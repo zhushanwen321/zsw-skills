@@ -1,6 +1,6 @@
 # pre-commit 断言（ci-assertions）
 
-> 防新增投机复杂度的快速断言集。设计 SSOT：`docs/plans/2026-09-10-over-engineering-audit-skill.md` §3.3.7（v6）。目标：单次提交断言耗时 <10s、零外部依赖（git/grep/date 内置）、不改 package.json/lock。
+> 防新增投机复杂度的快速断言集。设计 SSOT：`<skill_dir>/docs/plans/2026-09-10-over-engineering-audit-skill.md` §3.3.7（v6）。目标：单次提交断言耗时 <10s、零外部依赖（git/grep/date 内置）、不改 package.json/lock。
 
 ## 断言集与拦截口径
 

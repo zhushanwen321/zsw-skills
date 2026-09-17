@@ -15,7 +15,7 @@ description: >-
 
 # Over-Engineering Audit
 
-把「过度复杂设计」变成可裁决的简化候选：每张候选卡片论证三段——牺牲什么保证（小取舍）、省下什么机制（大简化）、为什么核心价值无损（价值锚）。设计文档是本 skill 的 SSOT：`docs/plans/2026-09-10-over-engineering-audit-skill.md`（useful-dev-tools 仓库）。
+把「过度复杂设计」变成可裁决的简化候选：每张候选卡片论证三段——牺牲什么保证（小取舍）、省下什么机制（大简化）、为什么核心价值无损（价值锚）。设计文档是本 skill 的 SSOT：`<skill_dir>/docs/plans/2026-09-10-over-engineering-audit-skill.md`（本 skill 内，随仓库分发）。
 
 被触发后先判模式，再按路由 read 对应文档；细节全部在 references，正文不含。
 
