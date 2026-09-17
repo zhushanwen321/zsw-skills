@@ -19,7 +19,7 @@ agents/
 - Agent 到 pi：`ln -s <仓库路径>/agents/self/<name>.md ~/.pi/agent/agents/<name>.md`
 - Agent 到 zcode：**禁止软链**，zcode 发现入口 lstat 校验，必须复制真实文件副本到 `~/.zcode/agents/`
 
-## skills/self（22）
+## skills/self（23）
 
 | Skill | 用途 |
 |-------|------|
@@ -33,6 +33,7 @@ agents/
 | design-code-sync | 校准代码实现与设计文档一致性 |
 | dev-flow | 按已审查的技术设计文档落地为可运行代码 |
 | directory-lookup | ~/Code、~/GitApp、~/Stock 目录索引查找。注意：运行时读 `~/.agents/lessons/directory-index.md`，lessons 迁移前依赖旧位置 |
+| meta-prompt-creator | AI agent 提示词设计/审查（源头 chat_project/meta-prompt-skill，原样保留） |
 | pi-flow-guided | pi 三层执行流程的流程图与决策指引 |
 | quota-wait | 套餐额度耗尽时挂起任务并定时接续 |
 | rethink | 跳出局部修补循环的思维框架 |
@@ -46,7 +47,7 @@ agents/
 | worktree-manipulate | bare repo + worktree 工作区管理唯一入口 |
 | zsw-session-cleanup | zcode 引擎残留会话清理与磁盘回收 |
 
-## skills/external（8）
+## skills/external（7）
 
 | Skill | 来源 | 用途 |
 |-------|------|------|
@@ -55,7 +56,6 @@ agents/
 | handoff | 收录 | 会话压缩成交接文档 |
 | impeccable | GitApp/ai-skills | 前端界面设计/打磨/审查 |
 | improve-codebase-architecture | 收录 | 架构改进与重构机会 |
-| meta-prompt-creator | chat_project/meta-prompt-skill | AI agent 提示词设计/审查 |
 | teach | 收录 | 教学模式 |
 | visual-explainer | 收录 | 自包含 HTML 可视化产物 |
 
