@@ -19,7 +19,7 @@ agents/
 - Agent 到 pi：`ln -s <仓库路径>/agents/self/<name>.md ~/.pi/agent/agents/<name>.md`
 - Agent 到 zcode：**禁止软链**，zcode 发现入口 lstat 校验，必须复制真实文件副本到 `~/.zcode/agents/`
 
-## skills/self（20）
+## skills/self（18）
 
 | Skill | 用途 |
 |-------|------|
@@ -33,7 +33,6 @@ agents/
 | design-code-sync | 校准代码实现与设计文档一致性 |
 | dev-flow | 按已审查的技术设计文档落地为可运行代码 |
 | meta-prompt-creator | AI agent 提示词设计/审查（源头 chat_project/meta-prompt-skill，原样保留） |
-| pi-flow-guided | pi 三层执行流程的流程图与决策指引 |
 | quota-wait | 套餐额度耗尽时挂起任务并定时接续 |
 | rethink | 跳出局部修补循环的思维框架 |
 | tech-design | 技术设计文档写作与对抗式审查（内嵌 3 个 review agent） |
@@ -41,7 +40,6 @@ agents/
 | user-memory | 记录/读取用户偏好与习惯 |
 | w25-contract | 周报管理与生成 |
 | web-fetch | 无 API key 网页抓取、YouTube 字幕 |
-| workflow-script-format | pi workflow JS 脚本编写规范 |
 | worktree-manipulate | bare repo + worktree 工作区管理唯一入口 |
 
 ## skills/external（7）
@@ -61,7 +59,7 @@ agents/
 - claude-code-tool 未安装的 38 个 skill 与 agents/ 下 9 个 agent：随 useful-dev-tools 仓库归档
 - pi-session-reader、plugin-management：源头仓库原地维护（~/Code/pi-session-reader、~/Code/dsh-test）
 - zsw-session-cleanup、directory-lookup：本机环境强绑定（zcode 插件清理 / 个人目录索引），以实体目录维护于 `~/.agents/skills/`，不入公开仓库
-- subagent-ext-config：pi-subagent-workflow 扩展（npm 包）自带，随扩展源码仓库维护（`~/.pi/agent/skills/` 软链指向扩展 checkout）
+- subagent-ext-config、workflow-script-format、pi-flow-guided：pi-subagent-workflow 扩展（npm 包）自带，随扩展源码仓库维护（`~/.pi/agent/skills/` 软链指向扩展 checkout）
 - lessons/、guide/、AGENTS.md、custom-tools、knowledge-engine、install 体系：仍留 claude-code-tool，退役清理事后议
 
 ## 待办（第二批次）
