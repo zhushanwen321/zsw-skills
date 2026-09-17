@@ -1,0 +1,1 @@
+../../skills/self/tech-design/agents/tech-design-review.md

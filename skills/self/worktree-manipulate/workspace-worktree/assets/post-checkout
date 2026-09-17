@@ -1,0 +1,17 @@
+#!/bin/bash
+# Bare repo post-checkout hook: 在新 worktree 创建后自动安装 githooks
+#
+# git worktree add 会触发此 hook，工作目录为新 worktree 的根目录。
+# 也在普通 git checkout 时触发，因此设计为幂等操作。
+#
+# 参数:
+#   $1 = 前一个 HEAD (新 worktree 时为全 0)
+#   $2 = 新 HEAD
+#   $3 = 1=分支 checkout, 0=文件 checkout
+
+INSTALLER=".githooks/install-hooks.sh"
+
+# 仅在 install-hooks.sh 存在时执行（确保 worktree 有 .githooks 目录）
+if [ -f "$INSTALLER" ]; then
+    bash "$INSTALLER" 2>/dev/null
+fi

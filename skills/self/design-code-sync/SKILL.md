@@ -1,0 +1,113 @@
+---
+name: design-code-sync
+description: >-
+  Use when 校准代码实现与设计文档的一致性、审查实现与设计的差距、"实现和设计
+  不一致"、design sync、对齐实现与文档、按设计文档校准代码、差距审查修复循环、
+  文档代码漂移、实现漂移检查、交付后修复未回写文档。双向校准代码与设计文档
+  至 0 must-fix。配合 tech-design（文档来源）与 dev-flow（实现来源）使用；
+  dev-flow 交付时（阶段 5 验收全绿后）由其阶段 6 自动衔接执行，无需单独触发。
+
+  Not for 审查设计文档本身（用 tech-design 的 review 流程）、dev-flow 流水线内
+  的一致性审查（走 dev-flow 阶段 3/4）与交付后独立 commit 的定向审查（走
+  dev-flow 的 post-delivery）——本 skill 覆盖其余时刻，或漂移已发生需要全量
+  校准循环时；无设计文档的代码审查（用 code-quality-tool）、找 bug（用 diagnose）。
+---
+
+# design-code-sync
+
+把"代码实现 vs 设计文档"的差距收敛到 0 must-fix 的**双向同步循环**：文档是意图的 SSOT，实现偏离默认视为漂移；但实现期发现的文档盲区，经裁决后反向修文档。
+
+被触发后从 Step 0 顺序执行；派发审查/修复 subagent 前**必须 read `references/task-templates.md`**（finding schema 与 task 模板都在里面，正文不含）。
+
+## 前提与输入
+
+- **设计文档**：应已通过 tech-design 对抗式审查（must-fix==0）。未审查的文档先进 tech-design review——给坏文档纠偏只会把循环拖进泥潭。
+- **impl-plan**（若存在）：dev-flow 产出的 `*.impl-plan.md`。它是**被审对象**而非仅参照系——状态表、残留风险登记、变更历史必须反映当前现实。
+- **代码实现**：来源不限。审查对象是**当前 HEAD 的终态全量**，不是某个 diff 区间。[HISTORICAL]（2026-08-31 update 模块事故：交付后 23 分钟的修复 commit 未走任何流水线环节，文档回写全漏，9 条偏差无一在流水线审查范围内）。
+- **找文档**：用户给了路径用路径；由 dev-flow 阶段 6 自动衔接进入时，设计文档与 impl-plan 路径由 dev-flow 直接给出（跳过本步），审查基线 = dev-flow 最终 commit；其余情形没给路径则找最近修改的 `*design*.md`、`<项目根>/.tmp/tech-design/`（tech-design 产物路径约定）下的候选，**多于一个候选时列出让用户选，禁止猜**。
+
+## 核心原则
+
+1. **审修分离**：审查 agent 只报告绝不改；修复 agent 按报告执行；主 agent 聚合裁决、验证、commit。
+2. **方向裁决先行**：每条差距必须同时给出方向（doc-right / code-right）与等级（must-fix/suggestion/info）——等级决定优先级，方向决定改哪边。审查者裁决方向必须给理由。
+3. **文档默认赢，争议要升级**：direction 裁决两边都有实质道理（影响公开 API / 行为语义 / 数据格式）时标 `contested`；must-fix 级 contested **暂停循环问用户**，suggestion 级 contested 默认按 doc-right 处理并在汇报中列出。
+4. **所有等级当轮修**：must-fix、suggestion、info 一律当轮修完，不留尾巴——info 也不许"留着以后看"。
+5. **修复方向要重演**：审查给的修复建议不照单全收，修复 agent 执行前先推演"修复后行为"，发现建议方案仍被同一场景击穿时换更稳的方案并在修复摘要中说明。
+
+## 流程
+
+### Step 0：建基线
+
+记录当前 commit hash（循环的 diff 与回滚基准）；确认测试可跑（无测试套件则记录，修复验证降级为构建通过 + 人工走查）。
+
+**验证矩阵前置 [MANDATORY]**：循环开始前列出本循环全部验证项，逐项标执行方式 / 成本 / 收益（1-10），并给出提速判定——与 dev-flow 的验证分级同构（L0 静态规则 → L1 增量单测 → L4 agent 审查），低成本高收益项永远先行：
+
+```markdown
+| 验证项 | 方式 | 成本 | 收益 | 时机 |
+|--------|------|------|------|------|
+| 测试套件可跑确认 | L2 直跑 | 2 | 7 | Step 0 |
+| 机械信号全量（文档/注释反引号标识符 grep、悬空引用） | L0 主 agent 直跑 | 1 | 8 | Step 1 审查 task 内前置 |
+| doc-right 修复验证 | L1 增量测试 | 3 | 8 | Step 3 每轮 |
+| 文档联动自检（正文/数据流图/错误规格/拆分清单/验收场景五处） | L0 核对 | 2 | 6 | Step 3 改文档时 |
+| 聚焦复审（只审上轮修复 + 新差距） | L4 agent | 6 | 7 | Step 4 |
+| 退役引用验证（全仓 grep 全文件名） | L0 直跑 | 2 | 9 | Step 5 |
+```
+
+提速判定呈现在循环开工前：机械信号是否全量前置、审查是否分区并行、修复是否按领地分组并行——机器可判定的修复（悬空引用、联动自检失配）在 agent 审查轮之前清零，避免把静态可判的问题消耗在 L4 审查轮里。矩阵随首轮审查派发一并呈现给用户备查（不构成等待点）。
+
+### Step 1：审查派发
+
+按 `references/task-templates.md` 的 reviewer 模板派 subagent。审查关系四条：代码 ↔ 设计文档（主对照）；现实 ↔ impl-plan（状态表 / 残留风险 / 变更历史是否反映当前）；impl-plan 内部一致性（单元表 vs 状态表 vs 变更历史）；注释口径（测试文件头、生产文件注释 vs 当前实现）。机械信号 [HISTORICAL]：文档/注释中反引号引用的标识符逐一 grep 验证存在，悬空引用直接立项（事故中悬空符号引用全靠人工审查才抓到）。规模：差距面小则单 reviewer；大则按对象或模块分区并行（并发 ≤5），各 reviewer 相互独立、禁止引用彼此结论，主 agent 聚合去重。派发一律后台异步、通知到达即收报告（多分区先到先读，聚合去重待全齐），禁止阻塞等待全部返回。
+
+### Step 2：裁决与升级
+
+聚合报告，处理 contested：must-fix 级停下问用户；其余进入修复。报告给用户看收敛轨迹（各等级计数）。
+
+### Step 3：修复派发
+
+按 fixer 模板后台异步派 subagent：doc-right 改代码，code-right 改文档。验证纪律：改代码跑增量测试，必须绿；改文档过联动自检（正文 / 数据流图 / 错误规格 / 拆分清单 / 验收场景五处同步）；每条修复扫**同模式涟漪面**（同类注释、测试文件头、其他文档引用点）一并修 [HISTORICAL]（事故中 6 个测试文件头注释、7 个生产文件注释口径混用，全在修复 commit 文件清单之外——漂移从来不是单点）。subagent 禁止 git 操作；主 agent 核验后按精确路径 commit（一轮一 commit，保证可回滚）。
+
+### Step 4：聚焦复审
+
+后台异步派回 reviewer（新 subagent，附上轮 findings + 本轮修复摘要 diff）：只审上轮问题的修复是否成立 + 修复是否引入新差距，不重查已确认项。回到 Step 2。
+
+### Step 5：伴生产物与被取代设计退役 [MANDATORY]
+
+终态 commit 交付时，主 agent 对本设计相关产物做去留判定，防止一次性产物滞留 docs/ 积压（2026-09-12 两轮清理退役 202 个文件的直接动因）：
+
+1. **范围**：本设计文档、impl-plan、历史审查报告、probe/探针、验收记录等伴生产物，以及被本交付**整体取代**的旧设计文档。
+2. **判定规则**：
+   - impl-plan 在 `.tmp/dev-flow/`（dev-flow 阶段 1 约定）、审查报告在 `.tmp/tech-design/`（tech-design 约定）→ 已合规，无需处理
+   - 残留在 docs/ 里的伴生产物（旧版惯例：`<name>.review*.md` / `.impl-plan.md` / probe 等）→ 移入 `<项目根>/.tmp/design-doc-retirement/`（gitignored 物理缓冲）
+   - 旧设计文档被本交付整体取代且**零外部引用** → 移入同一退役目录；仍被引用或仍是现行机制依据 → 原位保留（可加 [HISTORICAL] 取代头注指向新权威）
+3. **引用验证 [MANDATORY]**：移动前按**完整文件名**全仓 grep（AGENTS.md / docs/constraints.json / 守卫脚本 .githooks+scripts / 源码注释 / 活文档 / skills），任一引用命中即不退役；移动后反向复验，修复保留文档中的悬空链接（markdown 链接改退役标注 + 找回 commit 号；backtick 纯提及可不动）
+4. **退役目录索引**：更新 `<项目根>/.tmp/design-doc-retirement/README.md`（文件名 + 退役日期 + 依据 + 找回方式 `git show <退役前commit>:<path>`）
+5. 判定结果进交付汇报：退役 N 个 / 保留 N 个（含保留依据）/ 无可退役也要显式说
+
+## 终止与阈值 [MANDATORY]
+
+- **终止**：某轮复审报告 must-fix==0 → 该轮 suggestion/info 仍当轮修完，然后交付。不为 suggestion/info 单独循环。
+- **升级**：must-fix 计数 ≥4 轮不收敛或不减反增；或单条 must-fix 修复超 2 轮未解决 → 暂停，向用户呈报残余差距矩阵，裁决后再继续。禁止自行突破阈值或无声放弃。
+
+## 交付汇报
+
+循环轮数、每轮三等级计数的收敛轨迹、direction 分布（几条改代码 / 几条改文档）、contested 项及用户裁决记录、测试证据、（若有）未修项及原因、Step 5 退役判定结果（退役/保留清单）。
+
+## 关键约束
+
+- [MANDATORY] 遵守全局 AGENTS.md 的 subagent 约束：并发 ≤5、task 三段式（背景/目标/验收）、模型按全局路由表（审查属重量、修复属 coding；看不到指定模型时列实际可见项请用户选）。
+- [MANDATORY] 所有 subagent 一律后台异步派发、靠完成通知推进（zcode 即 run_in_background=true；xyz-agent 原生仅异步），禁止前台同步阻塞等待返回——同步等待长任务有超时丢失结果风险，且阻塞主 agent 流水化收报告与核验。
+- [MANDATORY] must-fix 级 contested 不裁决不修复，必须等用户（方向裁错 = 破坏性修复，不可逆）。
+- [MANDATORY] subagent 零 git 写操作；主 agent 单点 commit（subagent 上下文无全景，防误提交范围外文件与不可回滚变更）。
+- [MANDATORY] 改代码的修复必须有测试证据（或 Step 0 记录的降级证据），无证据的"已修复"退回。
+- [OPTIONAL] 文档改动巨大（重写多章）时，修完可建议用户送 tech-design review 复审一轮。
+
+---
+
+## 标记说明
+
+| 标记 | 含义 | 修改约束 |
+|------|------|----------|
+| `[HISTORICAL]` | 来自 2026-08-31 update 模块事故（交付后修复未回写文档，9 条漂移全部漏审）的规则 | **不允许删除或削弱**，只能补充 |
+| `[MANDATORY]` | 流程强制要求 | 必须严格遵守 |
+| `[OPTIONAL]` | 可选步骤 | 可按需调整 |

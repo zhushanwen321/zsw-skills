@@ -1,0 +1,289 @@
+/*
+ * Teach Skill — Default Dark Theme
+ * Copy this file to your workspace's ./assets/style.css
+ * All lessons should link: <link rel="stylesheet" href="../assets/style.css">
+ */
+:root {
+  --bg: #0f0f0f;
+  --bg-card: #1a1a1a;
+  --bg-elevated: #222222;
+  --text: #e4e4e7;
+  --text-muted: #a1a1aa;
+  --accent: #f59e0b;
+  --accent-dim: #92400e;
+  --accent-glow: #fbbf2420;
+  --border: #27272a;
+  --code-bg: #18181b;
+  --success: #22c55e;
+  --success-bg: #052e16;
+  --danger: #ef4444;
+  --danger-bg: #450a0a;
+  --warning: #f59e0b;
+  --warning-bg: #451a03;
+  --info: #3b82f6;
+  --info-bg: #172554;
+  --radius: 8px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.75;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 5rem;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Typography */
+h1 {
+  font-size: 1.85rem;
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+  letter-spacing: -0.025em;
+  color: #fafafa;
+}
+
+h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 2.8rem;
+  margin-bottom: 0.8rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 2px solid var(--accent);
+  color: #fafafa;
+}
+
+h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-top: 1.8rem;
+  margin-bottom: 0.5rem;
+  color: #e4e4e7;
+}
+
+p { margin-bottom: 1rem; }
+
+strong { color: #fafafa; }
+
+.lesson-meta {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  margin-bottom: 2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* Links */
+a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s;
+}
+a:hover { border-bottom-color: var(--accent); }
+
+/* Code */
+code {
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Cascadia Code", monospace;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  padding: 0.12em 0.4em;
+  border-radius: 4px;
+  font-size: 0.88em;
+  color: #fbbf24;
+}
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+  font-size: 0.84rem;
+  line-height: 1.65;
+}
+
+pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text);
+}
+
+/* Blockquote */
+blockquote {
+  border-left: 3px solid var(--accent);
+  padding: 0.8rem 1rem;
+  margin: 1.2rem 0;
+  background: var(--accent-glow);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--text);
+}
+
+blockquote strong {
+  color: var(--accent);
+}
+
+/* Lists */
+ul, ol {
+  margin: 0.5rem 0 1rem 1.5rem;
+}
+li { margin-bottom: 0.35rem; }
+li::marker { color: var(--text-muted); }
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.2rem 0;
+  font-size: 0.88rem;
+}
+
+th, td {
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+th {
+  background: var(--bg-elevated);
+  font-weight: 600;
+  color: #fafafa;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+tr:hover td {
+  background: var(--bg-card);
+}
+
+/* Quiz */
+.quiz {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.2rem 1.4rem;
+  margin: 1.5rem 0;
+}
+
+.quiz-question {
+  font-weight: 600;
+  margin-bottom: 0.8rem;
+  color: #fafafa;
+}
+
+.quiz-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.quiz-option {
+  padding: 0.65rem 0.9rem;
+  margin: 0.35rem 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: var(--text);
+}
+
+.quiz-option:hover {
+  background: var(--bg-elevated);
+  border-color: var(--accent);
+  color: #fafafa;
+}
+
+.quiz-option.correct {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.quiz-option.wrong {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.quiz-feedback {
+  margin-top: 0.8rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  display: none;
+}
+
+/* Tags */
+.tag {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.tag-basic { background: #1e3a5f; color: #93c5fd; }
+.tag-advanced { background: var(--accent-dim); color: #fbbf24; }
+.tag-expert { background: #7f1d1d; color: #fca5a5; }
+.tag-freq-high { background: #14532d; color: #86efac; }
+
+/* Interview Tip */
+.interview-tip {
+  background: var(--info-bg);
+  border: 1px solid #1e40af;
+  border-radius: var(--radius);
+  padding: 1rem 1.2rem;
+  margin: 1.2rem 0;
+}
+
+.interview-tip::before {
+  content: "面试提示";
+  display: block;
+  font-weight: 700;
+  color: var(--info);
+  margin-bottom: 0.35rem;
+  font-size: 0.9rem;
+}
+
+/* Source / Footer */
+.source {
+  margin-top: 2.5rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.source ul { margin-left: 1.2rem; }
+
+/* Navigation */
+.nav-links {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.nav-links span {
+  color: var(--text-muted);
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  body { padding: 1.5rem 1rem 3rem; }
+  h1 { font-size: 1.5rem; }
+  h2 { font-size: 1.15rem; }
+  pre { padding: 0.8rem; font-size: 0.8rem; }
+}
