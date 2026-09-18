@@ -24,7 +24,7 @@ agents/
 - Agent 到 pi：`ln -s <仓库路径>/agents/self/<name>.md ~/.pi/agent/agents/<name>.md`
 - Agent 到 zcode：**禁止软链**，zcode 发现入口 lstat 校验，必须复制真实文件副本到 `~/.zcode/agents/`
 
-## skills/self（17，按功能域分类）
+## skills/self（16，按功能域分类）
 
 ### dev-workflow/ — 常规开发流程
 
@@ -67,12 +67,6 @@ agents/
 | user-memory | 记录/读取用户偏好与习惯 |
 | worktree-manipulate | bare repo + worktree 工作区管理唯一入口 |
 
-### 根目录（分类待定）
-
-| Skill | 用途 |
-|-------|------|
-| w25-contract | 周报生成/管理：从 git 历史汇总本周工作、追踪目标完成。去留待定 |
-
 ## skills/external（7）
 
 | Skill | 来源 | 用途 |
@@ -92,12 +86,12 @@ agents/
 - zsw-session-cleanup、directory-lookup：本机环境强绑定（zcode 插件清理 / 个人目录索引），以实体目录维护于 `~/.agents/skills/`，不入公开仓库
 - subagent-ext-config、workflow-script-format、pi-flow-guided：pi-subagent-workflow 扩展（npm 包）自带，随扩展源码仓库维护（`~/.pi/agent/skills/` 软链指向扩展 checkout）
 - web-fetch：与 anysearch 的 Tavily 路径功能重叠，已删除（2026-09-18）
+- w25-contract：工作场景周报 skill，以实体目录维护于 `~/.agents/skills/`，不入本仓库
 - lessons/、guide/、AGENTS.md、custom-tools、knowledge-engine、install 体系：仍留 claude-code-tool，退役清理事后议
 
 ## 待办（第二批次）
 
 - `~/.zcode/agents/` 六个无源头文件（context-builder、oracle、researcher、reviewer、u-dev、worker）与 pi 侧三个实体 agent 建档迁入 agents/self/
 - claude-code-tool 退役归档（全局 AGENTS.md、lessons、guide 按决策留该仓库不动）
-- w25-contract 去留待定：归 tools/ 或移出仓库
 
 安装点切换已完成：`~/.agents/skills/` 的软链已改指本仓库并按类别路径重指（zsw-session-cleanup、directory-lookup 除外，二者为本地实体）。
