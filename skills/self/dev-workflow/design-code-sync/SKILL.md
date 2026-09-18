@@ -10,7 +10,7 @@ description: >-
   Not for 审查设计文档本身（用 tech-design 的 review 流程）、dev-flow 流水线内
   的一致性审查（走 dev-flow 阶段 3/4）与交付后独立 commit 的定向审查（走
   dev-flow 的 post-delivery）——本 skill 覆盖其余时刻，或漂移已发生需要全量
-  校准循环时；无设计文档的代码审查（用 code-quality-tool）、找 bug（用 diagnose）。
+  校准循环时；无设计文档的泛化代码审查、找 bug（用 diagnose）不在本 skill 范围。
 ---
 
 # design-code-sync
