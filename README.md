@@ -35,9 +35,8 @@ agents/
 | Skill | 说明 |
 |-------|------|
 | code-simplify | 简化代码：清理重复、死代码与本次改动 |
-| code-harden | 代码生产就绪加固：异常分级、重试策略、失败语义 |
+| code-harden | 代码生产就绪加固：异常分级、重试策略、失败语义、错误处理策略裁决 |
 | code-overdesign-audit | 审计过度设计与投机抽象，产出可裁决的简化候选 |
-| code-quality-tool | 代码质量与规范检查 |
 | test-quality | 测试设计与分层，最大化单位时间抓 bug 价值 |
 
 ### thinking/ — 复杂问题
@@ -78,22 +77,3 @@ agents/
 ## Agents
 
 skill 内嵌 agent 以 symlink 登记在 `agents/self/`（如 tech-design 的 tech-design-review、tech-design-impact-review、tech-design-simplicity-review），实体单一事实源在所属 skill 目录内，禁止复制副本进来形成双源。`agents/external/` 预留。
-
-## 安装
-
-Skill（软链，目录名必须与 SKILL.md frontmatter 的 `name` 一致）：
-
-```bash
-ln -s <repo>/skills/self/<category>/<name> ~/.agents/skills/<name>
-ln -s <repo>/skills/external/<name> ~/.agents/skills/<name>
-```
-
-Agent：
-
-```bash
-# pi：支持软链
-ln -s <repo>/agents/self/<name>.md ~/.pi/agent/agents/<name>.md
-
-# zcode：agent 发现入口 lstat 校验、软链零容忍，必须复制真实文件副本
-cp <repo>/agents/self/<name>.md ~/.zcode/agents/<name>.md
-```

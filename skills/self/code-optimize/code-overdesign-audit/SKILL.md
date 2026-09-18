@@ -10,7 +10,7 @@ description: >-
 
   Not for 模块做深、deepening、可测试性重构（用 improve-codebase-architecture）；
   简化最近的代码、清理本次改动、死代码、去重、复用优化（用 code-simplify）；
-  代码规范检查、lint 级问题（用 code-quality-tool）；找 bug（用 diagnose）。
+  代码规范检查、lint 级问题（lint 工具领地）；找 bug（用 diagnose）。
 ---
 
 # Over-Engineering Audit

@@ -35,9 +35,8 @@ agents/
 | Skill | Description |
 |-------|-------------|
 | code-simplify | Simplify code: remove duplication, dead code, and cleanup of recent changes |
-| code-harden | Production readiness hardening: exception tiers, retry policy, failure semantics |
+| code-harden | Production readiness hardening: exception tiers, retry policy, failure semantics, error-handling policy adjudication |
 | code-overdesign-audit | Audit over-engineering and speculative abstractions; produce actionable simplification candidates |
-| code-quality-tool | Code quality and convention checks |
 | test-quality | Test design and layering; maximize bug-catching value per unit of effort |
 
 ### thinking/ — Complex Problem Solving
@@ -78,22 +77,3 @@ agents/
 ## Agents
 
 Skill-embedded agents are registered in `agents/self/` via symlinks (e.g. tech-design's tech-design-review, tech-design-impact-review, tech-design-simplicity-review). The single source of truth lives inside the owning skill's directory; do not duplicate copies here. `agents/external/` is reserved.
-
-## Installation
-
-Skill (symlink; directory name must match the `name` in the SKILL.md frontmatter):
-
-```bash
-ln -s <repo>/skills/self/<category>/<name> ~/.agents/skills/<name>
-ln -s <repo>/skills/external/<name> ~/.agents/skills/<name>
-```
-
-Agent:
-
-```bash
-# pi: symlinks supported
-ln -s <repo>/agents/self/<name>.md ~/.pi/agent/agents/<name>.md
-
-# zcode: agent discovery lstats paths and rejects symlinks; copy real files
-cp <repo>/agents/self/<name>.md ~/.zcode/agents/<name>.md
-```
