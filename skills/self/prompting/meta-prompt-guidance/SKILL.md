@@ -1,5 +1,5 @@
 ---
-name: meta-prompt-creator
+name: meta-prompt-guidance
 description: >-
   Use when designing, writing, auditing, or reviewing AI agent prompts
   of any kind — tool descriptions, system prompts, steering prompts,

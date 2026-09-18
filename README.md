@@ -6,41 +6,72 @@
 
 ```
 skills/
-  self/       原创自用 skill
-  external/   抄来的/融合外部的 skill
+  self/            原创自用 skill，按功能域分子目录
+    dev-workflow/    常规开发流程
+    code-optimize/   代码优化
+    thinking/        复杂问题
+    prompting/       提示词优化
+    tools/           其他工具
+  external/        抄来的/融合外部的 skill
 agents/
-  self/       自用 agent（skill 内嵌 agent 用 symlink 登记，见 agents/self/README.md）
-  external/   外部 agent（暂空）
+  self/            自用 agent（skill 内嵌 agent 用 symlink 登记，见 agents/self/README.md）
+  external/        外部 agent（暂空）
 ```
 
 ## 安装规范
 
-- Skill：`ln -s <仓库路径>/skills/{self|external}/<name> ~/.agents/skills/<name>`，目录名必须与 SKILL.md frontmatter `name` 一致
+- Skill：`ln -s <仓库路径>/skills/{self/<category>|external}/<name> ~/.agents/skills/<name>`，目录名必须与 SKILL.md frontmatter `name` 一致
 - Agent 到 pi：`ln -s <仓库路径>/agents/self/<name>.md ~/.pi/agent/agents/<name>.md`
 - Agent 到 zcode：**禁止软链**，zcode 发现入口 lstat 校验，必须复制真实文件副本到 `~/.zcode/agents/`
 
-## skills/self（18）
+## skills/self（17，按功能域分类）
+
+### dev-workflow/ — 常规开发流程
+
+| Skill | 用途 |
+|-------|------|
+| tech-design | 技术设计文档写作与对抗式审查（内嵌 3 个 review agent） |
+| dev-flow | 按已审查的技术设计文档落地为可运行代码 |
+| design-code-sync | 校准代码实现与设计文档一致性 |
+
+### code-optimize/ — 代码优化
+
+| Skill | 用途 |
+|-------|------|
+| code-simplify | 简化代码、清理重复与死代码 |
+| code-harden | 代码生产就绪加固：异常分级、重试策略、失败语义 |
+| code-overdesign-audit | 审计过度设计/投机抽象，产出可裁决的简化候选（原名 over-engineering-audit，设计文档随 skill 分发于 docs/plans/） |
+| code-quality-tool | 代码质量检查、规范审查 |
+| test-quality | 测试设计与分层，最大化单位时间抓 bug 价值 |
+
+### thinking/ — 复杂问题
+
+| Skill | 用途 |
+|-------|------|
+| rethink | 跳出局部修补循环的思维框架 |
+
+### prompting/ — 提示词优化
+
+| Skill | 用途 |
+|-------|------|
+| meta-prompt-guidance | AI agent 提示词设计/审查（原名 meta-prompt-creator） |
+
+### tools/ — 其他工具
 
 | Skill | 用途 |
 |-------|------|
 | anysearch | 统一搜索：通用 web（Tavily wrapper）+ 垂直结构化（股票/CVE/论文/专利）+ 批量并行。由原 anysearch 与 tavily-web-search 融合 |
 | browser-automation | 网页/Electron 调试：截图、元素检查、UI 交互、网络监控 |
-| code-harden | 代码生产就绪加固：异常分级、重试策略、失败语义 |
 | code-link | 从入口点追踪调用链到所有相关文件 |
-| code-overdesign-audit | 审计过度设计/投机抽象，产出可裁决的简化候选（原名 over-engineering-audit） |
-| code-quality-tool | 代码质量检查、规范审查 |
-| code-simplify | 简化代码、清理重复与死代码 |
-| design-code-sync | 校准代码实现与设计文档一致性 |
-| dev-flow | 按已审查的技术设计文档落地为可运行代码 |
-| meta-prompt-creator | AI agent 提示词设计/审查（源头 chat_project/meta-prompt-skill，原样保留） |
 | quota-wait | 套餐额度耗尽时挂起任务并定时接续 |
-| rethink | 跳出局部修补循环的思维框架 |
-| tech-design | 技术设计文档写作与对抗式审查（内嵌 3 个 review agent） |
-| test-quality | 测试设计与分层，最大化单位时间抓 bug 价值 |
 | user-memory | 记录/读取用户偏好与习惯 |
-| w25-contract | 周报管理与生成 |
-| web-fetch | 无 API key 网页抓取、YouTube 字幕 |
 | worktree-manipulate | bare repo + worktree 工作区管理唯一入口 |
+
+### 根目录（分类待定）
+
+| Skill | 用途 |
+|-------|------|
+| w25-contract | 周报生成/管理：从 git 历史汇总本周工作、追踪目标完成。去留待定 |
 
 ## skills/external（7）
 
@@ -60,11 +91,13 @@ agents/
 - pi-session-reader、plugin-management：源头仓库原地维护（~/Code/pi-session-reader、~/Code/dsh-test）
 - zsw-session-cleanup、directory-lookup：本机环境强绑定（zcode 插件清理 / 个人目录索引），以实体目录维护于 `~/.agents/skills/`，不入公开仓库
 - subagent-ext-config、workflow-script-format、pi-flow-guided：pi-subagent-workflow 扩展（npm 包）自带，随扩展源码仓库维护（`~/.pi/agent/skills/` 软链指向扩展 checkout）
+- web-fetch：与 anysearch 的 Tavily 路径功能重叠，已删除（2026-09-18）
 - lessons/、guide/、AGENTS.md、custom-tools、knowledge-engine、install 体系：仍留 claude-code-tool，退役清理事后议
 
 ## 待办（第二批次）
 
 - `~/.zcode/agents/` 六个无源头文件（context-builder、oracle、researcher、reviewer、u-dev、worker）与 pi 侧三个实体 agent 建档迁入 agents/self/
 - claude-code-tool 退役归档（全局 AGENTS.md、lessons、guide 按决策留该仓库不动）
+- w25-contract 去留待定：归 tools/ 或移出仓库
 
-安装点切换已完成：`~/.agents/skills/` 的软链已改指本仓库（zsw-session-cleanup、directory-lookup 除外，二者为本地实体）。
+安装点切换已完成：`~/.agents/skills/` 的软链已改指本仓库并按类别路径重指（zsw-session-cleanup、directory-lookup 除外，二者为本地实体）。
