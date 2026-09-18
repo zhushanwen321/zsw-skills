@@ -57,7 +57,6 @@ agents/
 |-------|-------------|
 | anysearch | Unified search: general web, news, URL extraction/crawl, vertical structured search (stocks/CVE/papers/patents), and batch parallel queries |
 | browser-automation | Web/Electron debugging: screenshots, element inspection, UI interaction, network monitoring |
-| code-link | Trace call chains from entry points (HTTP routes, WebSocket, IPC) to related files |
 | quota-wait | Suspend tasks when model quota runs out and resume on schedule |
 | user-memory | Record and recall user preferences and habits |
 | worktree-manipulate | Single entry for bare repo + worktree workspace management |

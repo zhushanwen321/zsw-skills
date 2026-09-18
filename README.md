@@ -57,7 +57,6 @@ agents/
 |-------|------|
 | anysearch | 统一搜索：通用 web、新闻、URL 提取/爬取，垂直结构化检索（股票/CVE/论文/专利）与批量并行搜索 |
 | browser-automation | 网页/Electron 调试：截图、元素检查、UI 交互、网络监控 |
-| code-link | 从入口点（HTTP 路由、WebSocket、IPC）追踪调用链到相关文件 |
 | quota-wait | 模型套餐额度耗尽时挂起任务并定时接续 |
 | user-memory | 记录与读取用户偏好、习惯 |
 | worktree-manipulate | bare repo + worktree 工作区管理唯一入口 |
