@@ -37,7 +37,7 @@ description: >-
 |---|---|
 | **写设计文档**（"帮我设计/写设计文档/design doc"） | `flow/write.md` |
 | **审查设计文档**（"review 设计/review design/审一下这份设计文档"） | `flow/review.md` |
-| **审查后修复 / 多轮循环**（审查报告回来了、复审、修复 must-fix） | `flow/write.md` Step 7（审查-修复循环协议：**每轮全修 must-fix + 所有 suggestion** [MANDATORY]、修复纪律、聚焦复审、终止条件） |
+| **审查后修复 / 多轮循环**（审查报告回来了、复审、修复 must-fix） | `flow/write.md` Step 7（审查-修复循环协议：**循环由 must-fix 驱动 + suggestion 处置制** [MANDATORY]、修复纪律、聚焦复审、终止条件） |
 | 问"设计文档该有什么结构/某段怎么写" | `references/doc-structure.md` |
 | 问"为什么这么要求/写作原则" | `references/design-principles.md` |
 | 问"验收的最佳实践/业界怎么做" | `references/acceptance-practices.md` |
@@ -66,7 +66,7 @@ description: >-
 - **`tech-design-impact-review`（影响面审）**：影响面枚举者——专注副作用/遗漏：改动辐射到哪些其他功能与系统面（代码面/数据面/宿主外部系统面/用户工作流面），每个面的影响是否被量化、被显式判定可接受、有无清理或恢复通道（rubric P0-12/19/20）
 - **`tech-design-simplicity-review`（简洁审）**：过度设计守门员——专注机制必要性：§3 每个机制/抽象/扩展点是 §1/§2 已发生证据逼出来的，还是为想象未来预付的复杂度；语义四问（Parnas/认知压缩/Rule of Three/反模式清单）+ 砍建议必须三段论证（小取舍/大简化/核心无损锚），误报控制靠「已核实非过度」节（rubric P0-22/23、P1-6）
 
-审查与修复分离：三个 agent 都只报告 must-fix/suggestion，不代改文档；主 agent 拿到三份报告后按 `flow/write.md` Step 7 的审查-修复循环处理（每轮全修，循环复审至 0 must-fix）。
+审查与修复分离：三个 agent 都只报告 must-fix/suggestion，不代改文档；主 agent 拿到三份报告后按 `flow/write.md` Step 7 的审查-修复循环处理（循环由 must-fix 驱动——每轮全修 must-fix 循环复审至 0；suggestion 逐条处置后即终止，不为它派确认轮）。
 
 ## 标记说明
 

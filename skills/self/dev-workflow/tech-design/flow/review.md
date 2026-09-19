@@ -83,12 +83,12 @@ task:
 
 ## Step 3：接收结果
 
-读三个 subagent 返回的 structured-output，must_fix / suggestion 计数**合并**看待（三份报告地位平等，影响面审与简洁审的 must-fix 同样阻塞实施）。
+读三个 subagent 返回的 structured-output。must_fix 计数**合并**看待（三份报告地位平等，影响面审与简洁审的 must-fix 同样阻塞实施）；suggestion 不阻塞实施，汇总进处置清单按 `flow/write.md` Step 7.1 三选一处置。
 
 ## Step 4：处理
 
-- **任一份 must_fix > 0 或 suggestion > 0**：进入审查-修复循环——按 `flow/write.md` Step 7 修复（**每轮全修三份报告的全部 must-fix + 所有 suggestion**，修复纪律与联动同步清单见该节），修订后按其 7.3 送回聚焦复审。**本 flow 不自动改文档**——修改由主 agent（或用户）按 `flow/write.md` Step 7 执行
-- **三份均 must_fix == 0 且无未修 suggestion**：审查通过，设计就绪（循环终止条件）
+- **任一份 must_fix > 0**：进入审查-修复循环——按 `flow/write.md` Step 7 修复（**每轮全修三份报告的全部 must-fix**；suggestion 逐条处置——修 / 登记不修 / 归档，判定线见该节 7.1），修订后按其 7.3 送回聚焦复审。**本 flow 不自动改文档**——修改由主 agent（或用户）按 `flow/write.md` Step 7 执行
+- **三份均 must_fix == 0 且 suggestion 全部处置**：审查通过，设计就绪（循环终止条件；不为 suggestion 派确认轮）
 
 ## 衔接
 
