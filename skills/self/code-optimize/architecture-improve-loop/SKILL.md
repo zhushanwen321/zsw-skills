@@ -24,8 +24,9 @@ description: >-
 ——review-fix-loop 的 fixer 原生修全部等级，与本流程目标一致。
 
 本 skill 是**编排层**：引擎是 zcode saved workflow `review-fix-loop`
-（`~/.zcode/workflows/review-fix-loop.dwf.ts`，pi/zsw 内置版语义同源），眼睛是本目录
-`agents/` 下的架构域 reviewer 定义文件。不修改 workflow 本体。
+（`~/.zcode/workflows/review-fix-loop.dwf.ts`；pi 环境用 subagent-core 内置版，
+语义同源，发起形态见 3b 节），眼睛是本目录 `agents/` 下的架构域 reviewer 定义文件。
+不修改 workflow 本体（缓解边界见「引擎约束下的缓解边界」节）。
 
 ## 机制映射（为什么这样复用）
 
@@ -33,7 +34,7 @@ description: >-
 |---|---|---|
 | 派 sub-agent 走查热点域 | `reviewers` 参数（.md 定义驱动，4 个一批并行） | reviewer 定义文件承载架构词汇+候选卡格式+证据纪律 |
 | grilling 对抗质询 | 聚合器证据分级（evidence/unverified/downgraded）+ **reviewer 定义内嵌质询** | 质询拆两半：证据核实 + 方案质询五问（约束/依赖/形态/接缝后面/测试存活）内嵌进 reviewer 定义，方案裁决进聚合（无实证不进修复队列） |
-| 候选卡 Solution 方案 | issue 的 `guidance` 字段（随 per-fixer 文档直达修复者） | guidance 必含修复方向+行为不变量（reviewer 定义强制） |
+| 候选卡 Solution 方案 | issue 的 `guidance` 字段（随 per-fixer 文档直达修复者） | guidance 必含修复方向+方案形态+行为不变量+测试处置（reviewer 定义强制） |
 | 文件冲突矩阵分批派 worker | reconcileGroups：组间文件不相交确定性校验 + 相交传递闭包合并，3 个一批并行 | 比人工矩阵更严（机器校验） |
 | 主会话统一验收提交 | autoCommit 统一 commit（显式路径）+ R2+ reconciliation 对账 | fixed 需实证、regressed 计修复失败、needs-redesign 熔断 |
 | 循环直到无 Strong | mustFix==0 → converged；stuck/needs-redesign/max-rounds 熔断 | 「无 Strong」= major 映射档清零 |
@@ -85,10 +86,37 @@ CreateWorkflow:
       maxRounds: 10               # 架构重构轮次收敛通常 2-4 轮
       autoCommit: true            # 每轮一 commit（fix: review round N — 可回溯）
                                   # 需要人工整理提交语义时传 false（改动留工作区）
+      skipCleanAgents: false      # [架构域固定] clean reviewer 继续参与对账：R2+ 的台账
+                                  # 申报（fixed 实证/regressed 揭穿）依赖全维度在场，
+                                  # 跳过会让已 clean 域的复发问题漏审
+      stuckThreshold: 5           # [架构域固定] 高于引擎默认 3：「修复揭出新问题」在架构域
+                                  # 是常态而非停滞，阈值过小会把正常推进误判为 stuck
       reportDir: .tmp/architecture-improve-loop
 ```
 
 发起后等完成通知，**不要轮询**。
+
+### 3b. pi 环境发起形态（同一套 reviewer 模板，引擎参数不同）
+
+pi 主 agent 跑内置 `review-fix-loop`（subagent-core 版），参数名不同但语义一致；
+`targetType` 直接声明域走查（无 diff 硬编码问题），`reviewPrompt` 补域指令：
+
+```
+pi workflow run review-fix-loop --args '{
+  targetType: "dir",
+  target: "<域根目录绝对路径>",
+  batch1: "<三份 reviewer .md 绝对路径，逗号分隔>",
+  reviewPrompt: "架构域审查：审查对象=域内文件现状形态（diff 仅作热点参考）；severity 映射按 reviewer 模板（Strong→major / Worth→minor / Speculative 不报）",
+  maxRounds: 10,
+  autoCommit: true,
+  skipCleanAgents: false,
+  stuckThreshold: 5
+}'
+```
+
+pi 版引擎多出 `fixAgent`（指定专门的修复者 .md）与 `fixPrompt`（追加修复执行策略）
+两个参数口——fixer「小步修复」内置约束与架构重构有张力时用它们显式放宽；缺省依赖
+guidance 承载执行策略（zcode 侧即此形态，已实证可忍）。
 
 ### 4. 终态判读
 
@@ -133,6 +161,22 @@ evidence 裁决（无实证不进修复队列）与 R2+ reconciliation（修坏�
 揭穿并走向 needs-redesign 熔断）。fixer 侧保留 disputed 申诉通道（怀疑误报给
 file:line 反证转人工，不盲改）。代价：失去「修复前的人工方案裁决」——若项目对架构
 变更要求更高把关，autoCommit=false 让改动停在每轮工作区，人工审后统一提交。
+
+## 引擎约束下的缓解边界（不改 review-fix-loop 的已知名单与升级触发）
+
+本 skill 在**不修改 review-fix-loop 本体**的约束下运行，引擎的已知断点全部用模板与
+参数在技能侧缓解（guidance 承载定位与关键裁决、方案全文落报告；「方案不可行」走
+disputed 预授权出口；审查范围由 reviewer 模板声明覆盖 diff 提示）。三个缓解项属
+**有概率的劣化而非功能失效**，按监控项对待——循环实践中若出现下述任一信号且**频率
+可感**（多轮循环反复命中），升级为 fork 双版本定制脚本（zcode .dwf.ts 与 pi .js 各
+一份、逐机制镜像，fork 自各自引擎源并落实改动清单：guidance 去一句化压缩、加 blocked
+终态通道、审查范围参数化、fixer prompt 放宽架构域执行策略）：
+
+- 方案细节损耗：fixer 反复偏离报告 Solution（guidance 信息不足的直接证据）
+- disputed 出口失灵：方案受阻的申述被聚合器误判为问题误报（重载语义的误裁决）
+- stuck 误判：正常推进被提前熔断（阈值 5 仍不兼容的极端揭新率）
+
+未命中信号前不写定制脚本——为想象中的问题付双版本镜像维护的真实成本，违反最小机制。
 
 ## 内化来源（已移除的上游技能）
 
