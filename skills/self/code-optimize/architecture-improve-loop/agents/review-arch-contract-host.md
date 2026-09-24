@@ -4,7 +4,7 @@
 
 ## 域界定（首轮自圈定，R2+ 复用）
 
-首次执行时用 Glob/Grep/Bash 圈定本层文件清单，写在报告开头「## 域清单」节；后续轮次 Read 上轮报告（round-N/review-arch-contract-host.md）复用清单，只在发现明显遗漏时增补并注明。本层覆盖：
+首次执行时用 Glob/Grep/Bash 圈定本层文件清单，写在报告开头「## 域清单」节；后续轮次 Read 上轮报告（round-N/review-arch-contract-host.md）复用清单。每轮开工先核对当轮 diff 中的新增文件——属于本域的必须归入清单，不属于的显式声明弃审，不允许新文件处于无主状态。本层覆盖：
 
 - **跨进程契约层**：shared 类型定义、跨进程协议/消息类型登记、共享常量 SSOT（正则/枚举/退出码等判据）、跨包 payload 类型
 - **宿主进程侧**（Electron main / 宿主装配进程）：应用装配入口、子进程生命周期管理（spawn/停止/重启/健康检查）、IPC handler 面、配置文件持久化（读写/原子性/权限）、运行环境探测（dev/prod/E2E 形态）
@@ -15,11 +15,11 @@
 
 工作流 prompt 会给你 `git diff base...HEAD` 指令——那是**近期热点参考**（哪片最近在动、优先看），不是审查对象本身。架构审查以域清单内文件的**现状形态**为准。
 
-## 审查词汇（输出必须用这套，不用「组件/服务/API/边界」）
+## 审查词汇（输出必须用这套，不用「组件/服务/API/边界/单元(unit)/签名(signature)/层(layer)/包装(wrapper)」）
 
 - **module**：有 interface 与 implementation 的任何东西——函数、类、包、跨层切片，刻度无关
 - **interface**：调用方正确使用模块必须知道的**一切**——类型签名之外还包括不变量、顺序约束、错误模式、必要配置、性能特征（interface ≠ TS 的 interface 关键字）
-- **implementation / adapter**：前者是模块体内代码，后者是「在接缝处满足 interface 的具体物」——谈接缝话题用 adapter，谈其他用 implementation
+- **implementation / adapter**：前者是模块体内代码，后者是「在接缝处满足 interface 的具体物」——谈接缝话题用 adapter，谈其他用 implementation。adapter 描述**角色**（填哪个槽）不描述体量：大实现的小 adapter（真实 DB repo）与大 adapter 的小实现（内存 fake）均合法，adapter ≠ 薄包装
 - **depth**：interface 处的杠杆——调用方（或测试）每学习一个单位的 interface 能驱动的行为量。**深模块 = 小 interface 背后大量行为；浅模块 = interface 复杂度≈实现**（不是实现行数比，是杠杆）
 - **seam**：不改这个地方就能改变行为的位置——interface 安放处。接缝放哪是独立设计决策，与接缝后面放什么分开讨论
 - **leverage**：调用方从 depth 得到的东西（一份实现惠及 N 个调用点 + M 个测试）；**locality**：维护者从 depth 得到的东西（改动/排障/验证集中一处，修一次处处修好）
@@ -27,6 +27,7 @@
 判定原则：
 - **deletion test**：怀疑浅模块时问「删掉它复杂度是集中还是只是搬家？」——集中 = 值得深挖；消失 = 它是 pass-through
 - **interface is the test surface**：调用方与测试过同一接缝——想测穿 interface 的模块，形态多半错了
+- **depth 属于 interface，不属于 implementation**：深模块内部由多个小部件组成**不构成**浅模块/碎片化证据（它们不在 interface 上）；模块可有**内部接缝**（私有、供自身测试），但不得为测试可达性把内部接缝提升进外部 interface
 - **一个 adapter = 假想接缝，两个 = 真接缝**：没有真实变化轴穿过时不要引入接缝
 - **可测试性三原则**（「难测试」摩擦的判定依据）：接受依赖而不创建依赖；返回结果而非产生副作用；小表面（方法少参数简）
 - **按变化轴拆分**：一个文件承载多个正交变化轴 = 混合信号
@@ -37,7 +38,7 @@
 2. 哪里存在浅模块（interface 复杂度 ≈ 实现）？——deletion test 判定
 3. 哪里纯函数为测试抽出，但真 bug 藏在调用方式里（无 locality）？
 4. 哪里紧耦合模块互相泄漏（跨接缝漏内部细节）？
-5. 哪些部分难以通过现有 interface 测试？（对照可测试性三原则找原因）
+5. 哪些部分难以通过现有 interface 测试，或根本无测试覆盖？（对照可测试性三原则找原因）
 
 ## 领域词表与 ADR 纪律（审查前置 + 输出纪律）
 
@@ -45,7 +46,7 @@
 2. **用词条称呼模块**：CONTEXT.md 已定义的概念用词条名（有「Order」词条就写「Order intake module」，不写 FooBarHandler 也不写 Order service）；候选涉及 CONTEXT.md 没有的新概念时，在卡上标注「（建议新词条：XX）」并汇总到报告末尾
 3. **报告末尾两节登记**（主 agent 循环收敛后统一落盘，你只登记不写文件）：
    - 「领域词表待登记」：新概念词条建议（术语 + 1-2 句定义 + _Avoid_ 别名）
-   - 「建议 ADR」：你判定应否决/误报、但否决理由是 load-bearing 的候选——满足三条件（难逆 / 无上下文会惊讶 / 真实权衡）才登记，防未来审查循环重提同一候选
+   - 「建议 ADR」：load-bearing 的**否决/误报判定**与 load-bearing 的**方案裁决**（如 interface 形态定案、有意行为修正）——满足三条件（难逆 / 无上下文会惊讶 / 真实权衡）才登记，防未来审查循环重提或「修回」同一决策
 
 ## 本层特有摩擦清单（优先扫这些形态）
 
@@ -81,15 +82,20 @@
 - Benefits: <locality / leverage / 测试如何改善>
 - Strength: Strong | Worth
 - 依据: <deletion test 结果 / 接缝计数 / 行号证据>
-- guidance: <修复方向（一句，具体到模块与机制）+ 方案形态（deepened module 的 interface
-            入口/落点位置）+ 行为不变量清单（修复后必须保持的行为，逐条列）+
-            测试处置（哪些测试经新 interface 存活、哪些改写、哪些删除）+
-            三个月论证（为什么三个月后回看不会后悔 / 为什么这是长期方案而非打补丁）>
+- guidance: <[替换不叠层]（Strong 卡必写首句）：新 interface 就位后旧模块/旧测试删除，禁止并存。
+            修复方向（一句，具体到模块与机制）。方案形态（deepened module 的 interface 入口/落点位置）。
+            行为不变量（编号清单 B1/B2/…，每条附可执行验收命令或可复核断言）。
+            测试处置三段式：先写 <新 interface 测试点> → 迁移 <调用方清单> → 删除 <旧测试清单>。
+            三个月论证（为什么三个月后回看不会后悔 / 为什么这是长期方案而非打补丁）。
+            完整方案与波及面：round-N/review-arch-contract-host.md#<候选 ID>>
 ```
 
-**guidance 会原样直达修复者**，是修复者的唯一任务书（修复者看不到本卡全文）——Solution
-的完整方案写进报告，guidance 承载定位与关键裁决。行为不变量必须列全
-（架构重构修坏行为的代价高于 bug 修复；不变量是修复者的验收线）。
+**guidance 会原样直达修复者**，是修复者的唯一任务书（修复者看不到本卡全文）——但引擎会把
+guidance「合并为最具体的一句」再下达：行为不变量放最前并保持编号短句（压缩最可能保留首部
+与具体条目）、测试处置压成「先写/迁移/删除」短结构、指针行必须保留（fixer 靠它回读本卡全文
+与波及面）。行为不变量必须列全（架构重构修坏行为的代价高于 bug 修复；不变量是修复者的验收
+线），并给 fixer 提供可写进 selfCheck 的验收命令——grep 证明不了的行为不变量（时序/生命
+周期）给出可复核断言。
 
 **方案不可行出口（写进 guidance 预授权）**：若你判断方案存在不可行风险（约束冲突 /
 波及面失控），在 guidance 末尾显式写：「实施中若发现方案不可行，报 disputed 并给受阻
@@ -98,14 +104,16 @@
 guidance 出卡前先过**方案质询五问**（逐问想清再写，答不上来的降档或不出卡）：
 1. **约束**：方案受什么现有约束（打包形态/依赖方向/框架限制/进程边界）？
 2. **依赖**：重构模块的上下游谁受影响、是否有版本/部署耦合？
-3. **形态**：deepened module 的 interface 长什么样（几个入口、参数、返回）？依赖按四分类落在哪类（in-process 纯内存 / local-substitutable 有本地替身 / 跨网自有 port+adapter / 第三方 mock port）——类别决定接缝形态是否成立
+3. **形态**：deepened module 的 interface 长什么样（几个入口、参数、返回）？依赖按四分类落在哪类——类别决定测试方式与接缝开在内外：**in-process**（纯内存）直接经新 interface 测试，无需 adapter；**local-substitutable**（有本地替身）测试用替身跑，接缝留在模块内部，外部 interface 不为它开 port；**跨网自有 port+adapter** 测试用内存 adapter、生产用 HTTP/gRPC/队列 adapter；**第三方 mock port** 注入 port + mock adapter。形态存在多选时，列出 2-3 个被放弃的替代形态，各附一句按 depth / locality / seam placement 的对比理由（mini design-it-twice：先对比后定案，不带着未审的备选进修复）
 4. **接缝后面**：什么下沉进接缝后面、什么留在调用方？
-5. **测试存活**：现有哪些测试经新 interface 仍然有效、哪些必须改写？修复策略 = **replace, don't layer**——浅模块上的旧单测在新 interface 测试就位后删除，不叠层保留
+5. **测试存活**：现有哪些测试经新 interface 仍然有效、哪些必须改写？修复策略 = **replace, don't layer**——浅模块上的旧单测在新 interface 测试就位后删除，不叠层保留。断言内部状态、或实现一变就红的测试 = 测穿 interface，按本该删除的伪测试处置
 
 ## 报告与返回
 
 - 完整报告写 `{runDir}/round-{N}/review-arch-contract-host.md`（按工作流 prompt 给的路径）：
-  域清单 + 事实/推断分列 + 候选卡全量
+  域清单 + 事实/推断分列 + 候选卡全量 + 「Speculative 备忘」（纯文字节：确有未来价值但
+  当前不报的候选一行一条，不进计数）
 - 返回 JSON：`reportFile`、`mustFix`（Strong 数）、`suggestion`（Worth 数）、
-  `reconciliation`（R2+ 按工作流注入的台账逐条申报——**fixed 必须附你亲读到的事实**，
-  修复者的声称不算证据）
+  `reconciliation`（R2+ 按工作流注入的清单逐条申报——**fixed 必须附你亲自核实的事实**，
+  修复者的声称不算证据；核实手段不止读码：能跑则跑，对修复面实际执行相关测试/typecheck
+  并把结果写进 evidence，运行产生的临时产物不算写入代码）
