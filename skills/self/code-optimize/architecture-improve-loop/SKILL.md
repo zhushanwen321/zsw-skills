@@ -1,14 +1,18 @@
 ---
 name: architecture-improve-loop
 description: >-
-  Use when 架构改进要自动循环执行（审查→修复→复审直到 Strong 级清零）、自动化架构审查修复、
-  architecture improve loop、循环修架构、架构审查修复循环、把 improve-codebase-architecture
-  的候选直接修掉不要只出报告。本质 = 用 zcode saved workflow review-fix-loop 做引擎，
-  架构域 reviewer 定义做眼睛，循环直到无 Strong（Worth 随批全修）。
+  Use when 用户想改进架构、找重构机会、合并紧耦合模块、加深浅层模块、让代码库更可测试和
+  AI 可导航（触发词：改进架构、重构机会、架构优化、improve architecture、refactoring、
+  architecture review、架构改进循环、自动架构审查修复、architecture improve loop、循环修架构），
+  以及要把架构审查候选直接修掉不要只出报告。本质 = 用 zcode saved workflow
+  review-fix-loop 做引擎，架构域 reviewer 定义做眼睛，循环直到无 Strong（Worth 随批全修）。
+  本 skill 已内化 improve-codebase-architecture（走查方法论/候选卡/HTML 报告）、
+  codebase-design（深模块词汇与判定原则）、domain-modeling（CONTEXT.md/ADR 纪律）与
+  grilling 的方案质询决策树。
 
-  Not for 只要架构报告不改码（用 improve-codebase-architecture 原版走查 + HTML 报告）、
-  PR 增量多维 review（用 pr-cr-fix，其 reviewer 面向 git diff）、找 bug（用 diagnosing-bugs）、
-  过度设计审计（用 code-overdesign-audit）。
+  Not for 找 bug（用 diagnosing-bugs）、PR 增量多维 review（用 pr-cr-fix，其 reviewer
+  面向 git diff）、过度设计审计（用 code-overdesign-audit）、与用户对话式逐候选质询
+  （grilling 独立技能仍在）。
 ---
 
 # Architecture Improve Loop
@@ -25,10 +29,10 @@ description: >-
 
 ## 机制映射（为什么这样复用）
 
-| 原版 skill 的人工环节 | review-fix-loop 的机制 | 等价性说明 |
+| 原走查流程的人工环节 | review-fix-loop 的机制 | 等价性说明 |
 |---|---|---|
-| 派 sub-agent 走查热点域 | `reviewers` 参数（.md 定义驱动，4 个一批并行） | reviewer 定义文件承载架构词汇+候选卡格式 |
-| grilling 对抗质询 | 聚合器证据分级（evidence/unverified/downgraded）+ **reviewer 定义内嵌质询纪律** | 质询拆两半：证据核实进 reviewer 定义（先读码再写卡），方案裁决进聚合（无实证不进修复队列） |
+| 派 sub-agent 走查热点域 | `reviewers` 参数（.md 定义驱动，4 个一批并行） | reviewer 定义文件承载架构词汇+候选卡格式+证据纪律 |
+| grilling 对抗质询 | 聚合器证据分级（evidence/unverified/downgraded）+ **reviewer 定义内嵌质询** | 质询拆两半：证据核实 + 方案质询五问（约束/依赖/形态/接缝后面/测试存活）内嵌进 reviewer 定义，方案裁决进聚合（无实证不进修复队列） |
 | 候选卡 Solution 方案 | issue 的 `guidance` 字段（随 per-fixer 文档直达修复者） | guidance 必含修复方向+行为不变量（reviewer 定义强制） |
 | 文件冲突矩阵分批派 worker | reconcileGroups：组间文件不相交确定性校验 + 相交传递闭包合并，3 个一批并行 | 比人工矩阵更严（机器校验） |
 | 主会话统一验收提交 | autoCommit 统一 commit（显式路径）+ R2+ reconciliation 对账 | fixed 需实证、regressed 计修复失败、needs-redesign 熔断 |
@@ -40,14 +44,16 @@ description: >-
 |---|---|---|---|
 | Strong（现实击中 + 长期合理） | major | mustFix | 清零才收敛 |
 | Worth exploring（真实但需权衡） | minor | suggestion | 随批全修；fixer 可 deferred（须具体理由） |
-| Speculative（纯未来收益） | 不报 | — | reviewer 定义禁止出卡（原版也只登记不展开） |
+| Speculative（纯未来收益） | 不报 | — | reviewer 定义禁止出卡 |
 
 ## 流程
 
 ### 1. 圈定范围
 
-继承原版 skill 第 1 步：用户点名方向就用它；否则走 `git log --oneline` 找热点路径。
-范围决定传给 workflow 的 `base` 与 reviewer 域定义的侧重（见第 2 步）。
+**Scope before you scan（YAGNI）**：加深模块的收益在于让未来改动更容易，所以把额外
+权重放在最近变过的部分——先决定看哪里再看。用户点名方向（模块/子系统/痛点）就直接用；
+否则回溯一段 `git log --oneline` 找热点路径（反复出现的文件优先拉注意力），改动分散
+无热点则放宽网。范围决定传给 workflow 的 `base` 与 reviewer 域定义的侧重（见第 2 步）。
 
 ### 2. 选定/校准域 reviewer
 
@@ -95,27 +101,51 @@ CreateWorkflow:
 | max-rounds | 轮次耗尽仍有活跃问题 | 读 remaining 清单，人工收尾 |
 | *-failure | review/aggregate/fix 环节失败 | 按失败信息处置后 ResumeWorkflowRun 或重新发起 |
 
-### 5. 消费产物
+### 5. 消费产物与收尾
 
 - 分轮报告：`{reportDir}/{topic}/round-N/`（review-<域>.md / aggregated.md /
   aggregate-4-fixer-<k>.md）——事后审阅与下次循环的基线
 - 终态 `result`：remaining / disputed 清单即人工待办
-- 可选：把最终轮 aggregated.md 的候选卡转 HTML 报告（原版 skill 的 HTML-REPORT.md 格式）
-  给用户呈阅；循环已收敛时此步仅作展示，不驱动修复
+- **领域模型落盘**（reviewer 是只读的，登记在其报告末尾的待办由主 agent 循环收敛后统一执行）：
+  - 「领域词表待登记」清单 → 写入项目 `CONTEXT.md`（词条格式：`**术语**：1-2 句定义（定义它 IS 什么而非做什么）+ _Avoid_: 别名列表`；有主见——多词一概念选最佳、其余进 Avoid；**只收项目特有概念**，通用编程概念不收；文件不存在则此时创建）
+  - 「建议 ADR」清单（disputed 成立的 load-bearing 否决）→ 按三条件复核后在 `docs/adr/` 记录（格式极简：`# 决策短标题` + 1-3 句「上下文/决定/为什么」；顺序编号扫描最大号 +1；目录不存在则此时创建）
+- **HTML 呈阅报告**（可选，给用户看的最终产物）：自包含单文件 HTML 写入系统临时目录
+  （`$TMPDIR`，回退 `/tmp`；文件名 `architecture-review-<时间戳>.html`），写完 `open` 给
+  用户并告知绝对路径。要点：
+  - Tailwind via CDN 布局 + Mermaid via CDN 图表；两者混用——**Mermaid 管 graph 型**
+  （依赖/调用链/时序），**手绘 div/inline-SVG 管 editorial 型**（体量图/剖面/前后对比）
+  - 每候选一卡：标题（命名 the deepening，如「收拢 Order 接入管线」）+ 强度徽章
+  （Strong=emerald / Worth=amber）+ 依赖类别 tag（in-process / local-substitutable /
+  ports & adapters / mock）+ Files（等宽字体）+ **Before/After 双栏图（主角）** +
+  Problem/Solution 各一句 + Wins（≤6 词 bullet，如「测试只打一个 interface」）+
+  ADR 警示框（若有）
+  - 图承担表达重量、散文极简：图需要一段话才能看懂就重画图；模块=实线框、接缝=虚线、
+  泄漏=红箭头、深模块=厚深色框（header 给图例）
+  - 报告收尾「Top recommendation」节：最优先做哪个候选、为什么
+  - 领域概念用项目 CONTEXT.md 词条称呼，架构词用 reviewer 定义的词汇表
 
 ## 设计决策（为什么 grilling 不独立成环）
 
-原版流程的 grilling 对话（与用户逐候选质询）在本 skill 中拆解消化：**证据核实**前置进
-reviewer 定义（先读码再写卡、file:line 必引、推断必须核实升级为事实）；**方案对抗**由
-两道机器闸门承接——聚合器 evidence 裁决（无实证不进修复队列）与 R2+ reconciliation
-（修坏会在下轮被 regressed 揭穿并走向 needs-redesign 熔断）。fixer 侧保留 disputed
-申诉通道（怀疑误报给 file:line 反证转人工，不盲改）。代价：失去「修复前的人工方案
-裁决」——若项目对架构变更要求更高把关，autoCommit=false 让改动停在每轮工作区，
-人工审后统一提交。
+原流程的 grilling 对话（与用户逐候选质询）在本 skill 中拆解消化：**证据核实 + 方案质询
+五问**（grilling 决策树：约束/依赖/深模块形态/接缝后面/测试存活）内嵌进 reviewer 定义
+——出卡前逐问想清，答不上来降档或不出卡；**方案对抗**由两道机器闸门承接——聚合器
+evidence 裁决（无实证不进修复队列）与 R2+ reconciliation（修坏会在下轮被 regressed
+揭穿并走向 needs-redesign 熔断）。fixer 侧保留 disputed 申诉通道（怀疑误报给
+file:line 反证转人工，不盲改）。代价：失去「修复前的人工方案裁决」——若项目对架构
+变更要求更高把关，autoCommit=false 让改动停在每轮工作区，人工审后统一提交。
 
-## 与原版 skill 的关系
+## 内化来源（已移除的上游技能）
 
-- 本 skill = improve-codebase-architecture 的**执行引擎化**（出码闭环）
-- 原版 skill = **走查 + 候选卡 + HTML 报告 + 与用户 grilling 对话**（不出码，适合
-  需要人工逐候选裁决的场景）
-- 触发分流：用户说「改/修/循环/自动」→ 本 skill；说「看看/分析/出报告」→ 原版
+本 skill 的方法论自下列技能内化，它们已从全局 skill 清单移除（git 历史可追溯）：
+
+- **improve-codebase-architecture**：走查方法论（scope before scan / 热点优先 /
+  通用摩擦五问 / 候选卡与三档强度 / HTML 报告）→ SKILL.md 流程 + reviewer 定义 + HTML 呈阅节
+- **codebase-design**：深模块词汇表与判定原则（interface 全义 / deletion test /
+  interface-is-test-surface / 接缝计数 / 可测试性三原则 / 依赖四分类 /
+  replace-don't-layer）→ reviewer 定义的词汇与判定段
+- **domain-modeling**：CONTEXT.md 词条纪律与 ADR 三条件/格式 → reviewer 定义的
+  领域词表与 ADR 纪律段 + SKILL.md 收尾落盘节
+- **grilling**（技能本体**保留**，tech-design 与 code-overdesign-audit 仍在引用）：
+  其决策树问题内化为 reviewer 的方案质询五问；「事实自己查不问用户」已是 reviewer
+  证据纪律
+
