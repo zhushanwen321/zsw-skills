@@ -6,16 +6,16 @@ description: >-
   over-engineering audit、简化设计、删抽象、删间接层、这段设计是不是过度了。
   识别「只需简化一点点设计，就能大幅提升可维护性/可理解性」的高杠杆点：
   三层证据（可计算信号+语义四问+业务保证映射）→ 杠杆排序 → 候选卡片
-  （小取舍→大简化→核心无损三段论证）→ 用户裁决后才执行。
+  （小取舍→大简化→核心价值不变的三段论证）→ 用户裁决后才执行。
 
   Not for 模块做深、deepening、可测试性重构（用 improve-codebase-architecture）；
   简化最近的代码、清理本次改动、死代码、去重、复用优化（用 code-simplify）；
-  代码规范检查、lint 级问题（lint 工具领地）；找 bug（用 diagnose）。
+  代码规范检查、lint 级问题（归 lint 工具管）；找 bug（用 diagnose）。
 ---
 
 # Over-Engineering Audit
 
-把「过度复杂设计」变成可裁决的简化候选：每张候选卡片论证三段——牺牲什么保证（小取舍）、省下什么机制（大简化）、为什么核心价值无损（价值锚）。设计文档是本 skill 的 SSOT：`<skill_dir>/docs/plans/2026-09-10-over-engineering-audit-skill.md`（本 skill 内，随仓库分发）。
+把「过度复杂设计」变成可裁决的简化候选：每张候选卡片论证三段——牺牲什么保证（小取舍）、省下什么机制（大简化）、为什么核心价值无损（核心价值不变的判据）。设计文档是本 skill 的 SSOT：`<skill_dir>/docs/plans/2026-09-10-over-engineering-audit-skill.md`（本 skill 内，随仓库分发）。
 
 被触发后先判模式，再按路由 read 对应文档；细节全部在 references，正文不含。
 

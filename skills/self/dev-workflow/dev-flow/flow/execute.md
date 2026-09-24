@@ -41,7 +41,7 @@
    - `git status --short` + `git diff --stat` 核对改动文件集合 == files_changed 且 ⊆ 领地
    - 重跑其核心测试命令至少 1 次，确认输出与 test_evidence 相符
    - 有疑点 → 打回重验；允许通过的测试类文件（fixture 等）须能解释归属
-5. **流转 commit**：核验过 → 主 agent 按 files_changed 清单精确 add → commit（英文 message 含 unit id、对应设计章节、测试结论一行；属地的文档同步随本单元同笔提交，禁止单独的簿记/文档小笔；计划文档在 gitignored `.tmp/dev-flow/` 下不入库，禁 add——状态表更新是写盘动作，不产生 commit）。同步更新状态表
+5. **流转 commit**：核验过 → 主 agent 按 files_changed 清单精确 add → commit（英文 message 含 unit id、对应设计章节、测试结论一行；本单元范围内的文档同步随本单元同笔提交，禁止单独的文档类小 commit；计划文档在 gitignored `.tmp/dev-flow/` 下不入库，禁 add——状态表更新是写盘动作，不产生 commit）。同步更新状态表
 6. **失败打回**：原 dev 会话仍存活则续聊定向修（贴 diff/失败输出/违反条款）；否则走「接替程序」。轮次 +1；超 2 轮未绿 → 冻结该单元，升级用户（附已尝试方案清单）。打回轮派发前后都重算就绪集——某单元在修不阻塞其他就绪单元的并行推进（第 7 步在打回场景同样生效）
 7. **流式推进**：任一单元 committed 即重算第 1 步就绪集，解锁的后继在并发余量内立即补派（守恒 ≤5），不等同批其他单元——拓扑分层只是 DAG 展示分组，不是调度边界
 8. **循环至状态表全 committed** → 转入 `flow/consistency-review.md`
