@@ -26,6 +26,10 @@
 | 2026-09-24 | 词 | 揭新率 | A 砍字造词（"揭出新问题的比率"压缩成"揭新率"），"揭新"非词需读者自行还原 | 第 3A 组审查：architecture-improve-loop/SKILL.md（本轮已就地改写为"新问题出现率极端偏高"，全称"揭出新问题"可懂保留；登记供裁决） |
 | 2026-09-24 | 词 | 重载语义 | G 同词多义："重载"默认联想 override/overload，此处义为"disputed 通道被复用于多种含义"，第一遍无法准确推出；语义拿不准未改 | 第 3A 组审查：architecture-improve-loop/SKILL.md L190（"重载语义的误裁决"） |
 | 2026-09-24 | 词 | 去一句化压缩 | F 电报式密度 + 切分歧义："guidance 去一句化压缩"可切成"去掉『一句化压缩』"或"去一句化＋压缩"，指涉（guidance 长度限制）无就地定义；切分歧义未改 | 第 3A 组审查：architecture-improve-loop/SKILL.md L186（fork 改动清单项） |
+| 2026-09-24 | 词 | 领地（含同族"属地"） | G 同义多词：dev-flow DAG 单元表字段名「领地（精确文件路径）」义为"该单元允许修改的文件集合"，行文中与"属地""白名单内文件"混用；第 3B 组已就地改写行文用法约 10 处（design-code-sync/tech-design），dev-flow 字段体系约 35 处（dag-authoring/plan/execute/consistency-review/acceptance/parallelism-reviewer）因属字段级术语待整体定名而保留，裁决后需整体重命名 | 第 3B 组审查：dev-flow 全目录（字段名本体）+ design-code-sync/tech-design（行文用法，已改） |
+| 2026-09-24 | 词 | 面族（登记面 / 影响面 / 测试面 / 失败面 / 投影面等"XX 面"） | A 砍字造词族：「面」作"方面/范围/集合"义的构词后缀成体系使用，第一遍需猜所指（如"关联登记面""宿主投影面"）；本批已改最不可懂的 3 个（涟漪面→波及点、识别面→识别结果、文件面→文件清理），其余保留待整体定名 | 第 3B 组审查：tech-design / dev-flow / design-code-sync 多文件 |
+| 2026-09-24 | 词 | 挂账 | D 财税记账隐喻，与已裁决的清账/盘面同族未裁决成员（patterns.md 模式四已举例但未入三表），此处义为"一直搁置不处理"；本批已就地改写 1 处（"继续挂账"→"继续挂着不处理"），登记供裁决是否入正式替换表 | 第 3B 组审查：code-overdesign-audit/docs/plans/2026-09-10-over-engineering-audit-skill.md L225 |
+| 2026-09-24 | 词 | 销账 | D 财税记账隐喻，与已裁决的清账/盘面同族未裁决成员，此处义为"逐条处理完毕（关闭）"；本批已就地改写 1 处（"逐条销账"→"逐条处理关闭"），登记供裁决是否入正式替换表 | 第 3B 组审查：dev-flow/references/dag-authoring.md L37（stub-blocked 项） |
 
 ## 裁决去向
 

@@ -60,7 +60,7 @@
 ## 收尾
 
 1. 全绿后向用户交付汇总：目标达成对照表 + 合理偏差登记表 + 残留风险 + 覆盖概览 + 剧本分流结果（沉淀了哪些可复用 spec / 丢弃了哪些一次性脚本）
-2. 主 agent 最终 commit（验收产物、可复用 e2e spec 与文档登记）。**impl-plan 不入本 commit**——台账/计划文档全程是盘面产物（`.tmp/`，plan.md 文档头 [MANDATORY] 禁令），终态回填写盘即闭环，禁止 `git add -f` 入库
+2. 主 agent 最终 commit（验收产物、可复用 e2e spec 与文档登记）。**impl-plan 不入本 commit**——进度清单/计划文档全程是写盘产物、不 commit（`.tmp/`，plan.md 文档头 [MANDATORY] 禁令），终态回填写盘即闭环，禁止 `git add -f` 入库
 3. **功能分级登记同步 [MANDATORY]**：交付引入了新功能/新用例，或既有功能的「挂掉后果」变化导致分级依据改变 → 同 commit 更新项目功能分级登记（如 `docs/FEATURE-PRIORITIES.md`）对应行 + 受影响 extension 包内文档头注（仅包内有 ARCHITECTURE.md / docs/ 的）；纯内部重构/等价修复不触发。项目无分级登记时跳过并在交付汇报注明
 4. **重要文档资产更新检查 [MANDATORY]**：对照项目 AGENTS.md 文档索引登记的资产文档（典型：`docs/PRODUCT.md` / `docs/ARCHITECTURE.md` / `docs/CONTEXT.md` / `docs/DESIGN.md` / `docs/STANDARDS.md` / `docs/TEST-STRATEGY.md` / `docs/TROUBLESHOOTING.md`），按变更内容判定是否同 commit 更新——产品边界/用户画像变化 → PRODUCT；进程拓扑/分层/数据流变化 → ARCHITECTURE；新领域术语或语义漂移 → CONTEXT；视觉范式/token 结构变化 → DESIGN；编码规范变化 → STANDARDS；回归基线/测试分层变化 → TEST-STRATEGY；新增排障规则/日志路径 → TROUBLESHOOTING。路径以项目 AGENTS.md 索引为准（项目可能不同名）。**项目维护了采样管道资产目录时（见「剧本预编译」采样管道复用检查），本验收期新增/修改/淘汰的管道脚本同 commit 回写资产目录并同步其资产清单表**。零触发也必须在交付汇报注明「文档资产零同步」，禁止静默跳过
 5. **ADR 复审 [MANDATORY]**：项目存在 ADR 登记（如 `docs/adr/decisions.md`，路径以项目 AGENTS.md 索引为准）时，对照本次交付复审：① 开发中拍板的重要决策（机制取舍 / 架构选择 / 行为语义变化）是否已登记 ADR，漏登的同 commit 补登记；② 本次改动是否使既有 ADR 条目过时或被推翻，是则按其文档规则修订（含「已否谱系」注记）；③ 本项与上两项（功能分级 / 文档资产）的核对来源优先 = 各设计文档头部「关联登记面」字段（tech-design 产物带该字段时逐项核对登记面是否已同步；无该字段时按变更内容扫描判定）。零触发也必须在交付汇报注明「ADR 零同步」，禁止静默跳过

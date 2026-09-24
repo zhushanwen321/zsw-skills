@@ -27,7 +27,7 @@ bash ~/.agents/skills/merge-worktree/pre-merge-check.sh
 # <填写项目特有验证命令>
 ```
 
-**零容忍**：任何失败都必须正面修复，不允许跳过。
+**零容忍**：任何失败都必须当场直接修复，不允许跳过。
 
 ### 2. commit message
 

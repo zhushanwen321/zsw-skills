@@ -11,7 +11,7 @@ read {skill_dir}/references/design-principles.md
   # 重点：P1(行为约束)、P2(风险∝密度)、P5(示例驱动)、
   #       P11(展示独立)、P14(约束衰减)
 read {skill_dir}/references/failure-mode-taxonomy.md
-  # 重点：F1(规则被忽略)、F10(示例空洞)、F13(约束过载)
+  # 重点：F1(规则被忽略)、F10(缺示例)、F13(约束过载)
 read {skill_dir}/references/carrier-taxonomy.md
   # 重点：SKILL.md 栏目 — description 只写何时用，正文做路由不做内容
 ```
@@ -40,7 +40,7 @@ SKILL.md 设计最大的陷阱：**把 description 写成能力摘要而不是�
 - 验证方法：**只读 description，能判断什么时候该加载这个 skill 吗？** 如果能但不知道 skill 具体会做什么，description 正确
 - [P4 反模式枚举] 反模式检测：
   - description 中出现流程描述（"first does X, then Y"） → 太像正文
-  - description 中没有排除子句 → 可能在无关场景被加载（[F10 示例空洞]）
+  - description 中没有排除子句 → 可能在无关场景被加载（[F10 缺示例]）
   - description 中用了第一人称 → 描述的不是触发条件而是身份声明
 - 触发短语的密度：至少 3 个不同的触发短语，覆盖不同表达方式
 
@@ -117,7 +117,7 @@ SKILL.md 设计最大的陷阱：**把 description 写成能力摘要而不是�
 
 1. **Description 写工作流** → 模型 probability-match 后跳过正文，按 description 的简化描述行动——丢失所有细节约束
 2. **正文做内容不做路由**（[F13 约束过载]）→ 600 行正文，模型加载后仍然不知道第一步该做什么，且后面的规则因约束衰减被忽略
-3. **缺少排除子句**（[F10 示例空洞]）→ skill 在不该触发时被加载，如写 CLAUDE.md 时触发 skill-writing skill，在错误的上下文中执行错误的流程
+3. **缺少排除子句**（[F10 缺示例]）→ skill 在不该触发时被加载，如写 CLAUDE.md 时触发 skill-writing skill，在错误的上下文中执行错误的流程
 
 ## 与其他载体的协作
 
@@ -139,5 +139,5 @@ SKILL.md 设计最大的陷阱：**把 description 写成能力摘要而不是�
 ## 快速参考
 
 - 核心原则：[P1 行为约束]、[P11 展示独立]、[P14 约束衰减]
-- 失败模式：[F1 规则被忽略]、[F10 示例空洞]、[F13 约束过载]
+- 失败模式：[F1 规则被忽略]、[F10 缺示例]、[F13 约束过载]
 - 已有规范：`meta-sk-skill-writer`（YAML 格式、标记规范、安装路径）

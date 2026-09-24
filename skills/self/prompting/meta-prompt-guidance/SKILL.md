@@ -40,7 +40,7 @@ brainstorm 完成后，进入设计阶段：
 read {skill_dir}/flow/create.md
 ```
 
-create.md 会引导你按顺序消费 `patterns/<carrier>.md` 的各章节（前置知识 → 核心挑战 → 逐维度设计 → 失败案例 → 载体协作 → 设计走查）。
+create.md 会引导你按顺序阅读 `patterns/<carrier>.md` 的各章节（前置知识 → 核心挑战 → 逐维度设计 → 失败案例 → 载体协作 → 设计走查）。
 
 设计完成后，如需要格式起点，read 对应模板：
 
@@ -92,7 +92,7 @@ read {skill_dir}/resources/failure-modes/<failure-mode>.md
 
 ## 载体选择
 
-先判断载体类型，再加载方法论。判断依据：
+先判断载体类型（载体 = prompt 的类型：工具描述 / 系统提示词 / 运行时注入指令等，见下表），再加载方法论。判断依据：
 
 | 你要设计的是 | 载体 | 场景 |
 |------------|------|------|
@@ -108,7 +108,7 @@ read {skill_dir}/resources/failure-modes/<failure-mode>.md
 
 ## 关键约束
 
-- [MANDATORY] **永远先 brainstorm → create → patterns，不跳过 create.md**。brainstorm 确定载体和失败模式，create 引导你按固定顺序消费 pattern 的每个章节。跳过 create 直接进 patterns = 方法论碎片化——你失去了风险分级、逐维度设计协议和设计走查
+- [MANDATORY] **永远先 brainstorm → create → patterns，不跳过 create.md**。brainstorm 确定载体和失败模式，create 引导你按固定顺序阅读 pattern 的每个章节。跳过 create 直接进 patterns = 方法论碎片化——你失去了风险分级、逐维度设计协议和设计走查
 - [MANDATORY] **方法论文档按需要加载，不要一次全读**。`patterns/` 下的每个文件约 300 行，一次加载浪费 context
 - [MANDATORY] **模板必须在方法论之后才能使用**。如果用户直接要模板，给模板但同时加载对应的方法论文档
 - [MANDATORY] **审查必须用审查清单，不能凭感觉**。每个载体有对应的 review/rubric-XXX.md

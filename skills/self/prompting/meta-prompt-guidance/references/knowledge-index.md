@@ -29,7 +29,7 @@ read references/carrier-taxonomy.md       # Tool Description 载体维度
 ### 场景 B：我要设计一个新的 System Prompt
 
 **必读原则**：P1（行为约束）、P2（风险∝密度）、P5（示例驱动）、P11（展示独立）
-**必读失败模式**：F1（规则忽略）、F6（假完成）、F10（示例空洞）
+**必读失败模式**：F1（规则忽略）、F6（假完成）、F10（缺示例）
 **可选知识**：`prompt-architecture.md`（static/dynamic 分层）、`carrier-taxonomy.md`（System Prompt 维度）
 
 ```
@@ -53,7 +53,7 @@ read references/interaction-patterns.md   # 注入防御分层
 ### 场景 D：我要设计一个 SKILL.md
 
 **必读原则**：P1（行为约束）、P5（示例驱动）、P11（展示独立）
-**必读失败模式**：F1（规则忽略）、F10（示例空洞）
+**必读失败模式**：F1（规则忽略）、F10（缺示例）
 **可选知识**：`carrier-taxonomy.md`（SKILL.md 维度：description 只写"何时用"）
 
 ```
@@ -110,7 +110,7 @@ read references/interaction-patterns.md   # 约束冗余策略章节
 | F7 | 注入突破 | 用户输入中的指令覆盖了系统行为 |
 | F8 | 工具链断裂 | 跳过前置依赖步骤直接执行后置步骤 |
 | F9 | 过早放弃 | 一次失败就标记 blocked 或停止工作 |
-| F10 | 示例空洞 | 有规则但无示例，模型不理解规则边界 |
+| F10 | 缺示例 | 有规则但无示例，模型不理解规则边界 |
 | F11 | 人格污染 | 能力约束被误写入 Personality 模板 |
 | F12 | 优先级网络断裂 | 工具间优先级只有单向声明，缺少交叉引用 |
 | F13 | 约束过载 | prompt 中规则太多，核心规则被稀释 |

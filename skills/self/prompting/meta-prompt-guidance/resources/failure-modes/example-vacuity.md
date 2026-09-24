@@ -1,4 +1,4 @@
-# F10: 示例空洞 (Example Vacuity)
+# F10: 缺示例 (Example Vacuity)
 
 **一句话**：有规则但无示例，模型不理解规则的边界在哪里。
 

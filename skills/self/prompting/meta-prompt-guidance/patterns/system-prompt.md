@@ -9,7 +9,7 @@ read {skill_dir}/references/design-principles.md
   # 重点：P1(行为约束)、P2(风险∝密度)、P5(示例驱动)、
   #       P11(展示独立)、P13(人格分离)、P14(约束衰减)、P15(防提取)
 read {skill_dir}/references/failure-mode-taxonomy.md
-  # 重点：F1(规则被忽略)、F6(假完成)、F10(示例空洞)、
+  # 重点：F1(规则被忽略)、F6(假完成)、F10(缺示例)、
   #       F13(约束过载)、F15(提示词泄露)
 read {skill_dir}/references/prompt-architecture.md
   # 重点：第三节 Static/Dynamic 分层
@@ -191,5 +191,5 @@ System prompt 设计最大的陷阱：**一切往里塞，最终什么都留不�
 ## 快速参考
 
 - 核心原则：[P1 行为约束]、[P2 风险∝密度]、[P5 示例驱动]、[P11 展示独立]、[P13 人格分离]、[P14 约束衰减]、[P15 防提取]
-- 失败模式：[F1 规则被忽略]、[F6 假完成]、[F10 示例空洞]、[F13 约束过载]、[F15 提示词泄露]
+- 失败模式：[F1 规则被忽略]、[F6 假完成]、[F10 缺示例]、[F13 约束过载]、[F15 提示词泄露]
 - 工程管理：static/dynamic 分层（prompt-architecture.md 第三节）
