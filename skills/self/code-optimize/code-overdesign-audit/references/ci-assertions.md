@@ -1,6 +1,6 @@
 # pre-commit 断言（ci-assertions）
 
-> 防新增投机复杂度的快速断言集。设计 SSOT：`<skill_dir>/docs/plans/2026-09-10-over-engineering-audit-skill.md` §3.3.7（v6）。目标：单次提交断言耗时 <10s、零外部依赖（git/grep/date 内置）、不改 package.json/lock。
+> 防新增投机复杂度的快速断言集。设计 SSOT：`<skill_dir>/docs/plans/2026-09-10-code-overdesign-audit-skill.md` §3.3.7。目标：单次提交断言耗时 <10s、零外部依赖（git/grep/date 内置）、不改 package.json/lock。
 
 ## 断言集与拦截口径
 
@@ -152,6 +152,6 @@ bash "$(git rev-parse --git-dir)/hooks/oe-assert.sh" # oe-audit-assert
 
 **marker 互斥约束**：oe-exempt 汇总用 `grep -r "oe-exempt:"`（冒号锚定），与 `# oe-audit-assert` 前缀互斥——调用行不会被 audit 步骤 0 误认作豁免；两端标记格式演进时必须维持互斥。
 
-## 验收锚（设计文档 §4 场景 4）
+## 验收对照（SSOT §4 场景 4）
 
 a 具名导出零引用被拦｜b 正常修改十连放行（含一次 default 修改）｜c 豁免标记放行且可被 grep 汇总｜d WIP 两步提交 + audit 汇总无残留｜e 单次耗时 <10s×10 次｜f 故障 skipped 可见｜g husky 仓库走分支 (b) 且真实提交断言输出实际出现。
