@@ -162,7 +162,7 @@ guidance 承载执行策略（zcode 侧即此形态，已实证可忍）。
 
 ## 设计决策（为什么 grilling 不独立成环）
 
-原流程的 grilling 对话（与用户逐候选质询）在本 skill 中拆解消化：**证据核实 + 方案质询
+grilling 对话（与用户逐候选质询）在本 skill 中不独立成环，拆为两处：**证据核实 + 方案质询
 五问**（grilling 决策树：约束/依赖/深模块形态/接缝后面/测试存活）内嵌进 reviewer 定义
 ——出卡前逐问想清，答不上来降档或不出卡；**方案对抗**由两道机器闸门承接——聚合器
 evidence 裁决（无实证不进修复队列）与 R2+ reconciliation（修坏会在下轮被 regressed
@@ -192,19 +192,21 @@ fixer prompt 放宽架构域执行策略）：
 
 未命中信号前不写定制脚本——为想象中的问题付双版本镜像维护的真实成本，违反最小机制。
 
-## 内化来源（已移除的上游技能）
+## 方法论来源与上游技能去向
 
-本 skill 的方法论自下列技能内化，它们已从全局 skill 清单移除（git 历史可追溯）：
+improve-codebase-architecture、codebase-design、domain-modeling 的职责由本 skill 承接（三者不再独立存在，需要其能力时用本 skill）；grilling 例外，技能本体仍独立：
 
-- **improve-codebase-architecture**：走查方法论（scope before scan / 热点优先 /
-  通用摩擦五问 / 候选卡与三档强度 / HTML 报告）→ SKILL.md 流程 + reviewer 定义 + HTML 呈阅节
-- **codebase-design**：深模块词汇表与判定原则（interface 全义 / deletion test /
+- **走查方法论**（scope before scan / 热点优先 /
+  通用摩擦五问 / 候选卡与三档强度 / HTML 报告；来自 improve-codebase-architecture）：
+  SKILL.md 流程 + reviewer 定义 + HTML 呈阅节
+- **深模块词汇与判定原则**（interface 全义 / deletion test /
   interface-is-test-surface / 接缝计数 / 可测试性三原则 / 依赖四分类 /
-  replace-don't-layer / design-it-twice 以质询五问 Q3 的 mini 形态内化——形态多选时
-  列被弃替代形态逐维对比，不开平行 sub-agent）→ reviewer 定义的词汇与判定段
-- **domain-modeling**：CONTEXT.md 词条纪律与 ADR 三条件/格式 → reviewer 定义的
-  领域词表与 ADR 纪律段 + SKILL.md 收尾落盘节
-- **grilling**（技能本体**保留**，tech-design 与 code-overdesign-audit 仍在引用）：
-  其决策树问题内化为 reviewer 的方案质询五问；「事实自己查不问用户」已是 reviewer
+  replace-don't-layer / design-it-twice 以质询五问 Q3 的 mini 形态存在——形态多选时
+  列被弃替代形态逐维对比，不开平行 sub-agent；来自 codebase-design）：
+  reviewer 定义的词汇与判定段
+- **CONTEXT.md 词条纪律与 ADR 三条件/格式**（来自 domain-modeling）：
+  reviewer 定义的领域词表与 ADR 纪律段 + SKILL.md 收尾落盘节
+- **grilling**（tech-design 与 code-overdesign-audit 也在引用）：
+  其决策树问题以 reviewer 的方案质询五问形式存在；「事实自己查不问用户」是 reviewer
   证据纪律
 

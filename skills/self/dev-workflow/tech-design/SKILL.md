@@ -15,10 +15,10 @@ description: >-
 
 层无关——无论你在哪一层做设计（需求规格 / 技术方案 / 实现计划），都套同一套方法论；差异只在"解决方案"章节的侧重点（见层适配）。
 
-## 产物路径与决策沉淀 [MANDATORY]
+## 产物路径与决策登记 [MANDATORY]
 
 1. **设计文档本体落 `<项目根>/.tmp/tech-design/<name>.md`**（项目根 = `git rev-parse --show-toplevel`，worktree 解析为各 worktree 根；非 git 仓库落 `/tmp/tech-design/`）——设计文档是 tech-design → dev-flow 的**过程产物，不进项目 docs/、不进 git**（实施落地后的现行设计依据是代码与活性文档；入库设计文档会过期成僵尸文档）。伴生流水线产物（审查报告/探针/impl-plan）同落此目录。完整约定见 `flow/write.md` 产物路径节
-2. **重要设计决策必须沉淀 ADR**：项目存在 ADR 登记处（如 `docs/adr/decisions.md`，路径以项目 AGENTS.md 索引为准）时，设计中拍板的重要决策（机制取舍 / 架构选择 / 行为语义变化）须登记或更新 ADR——设计文档本身可弃，决策必须活在其权威登记处；dev-flow 收尾有 ADR 复审兜底
+2. **重要设计决策必须登记 ADR**：项目存在 ADR 登记处（如 `docs/adr/decisions.md`，路径以项目 AGENTS.md 索引为准）时，设计中拍板的重要决策（机制取舍 / 架构选择 / 行为语义变化）须登记或更新 ADR——设计文档本身可弃，决策必须活在其权威登记处；dev-flow 收尾有 ADR 复审兜底
 
 ## 核心红线（11 条，详解见 references/design-principles.md）
 
