@@ -5,7 +5,8 @@ description: >-
   不一致"、design sync、对齐实现与文档、按设计文档校准代码、差距审查修复循环、
   文档代码漂移、实现漂移检查、交付后修复未回写文档。双向校准代码与设计文档
   至 0 must-fix。配合 tech-design（文档来源）与 dev-flow（实现来源）使用；
-  dev-flow 交付时（阶段 5 验收全绿后）由其阶段 6 自动衔接执行，无需单独触发。
+  dev-flow 交付时（阶段 5 验收全绿后）由其阶段 6 自动衔接执行，无需单独触发；
+  dev-flow-wf 流程中的终态同步走其内嵌 D5（W4 design-code-sync-loop），不经本 skill。
 
   Not for 审查设计文档本身（用 tech-design 的 review 流程）、dev-flow 流水线内
   的一致性审查（走 dev-flow 阶段 3/4）与交付后独立 commit 的定向审查（走

@@ -475,7 +475,7 @@ function normFindings(raw: unknown, owner: string, round: number, seqStart: numb
       severity: normSeverity(o.severity),
       impact: asStr(o.impact),
       rationale: asStr(o.rationale),
-      fixHint: asStr(o.fixHint),
+      fixHint: asStr(o.fixHint ?? o["fix-hint"]), // 双键兼容：模板 schema 的人类可读形态是连字符 fix-hint
       firstSeen: round,
       status: "open",
     });
@@ -986,7 +986,7 @@ const plannerPromptText = [
     ? `职责②「现实↔impl-plan 进度核对」的数据源 = status.json（${statusPathArg}，D1/D2 各节点终态事实）——进度核对以它为准，impl-plan.json 只有单元面/依赖/领地。`
     : "职责②注意：本次未提供 status.json——进度核对降级为 impl-plan.json 单侧（单元面/依赖/领地），无法核对节点终态事实，请在 frameworkFindings 的 note 注明该降级。",
   "只报告与产出计划，不修改任何文件。",
-  "完成后返回 JSON：frameworkFindings（元素 {id, matrixRow: {claim, impl, verdict, note}, severity}）+ modules（元素 {id, module, files, focus}）——结构按模板输出节；无某类发现时显式说明；modules 至少 1 个（规模小返回单模块）。",
+  "完成后返回 JSON：frameworkFindings（元素 {id, matrixRow: {claim, impl, verdict, note, overdesign?}, severity}）+ modules（元素 {id, module, files, focus}）——结构按模板输出节；无某类发现时显式说明；modules 至少 1 个（规模小返回单模块）。",
 ].join("\n");
 
 function reviewPrompt(m: ModulePlanRec): string {

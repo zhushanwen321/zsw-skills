@@ -48,7 +48,7 @@
 
 ### 3. 逐节点 promptFile 构造
 
-每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·领地·验收条款/设计文档对应节摘录/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：增量测试按 testCommand；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组）/ 约束（领地白名单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报）。
+每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·领地·验收条款/设计文档对应节摘录/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：增量测试按 testCommand；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组；宿主无 structured-output 工具时在回复中用 json 代码块返回同构对象，解析失败视同本次汇报无效打回重报）/ 约束（领地白名单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报）。
 
 ### 4. 初始 status.json
 
@@ -66,7 +66,7 @@
 - 产物类条目编入 testPlan.artifacts（引擎 Gate A 第一波并行预备，见 §2 testPlan 注释；禁只标注不落位）
 - 覆盖矩阵骨架：从 impl-plan 领地表 × 验收计划表生成「单元领地 × 计划用例」骨架表落 `.tmp/dev-flow/<name>.coverage.md`（D4 收尾时回填实际覆盖并处置 uncovered 区——补测试或登记理由）
 - 章节映射锚点核对：逐条 read 设计文档核对 §N 实际存在，对不上停回 tech-design-wf T3（不猜测）
-- （进 D3 前）环境 smoke：场景依赖的每个环境面跑无 LLM 探针验证可用；剧本 dry-run：机械断言先对样本数据跑通；采样管道复用检查：read 项目采样管道文档，已有脚本直接复用，新姿势沉淀回写，禁现场重写管道；多实例分配：互斥场景组绑独立 dev 实例（装配器端口段派生 + 独立数据目录）
+- （进 D3 前）环境 smoke：场景依赖的每个环境面跑无 LLM 探针验证可用；剧本 dry-run：机械断言先对样本数据跑通；bash 语义歧义点（管道子 shell 的 cwd 隔离、`$()` 剥尾换行、引号嵌套、**管道退出码陷阱**）逐行过一遍——`cmd | tail; echo $?` 取的是管道末段（tail）的退出码，主命令失败会被判绿，验收/测试命令一律无管道形态 `cmd > log 2>&1; echo "EXIT=$?"`，判定读 EXIT 行 + grep 日志，禁止 `| tail`/`| head` 后跟 `$?`/`&&` 判定退出；采样管道复用检查：read 项目采样管道文档，已有脚本直接复用，新姿势沉淀回写，禁现场重写管道；多实例分配：互斥场景组绑独立 dev 实例（装配器端口段派生 + 独立数据目录）
 
 ### 6. 验收编译规则（为 D3 预生成 acceptance 面）
 

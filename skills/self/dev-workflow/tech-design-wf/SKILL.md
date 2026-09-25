@@ -3,7 +3,7 @@ name: tech-design-wf
 description: >-
   Use when 三阶段产出完整设计包（设计文档 + 实施计划）：写技术设计文档 → 对抗式审查循环 →
   实施计划（impl-plan 双格式）。tech-design 的 workflow 版（灰度并行，老版保留可随时切回）。
-  触发词：「三阶段设计」「设计包」「wf 设计」「workflow 版设计」；「优化表达」「换个说法」「agent 说得太绕」（借用 flow/write.md 易理解性方法论优化沟通表达，不走 review 流程）。
+  触发词：「三阶段设计」「设计包」「wf 设计」「workflow 版设计」；「优化表达」「换个说法」「agent 说得太绕」（借用 flow/express.md 易理解性准则优化沟通表达，不走 review 流程）。
   每阶段结束默认停下等用户确认，前期授权可连跑。含 W1 tech-review-loop 审查循环
   （workflow 就绪前走内置手工路径）。
   Not for 写代码实现、写测试（用 test-quality）、纯架构分析无文档产出；
@@ -47,7 +47,7 @@ T1 写设计文档（Step 0-6）──确认──▶ T2 审查循环（价值�
 | 审查后修复 / 多轮循环协议 | `flow/write.md` Step 7（循环由 must-fix 驱动 + suggestion 处置制） |
 | 问结构/原则/反模式/验收最佳实践 | `references/`（doc-structure / design-principles / anti-patterns / acceptance-practices） |
 | 要文档骨架模板 | `resources/templates/design-doc-template.md` |
-| 优化表达 / 换个说法 / agent 说得太绕 | 借用 `flow/write.md` 易理解性方法论优化沟通表达，不走 review 流程 |
+| 优化表达 / 换个说法 / agent 说得太绕 | `flow/express.md`（一次性表达优化，不写文档不派 review） |
 
 ## W1 workflow 契约（zcode 环境执行体，渐进接入）
 

@@ -57,7 +57,7 @@ description: "审查 dev-flow 实施计划（impl-plan）的并行度与调度�
 
 ```markdown
 ## Summary
-<can_parallelize 数> 可并行化, <front_loadable 数> 可前置, <level_downgradable 数> 可降级, <prebuildable 数> 可预建.
+<findings 数> 条并行度损失；命中模式：<模式编号列表，如 1/3/4>；六模式逐条核查结论一句话。
 
 ## Findings
 
@@ -78,7 +78,7 @@ description: "审查 dev-flow 实施计划（impl-plan）的并行度与调度�
 通过 `structured-output` 返回，字段名严格一致：
 
 ```json
-{ "report_file": "<output 路径>", "can_parallelize": <数字>, "front_loadable": <数字>, "level_downgradable": <数字>, "prebuildable": <数字> }
+{ "report_file": "<output 路径>", "findings": <数字>, "patterns_hit": ["<命中模式编号>"] }
 ```
 
 ## 约束

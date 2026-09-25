@@ -58,13 +58,14 @@ description: >-
 |----------|----|------|------|
 | W2 `wave-executor`（saved） | D1 / D3（两实例化） | `{ execPlan: "<path>.exec-plan.json" }` | completed / blocked / core-failed |
 | W3 `dev-consistency-loop`（saved） | D2 | `{ execPlan, maxRounds?, reviewerTemplate?, attempt? }` | converged / stuck / gate-a-failed / review-failure / fix-failure（终态回写 status.json events：consistency 终态一笔恒写 + gate-a 笔仅在 converged/gate-a-failed 时写；必填字段双无条目降级登记项——deferredLedger 回流；attempt>1 时 Gate A 日志带 .attemptM 后缀） |
-| W4 `design-code-sync-loop`（saved） | D5 | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath? }` | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（args 可选 statusPath；终态含 overdesignCandidates——越权候选卡呈报） |
+| W4 `design-code-sync-loop`（saved） | D5 | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath?, plannerTemplate?, reviewerTemplate?, attempt? }` | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（模板路径与 attempt 缺省自动处理，attempt>1 历史产物不覆盖；终态含 overdesignCandidates——越权候选卡呈报） |
 
 workflow 未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：workflow 用 ResumeWorkflowRun/AmendWorkflow，手工路径以 status.json + git log 对账，冲突以 git 为准）。
 
 ## 关键约束
 
-- [MANDATORY] 并发 ≤5（全局 subagent 约束）；模型按全局路由表、thinking max；task 三段式
+- [MANDATORY] 并发 ≤5（全局 subagent 约束）；模型按全局路由表、thinking max；task 三段式；环境中看不到指定模型时列出实际可见项请用户选择
+- [MANDATORY] 手工路径的 subagent 派发一律后台异步、靠完成通知推进（zcode 即 run_in_background=true），禁止前台同步阻塞等待返回——同步等待长任务有超时丢失结果风险，且阻塞主 agent 无法流水化核验；workflow 通道不受此条约束
 - [MANDATORY] 数字阈值：单元 dev→fix 超 2 轮 = blocked 升级用户；一致性审查累计 ≥3 轮不收敛或活跃数不减反增 = stuck 呈报（顽固条目 ≥2 轮修复未清随 escalated 清单标注，优先人工裁决）；终态同步 must-fix 连续 4 轮不降或单条 must-fix 存活超 2 轮 = 呈报
 - [MANDATORY] e2e 只在开发阶段按改动面跑（清单继承 T3 验收计划表），空载串行；PR/merge/CI 门禁只跑单测（SSOT = 项目 AGENTS.md 测试节）；自动化回归的长期方向 = e2e 逐步单测化——能以 mock/fixture 重放等价覆盖的圈定项，随所属单元沉淀为 L1/L2 单测
 - [MANDATORY] 偏差三分类：合理 → 登记表固化；不合理 → 打回修；doc_errors → 主 agent 改设计文档并记录

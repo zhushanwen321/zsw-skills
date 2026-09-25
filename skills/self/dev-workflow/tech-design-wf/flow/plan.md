@@ -36,11 +36,11 @@
 ```markdown
 | # | 验收项（场景表行） | 方式(L0-L4) | 组 | 依赖 | 优化判定 |
 |---|--------------------|-------------|----|------|----------|
-| A1 | 计数口径与渲染 | L3 脚本 | 核心 | - | 可脚本化（testid 已有）；沉淀 e2e |
+| A1 | 计数口径与渲染 | L3 脚本 | 核心 | - | 可脚本化（testid 已有）；转化为 e2e 用例 |
 | A2 | 体验流畅性 | L4 agent | 非核心 | A1 | 机器判不了 = 视觉形态（声明拆行条件） |
 ```
 
-- **方式**：L0 静态规则 / L1 增量单测 / L2 全量套件 / L3 脚本端到端 / L4 agent 端到端（L0-L4 分层定义见 dev-flow-wf SKILL.md 核心原则——成本不另打分，L 级即承载）
+- **方式**：L0 静态规则 / L1 增量单测 / L2 全量套件 / L3 脚本端到端 / L4 agent 端到端（分层定义与铁律见 dev-flow-wf `flow/acceptance.md`——L0 未清不进 L2；L2 不绿不派任何端到端；L3 能覆盖的场景不升 L4；成本不另打分，L 级即承载）
 - **组**：核心（主链路，走不通则其余验收无意义）/ 非核心
 - **依赖**：默认 = 对应开发单元已提交（唯一无需说明的真实前提）；填其他依赖（另一验收项 id）必须附一句理由——功能先后或共享不可重置状态；编号顺序/顺手连跑不构成依赖
 - **优化判定**：可降级（L4→L3）/ 可合并 / 可脚本化 / L0 可消化；L4 行必须声明「机器判不了的部分是什么」，声明不出 = 拆行或降级
@@ -86,7 +86,7 @@
 
 ## 并行度复审（门槛触发，落盘前）
 
-触发门槛：实现链关键路径深度 ≥3 或单元数 ≥4（门槛内小计划不派——零收益）。派 `~/.agents/skills/dev-flow-wf/agents/parallelism-reviewer.md`（zcode 环境按 subagent_type 派发；无注册机制环境用 general-purpose + 内嵌 agent 文件全文）；task 附 impl-plan 双格式 + 设计文档 + 项目根三绝对路径；报告落 `.tmp/tech-design/<name>.plan-review.md`。reviewer 只报告——主 agent 逐条裁决（采纳即改计划并重跑自检；不采纳记理由），裁决记入 json 的 notes。
+触发门槛：实现链关键路径深度 ≥3 或单元数 ≥4（门槛内小计划不派——零收益）。派 `~/.agents/skills/dev-flow-wf/agents/parallelism-reviewer.md`（zcode 环境按 subagent_type 派发；无注册机制环境用 general-purpose + 内嵌 agent 文件全文）；task 附 impl-plan 双格式 + 设计文档 + 项目根三绝对路径；报告落 `.tmp/tech-design/<name>.plan-review.md`。reviewer 只报告——主 agent 逐条裁决（采纳即改计划并重跑自检；不采纳记理由），裁决记入 json 的 notes。头两个使用并行度复审的项目交付后回看其产出：连续零 finding 则降级为自检清单条目、砍掉派发（流程环节要能证明收益）。
 
 ## 落盘与 T3 确认
 
