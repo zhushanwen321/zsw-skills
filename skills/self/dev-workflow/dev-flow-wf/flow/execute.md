@@ -1,6 +1,6 @@
 # D1 开发循环 — W2 wave-executor 契约与手工降级路径
 
-> 输入：D0 编译产物齐备（exec-plan + prompts + 初始 status.json）。不变量：subagent 零 git；每单元双锁——领地 diff 干净 + 测试真实跑绿；**调度只看依赖边（wave 仅展示标签，不是边界）**；**每单元核验通过瞬间独立 commit**（不等批、不等 wave、不等尾）。
+> 输入：D0 编译产物齐备（exec-plan + prompts + 初始 status.json）。不变量：subagent 零 git；每单元双锁——领地 diff 干净 + 测试真实跑绿；**调度只看依赖边（wave 仅展示标签，不是边界）——并发 ≤5，逐节点完成即重算（单节点 settle 立即解锁后继补派，不等批内其他节点）**；**每单元核验通过瞬间独立 commit**（不等批、不等 wave、不等尾）。
 
 ## W2 workflow 契约（zcode 环境默认动作）
 
@@ -16,9 +16,9 @@ args: { execPlan: "<项目根>/.tmp/dev-flow/<name>.exec-plan.json" }
 3. world.run 核验：`git status --porcelain` + diff 归属核对（files_changed ⊆ territory；**并行单元共享工作区时 = dev 自报精确路径 + 引擎按并集粗粒度复核两级判定**）+ 重跑 testCommand 断言退出码
 4. 核验过 → world.run commit（`git add -- <files_changed>` + commitTemplate 渲染）→ status.json 回写 → 解锁下游
 
-打回（核验不过）：原节点 agent 会话续聊定向修（贴 diff/失败输出/违反条款），≤2 轮；agent 不可用 → 接替程序（新 agent + 前任证据包：状态表该单元最后一轮 files_changed/test_evidence/deviations + 当前 `git diff --stat`，令其先核验现状再续作）。超 2 轮 → 节点 blocked，后继自动挂起（deps 不满足），无依赖节点照常推进 → 全场无可调度且存在 blocked → 终态 `blocked`（+清单+已试方案）→ 主 agent 升级用户。全节点 done → 终态 `completed` → 进 D2。
+打回（核验不过）：原节点 agent 会话续聊定向修（贴 diff/失败输出/违反条款），≤2 轮；agent 不可用 → 接替程序（新 agent + 前任证据包：状态表该单元最后一轮 files_changed/test_evidence/deviations + 当前 `git diff --stat`，令其先核验现状再续作）；接替者亦异常 → 节点 blocked（引擎层，其他节点照常推进）。超 2 轮 → 节点 blocked，后继自动挂起（deps 不满足），无依赖节点照常推进 → 全场无可调度且存在 blocked → 终态 `blocked`（+清单+已试方案）→ 主 agent 升级用户。全节点 done → 终态 `completed` → 进 D2。
 
-worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 worktree 内执行；集成性质下游单元在其合并回主分支后才绪。
+worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 worktree 内执行；集成性质下游单元在其合并节点完成后才就绪——合并由 D0 显式排布（合并节点/手工段，见 `flow/compile.md` worktree 合并排布节），引擎不做合并检测。
 
 ## 手工降级路径（workflow 未就绪/失败时，语义等价）
 
@@ -35,4 +35,12 @@ worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 workt
 
 ## 中断恢复
 
-回到第 1 步；以 git log 与工作区实物校准 status.json（**冲突以 git 为准**：标 done 无 commit → pending；有 commit 未写 → 补写 done）。
+回到第 1 步；以 git log 与工作区实物校准 status.json（冲突以 git 为准）。引擎重启时自动双向对账：标 done 无 commit → 回 pending；有 commit 未记 done → 按 git log 匹配单元 id 补写 done。人工手改 status.json 无必要——字段见 compile.md §4（status/attempts）。
+
+## 终态处置表
+
+| 终态 | 主 agent 动作 |
+|------|--------------|
+| completed | 全节点 done——D1 完成转 D2（consistency-review.md）；D3 完成转 D4 收尾 |
+| blocked | 读 blocked 清单逐条处置：打回超限类 → 人工裁决（采纳修复方案/放弃该单元）；引擎层异常 → ResumeWorkflowRun 或修复 exec-plan 后重发 |
+| core-failed | 读 coreFailure 归因——缺陷修复走 W2 修复节点形态重验（exec-plan 更新为重验子集），主 agent 只裁决与重发起，不亲编码 |

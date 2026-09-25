@@ -6,22 +6,22 @@
 
 - 报告落 `<项目根>/.tmp/tech-design/<name>/round-N/`：`review-<dimension>.md`（dimension = value / main / impact / simplicity）+ `dispositions.md`（当轮处置表）
 - 重发起（value-rejected 修完重来 / escalated 裁决后重跑）时新轮次目录带 attempt 后缀：`round-3.attempt2/`——不覆盖历史
-- 终态记录 `<name>/final.json`：`{ terminated, rounds, valueOneliner, mustFixTrajectory[], suggestionDispositions[] }`——设计包的审查证据（dev-flow-wf 入口判据读它）
+- 终态记录 `<name>/final.json`：`{ terminated, rounds, runDir, designDoc, oneliner, reportFile, mustFixTrajectory, suggestionDispositions, remaining, blocked, message }`——设计包的审查证据（dev-flow-wf 入口判据读它）
 - `.tmp/` 是临时产物目录不进 git；用户显式指定路径时以用户为准
 
 ## W1 workflow 发起（zcode 环境默认动作）
 
 ```
 CreateWorkflow saved: tech-review-loop
-args: { designDoc: <绝对路径>, projectRoot: <项目根绝对路径>, maxRounds?: 10 }
-终态: converged / value-rejected / escalated / stuck / max-rounds / *-failure
+args: { designDoc: <绝对路径>, projectRoot: <项目根绝对路径>, maxRounds?: 10, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件> }
+终态: converged / value-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / fix-failure（环境失败族）
 ```
 
 终态处置（workflow 与手工路径同表）：
 
 | 终态 | 主 agent 动作 |
 |------|--------------|
-| converged | **T2 确认点**：转述 valueOneliner + 收敛轨迹 + 处置清单 → 默认等用户确认 → 进 T3（前期授权直接进） |
+| converged | **T2 确认点**：转述 oneliner + 收敛轨迹 + 处置清单 → 默认等用户确认 → 进 T3（前期授权直接进） |
 | value-rejected | 按价值审修复方向回 T1 与用户对话重写问题定义/方案主干，修完重新发起（attempt+1） |
 | escalated | 方案性意见需方向裁决——与用户对比新候选后改文档重新发起（语义声明：老版主 agent 可轮内自行重跑方案对比，本版一律停回用户，更保守） |
 | stuck / max-rounds | 呈报残余风险矩阵，用户裁决（stuck = 连续 3 轮 must-fix 不降） |
@@ -51,7 +51,7 @@ args: { designDoc: <绝对路径>, projectRoot: <项目根绝对路径>, maxRoun
      已发生证据）
   5. 声称「现状行为与代码不符」前必须 read 源码核实；只审方向与量级，机制正确性/
      影响面/过度设计留给三 reviewer（标 INFO 交接）
-  6. 报告写到 <runDir>/round-1/review-value.md
+  6. 报告写到 <runDir>/review-value.md
 验收：
   - 返回 structured-output { report_file, must_fix, suggestion, oneliner }
   - 报告含 Summary + 一句话复述 + Findings 表；每个 MUST_FIX 引用 P0-V-N + 文档位置
@@ -63,7 +63,7 @@ args: { designDoc: <绝对路径>, projectRoot: <项目根绝对路径>, maxRoun
 
 ## 手工路径 Step 3：第二阶段——并行派三个 reviewer
 
-同一条消息并行派三个（subagent 独立加载，task 内路径全部绝对路径）：
+同一条消息并行派三个（subagent 独立加载，task 内路径全部绝对路径）。**不要自己审——审查与写作分离，避免确认偏差，主 agent 不自审**：
 
 ```text
 agent: tech-design-review
@@ -88,14 +88,14 @@ task:
     - 每个 MUST_FIX 引用 P0-N 检查项编号 + 文档位置
 ```
 
-（impact / simplicity 同构，判据分工按 rubric：impact 审 P0-12/19/20 副作用遗漏；simplicity 审 P0-22/23、P1-6 机制必要性——报告名 review-impact.md / review-simplicity.md。**可跳过简洁审的唯一情形**：文档不引入任何新机制/抽象/扩展点（纯文案修订/参数调整的设计记录），跳过须汇报说明理由。）
+（impact / simplicity 同构，判据分工按 rubric：impact 审 P0-12/19/20 副作用遗漏；simplicity 审 P0-22/23、P1-6 机制必要性——报告名 review-impact.md / review-simplicity.md。**简洁审一律派**——agent 在报告中说明本设计是否纯文案/参数调整类、简洁面零发现即可（无需跳过通道）。）
 
 ## 手工路径 Step 4：修复轮（主 agent 亲为）
 
 1. 读三份结构化返回，合并去重（同根因跨维度表述合并）
 2. 按 `flow/write.md` Step 7.1/7.2 修复全部 must-fix + suggestion 三选一处置
 3. 产出当轮处置表 `<runDir>/round-N/dispositions.md`（每条：id / 来源报告 / 处置（修复|登记不修|归档）/ 修订位置 / 反例重演 / 攻击点建议 / 影响决策 / 影响交付）
-4. 终态判定（机械）：三报告 must-fix==0 且处置表无未处置条目 → converged，写 final.json；否则 → 下一轮聚焦复审（Step 3 的 R2+ 形态），轮次 +1
+4. 终态判定（机械）：三报告 must-fix==0 且上轮处置表无未处置条目即终止（converged，写 final.json）——不要求当轮 suggestion 清零（suggestion 逐条处置完即终止，不为 suggestion 单独驱动确认轮，老实测教训）；R1 全 0 且零 suggestion 直接收敛不派修复者。否则 → 下一轮聚焦复审（Step 3 的 R2+ 形态），轮次 +1
 5. 停机线：maxRounds（默认 10）；连续 3 轮 must-fix 不降 → stuck 呈报用户
 
 ## 手工路径 Step 5：终态与 T2 确认

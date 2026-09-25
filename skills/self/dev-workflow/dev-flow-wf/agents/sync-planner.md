@@ -16,7 +16,9 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第一级（framew
 1. 框架级对照：设计文档的架构/分层/数据流声明 vs 代码目录结构与关键接线——
    整体架构层面的漂移逐条立项（架构漂移直接进矩阵顶层行，不等人下钻）
 2. impl-plan 两条：现实 ↔ impl-plan（进度/残留风险登记/变更历史是否反映当前
-   ——已修复风险仍标待处理 = must-fix；变更历史缺关键 commit = must-fix）；
+   ——已修复风险仍标待处理 = must-fix；变更历史缺关键 commit = must-fix。
+   进度核对数据源 = status.json（若 workflow 注入 statusPath）；未注入时降级
+   为 impl-plan.json 单侧核对并在差异行注明降级）；
    impl-plan 内部一致性（单元表 vs 状态 vs 变更历史矛盾处）
 3. 关联登记面 × 存量文档同步：设计头部登记的关联面（决策记录/排障文档/功能
    分级等）逐项核对是否已按交付同步；设计无该字段时按交付语义扫描「声称
@@ -31,4 +33,7 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第一级（framew
 }
 验收：frameworkFindings 每条可回溯章节与文件位置；modules 的 files 是文件
   路径数组（供确定性分组校验）；某职责无发现显式说明
+verdict 枚举约束（引擎按词判定）：verdict ∈ {一致, 漏实现, 越权实现}——
+  「一致」行不立项、「漏」→ doc-right、其余 → code-right；越权行的三问
+  初评过度/存疑由引擎转候选卡呈报，不进修复
 ```

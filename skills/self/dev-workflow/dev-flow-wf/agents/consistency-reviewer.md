@@ -31,6 +31,8 @@ description: "dev-flow-wf D2 的一致性审查 agent：审查 git diff 区间�
    两字段判定口径（unreasonable 与 doc_errors 必填）：
    - 影响决策：`是——<违背哪条机制决策（D几/§几），不修则该决策落空>` 或 `否——<半句理由>`
    - 影响交付：`<环节>——<什么会出错>`；环节 = 开发/测试/验收/文档登记/无
+   ——引擎按「否」「无」前缀分流：影响决策=否 且 影响交付=无 的双无条目
+   降级登记项不进修复
 4. R2+ 定向复审（任务 prompt 会标注）：只审上批修复影响面——修复成立？
    引入新问题？新 diff 暴露新偏差？不重查已确认项
 5. 返回 {reasonable, unreasonable, doc_errors}（宿主无 structured-output 时

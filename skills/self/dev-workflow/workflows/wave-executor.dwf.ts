@@ -18,13 +18,16 @@ args:
 // ── W2 wave-executor ──
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
-// 并发 ≤5：批内 Promise.allSettled 全落地后才重算就绪集（join 屏障即批边界）。
+// 并发 ≤5，逐节点 settle 即重算（设计 §8.2：单节点完成立即解锁后继补派，不等批内
+//   其他节点——长尾不拖批；活跃领地并集随活跃集动态重建）。
+// agent 会话异常 → 接替程序（新 agent 名 + 前任证据包 + 当前 diff，先核验现状再续作，
+//   设计 §6.2 F15 第一等路径）；接替者再异常才 blocked。
 // 一律 failed-as-return：throw 的 errored run 不可 resume 且丢结构化错误。
 // 边界声明（设计 §8.2）：并行单元共享工作区时，单单元改动归属无法由 git status 精确切分，
 //   核验采用两级判定——dev 自报 files_changed 为精确集（级一：⊆ 领地），引擎另跑全量
 //   status 对活跃单元领地并集做粗粒度复核（级二）；启动前工作区必须干净（级二成立前提）。
-// 边界声明（设计 §8.5 未实现项）：worktree 单元 commit 后「合并回主分支才就绪」不做引擎侧
-//   自动检测——集成单元依赖 worktree 单元时，由 D0 编译负责排布合并次序（串行边或手工段）。
+// 边界声明（设计 §8.5）：worktree 单元的「合并回主分支才就绪」不做引擎侧自动检测——
+//   由 D0 编译负责排布合并（合并节点或手工段）。
 
 // ── args 窄化（未知键 fail-fast：拼错键静默忽略比报错危险） ──
 const VALID_ARG_KEYS = new Set(["execPlan"]);
@@ -73,6 +76,8 @@ interface PlanNode {
   id: string;
   kind: "dev" | "verify" | "inspect";
   deps: string[];
+  /** 设计章节锚（D0 从 impl-plan 章节映射提取；commit 渲染时前置于 summary——老三要素保真） */
+  designRef: string;
   territory: string[];
   testCommand: TestCommand | null;
   promptFile: string;
@@ -115,6 +120,8 @@ interface StatusFileData {
   baseline: string | null;
   nodes: Record<string, StatusEntry>;
   events: StatusEvent[];
+  /** schema 外的顶层字段（name/updated 等 D0 产物）——回写时原样保留不抹除（§4.5） */
+  extra: Record<string, unknown>;
 }
 
 /** 调度器内存态（崩溃恢复事实源是 status.json + git，不是这个 Map） */
@@ -201,17 +208,31 @@ const RUN_IN_CWD =
   "process.exit(typeof s.status==='number'?s.status:1)}" +
   "catch(e){process.stderr.write(String((e&&e.message)||'spawn failed'));process.exit(1)}";
 
-// argv: [statusPath, projectRoot, ...devDoneIds] → 对 dev done 节点核对 commit 是否在 git 对象库，
-// 不在则回 pending（§4.5 崩溃裁决：status 与 git 冲突以 git 为准）；stdout = 对账后的完整 status.json
+// argv: [cwd] → stdout = git diff --stat 原文（接替程序的前任证据包成分）；失败 exit 1 输出空
+const GIT_DIFF_STAT =
+  "try{const o=require('child_process').execFileSync('git',['diff','--stat'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});process.stdout.write(o)}catch(e){process.stdout.write('(diff 不可用)')}";
+
+// argv: [statusPath, projectRoot, ...devIds] → 双向对账（§4.5 崩溃裁决，git 为准）：
+//   ①status=done 的节点：commit 不在 git 对象库 → 回 pending；
+//   ②status≠done 的 dev 节点：git log（HEAD 起 500 条）subject 含完整词 <id>（commitTemplate 渲染
+//     的单元锚）→ 补写 done（commit 哈希 + 证据）；双向都是引擎行为，不留人工方向。
+//   stdout = 对账后的完整 status.json（保留 schema 外顶层字段）
 const RECONCILE_STATUS =
   "try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],ids=process.argv.slice(3);" +
   "const x=require('child_process').execFileSync;const st=JSON.parse(fs.readFileSync(sp,'utf8'));const nodes={};" +
   "for(const k of Object.keys(st.nodes||{}))nodes[k]=st.nodes[k];const events=(st.events||[]).slice();" +
-  "for(const id of ids){const e=nodes[id];if(!e||e.status!=='done')continue;let ok=false;" +
+  "let logLines='';try{logLines=String(x('git',['log','--format=%H%x1f%s','-n','500'],{cwd:root,encoding:'utf8',maxBuffer:33554432}))}catch(err){}" +
+  "for(const id of ids){const e=nodes[id]||{status:'pending',attempts:0};" +
+  "if(e.status==='done'){let ok=false;" +
   "if(typeof e.commit==='string'&&e.commit.length>=7){try{x('git',['cat-file','-e',e.commit+'^{commit}'],{cwd:root,encoding:'utf8'});ok=true}catch(err){}}" +
   "if(ok)continue;nodes[id]={status:'pending',attempts:0};" +
   "events.push({seq:events.length+1,node:id,event:'reconcile-reset',detail:'status done 但 commit 不在 git 对象库，按 git 为准回 pending'})}" +
-  "process.stdout.write(JSON.stringify({baseline:st.baseline||null,nodes:nodes,events:events}))}" +
+  "else{const re=new RegExp('\\\\b'+id.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+'\\\\b');" +
+  "const hit=logLines.split('\\n').find((l)=>{const i=l.indexOf('\\x1f');return i>0&&re.test(l.slice(i+1))});" +
+  "if(hit){const h=hit.slice(0,hit.indexOf('\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 发现本单元 commit（status 未记，按 git 为准补写 done）'};" +
+  "events.push({seq:events.length+1,node:id,event:'reconcile-done',detail:'status 未记但 git log 有本单元 commit，按 git 为准补写 done'})}}}" +
+  "const out={};for(const k of Object.keys(st))if(k!=='nodes'&&k!=='events')out[k]=st[k];out.baseline=st.baseline||null;out.nodes=nodes;out.events=events;" +
+  "process.stdout.write(JSON.stringify(out))}" +
   "catch(e){process.stderr.write(String((e&&e.message)||'reconcile failed'));process.exit(1)}";
 
 // ── 纯工具函数 ──
@@ -376,8 +397,8 @@ function validatePlan(raw: unknown): ValidateResult {
       errors.push(`节点 ${id} 的 kind 必须是 dev/verify/inspect，实际：${JSON.stringify(kind)}`);
       continue;
     }
-    if (mode === "dev" && kind !== "dev") {
-      errors.push(`mode=dev 但节点 ${id} kind=${kind}（dev 模式只承载 dev 节点）`);
+    if (mode === "dev" && kind === "inspect") {
+      errors.push(`mode=dev 但节点 ${id} kind=inspect（inspect 任务书属验收语义；dev 模式仅允许 dev 节点与开发期 e2e 的 verify 节点）`);
     }
     if (mode === "acceptance" && kind === "dev") {
       errors.push(`mode=acceptance 但节点 ${id} kind=dev（dev 节点属 D1 实例化）`);
@@ -390,6 +411,7 @@ function validatePlan(raw: unknown): ValidateResult {
       id,
       kind,
       deps: rn.deps,
+      designRef: isStr(rn.designRef) ? rn.designRef : "",
       territory: [],
       testCommand: null,
       promptFile: "",
@@ -496,7 +518,11 @@ function validatePlan(raw: unknown): ValidateResult {
 
   const commitTemplate = isStr(raw.commitTemplate) ? raw.commitTemplate : null;
   if (mode === "dev" && commitTemplate === null) {
-    errors.push("mode=dev 时 commitTemplate 必须是非空字符串（含 {unitId}/{summary} 占位符）");
+    errors.push("mode=dev 时 commitTemplate 必须是非空字符串");
+  } else if (mode === "dev" && commitTemplate !== null) {
+    if (!commitTemplate.includes("{unitId}") || !commitTemplate.includes("{summary}")) {
+      errors.push(`commitTemplate 须同时含 {unitId} 与 {summary} 占位符（当前：${commitTemplate}）`);
+    }
   }
   if (errors.length > 0) return { ok: false, errors };
 
@@ -553,11 +579,13 @@ async function gitAddCommitViaNode(
   return { ok: true, hash: r.stdout.trim(), err: "" };
 }
 
-// ── 状态（校验通过后填充；函数在运行时才读取，定义顺序无碍） ──
+// ── 调度器内存态（崩溃恢复事实源是 status.json + git，不是这个 Map） ──
 
 const state = new Map<string, NodeRt>();
 let plan: ParsedPlan; // 赋值点在「校验执行计划」段；其后所有函数才可能被调用
 let coreFail: { id: string; detail: string } | null = null;
+/** 当前 in-flight 节点的领地并集（按 cwd 分组）——级二粗粒度复核的基线，逐节点 settle 后重建 */
+let activeTerrByCwd = new Map<string, string[]>();
 
 function nodeState(id: string): NodeRt["status"] {
   return state.get(id)?.status ?? "pending";
@@ -601,7 +629,11 @@ async function readStatusFile(): Promise<StatusFileData | null> {
       ? parsed.events.filter((e): e is StatusEvent => isRec(e) && typeof (e as Record<string, unknown>).node === "string")
       : [];
     const baseline = typeof parsed.baseline === "string" ? parsed.baseline : null;
-    return { baseline, nodes, events };
+    const extra: Record<string, unknown> = {};
+    for (const k of Object.keys(parsed)) {
+      if (k !== "baseline" && k !== "nodes" && k !== "events") extra[k] = (parsed as Record<string, unknown>)[k];
+    }
+    return { baseline, nodes, events, extra };
   } catch {
     return null;
   }
@@ -609,15 +641,16 @@ async function readStatusFile(): Promise<StatusFileData | null> {
 
 async function statusUpdate(nodeId: string, entry: StatusEntry, event: string, detail?: string): Promise<void> {
   await serializedStatus(async () => {
-    const st = (await readStatusFile()) ?? { baseline: plan.baseline, nodes: {}, events: [] };
+    const st = (await readStatusFile()) ?? { baseline: plan.baseline, nodes: {}, events: [], extra: {} };
     const nodes: Record<string, StatusEntry> = { ...st.nodes, [nodeId]: entry };
     const events: StatusEvent[] = [
       ...st.events,
       { seq: st.events.length + 1, node: nodeId, event, detail: detail ?? entry.evidence ?? "" },
     ];
+    // schema 外顶层字段（name/updated 等 D0 产物）原样保留（§4.5）
     await writeTextViaNode(
       plan.statusPath,
-      JSON.stringify({ baseline: st.baseline, nodes, events }, null, 2),
+      JSON.stringify({ ...st.extra, baseline: st.baseline, nodes, events }, null, 2),
     );
   });
 }
@@ -676,11 +709,7 @@ async function runTestCommand(cmd: TestCommand, cwd: string): Promise<RunOutcome
 
 // ── dev 节点确定性核验（三查） ──
 
-async function verifyDevNode(
-  node: PlanNode,
-  result: NodeResult,
-  activeByCwd: Map<string, string[]>,
-): Promise<VerifyVerdict> {
+async function verifyDevNode(node: PlanNode, result: NodeResult): Promise<VerifyVerdict> {
   // 查三：blockers 自报非空 → blocked（环境/任务书问题，定向修不可解，不进打回）
   if (result.blockers.length > 0) {
     return { outcome: "blocked", reason: "任务书自报 blockers", detail: result.blockers.join("；") };
@@ -697,13 +726,13 @@ async function verifyDevNode(
       detail: `超界路径：\n${outside.join("\n")}\n领地：\n${node.territory.join("\n")}`,
     };
   }
-  // 查二级（粗粒度）：引擎另跑全量 status——改动集须 ⊆ 同 cwd 活跃单元领地并集
+  // 查二级（粗粒度）：引擎另跑全量 status——改动集须 ⊆ 当前活跃单元领地并集
   //（并行共享工作区无法按单元切分 status，故只做并集级复核——设计 §8.2 边界声明）
   const porcelain = await gitPorcelainViaNode(node.cwd);
   if (porcelain === null) {
     return { outcome: "blocked", reason: "git status --porcelain 执行失败（引擎层）", detail: `cwd=${node.cwd}` };
   }
-  const activeTerr = activeByCwd.get(node.cwd) ?? [];
+  const activeTerr = activeTerrByCwd.get(node.cwd) ?? [];
   const strays = parsePorcelain(porcelain).filter(
     (f) => !f.startsWith(".tmp/") && !pathInTerritory(f, activeTerr),
   );
@@ -735,26 +764,73 @@ async function verifyDevNode(
 
 // ── 三类节点执行体 ──
 
-async function executeDevNode(node: PlanNode, activeByCwd: Map<string, string[]>): Promise<void> {
+/** agent ask 的接替包装（设计 §6.2 F15 第一等路径）：会话异常 → 接替 actor + 前任证据包
+ *  + 当前 git diff --stat，令其先核验现状再续作，禁止盲目重做；接替者再异常才向上抛（→ blocked）。
+ *  注意 actor 引用在 executeDevNode 开头一次性创建——同名续聊 = 单 actor 多次 ask，
+ *  每次 ask 都调 agent(name) 会创建同名新 actor，run 直接炸（冒烟实测） */
+async function askWithSuccession(
+  primary: Agent,
+  successor: Agent,
+  prompt: string,
+  node: PlanNode,
+  lastResult: NodeResult | null,
+): Promise<NodeResult> {
+  try {
+    return await primary.ask<NodeResult>(prompt);
+  } catch (e) {
+    const diff = await world.run("node", ["-e", GIT_DIFF_STAT, node.cwd]);
+    const pack = [
+      `前任 agent 会话异常（${errText(e)}）——你是接替者，先核验现状再续作，禁止盲目重做已完成的改动：`,
+      `- 前任最后自报：files_changed = ${lastResult?.files_changed.join("、") ?? "（无）"}`,
+      `  test_evidence = ${lastResult?.test_evidence ?? "（无）"}；deviations = ${lastResult?.deviations.join("；") || "无"}`,
+      `- 当前 git diff --stat（工作区现状）：`,
+      diff.stdout.trim() === "" ? "  （工作区无未提交改动——前任可能尚未落盘任何文件）" : diff.stdout.trim(),
+      `- 任务书：${node.promptFile}`,
+      ``,
+      `先 read 任务书，再核对上述现状，判断前任已完成什么/缺什么，续作完成后返回任务书末尾定义的同一 JSON 契约。`,
+    ].join("\n");
+    log(`节点 ${node.id} agent 会话异常（${errText(e)}），启动接替程序`);
+    return await successor.ask<NodeResult>(pack);
+  }
+}
+
+async function executeDevNode(node: PlanNode): Promise<void> {
   await beginNode(node.id);
-  // 同名 agent 续聊承载打回：同一 subagent 队列天然保持会话上下文（打回不另起会话）
-  const nodeAgent = agent(`node-${node.id}`, DEV_PERSONA);
-  let result = await nodeAgent.ask<NodeResult>(
+  // 同名续聊承载打回：actor 一次性创建、多次 ask（同一 subagent 队列天然保持会话上下文）；
+  // 接替 actor 预创建（仅异常时使用——创建即占名，名字唯一性由节点 id 保证）
+  const primaryAgent = agent(`node-${node.id}`, DEV_PERSONA);
+  const succAgent = agent(`接替-${node.id}`, DEV_PERSONA);
+  let result = await askWithSuccession(
+    primaryAgent,
+    succAgent,
     `读取任务书 ${node.promptFile}（绝对路径）并按其完整执行，返回该文件末尾定义的 JSON 契约（status / files_changed / test_evidence / deviations / blockers，可含 summary）。files_changed 用相对工作区 git 仓库根的路径（git status 风格）。`,
+    node,
+    null,
   );
   let attempts = 1;
-  let verdict = await verifyDevNode(node, result, activeByCwd);
+  let verdict = await verifyDevNode(node, result);
   while (verdict.outcome === "retry" && attempts <= MAX_REJECT_ROUNDS) {
     log(`节点 ${node.id} 核验未过（${verdict.reason}），打回定向修`);
-    result = await nodeAgent.ask<NodeResult>(
+    result = await askWithSuccession(
+      primaryAgent,
+      succAgent,
       `引擎确定性核验未通过（原因：${verdict.reason}）。按以下失败输出定向修复，然后重新返回同一 JSON 契约：\n${verdict.detail}`,
+      node,
+      result,
     );
     attempts += 1;
     await statusUpdate(node.id, { status: "in-progress", attempts }, "reject-round", verdict.reason);
-    verdict = await verifyDevNode(node, result, activeByCwd);
+    verdict = await verifyDevNode(node, result);
   }
   if (verdict.outcome === "pass") {
-    const message = renderCommit(plan.commitTemplate, node.id, result.summary ?? "dev 单元交付");
+    // commit 三要素保真（§8.3）：unitId（模板）+ designRef（章节锚前置）+ summary（promptFile
+    // 契约要求含「测试：<命令> 绿」一行）
+    const summary = result.summary ?? "dev 单元交付";
+    const message = renderCommit(
+      plan.commitTemplate,
+      node.id,
+      node.designRef !== "" ? `${node.designRef} ${summary}` : summary,
+    );
     const cr = await gitAddCommitViaNode(node.cwd, message, result.files_changed);
     if (!cr.ok) {
       await markNodeBlockedOrFailed(node.id, "blocked", `commit 执行失败：${cr.err}`, "", attempts);
@@ -822,48 +898,66 @@ async function executeInspectNode(node: PlanNode): Promise<void> {
   log(`Inspect 节点 ${node.id} 检查通过`);
 }
 
-async function executeNode(node: PlanNode, activeByCwd: Map<string, string[]>): Promise<void> {
-  if (node.kind === "dev") return executeDevNode(node, activeByCwd);
+async function executeNode(node: PlanNode): Promise<void> {
+  if (node.kind === "dev") return executeDevNode(node);
   if (node.kind === "verify") return executeVerifyNode(node);
   return executeInspectNode(node);
 }
 
-// ── 调度主循环：就绪集 = deps 全 done 且自身 pending；批 ≤5，批内 allSettled 全落地后重算 ──
+// ── 调度主循环（设计 §8.2 流式）：逐节点 settle 即重算——单节点完成立即解锁后继
+//    在并发余量内补派，不等批内其他节点（长尾不拖批）；活跃领地并集随活跃集动态重建 ──
 
 async function runSchedulingLoop(): Promise<void> {
+  // id → 完成后 resolve 回自身 id（race 的返回值即完成节点）
+  const active = new Map<string, Promise<string>>();
+  const launch = (n: PlanNode): void => {
+    const p = (async (): Promise<string> => {
+      try {
+        await executeNode(n);
+      } catch (e) {
+        // rejected（接替程序也失败/写盘失败等引擎层异常）→ 节点 blocked，其他节点照常推进
+        await markNodeBlockedOrFailed(n.id, "blocked", `节点执行异常：${errText(e)}`, "", 0);
+      }
+      return n.id;
+    })();
+    active.set(n.id, p);
+  };
   while (true) {
     if (coreFail !== null) break;
-    const pendingNodes = plan.nodes.filter((n) => nodeState(n.id) === "pending");
-    if (pendingNodes.length === 0) break;
+    // 级二粗粒度复核的基线：当前 in-flight 节点领地按 cwd 分组求并集（逐节点 settle 后重建）
+    activeTerrByCwd = new Map<string, string[]>();
+    for (const id of active.keys()) {
+      const n = plan.nodes.find((x) => x.id === id);
+      if (!n) continue;
+      const list = activeTerrByCwd.get(n.cwd) ?? [];
+      for (const t of n.territory) list.push(t);
+      activeTerrByCwd.set(n.cwd, list);
+    }
     // 非核心组在核心全绿后解锁（设计 §6.2 D3）；dev 模式核心集为空 → 空条件恒真，不引入额外门
     const coreAllDone = plan.nodes
       .filter((n) => plan.coreIds.has(n.id))
       .every((n) => nodeState(n.id) === "done");
-    const ready = pendingNodes.filter(
-      (n) => n.deps.every((d) => nodeState(d) === "done") && (plan.coreIds.has(n.id) || coreAllDone),
+    const ready = plan.nodes.filter(
+      (n) =>
+        nodeState(n.id) === "pending" &&
+        n.deps.every((d) => nodeState(d) === "done") &&
+        (plan.coreIds.has(n.id) || coreAllDone),
     );
-    if (ready.length === 0) break; // 无可调度但存在 pending → 依赖挂起 → 终态 blocked
-    const batch = ready.slice(0, MAX_CONCURRENCY);
-    log(`就绪 ${ready.length} 个节点，派发 ${batch.length} 个：${batch.map((n) => n.id).join("、")}`);
-    // 级二粗粒度复核的基线：本批（活跃）节点领地按 cwd 分组求并集
-    const activeByCwd = new Map<string, string[]>();
-    for (const n of batch) {
-      const list = activeByCwd.get(n.cwd) ?? [];
-      for (const t of n.territory) list.push(t);
-      activeByCwd.set(n.cwd, list);
+    // 游标防同轮重复派发（launch 后 state 同步变 in-progress，游标是双保险）
+    let dispatched = 0;
+    while (active.size < MAX_CONCURRENCY && dispatched < ready.length) {
+      launch(ready[dispatched]);
+      dispatched += 1;
     }
-    const outcomes = await Promise.allSettled(batch.map((n) => executeNode(n, activeByCwd)));
-    // rejected（agent 会话异常/写盘失败等）→ 节点 blocked，其他节点照常
-    for (let i = 0; i < outcomes.length; i += 1) {
-      const o = outcomes[i];
-      if (o.status === "rejected") {
-        const n = batch[i];
-        await markNodeBlockedOrFailed(n.id, "blocked", `节点执行异常：${errText(o.reason)}`, "", 0);
-      }
-    }
-    // 核心组熔断判定：本批任一核心节点 blocked/failed 且 haltOnCoreFail → 记归因、停止派发
+    if (active.size === 0) break; // 无可调度且无活跃 → 依赖挂起或全终态 → 终态判定
+    const finishedId = await Promise.race(active.values());
+    active.delete(finishedId);
+    log(`节点 ${finishedId} 落定（活跃 ${active.size}），重算就绪集`);
+    // 核心组熔断判定：任一核心节点 blocked/failed 且 haltOnCoreFail → 记归因、停止派发
     if (plan.haltOnCoreFail) {
-      const bad = batch.find((n) => plan.coreIds.has(n.id) && (nodeState(n.id) === "blocked" || nodeState(n.id) === "failed"));
+      const bad = plan.nodes.find(
+        (n) => plan.coreIds.has(n.id) && (nodeState(n.id) === "blocked" || nodeState(n.id) === "failed"),
+      );
       if (bad !== undefined) {
         const rt = state.get(bad.id);
         coreFail = {
@@ -953,22 +1047,22 @@ if (existingStatus === null) {
   log(`status.json 不存在，已创建初始态（${plan.nodes.length} 个节点全 pending）：${plan.statusPath}`);
   for (const n of plan.nodes) state.set(n.id, { status: "pending", attempts: 0 });
 } else {
-  const devDoneIds = plan.nodes
-    .filter((n) => n.kind === "dev" && existingStatus.nodes[n.id]?.status === "done")
-    .map((n) => n.id);
+  // 双向对账（§4.5 崩溃裁决，git 为准）：done 验证 commit 存在性（不在回 pending）；
+  // 非 done 的 dev 节点反查 git log（commitTemplate 渲染的单元锚）——有 commit 未记 → 补写 done
+  const allDevIds = plan.nodes.filter((n) => n.kind === "dev").map((n) => n.id);
   let aligned: Record<string, StatusEntry> = {};
   for (const n of plan.nodes) aligned[n.id] = existingStatus.nodes[n.id] ?? { status: "pending", attempts: 0 };
-  if (devDoneIds.length > 0) {
-    const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, ...devDoneIds]);
+  if (allDevIds.length > 0) {
+    const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, ...allDevIds]);
     if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
       try {
         const parsed = JSON.parse(rec.stdout) as unknown;
         if (isRec(parsed) && isRec(parsed.nodes)) {
-          for (const id of devDoneIds) aligned[id] = normalizeEntry(parsed.nodes[id]);
-          log(`status.json 已存在，按 git 对账完成（dev done ${devDoneIds.length} 个核验 commit 存在性）`);
+          for (const id of allDevIds) aligned[id] = normalizeEntry(parsed.nodes[id]);
+          log(`status.json 已存在，双向对账完成（dev 节点 ${allDevIds.length} 个：done 核验 commit 存在性 + git log 反查补写）`);
         }
       } catch {
-        // 对账输出解析失败：保留原始 done 记录，终态核验仍有 commit 证据可查
+        // 对账输出解析失败：保留原始记录，终态核验仍有 commit 证据可查
       }
     }
   }
@@ -1016,7 +1110,7 @@ const terminated: WaveExecutorOutcome["terminated"] =
 
 // 终局回写：挂起节点落 suspended + run-terminal 事件（status.json 即人读恢复入口）
 await serializedStatus(async () => {
-  const st = (await readStatusFile()) ?? { baseline: plan.baseline, nodes: {}, events: [] };
+  const st = (await readStatusFile()) ?? { baseline: plan.baseline, nodes: {}, events: [], extra: {} };
   const nodes: Record<string, StatusEntry> = { ...st.nodes };
   for (const n of plan.nodes) {
     if (nodeState(n.id) === "pending") nodes[n.id] = { status: "suspended", attempts: 0 };
@@ -1030,7 +1124,7 @@ await serializedStatus(async () => {
       detail: `terminated=${terminated}; done=${doneIds.length}; blocked=${blockedOut.length}; skipped=${skippedIds.length}`,
     },
   ];
-  await writeTextViaNode(plan.statusPath, JSON.stringify({ baseline: st.baseline, nodes, events }, null, 2));
+  await writeTextViaNode(plan.statusPath, JSON.stringify({ ...st.extra, baseline: st.baseline, nodes, events }, null, 2));
 });
 
 log(

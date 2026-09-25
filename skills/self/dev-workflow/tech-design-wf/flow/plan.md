@@ -22,9 +22,10 @@
 | Unit | 职责 | 领地（精确文件路径） | 依赖 | 隔离(plain/worktree) | 验收条款 |
 # u-foundation 固定为共享契约根节点，初始即就绪的 DAG 根
 ## 3 DAG 图       # mermaid
-## 4 测试与验收计划  # 测试命令从项目 AGENTS.md / package.json scripts 真实读取；增量与全量分开列
+## 4 测试与验收计划  # 测试命令从项目 AGENTS.md / package.json scripts / 项目测试策略文档（若存在，典型 docs/TEST-STRATEGY.md）真实读取；增量与全量分开列
                     # 全量段 = 改动面 + 依赖闭包（防跨单元叠加回归），逐条标注 产物类/验证类
 ## 5 合理偏差登记表  # 初始空；| 偏差 | 内容与理由 | 影响面 | 处置 |
+                    # 影响面 = 误导了什么/造成什么返工，写不出影响的不入表；处置 = 已接受 / 待回写设计文档 / 移交 D5 终态同步
 ## 6 残留风险与变更历史  # 残留风险四要素：触发条件/影响/处置/重审触发条件
 ```
 
@@ -43,7 +44,9 @@
 - **组**：核心（主链路，走不通则其余验收无意义）/ 非核心
 - **依赖**：默认 = 对应开发单元已提交（唯一无需说明的真实前提）；填其他依赖（另一验收项 id）必须附一句理由——功能先后或共享不可重置状态；编号顺序/顺手连跑不构成依赖
 - **优化判定**：可降级（L4→L3）/ 可合并 / 可脚本化 / L0 可消化；L4 行必须声明「机器判不了的部分是什么」，声明不出 = 拆行或降级
-- **e2e 影响面圈定 [MANDATORY]**：从设计文档「e2e 影响面评估」继承落清单，逐项「跑（执行时点 = 单元 committed 后 / 阶段 5，空载串行）/ 不跑（理由）」；有 `docs/testing/e2e-map.json` 登记表的项目与 `node scripts/select-affected-e2e.mjs --base <基线>` 输出双向对账（差异逐条披露；脚本看不见设计语义，最终清单以人工裁决为准）
+- **e2e 影响面圈定 [MANDATORY]**：从设计文档「e2e 影响面评估」继承落清单，逐项「跑（执行时点 = 单元 committed 后 / 阶段 5，空载串行；该项由 dev-flow-wf D0 编译为 verify 节点（deps=所属 dev 单元）在 D1 内执行）/ 不跑（理由）」；有 `docs/testing/e2e-map.json` 登记表的项目与 `node scripts/select-affected-e2e.mjs --base <基线>` 输出双向对账（差异逐条披露；脚本看不见设计语义，最终清单以人工裁决为准）
+
+**提速结论 [MANDATORY]**：表后附一段——可降级 N 项 / 可合并 N 项 / 可脚本化 N 项 / L0 静态守卫清单（项目既有守卫脚本逐个列出），预计节省的派发轮次。随计划一并呈现给用户备查（陈述性展示，不构成等待点）。
 
 ## 双格式产出 [MANDATORY]
 
@@ -62,7 +65,8 @@
   "testPlan": { "incremental": "…", "fullSuite": "…" },
   "acceptancePlan": [
     { "id": "A1", "item": "…", "level": "L3", "group": "core", "deps": [], "optimization": "…" }
-  ]
+  ],
+  "notes": []
 }
 ```
 
@@ -82,7 +86,7 @@
 
 ## 并行度复审（门槛触发，落盘前）
 
-触发门槛：实现链关键路径深度 ≥3 或单元数 ≥4（门槛内小计划不派——零收益）。派 `agents/parallelism-reviewer.md`（zcode 环境按 subagent_type 派发；无注册机制环境用 general-purpose + 内嵌 agent 文件全文）；task 附 impl-plan 双格式 + 设计文档 + 项目根三绝对路径；报告落 `.tmp/tech-design/<name>.plan-review.md`。reviewer 只报告——主 agent 逐条裁决（采纳即改计划并重跑自检；不采纳记理由），裁决记入 json 的 notes。
+触发门槛：实现链关键路径深度 ≥3 或单元数 ≥4（门槛内小计划不派——零收益）。派 `~/.agents/skills/dev-flow-wf/agents/parallelism-reviewer.md`（zcode 环境按 subagent_type 派发；无注册机制环境用 general-purpose + 内嵌 agent 文件全文）；task 附 impl-plan 双格式 + 设计文档 + 项目根三绝对路径；报告落 `.tmp/tech-design/<name>.plan-review.md`。reviewer 只报告——主 agent 逐条裁决（采纳即改计划并重跑自检；不采纳记理由），裁决记入 json 的 notes。
 
 ## 落盘与 T3 确认
 

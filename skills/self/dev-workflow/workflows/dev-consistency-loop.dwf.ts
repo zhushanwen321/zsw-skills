@@ -136,7 +136,7 @@ interface ItemRecord {
   group: string;
   /** 首次出现的审查轮（R1 = 1） */
   firstRound: number;
-  /** 连续「修复后复审仍报」次数；≥2 触发单条停机线升级 */
+  /** 连续「修复后复审仍报」次数；≥3 触发单条停机线升级（1 次初始修复 + 2 次打回 = 3 次 fixer 机会，设计 §8.6） */
   uncleanRounds: number;
   active: boolean;
   /** 修复史（每轮一句，供后续轮修复 agent 与终态诊断） */
@@ -165,6 +165,8 @@ interface PrepInfo {
   designDocPath: string;
   planPath: string;
   planMdPath: string | null;
+  /** statusPath 绝对路径（终态 events 回写目标——§4.5 W3 回写义务） */
+  statusPath: string;
   gateALog: string;
   reviewerTemplate: string;
   partitions: { name: string; files: string[] }[];
@@ -173,6 +175,8 @@ interface PrepInfo {
   unitCount: number;
   incremental: { program: string; args: string[] } | null;
   fullSuite: { program: string; args: string[] };
+  /** 产物类条目（§6.1 条目 3——Gate A 起始第一波并行预备；空数组 = 无） */
+  artifacts: { id: string; command: { program: string; args: string[] } }[];
 }
 
 interface FinalResult {
@@ -186,8 +190,10 @@ interface FinalResult {
   reasonable: ReasonableEntry[];
   /** Gate A 日志绝对路径（未执行到 Gate A = null） */
   gateALog: string | null;
-  /** 单条停机线升级清单（连续 2 轮修复未清） */
+  /** 单条停机线升级清单（1+2 次 fixer 后复审仍报，设计 §8.6 ③） */
   escalated: { id: string; location: string; gap: string; uncleanRounds: number }[];
+  /** 必填字段分流降级条目（影响决策=否 且 影响交付=无——不进修复批次，随终态回流主 agent 登记残留风险） */
+  deferredLedger: { id: string; location: string; gap: string; affectsDecision: string; affectsDelivery: string }[];
   /** 终态仍活跃条目（stuck / fix-failure 在场） */
   remaining: { id: string; location: string; gap: string; severity: string; group: string }[];
   /** 分区概览（诊断） */
@@ -209,7 +215,7 @@ const NODE_PREP = [
   "var epPath = path.resolve(process.argv[1]);",
   "var ep;",
   "try { ep = JSON.parse(fs.readFileSync(epPath, 'utf8')); } catch (e) { die('exec-plan 读取失败: ' + epPath + ' — ' + (e.message || e)); }",
-  "for (var k of ['baseline', 'planPath', 'designDocPath', 'statusPath']) {",
+  "for (var k of ['baseline', 'planPath', 'designDocPath', 'statusPath', 'projectRoot']) {",
   "  if (typeof ep[k] !== 'string' || !ep[k].trim()) die('exec-plan 缺字段 ' + k + '（恢复：核对 D0 编译产物）');",
   "}",
   "if (!ep.testPlan || typeof ep.testPlan.fullSuite !== 'object' || ep.testPlan.fullSuite === null) die('exec-plan 缺 testPlan.fullSuite（Gate A 全量测试命令；恢复：D0 编译时补全）');",
@@ -217,6 +223,17 @@ const NODE_PREP = [
   "var fsuite = ep.testPlan.fullSuite;",
   "if (typeof fsuite.program !== 'string' || !Array.isArray(fsuite.args)) die('testPlan.fullSuite 形态无效（需 {program, args[]}）');",
   "if (ALLOWED.indexOf(fsuite.program) < 0) die('testPlan.fullSuite.program 不在白名单 ' + ALLOWED.join('/') + ': ' + fsuite.program);",
+  "var artifacts = [];",
+  "if (ep.testPlan.artifacts !== undefined && ep.testPlan.artifacts !== null) {",
+  "  if (!Array.isArray(ep.testPlan.artifacts)) die('testPlan.artifacts 必须是数组（产物类条目 {id, command{program,args}}，§6.1 条目 3）');",
+  "  for (var ai = 0; ai < ep.testPlan.artifacts.length; ai++) {",
+  "    var at = ep.testPlan.artifacts[ai];",
+  "    if (!at || typeof at.id !== 'string' || !at.id.trim() || !at.command || typeof at.command.program !== 'string' || !Array.isArray(at.command.args))",
+  "      die('testPlan.artifacts[' + ai + '] 形态无效（需 {id, command: {program, args[]}}）');",
+  "    if (ALLOWED.indexOf(at.command.program) < 0) die('testPlan.artifacts[' + ai + '].command.program 不在白名单: ' + at.command.program);",
+  "    artifacts.push({ id: at.id.trim(), command: { program: at.command.program, args: at.command.args } });",
+  "  }",
+  "}",
   "var incr = null;",
   "if (ep.testPlan.incremental && typeof ep.testPlan.incremental.program === 'string' && Array.isArray(ep.testPlan.incremental.args)) {",
   "  if (ALLOWED.indexOf(ep.testPlan.incremental.program) < 0) die('testPlan.incremental.program 不在白名单: ' + ep.testPlan.incremental.program);",
@@ -224,15 +241,16 @@ const NODE_PREP = [
   "}",
   "var bl = ep.baseline.trim();",
   "if (!/^[0-9a-f]{7,40}$/i.test(bl)) die('baseline 非 git hash 形态: ' + bl);",
-  // projectRoot 推导：designDocPath（.tmp/tech-design/<name>.md）向上两级。
-  // 相对路径相对 node cwd（= workflow workspace）解析；绝对路径 resolve 原样保留。
-  "var projectRoot = path.resolve(process.cwd(), ep.designDocPath, '..', '..');",
-  "var designAbs = path.resolve(process.cwd(), ep.designDocPath);",
-  "var planAbs = path.resolve(process.cwd(), ep.planPath);",
+  // projectRoot：消费 exec-plan 的 projectRoot 字段（§8.3「引擎缺省 cwd（W2/W3 消费）」——
+  // 不再从 designDocPath 上推）；exec-plan 内相对路径一律按 projectRoot 解析（§8.6：
+  // 不依赖发起时 process.cwd()——cwd≠projectRoot 发起不再误判「设计文档不存在」）
+  "var projectRoot = path.resolve(process.cwd(), ep.projectRoot);",
+  "var designAbs = path.resolve(projectRoot, ep.designDocPath);",
+  "var planAbs = path.resolve(projectRoot, ep.planPath);",
   // impl-plan 双格式（§8.4）：人读版 .impl-plan.md 与机器版并存，存在则一并给 reviewer
   "var planMd = planAbs.replace(/\\.impl-plan\\.json$/, '.impl-plan.md');",
   "if (!fs.existsSync(planMd)) planMd = null;",
-  "var statusAbs = path.resolve(process.cwd(), ep.statusPath);",
+  "var statusAbs = path.resolve(projectRoot, ep.statusPath);",
   "if (!fs.existsSync(designAbs)) die('设计文档不存在: ' + designAbs);",
   "if (!fs.existsSync(planAbs)) die('impl-plan 不存在: ' + planAbs);",
   "var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);",
@@ -284,9 +302,9 @@ const NODE_PREP = [
   "var gateALog = path.join(statusDir, baseName + '.gate-a.log');",
   "console.log(JSON.stringify({",
   "  projectRoot: projectRoot, baseline: bl, designDocPath: designAbs, planPath: planAbs, planMdPath: planMd,",
-  "  gateALog: gateALog, reviewerTemplate: tplAbs, partitions: partitions,",
+  "  statusPath: statusAbs, gateALog: gateALog, reviewerTemplate: tplAbs, partitions: partitions,",
   "  diffChurn: churn, diffFileCount: files.length, unitCount: unitCount,",
-  "  incremental: incr, fullSuite: { program: fsuite.program, args: fsuite.args },",
+  "  incremental: incr, fullSuite: { program: fsuite.program, args: fsuite.args }, artifacts: artifacts,",
   "}));",
 ].join("\n");
 // templateArgRaw 是 NODE_PREP 内引用的第三个 argv（见下方调用：execPlanArg 之后传入）。
@@ -513,22 +531,63 @@ const activeItems = (): ItemRecord[] => items.filter((i) => i.active);
 // 分区名不同，与分区组文件路径必不相交——天然无并行冲突）。
 let partitionOf = (filePath: string): string => "溢出";
 
-function finish(terminated: FinalResult["terminated"], roundsDone: number, message: string): FinalResult {
-  return {
+// 必填字段分流的登记项收集（影响决策=否 且 影响交付=无——不进修复批次，随终态回流）
+let deferredLedger: FinalResult["deferredLedger"] = [];
+
+const MAX_CONCURRENCY = 5; // 全局并发上限（修复组/分区审/复审批共用——组数 >5 时分批，禁全量裸并发）
+
+/** 通用分批并行（≤MAX_CONCURRENCY；fn 可返回 PromiseLike——agent().ask 的 Node 即是） */
+async function mapBatch<T, R>(list: T[], fn: (item: T) => PromiseLike<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < list.length; i += MAX_CONCURRENCY) {
+    out.push(...(await Promise.all(list.slice(i, i + MAX_CONCURRENCY).map(fn))));
+  }
+  return out;
+}
+
+// status.json events 追加（§4.5 W3 回写义务：D3 入口门「Gate A 绿证据在 events 可查」的数据源；
+// 保留全部既有顶层字段——与 W2 写的是同一文件）
+const NODE_APPEND_EVENT =
+  "try{var fs=require('fs');var sp=process.argv[1];var st=JSON.parse(fs.readFileSync(sp,'utf8'));var evs=Array.isArray(st.events)?st.events:[];evs.push({seq:evs.length+1,node:process.argv[2],event:process.argv[3],detail:process.argv[4]||''});st.events=evs;fs.writeFileSync(sp,JSON.stringify(st,null,2));process.exit(0)}catch(e){process.stderr.write(String((e&&e.message)||'append failed'));process.exit(1)}";
+
+async function appendStatusEvent(node: string, event: string, detail: string): Promise<void> {
+  try {
+    const r = await world.run("node", ["-e", NODE_APPEND_EVENT, info.statusPath, node, event, detail]);
+    if (r.exitCode !== 0) log(`WARN: status.json events 追加失败（${event}，exit ${r.exitCode}）——终态数据以本次返回值为准`);
+  } catch (e) {
+    log(`WARN: status.json events 追加异常（${event}）：${String(e)}`);
+  }
+}
+
+async function finish(terminated: FinalResult["terminated"], roundsDone: number, message: string): Promise<FinalResult> {
+  const result: FinalResult = {
     terminated,
     rounds: roundsDone,
     docErrors: [...docErrorPool.values()],
     reasonable: [...reasonablePool.values()],
     gateALog: gateALogPath,
     escalated: items
-      .filter((i) => i.active && i.uncleanRounds >= 2)
+      .filter((i) => i.active && i.uncleanRounds >= 3)
       .map((i) => ({ id: i.id, location: i.location, gap: i.gap, uncleanRounds: i.uncleanRounds })),
+    deferredLedger,
     remaining: items
       .filter((i) => i.active)
       .map((i) => ({ id: i.id, location: i.location, gap: i.gap, severity: i.severity, group: i.group })),
     partitions: info.partitions.map((p) => ({ name: p.name, files: p.files.length })),
     message,
   };
+  // §4.5：W3 终态回写 status.json events——consistency 终态一笔 + Gate A 结果一笔（converged/gate-a-failed）
+  await appendStatusEvent(
+    "consistency",
+    "consistency-terminal",
+    `terminated=${terminated}; rounds=${roundsDone}; ${message.slice(0, 160)}`,
+  );
+  if (terminated === "converged") {
+    await appendStatusEvent("gate-a", "gate-a-pass", `全量测试通过，日志：${gateALogPath ?? info.gateALog}`);
+  } else if (terminated === "gate-a-failed") {
+    await appendStatusEvent("gate-a", "gate-a-fail", message.slice(0, 200));
+  }
+  return result;
 }
 
 // ══════════════ Phase 1：生成分区并全面审查（R1）══════════════
@@ -600,12 +659,13 @@ log(
 
 let r1Norm: ReviewResult[];
 try {
-  const r1Raw = await Promise.all(
-    info.partitions.map((p) => agent(`一致性审查-${p.name}`, R1_PERSONA).ask<ReviewResult>(r1Prompt(p))),
+  const r1Raw = await mapBatch(
+    info.partitions,
+    (p) => agent(`一致性审查-${p.name}`, R1_PERSONA).ask<ReviewResult>(r1Prompt(p)),
   );
   r1Norm = r1Raw.map((v, i) => normalizeReview(v, `分区 ${info.partitions[i]?.name ?? i}`));
 } catch (e) {
-  return finish("review-failure", 1, `R1 审查失败：${String(e)}——恢复动作：读 run 日志定位失败分区，AmendWorkflow 修订后重发`);
+  return await finish("review-failure", 1, `R1 审查失败：${String(e)}——恢复动作：读 run 日志定位失败分区，AmendWorkflow 修订后重发`);
 }
 
 // ── 脚本聚合（无 LLM）：计数三分类 / unreasonable 建档（按分区边界成组）/
@@ -664,14 +724,35 @@ function renderItem(it: ItemRecord): string {
 }
 
 let prevActiveCount = items.length;
-let noDeclineStreak = 0;
 let foreignRound = false;
 
 for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRound++) {
   phase("并行修复与定向复审");
   reviewRound = fixRound + 1;
   foreignRound = false;
-  const roundActive = activeItems();
+  const roundActiveAll = activeItems();
+  // 必填字段分流（老一致性纪律保留）：影响决策=否 且 影响交付=无 → 降级登记项，
+  // 不进修复批次（低价值条目不烧修复轮次），随终态 deferredLedger 回流主 agent 登记残留风险
+  const roundActive: ItemRecord[] = [];
+  for (const it of roundActiveAll) {
+    if (it.affectsDecision.trim().startsWith("否") && it.affectsDelivery.trim().startsWith("无")) {
+      it.active = false;
+      deferredLedger.push({
+        id: it.id,
+        location: it.location,
+        gap: it.gap,
+        affectsDecision: it.affectsDecision,
+        affectsDelivery: it.affectsDelivery,
+      });
+      log(`条目 ${it.id} 双无（影响决策=否、影响交付=无）→ 降级登记项，不进修复批次`);
+    } else {
+      roundActive.push(it);
+    }
+  }
+  if (roundActive.length === 0) {
+    log("本轮全部活跃条目降级为登记项——无修复组，进清零判定");
+    continue;
+  }
 
   // 组划分 = 分区边界（脚本聚合，无 LLM）
   const groupMap = new Map<string, ItemRecord[]>();
@@ -686,8 +767,9 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
   // ── 阶段 A：修复组并行（每组一个 agent，条目清单直达；改动留工作区，引擎统一 commit）──
   let fixesByGroup: { name: string; fix: FixReport }[];
   try {
-    fixesByGroup = await Promise.all(
-      groupNames.map(async (name) => {
+    fixesByGroup = await mapBatch(
+      groupNames,
+      async (name) => {
         const gItems = groupMap.get(name) ?? [];
         const prompt = [
           `第 ${fixRound} 轮一致性修复（分区：${name}；${gItems.length} 条 unreasonable，修复方向 = 让实现符合设计文档）。`,
@@ -716,10 +798,10 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           .join("\n");
         const fix = await agent(`修复-${name}-r${fixRound}`, FIX_PERSONA).ask<FixReport>(prompt);
         return { name, fix: normalizeFix(fix, `修复-${name}-r${fixRound}`) };
-      }),
+      },
     );
   } catch (e) {
-    return finish("fix-failure", reviewRound, `第 ${fixRound} 轮修复失败：${String(e)}——在途改动可能留在工作区，接管前先 git status 盘点`);
+    return await finish("fix-failure", reviewRound, `第 ${fixRound} 轮修复失败：${String(e)}——在途改动可能留在工作区，接管前先 git status 盘点`);
   }
 
   // ── 阶段 B：轮级核验（需要全体组申报——合法汇聚点）→ 逐组增量测试 → 逐组 commit ──
@@ -751,13 +833,13 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
   const pool = [...new Set(groupStates.flatMap((g) => g.own))];
   const vRes = await world.run("node", ["-e", NODE_VERIFY, info.projectRoot, JSON.stringify(pool)]);
   if (vRes.exitCode !== 0) {
-    return finish("fix-failure", reviewRound, `改动归属核验执行失败：${vRes.stderr.trim() || vRes.stdout.trim()}`);
+    return await finish("fix-failure", reviewRound, `改动归属核验执行失败：${vRes.stderr.trim() || vRes.stdout.trim()}`);
   }
   let verify: { changed: string[]; foreign: string[] };
   try {
     verify = JSON.parse(vRes.stdout) as { changed: string[]; foreign: string[] };
   } catch {
-    return finish("fix-failure", reviewRound, "核验输出解析失败（不应发生）");
+    return await finish("fix-failure", reviewRound, "核验输出解析失败（不应发生）");
   }
 
   if (verify.foreign.length > 0) {
@@ -820,8 +902,9 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     const reviewTargets = groupStates.filter((g) => g.changedFiles.length > 0 || g.testFailed);
     let reviews: { name: string; review: ReviewResult }[];
     try {
-      reviews = await Promise.all(
-        reviewTargets.map(async (g) => {
+      reviews = await mapBatch(
+        reviewTargets,
+        async (g) => {
           const files = [
             ...new Set([
               ...g.items.map((i) => fileOf(i.location)),
@@ -861,10 +944,10 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             .join("\n");
           const review = await agent(`${g.name}复审-r${fixRound}`, RE_PERSONA).ask<ReviewResult>(prompt);
           return { name: g.name, review: normalizeReview(review, `复审-${g.name}-r${fixRound}`) };
-        }),
+        },
       );
     } catch (e) {
-      return finish("review-failure", reviewRound, `第 ${fixRound} 轮定向复审失败：${String(e)}——在途改动状态见各组 commitNote`);
+      return await finish("review-failure", reviewRound, `第 ${fixRound} 轮定向复审失败：${String(e)}——在途改动状态见各组 commitNote`);
     }
     for (const r of reviews) {
       const g = groupStates.find((x) => x.name === r.name);
@@ -944,44 +1027,41 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
       round: reviewRound,
       active: activeAfter.length,
       newFindings: newReports.length,
-      escalated: activeAfter.filter((i) => i.uncleanRounds >= 2).length,
+      escalated: activeAfter.filter((i) => i.uncleanRounds >= 3).length,
       groups: groupStates.map((g) => ({ name: g.name, committed: g.committed, testFailed: g.testFailed })),
     });
 
-    // ── 停机线一：单条 unreasonable 连续 2 轮修复未清 → 升级用户（终态 stuck 带清单）──
-    const escalatedNow = activeAfter.filter((i) => i.uncleanRounds >= 2);
+    // ── 停机线一（§8.6 ③）：单条 unreasonable 修复「超 2 轮未清」→ 升级用户 ──
+    //（对齐 W2 打回语义：1 次初始修复 + 2 次打回重修 = 3 次 fixer 机会，第 3 次复审仍报才升级）
+    const escalatedNow = activeAfter.filter((i) => i.uncleanRounds >= 3);
     if (escalatedNow.length > 0) {
-      return finish(
+      return await finish(
         "stuck",
         reviewRound,
-        `单条停机线触发：${escalatedNow.map((i) => `${i.id}（${i.location}，已连续 ${i.uncleanRounds} 轮修复未清）`).join("、")}——按阈值升级用户裁决；升级清单见 escalated 字段，各条修复史见台账（GetWorkflowRun 日志）`,
+        `单条停机线触发：${escalatedNow.map((i) => `${i.id}（${i.location}，已 ${i.uncleanRounds} 次修复仍未清）`).join("、")}——按阈值升级用户裁决；升级清单见 escalated 字段，各条修复史见台账（GetWorkflowRun 日志）`,
       );
     }
-    // ── 停机线二：unreasonable 计数连续 3 轮未下降（含不减反增）→ stuck ──
-    if (activeAfter.length > 0 && activeAfter.length >= prevActiveCount) noDeclineStreak += 1;
-    else noDeclineStreak = 0;
+    // ── 停机线二（§8.6 ①②）：审查轮累计达 3 轮仍未收敛，或任一轮活跃数不减反增（高于前轮）→ stuck ──
+    if (activeAfter.length > 0 && (reviewRound >= 3 || activeAfter.length > prevActiveCount)) {
+      return await finish(
+        "stuck",
+        reviewRound,
+        `计数停机线触发：${activeAfter.length > prevActiveCount ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${activeAfter.length}）` : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${activeAfter.length} 条）`}——残留清单见 remaining 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`,
+      );
+    }
     prevActiveCount = activeAfter.length;
-    if (noDeclineStreak >= 3) {
-      return finish(
-        "stuck",
-        reviewRound,
-        `计数停机线触发：unreasonable 活跃数连续 ${noDeclineStreak} 轮未下降（当前 ${activeAfter.length} 条）——残留清单见 remaining 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`,
-      );
-    }
   } else {
     // foreign 轮：无复审（状态归属不明，复审无意义）；条目全保留。
     // 计数停机线照常累计（active 不降烧轮次 → 兜底终止）
     const activeAfter = activeItems();
-    if (activeAfter.length > 0 && activeAfter.length >= prevActiveCount) noDeclineStreak += 1;
-    else noDeclineStreak = 0;
-    prevActiveCount = activeAfter.length;
-    if (noDeclineStreak >= 3) {
-      return finish(
+    if (activeAfter.length > 0 && (reviewRound >= 3 || activeAfter.length > prevActiveCount)) {
+      return await finish(
         "stuck",
         reviewRound,
-        `计数停机线触发（连续 ${noDeclineStreak} 轮未下降，其中含越界作废轮）：当前 ${activeAfter.length} 条活跃，且存在未申报改动残留——先人工 git status 盘点工作区再决定恢复方式`,
+        `计数停机线触发（累计 ${reviewRound} 轮或规模反增，其中含越界作废轮）：当前 ${activeAfter.length} 条活跃，且存在未申报改动残留——先人工 git status 盘点工作区再决定恢复方式`,
       );
     }
+    prevActiveCount = activeAfter.length;
   }
 }
 
@@ -993,7 +1073,37 @@ if (activeItems().length > 0) {
   );
 }
 
-// ══════════════ Phase 3：跑全量测试 Gate A ══════════════
+// ══════════════ Phase 3：产物类第一波并行预备 + 全量测试 Gate A ══════════════
+
+// 产物类并行预备（§6.1 条目 3）：Gate A 起始时并行启动全部产物类命令，禁止按清单顺序
+// 现用现建（2026-09-19 实测教训：real 轨首跑因磁盘产物过期被 launch 探针拒绝，重跑付一次全轮成本）
+const artifactLogOf = (id: string): string => info.gateALog.replace(/\.gate-a\.log$/, `.artifact-${id}.log`);
+if (info.artifacts.length > 0) {
+  phase("产物类并行预备");
+  log(`产物类第一波并行启动：${info.artifacts.map((a) => a.id).join("、")}`);
+  const artOuts = await mapBatch(info.artifacts, async (a) => ({
+    a,
+    r: await world.run("node", [
+      "-e",
+      NODE_RUN_CMD,
+      info.projectRoot,
+      a.command.program,
+      JSON.stringify(a.command.args),
+      artifactLogOf(a.id),
+      String(GATE_A_TIMEOUT_MS),
+    ]),
+  }));
+  for (const { a, r } of artOuts) {
+    if (r.exitCode !== 0) {
+      return await finish(
+        "gate-a-failed",
+        reviewRound,
+        `产物类构建失败（${a.id}，exit ${r.exitCode}）——后续验证类条目依赖该产物，先归因产物构建（日志 ${artifactLogOf(a.id)}）再重跑；本工作流不自动归因`,
+      );
+    }
+  }
+  log(`产物类全部就绪：${info.artifacts.map((a) => `${a.id}（日志 ${artifactLogOf(a.id)}）`).join("、")}`);
+}
 
 phase("跑全量测试 Gate A");
 const gateLog = info.gateALog;
@@ -1026,4 +1136,4 @@ if (gateCode !== 0) {
     `${gateNote || `全量测试退出码 ${gateCode}`}。日志：${gateALogPath}。归因指引：读日志定位失败用例（单测红 = 修复回归；编译/类型红 = 一致性残留漂移；超时 = 用例预算问题），由主 agent 派归因补修后重跑本工作流或全量测试——本工作流不自动归因`,
   );
 }
-return finish("converged", reviewRound, `全部分区 unreasonable 清零，Gate A 全量测试通过（日志：${gateALogPath}）；doc_errors 与 reasonable 已随终态回流，由主 agent 转 D5 终态同步`);
+return await finish("converged", reviewRound, `全部分区 unreasonable 清零，Gate A 全量测试通过（日志：${gateALogPath}）；doc_errors 与 reasonable 已随终态回流，由主 agent 转 D5 终态同步`);

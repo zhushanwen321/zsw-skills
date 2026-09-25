@@ -36,8 +36,13 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第二级（模块
    severity 判据（按是否误导后来者划线）：must-fix = 过时登记/悬空符号/
    行为与文档矛盾；suggestion = 不同步但不误导；info = 知晓级
 5. 声称事实前必须 read 原文件核实到行级；只审本模块，禁止引用其他
-   reviewer 结论；R2+ 聚焦复审（任务 prompt 会标注）：只审上轮修复影响面
+   reviewer 结论；发现差距另涉其他模块时，在本模块 findings 立项并在 gap
+   标注「跨模块：另涉 <模块>」——不越区审；R2+ 聚焦复审（任务 prompt 会
+   标注）：只审上轮修复影响面
 输出（json 代码块）：{ "matrixRows": [{claim, impl, verdict, note, overdesign?}],
   "findings": [八字段…], "moduleNoFinding": "在 X 未发现"（无发现时显式声明）}
+  输出契约：越权过度/存疑行只进 matrixRows（overdesign 字段 + 候选卡三段
+  论证：小取舍/大简化/核心价值不变），禁止为越权实现立可修 findings；
+  越权合理档立一条 code-right finding（回写文档登记）
 验收：每行/每条可回溯文档章节与代码位置；越权行有调用方证据
 ```

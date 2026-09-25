@@ -505,8 +505,7 @@ async function finish(
     blocked,
     message,
   };
-  // final.json（字段名对齐契约：value-rejected 的 oneliner/reportFile、converged 的
-  // valueOneliner/mustFixTrajectory/suggestionDispositions）
+  // final.json（对外字段名 = oneliner，skill 文本契约同此——设计 §5.2 双形态契约权威表）
   const finalDoc = {
     terminated: result.terminated,
     rounds: result.rounds,
@@ -729,14 +728,22 @@ for (let round = 1; round <= maxRounds; round++) {
     ...parkedWatch.filter((d) => escalateIds.has(d.id)),
   ];
 
-  // converged 判定（统一公式：R1 必对账集为空、自然成立——即「R1 全 0 且零 suggestion
-  // 直接 converged 不派修复者」；R2+ 须当轮报告双 0 且必对账集全被实证确认）
-  if (roundMustFix === 0 && roundSuggestion === 0 && outstanding.length === 0) {
-    return await finish(
-      "converged",
-      round,
-      `第 ${round} 轮收敛：三报告 must-fix 与 suggestion 均 0${round > 1 ? "，上轮处置条目全部经实证复核确认" : "（首轮即净，未派修复者）"}。下游：T2 确认点`,
-    );
+  // converged 判定（设计 §5.2 唯一权威公式）：must-fix==0 且上轮处置表全处置即终止——
+  // 不要求当轮 suggestion==0（处置完即终止，不为 suggestion 单独驱动确认轮——2026-09-19
+  // 实测教训：must-fix 收敛后为清 suggestion 续 2 轮确认，占收敛期约 1/4 时长）。
+  // R1 全 0 且零 suggestion → 直接 converged（不派修复者）；有 suggestion → 派修复者
+  // 处置后同轮收敛（convergeAfterFix 出口），不派下轮确认。
+  let convergeAfterFix = false;
+  if (roundMustFix === 0 && outstanding.length === 0) {
+    if (roundSuggestion === 0) {
+      return await finish(
+        "converged",
+        round,
+        `第 ${round} 轮收敛：三报告 must-fix 与 suggestion 均 0${round > 1 ? "，上轮处置条目全部经实证复核确认" : "（首轮即净，未派修复者）"}。下游：T2 确认点`,
+      );
+    }
+    log(`第 ${round} 轮 must-fix 0、outstanding 0、suggestion ${roundSuggestion} 条——派修复者处置 suggestion 后收敛（不派纯确认轮）`);
+    convergeAfterFix = true;
   }
 
   // stuck 熔断（连续多轮 must-fix 总和不降；计数判定归脚本）
@@ -843,6 +850,15 @@ for (let round = 1; round <= maxRounds; round++) {
   const deferredCount = dispositions.filter((d) => d.action === "deferred").length;
   const archivedCount = dispositions.filter((d) => d.action === "archived").length;
   log(`第 ${round} 轮修复完成：处置 ${dispositions.length} 条（修复 ${fixedCount} / 登记 ${deferredCount} / 归档 ${archivedCount}），处置表 ${roundAbs}/dispositions.md`);
+
+  // suggestion 处置后收敛出口（设计 §5.2：处置完即终止，不派纯确认轮）
+  if (convergeAfterFix) {
+    return await finish(
+      "converged",
+      round,
+      `第 ${round} 轮收敛：must-fix 0 且上轮处置全部经实证复核确认；当轮 suggestion ${roundSuggestion} 条已全部处置（修复 ${fixedCount} / 登记 ${deferredCount} / 归档 ${archivedCount}，处置表 ${roundAbs}/dispositions.md）。下游：T2 确认点`,
+    );
+  }
 }
 
 // ── 轮次耗尽收尾 ──
