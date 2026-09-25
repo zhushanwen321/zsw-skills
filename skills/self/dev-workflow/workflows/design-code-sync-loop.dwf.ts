@@ -720,7 +720,9 @@ async function auditJson(path: string, content: string): Promise<void> {
 const ledger: FindingRecord[] = [];
 const matrixRowsRec: MatrixRowRecord[] = [];
 const roundsHist: RoundStat[] = [];
-const moduleAgents = new Map<string, ReturnType<typeof agent>>();
+// 模块 reviewer 跨轮复用容器：值类型用 facade 自带 interface 名（Agent）做注解——
+// ReturnType<typeof agent> 属取值引用、自定义结构类型属 retyping 逃逸，均被编译器拦
+const moduleAgents = new Map<string, Agent>();
 let moduleById = new Map<string, ModulePlanRec>();
 let finalNote = "";
 let lastDispatchedIds: string[] = [];

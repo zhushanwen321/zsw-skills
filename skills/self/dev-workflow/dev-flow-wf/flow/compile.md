@@ -14,6 +14,7 @@
 {
   "version": 1,
   "mode": "dev",                       // dev（D1）| acceptance（D3）
+  "projectRoot": "<项目根绝对路径>",      // 引擎缺省 cwd（W2/W3 消费；节点 cwd 为 null 时用）
   "planPath": ".tmp/tech-design/<name>.impl-plan.json",
   "designDocPath": ".tmp/tech-design/<name>.md",
   "baseline": "<git rev-parse HEAD>",
