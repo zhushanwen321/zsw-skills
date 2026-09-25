@@ -4,8 +4,9 @@ description: dev-flow-wf W3 一致性审查循环（D2）：R1 分区全面审�
   互斥契约下聚合退化为脚本操作）→ 修复组并行（组 = 分区边界，组级一笔 commit）→
   R2+ 每组定向复审（只审三条，不全面重审）→ Gate A 全量测试（零容忍绕过：无任何
   SKIP 逻辑，脚本不传环境变量）→ 终态回流 doc_errors/reasonable 给主 agent。
-  双停机线：计数连续 3 轮不降 → stuck；单条 unreasonable 连续 2 轮修复未清（按
-  location+gap 文本身份键追踪）→ 升级用户，终态 stuck 带清单
+  停止线（合并语义）：审查轮累计 3 轮不收敛（或 unreasonable 活跃数不减反增）→
+  stuck；顽固条目（连续 ≥2 轮修复未清，按 location+gap 文本身份键追踪）随 stuck
+  终态 escalated 清单呈报——单条独立停机线与时序互斥（到点必晚于计数线），已并入
 whenToUse: dev-flow-wf 主流程 D2 阶段——W2 开发循环终态（blocked 已升级处理）后由
   主 agent 发起；输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/
   环节失败由主 agent 接力（Gate A 红不自动归因，归因补修是主 agent 的事）
@@ -13,7 +14,7 @@ args:
   execPlan:
     type: string
     description: exec-plan.json 路径（绝对或 workspace 相对；D0 编译产物，须含
-      baseline/planPath/designDocPath/statusPath/testPlan.fullSuite）
+      baseline/planPath/designDocPath/statusPath/projectRoot/testPlan.fullSuite）
     required: true
   maxRounds:
     type: number
@@ -23,6 +24,11 @@ args:
     type: string
     description: 一致性审查 agent 模板路径（缺省用 dev-flow-wf skill 内置模板）
     default: ~/.agents/skills/dev-flow-wf/agents/consistency-reviewer.md
+  attempt:
+    type: number
+    description: 重发起序号（status.json events 追加保留历史不覆盖；attempt > 1 时
+      Gate A 日志命名带 .attemptM 后缀防覆盖上轮日志）
+    default: 1
 */
 // W3 dev-consistency-loop — dev-flow-wf D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
@@ -46,7 +52,7 @@ args:
 // 环境变量（node -e 执行器只透传 argv）——绕过通道在结构上不存在。
 
 // ── 参数窄化与白名单 ──
-const VALID_ARG_KEYS = new Set(["execPlan", "maxRounds", "reviewerTemplate"]);
+const VALID_ARG_KEYS = new Set(["execPlan", "maxRounds", "reviewerTemplate", "attempt"]);
 for (const key of Object.keys(args)) {
   if (!VALID_ARG_KEYS.has(key)) {
     throw new Error(
@@ -63,6 +69,9 @@ if (!execPlanArg) {
   );
 }
 const maxRounds = typeof args.maxRounds === "number" && args.maxRounds >= 1 ? Math.floor(args.maxRounds) : 10;
+// attempt：W3 无轮次产物目录（status.json events 追加即历史），attempt 只给 Gate A
+// 日志加后缀防覆盖上轮日志（consistency-review.md 终态处置表的重发通道）
+const attempt = typeof args.attempt === "number" && args.attempt >= 1 ? Math.floor(args.attempt) : 1;
 // reviewer 模板默认路径用 ~ 占位形态（运行时由 node 侧 os.homedir() 展开——家目录
 // 绝对路径不入脚本字面量）；args.reviewerTemplate 可覆盖。
 const DEFAULT_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/consistency-reviewer.md";
@@ -299,7 +308,8 @@ const NODE_PREP = [
   "if (total !== files.length) die('分区守恒校验失败: ' + total + ' != ' + files.length);",
   "var statusDir = path.dirname(statusAbs);",
   "var baseName = path.basename(statusAbs).replace(/\\.status\\.json$/, '');",
-  "var gateALog = path.join(statusDir, baseName + '.gate-a.log');",
+  "var attemptNo = parseInt(process.argv[3] || '1', 10) || 1;",
+  "var gateALog = path.join(statusDir, baseName + '.gate-a' + (attemptNo > 1 ? '.attempt' + attemptNo : '') + '.log');",
   "console.log(JSON.stringify({",
   "  projectRoot: projectRoot, baseline: bl, designDocPath: designAbs, planPath: planAbs, planMdPath: planMd,",
   "  statusPath: statusAbs, gateALog: gateALog, reviewerTemplate: tplAbs, partitions: partitions,",
@@ -386,6 +396,44 @@ const NODE_RUN_CMD = [
   "function head(s) { s = s || ''; return s.length > 8000 ? s.slice(0, 8000) + '\\n…(输出截断，全文见日志文件)…' : s; }",
   "console.log(JSON.stringify({ code: code, stdoutHead: head(out), stderrHead: head(err) }));",
 ].join("\n");
+
+// Gate A / 产物命令输出的零容忍绕过扫描（设计 §6.1 条目 1）：读日志尾部，命中
+// 「N skipped」汇总（测试跳过计数 > 0 的确定信号——比源码 grep 误伤低：用例名回显
+// 不含此形态）或 eslint-disable（lint 输出几乎不会合法出现）即失败项。
+// SKIP_* 环境变量形态不做输出扫描：环境侧已被结构性隔离（node 执行器只透传 argv），
+// 输出扫描用例名含 SKIP_ 字样的合法测试会误伤（权衡注释见 §6.1 对齐条目）。
+const NODE_SKIP_SCAN = [
+  "var fs = require('fs');",
+  "try {",
+  "  var t = String(fs.readFileSync(process.argv[1], 'utf8'));",
+  "  var tail = t.split('\\n').slice(-150);",
+  "  var hits = [];",
+  "  for (var i = 0; i < tail.length; i++) {",
+  "    var l = tail[i];",
+  "    if (/\\b\\d+\\s+skipped\\b/i.test(l) || l.indexOf('eslint-disable') >= 0) hits.push(l.trim());",
+  "  }",
+  "  console.log(JSON.stringify(hits.slice(0, 10)));",
+  "} catch (e) { console.log(JSON.stringify({ error: String((e && e.message) || e) })); }",
+].join("\n");
+
+/** 零容忍绕过扫描：命中返回证据行；读取失败返回 null（扫描器自身故障只 WARN 不拦
+ *  合法绿——「发现即失败」，发现不了不算发现） */
+async function scanSkipEvidence(logPath: string, label: string): Promise<string[] | null> {
+  const r = await world.run("node", ["-e", NODE_SKIP_SCAN, logPath]);
+  if (r.exitCode !== 0) {
+    log(`WARN ${label} 零容忍扫描器执行失败（exit ${r.exitCode}）——本次未扫描，人工抽查 ${logPath}`);
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(r.stdout) as unknown;
+    if (Array.isArray(parsed)) return parsed.filter((x): x is string => typeof x === "string");
+    log(`WARN ${label} 零容忍扫描器输出异常——本次未扫描，人工抽查 ${logPath}`);
+    return null;
+  } catch {
+    log(`WARN ${label} 零容忍扫描器输出解析失败——本次未扫描，人工抽查 ${logPath}`);
+    return null;
+  }
+}
 
 // Gate A / 增量测试的超时预算（毫秒）：node 内执行器先超时（抛 killed），world 层
 // 给 15s 余量兜进程树。
@@ -594,7 +642,7 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
 
 phase("生成分区并全面审查");
 
-const prepRes = await world.run("node", ["-e", NODE_PREP_CODE, execPlanArg, reviewerTemplate]);
+const prepRes = await world.run("node", ["-e", NODE_PREP_CODE, execPlanArg, reviewerTemplate, String(attempt)]);
 if (prepRes.exitCode !== 0) {
   throw new Error(
     `exec-plan 解析 / 分区生成失败（exit ${prepRes.exitCode}）：${prepRes.stderr.trim() || prepRes.stdout.trim()}` +
@@ -735,7 +783,11 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
   // 不进修复批次（低价值条目不烧修复轮次），随终态 deferredLedger 回流主 agent 登记残留风险
   const roundActive: ItemRecord[] = [];
   for (const it of roundActiveAll) {
-    if (it.affectsDecision.trim().startsWith("否") && it.affectsDelivery.trim().startsWith("无")) {
+    // 前缀精确匹配：「否」「否——理由」合法命中；「无法判断——」等近形词不得误入
+    // 降级登记项（曾用 startsWith("无") 会命中「无法…」形态）
+    const noDecision = /^否(?:$|[—\-:：\s])/.test(it.affectsDecision.trim());
+    const noDelivery = /^无(?:$|[—\-:：\s])/.test(it.affectsDelivery.trim());
+    if (noDecision && noDelivery) {
       it.active = false;
       deferredLedger.push({
         id: it.id,
@@ -805,6 +857,26 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
   }
 
   // ── 阶段 B：轮级核验（需要全体组申报——合法汇聚点）→ 逐组增量测试 → 逐组 commit ──
+  // skipped 消费（fixerPrompt 纪律 2 的契约闭环）：fixer 申报「设计文档自身错误、不改
+  // 代码」的条目 → 台账置不活跃（否则永远 active 空转烧轮次直到 stuck）+ 转 docErrorPool
+  // 随终态回流主 agent 亲修文档；复审若不同意（再报同 key）会按重开语义复活，闭环不受损
+  for (const f of fixesByGroup) {
+    for (const s of f.fix.skipped) {
+      const it = items.find((i) => i.id === s.id && i.active);
+      if (it === undefined) continue;
+      it.active = false;
+      it.fixHistory.push(`第${fixRound}轮 fixer 申报 skipped：${s.reason}——转 doc_errors 回流主 agent`);
+      docErrorPool.set(`${it.location}||${it.gap}`, {
+        location: it.location,
+        gap: `fixer 申报 skipped（${s.reason}）：${it.gap}`,
+        affectsDecision: it.affectsDecision,
+        affectsDelivery: it.affectsDelivery,
+        severity: normSeverity(it.severity),
+        fixHint: it.fixHint,
+      });
+      log(`条目 ${it.id} 被 fixer 申报 skipped（文档自身错误）——转 doc_errors 回流，不进修复循环`);
+    }
+  }
   const groupStates: GroupRun[] = groupNames.map((name) => {
     const gItems = groupMap.get(name) ?? [];
     const fixRec = fixesByGroup.find((f) => f.name === name)?.fix ?? null;
@@ -856,35 +928,43 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
   } else {
     foreignNote = "";
     for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));
+    // 增量测试组间并行（曾逐组串行 await，多组 × 10min 级增量拖成串行长尾——组间无
+    // 共享状态，NODE_RUN_CMD 只读工作区；缺省无 incremental 则跳过测试只验 diff）
+    const incrCmd = info.incremental;
+    if (incrCmd !== null) {
+      await mapBatch(
+        groupStates.filter((g) => g.changedFiles.length > 0),
+        async (g): Promise<void> => {
+          const t = await world.run(
+            "node",
+            ["-e", NODE_RUN_CMD, info.projectRoot, incrCmd.program, JSON.stringify(incrCmd.args), "null", String(INCREMENTAL_TIMEOUT_MS)],
+            { timeoutMs: INCREMENTAL_WORLD_TIMEOUT_MS },
+          );
+          let tCode = -1;
+          let tTail = "";
+          try {
+            const parsed = JSON.parse(t.stdout) as { code: number; stdoutHead: string; stderrHead: string };
+            tCode = parsed.code;
+            tTail = parsed.stdoutHead + (parsed.stderrHead ? `\n[stderr]\n${parsed.stderrHead}` : "");
+          } catch {
+            tTail = t.stderr.trim() || t.stdout.trim();
+          }
+          if (t.exitCode !== 0 || tCode !== 0) {
+            g.testFailed = true;
+            g.testTail = tTail;
+            log(`WARN 组 ${g.name} 增量测试未通过——改动留工作区，随复审反馈重修`);
+          }
+        },
+      );
+    }
     for (const g of groupStates) {
       if (g.changedFiles.length === 0) {
         g.commitNote = "无工作区改动（全部 skipped 或修复零 diff）——不提交";
         continue;
       }
-      // 增量测试（exec-plan.testPlan.incremental；缺省跳过测试只验 diff）
-      if (info.incremental) {
-        const t = await world.run(
-          "node",
-          ["-e", NODE_RUN_CMD, info.projectRoot, info.incremental.program, JSON.stringify(info.incremental.args), "null", String(INCREMENTAL_TIMEOUT_MS)],
-          { timeoutMs: INCREMENTAL_WORLD_TIMEOUT_MS },
-        );
-        let tCode = -1;
-        let tTail = "";
-        try {
-          const parsed = JSON.parse(t.stdout) as { code: number; stdoutHead: string; stderrHead: string };
-          tCode = parsed.code;
-          tTail = parsed.stdoutHead + (parsed.stderrHead ? `\n[stderr]\n${parsed.stderrHead}` : "");
-        } catch {
-          tTail = t.stderr.trim() || t.stdout.trim();
-        }
-        if (t.exitCode !== 0 || tCode !== 0) {
-          g.testFailed = true;
-          g.testTail = tTail;
-          log(`WARN 组 ${g.name} 增量测试未通过——改动留工作区，随复审反馈重修`);
-          continue; // 核验未过：不 commit
-        }
-      }
-      // 组级一笔 commit（引擎执行；只 add 本组实际改动文件，精确路径纪律）
+      if (g.testFailed) continue; // 核验未过：不 commit（随复审反馈重修）
+      // 组级一笔 commit（引擎执行；只 add 本组实际改动文件，精确路径纪律；commit 保持
+      // 串行——NODE_COMMIT 的 index.lock 退避是兜底，不主动制造锁竞争）
       const commitMsg = `fix(consistency): ${g.name} ${g.items.length} unreasonable`;
       const c = await world.run("node", ["-e", NODE_COMMIT, info.projectRoot, JSON.stringify(g.changedFiles), commitMsg]);
       if (c.exitCode === 0) {
@@ -1075,7 +1155,7 @@ if (activeItems().length > 0) {
 
 // 产物类并行预备（§6.1 条目 3）：Gate A 起始时并行启动全部产物类命令，禁止按清单顺序
 // 现用现建（2026-09-19 实测教训：real 轨首跑因磁盘产物过期被 launch 探针拒绝，重跑付一次全轮成本）
-const artifactLogOf = (id: string): string => info.gateALog.replace(/\.gate-a\.log$/, `.artifact-${id}.log`);
+const artifactLogOf = (id: string): string => info.gateALog.replace(/(\.attempt\d+)?\.log$/, `.artifact-${id}$1.log`);
 if (info.artifacts.length > 0) {
   phase("产物类并行预备");
   log(`产物类第一波并行启动：${info.artifacts.map((a) => a.id).join("、")}`);
@@ -1121,6 +1201,14 @@ if (info.artifacts.length > 0) {
         `产物类构建失败（${a.id}，exit ${r.exitCode}/code ${artCode}）——后续验证类条目依赖该产物，先归因产物构建（日志 ${artifactLogOf(a.id)}）再重跑；本工作流不自动归因`,
       );
     }
+    const artSkipHits = await scanSkipEvidence(artifactLogOf(a.id), `产物 ${a.id}`);
+    if (artSkipHits !== null && artSkipHits.length > 0) {
+      return await finish(
+        "gate-a-failed",
+        reviewRound,
+        `产物类命令输出命中零容忍绕过证据（${a.id}）：${artSkipHits.join("；")}——发现即失败项不自动归因（日志 ${artifactLogOf(a.id)}），由主 agent 归因处置后重跑`,
+      );
+    }
   }
   log(`产物类全部就绪：${info.artifacts.map((a) => `${a.id}（日志 ${artifactLogOf(a.id)}）`).join("、")}`);
 }
@@ -1139,13 +1227,18 @@ try {
     { timeoutMs: GATE_A_WORLD_TIMEOUT_MS },
   );
   if (g.exitCode === 0) {
-    const parsed = JSON.parse(g.stdout) as { code: number };
-    gateCode = parsed.code;
+    // 解析失败与执行失败分开归因（曾统一 catch 成「超时或无法执行」，排障被误导）
+    try {
+      const parsed = JSON.parse(g.stdout) as { code: number };
+      gateCode = parsed.code;
+    } catch (pe) {
+      gateNote = `Gate A 输出解析失败（执行器退出 0 但 stdout 非 JSON：${String(pe)}）——输出被截断或污染，日志：${gateALogPath}`;
+    }
   } else {
     gateNote = `Gate A 执行器失败（exit ${g.exitCode}）：${g.stderr.trim() || g.stdout.trim()}`;
   }
 } catch (e) {
-  gateNote = `Gate A 超时或无法执行：${String(e)}——日志可能不完整：${gateALogPath}`;
+  gateNote = `Gate A 超时或执行器无法运行：${String(e)}——日志可能不完整：${gateALogPath}`;
 }
 
 if (gateCode !== 0) {
@@ -1154,6 +1247,16 @@ if (gateCode !== 0) {
     "gate-a-failed",
     reviewRound,
     `${gateNote || `全量测试退出码 ${gateCode}`}。日志：${gateALogPath}。归因指引：读日志定位失败用例（单测红 = 修复回归；编译/类型红 = 一致性残留漂移；超时 = 用例预算问题），由主 agent 派归因补修后重跑本工作流或全量测试——本工作流不自动归因`,
+  );
+}
+// 零容忍绕过扫描（exit 0 之后；设计 §6.1 条目 1）：日志尾部 skipped 汇总 > 0 或
+// eslint-disable 命中 = 有测试被跳过 / lint 被禁用——绿不豁免
+const gateSkipHits = await scanSkipEvidence(gateALogPath, "Gate A");
+if (gateSkipHits !== null && gateSkipHits.length > 0) {
+  return await finish(
+    "gate-a-failed",
+    reviewRound,
+    `Gate A 输出命中零容忍绕过证据：${gateSkipHits.join("；")}——测试被跳过或 lint 被禁用即失败项，不自动归因（日志 ${gateALogPath}），由主 agent 归因处置后重跑`,
   );
 }
 return await finish("converged", reviewRound, `全部分区 unreasonable 清零，Gate A 全量测试通过（日志：${gateALogPath}）；doc_errors 与 reasonable 已随终态回流，由主 agent 转 D5 终态同步`);

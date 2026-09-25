@@ -22,7 +22,7 @@ phase 2  module fan-out：modules.map(m => agent(`module-${m.id}`))——并行
 phase 3+ 修复循环：双向修复 → 聚焦复审 →（轮）→ 退役判定 → 终态
 ```
 
-**流程排序**：机器信号（反引号 grep 脚本步）在模块语义审查（fan-out）之前清零——确定性信号先行（紧跟 planner 框架扫描），语义判级归 reviewer 复核。
+**流程排序**：机器信号（反引号 grep 脚本步）紧跟 planner 框架扫描执行立项（确定性信号先行），修复随第一轮修复组进行，语义判级归 reviewer 复核。
 
 **修复分组确定性校验（reconcileGroups）**：`modules[].files` 是 LLM 自报字段，并行 fixer 组间文件相交 = 冲突——组间 files 相交传递闭包合并 + 无效组过滤 + 覆盖兜底（脚本，不信任 planner 自觉）。
 
@@ -82,4 +82,4 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 
 ## 手工降级路径
 
-workflow 未就绪时：主 agent 按「两级拓扑」手工执行——先派 1 个 planner（task = framework-scan 职责，输出模块计划文件），按计划并行派模块 reviewer（模板 `agents/sync-reviewer.md`），聚合判定矩阵，修复循环按上节纪律，全程本文件语义。差距面小（设计只动一模块）时 planner 返回单模块 = 自动单 reviewer。
+workflow 未就绪时：主 agent 按「两级拓扑」手工执行——先派 1 个 planner（task = framework-scan 职责，模板 `agents/sync-planner.md`，输出模块计划文件），按计划并行派模块 reviewer（模板 `agents/sync-reviewer.md`），聚合判定矩阵，修复循环按上节纪律，全程本文件语义。差距面小（设计只动一模块）时 planner 返回单模块 = 自动单 reviewer。

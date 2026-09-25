@@ -44,7 +44,8 @@ args:
   attempt:
     type: number
     description: 重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；
-      缺省时检测到 runDir 下已有 final.json 自动取 2
+      缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取
+      已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）
     default: 1
 */
 // ============================================================================
@@ -66,7 +67,7 @@ args:
 //  - 机械信号步（R1，world.run 无 agent）：反引号标识符批量 git grep，悬空直接立项
 //    （owner=mechanical；R2+ 引擎重跑机械步对账，不走 LLM 复审）
 //  - 越权候选防线（§7.3 三档机器落点）：框架行 overdesign 过度/存疑入账即转候选卡；
-//    fixer 遇「删码类修复 + 非 must-fix」可申报 defer 不执行——两者都随终态
+//    fixer 遇删码类修复无论等级（含 must-fix）可申报 defer 不执行——两者都随终态
 //    overdesignCandidates 呈报，用户裁决前不产生删码动作
 //  - 修复全等级当轮修完不留尾巴（must-fix/suggestion/info）；组核验（改动 ⊆ 组文件并集
 //    ∪ 如实申报的 affectedFiles）→ 引擎组级一笔 commit（gitignore 产物留盘不提交）
@@ -112,7 +113,7 @@ const NODE_BACKTICK_GREP = [
   "  try{ var t=fs.readFileSync(process.argv[pi],'utf8');",
   "    var m=t.match(/`([^`\\n]{2,60})`/g)||[];",
   "    for (var s of m){ var v=s.slice(1,-1).trim();",
-  "      if(!v||!/^\\x20-\\x7e+$/.test(v))continue;",
+  "      if(!v||!/^[\\x20-\\x7e]+$/.test(v))continue;",
   "      if(v.indexOf('/')>=0||v.indexOf(' ')>=0)continue;",
   "      if(v.split(/[^A-Za-z0-9_.\\-]+/).length>4)continue;",
   "      if(/v?\\d+(\\.\\d+)+/i.test(v))continue;",
@@ -729,10 +730,12 @@ const finalJsonPath = `${runDir}/final.json`;
 const retirementDestDir = `${projectRoot}/${RETIREMENT_DIR}`;
 
 // 重发起检测（沿 W1 惯例）：扫描 runDir 内已有 attempt 后缀最大序号，未显式传 → max+1
-//（固定取 2 会覆盖第三次及以后重发起的 attempt2 产物）
+//（固定取 2 会覆盖第三次及以后重发起的 attempt2 产物）；无 attempt 后缀时，runDir 已有
+// 任何轮次产物（无后缀 round-* 或 final.json）→ 取 1（缺省 attempt=2），防首次重发起覆盖首轮
 const ATTEMPT_SCAN =
   "try{var fs=require('fs');var names=[];try{names=fs.readdirSync(process.argv[1])}catch(e){}var mx=0;" +
   "for(var n of names){var m=/^round-\\d+\\.attempt(\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}" +
+  "if(mx===0&&(names.some(n=>/^round-\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;" +
   "if(mx>0)process.stdout.write(String(mx))}catch(e){}";
 const attemptProbe = await world.run("node", ["-e", ATTEMPT_SCAN, runDir]);
 const prevAttemptMax =
@@ -1097,13 +1100,17 @@ async function commitGroupFiles(round: number, gid: string, count: number, files
     log(`  ${gid}: 无可提交文件（改动均在 gitignore 产物或为空）——不 commit`);
     return;
   }
-  const has = await world.run("git", ["-C", projectRoot, "diff", "--cached", "--quiet"]);
+  // 路径限定（沿 W2 GIT_ADD_COMMIT 惯例）：--only + pathspec 把提交面钉死在本组文件——
+  // 预检对脏工作区仅 WARN 不阻断，无 pathspec 时 index 里预存 staged 内容会被卷入组 commit，
+  // 且 diff --cached 判定也会被预存 staged 干扰
+  const rels = staged.map((p) => rel(p));
+  const has = await world.run("git", ["-C", projectRoot, "diff", "--cached", "--quiet", "--", ...rels]);
   if (has.exitCode === 0) {
     log(`  ${gid}: staged 内容与 HEAD 无差异——不 commit`);
     return;
   }
   const msg = `fix: design-code-sync R${round} ${gid} (${count} findings)`;
-  const c = await world.run("git", ["-C", projectRoot, "commit", "-m", msg]);
+  const c = await world.run("git", ["-C", projectRoot, "commit", "--only", "-m", msg, "--", ...rels]);
   if (c.exitCode !== 0) {
     throw new Error(
       `组 ${gid} git commit 失败（exit ${c.exitCode}）：${(c.stderr !== "" ? c.stderr : c.stdout).trim()}。改动已 staged 未提交。恢复动作：人工检查 git index 后重试 commit 或接管`,
@@ -1164,17 +1171,8 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     for (const ff of plan.frameworkFindings) {
       matrixRowsRec.push({ ...ff.matrixRow, overdesign: ff.matrixRow.overdesign, source: "框架（planner）", round });
       const verdict = ff.matrixRow.verdict;
-      if (verdict.includes("一致")) {
-        seq += 1;
-        continue;
-      }
-      // 「未评」= planner 畸形行（verdict 缺失被归一）——不立项进修复（方向判定无依据），
-      // 只留矩阵行 + WARN 供人工复核（审查 P3-3：盲目 code-right 立项会误导修复）
-      if (verdict === "未评") {
-        log(`WARN: 框架行 ${ff.id}（${ff.matrixRow.claim.slice(0, 40)}…）verdict 缺失归一为「未评」——不立项，人工复核矩阵`);
-        seq += 1;
-        continue;
-      }
+      // od 检查先于「一致」短路：planner 同时报「一致」与「过度/存疑」的矛盾行信号更可疑，
+      // 照常转候选卡并 WARN 标注矛盾（曾因一致 continue 在前被静默吞掉）
       const od = ff.matrixRow.overdesign ?? "";
       if (od.includes("过度") || od.includes("存疑")) {
         overdesignCandidates.push({
@@ -1183,7 +1181,21 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
           gap: `${ff.matrixRow.claim} ↔ ${ff.matrixRow.impl}`,
           reason: `框架三问初评「${od}」——候选卡：${ff.matrixRow.note}`,
         });
+        if (verdict.includes("一致")) {
+          log(`WARN: 框架行 ${ff.id} verdict=一致 但 overdesign=${od}——矛盾行，转候选卡供人工复核`);
+        }
         log(`框架越权行初评「${od}」→ 候选卡呈报（不进修复循环，用户裁决后才动）`);
+        seq += 1;
+        continue;
+      }
+      if (verdict.includes("一致")) {
+        seq += 1;
+        continue;
+      }
+      // 「未评」= planner 畸形行（verdict 缺失被归一）——不立项进修复（方向判定无依据），
+      // 只留矩阵行 + WARN 供人工复核（审查 P3-3：盲目 code-right 立项会误导修复）
+      if (verdict === "未评") {
+        log(`WARN: 框架行 ${ff.id}（${ff.matrixRow.claim.slice(0, 40)}…）verdict 缺失归一为「未评」——不立项，人工复核矩阵`);
         seq += 1;
         continue;
       }
@@ -1371,7 +1383,21 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
 
   // ── contested 拦截：任一 must-fix 级方向争议 → 立即停回用户裁决，不进修复 ──
   const contestedMust = active.filter((f) => f.direction === "contested" && f.severity === "must-fix");
+  // 停机终态轮也入收敛轨迹（此前 contested/stuck 尾轮缺数据点，轨迹断在修复轮）
+  const pushStopRoundStat = (): void => {
+    roundsHist.push({
+      round,
+      rowsNew: matrixRowsRec.length - rowsBefore,
+      findingsNew: ledger.length - findingsBefore,
+      mustActive: activeMust,
+      sugActive: active.filter((f) => f.severity === "suggestion").length,
+      infoActive: active.filter((f) => f.severity === "info").length,
+      contestedActive: active.filter((f) => f.direction === "contested").length,
+      fixGroups: 0,
+    });
+  };
   if (contestedMust.length > 0) {
+    pushStopRoundStat();
     finalNote = `contested（R${round}）：must-fix 级方向争议 ${contestedMust.length} 条待用户裁决`;
     try {
       await persistArtifacts();
@@ -1410,6 +1436,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     (f) => f.severity === "must-fix" && round - f.firstSeen >= STUCK_PER_FINDING_ROUNDS,
   );
   if (perFindingStuck.length > 0) {
+    pushStopRoundStat();
     finalNote = `stuck（R${round}）：单条条目超 ${STUCK_PER_FINDING_ROUNDS} 轮未收敛`;
     try {
       await persistArtifacts();
@@ -1424,6 +1451,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     break;
   }
   if (stallStreak >= STUCK_STALL_ROUNDS) {
+    pushStopRoundStat();
     finalNote = `stuck（R${round}）：must-fix 连续 ${stallStreak} 轮不降`;
     try {
       await persistArtifacts();
@@ -1495,9 +1523,11 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         throw new Error(`git status 复查失败（exit ${curRes.exitCode}）：${curRes.stderr.trim()}`);
       }
       const current = parsePorcelain(curRes.stdout);
+      // 口径统一：porcelain 输出仓库相对路径，claims（组 files/affectedFiles）为绝对路径——
+      // changed 一律归一绝对再比对（曾因相对 vs 绝对恒不匹配，诚实修复必判「无组认领」）
       const changed = new Set<string>();
       for (const [p, st] of current) {
-        if (snapshot.get(p) !== st) changed.add(p);
+        if (snapshot.get(p) !== st) changed.add(pathUnderRoot(p));
       }
       for (const { o } of outcomes) {
         for (const p of o.affectedFiles) {
@@ -1611,6 +1641,11 @@ if (finalResult === null && convergedRound > 0) {
       // 引用验证：完整文件名全仓 grep（git grep 只搜 tracked，天然排除 .tmp 产物），
       // 任一命中（自身除外）不退役
       const g = await world.run("git", ["-C", projectRoot, "grep", "-l", "-F", "-e", base]);
+      if (g.exitCode !== 0 && g.exitCode !== 1) {
+        // git grep 异常（非 0 命中 / 非 1 无命中）≠ 无引用——fail-open 会带着悬空引用退役，保守保留
+        kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：引用验证 git grep 异常（exit ${g.exitCode}）——保守保留待人工复核` });
+        continue;
+      }
       const hits =
         g.exitCode === 0
           ? g.stdout
@@ -1655,10 +1690,14 @@ if (finalResult === null && convergedRound > 0) {
       if (post.exitCode === 0) {
         const postHits = post.stdout.split("\n").filter((s) => s.trim() !== "").length;
         if (postHits > 0) log(`WARN: 退役 ${base} 后仍有 ${postHits} 处文件名引用（可能悬空，复核：${post.stdout.trim()}）`);
+      } else if (post.exitCode !== 1) {
+        log(`WARN: 退役 ${base} 后反向复验 git grep 异常（exit ${post.exitCode}）——无法确认无残留引用，人工复核`);
       }
     }
     if (movedTracked) {
-      const cm = await world.run("git", ["-C", projectRoot, "commit", "-m", "chore: retire superseded design artifacts (design-code-sync)"]);
+      // --only + pathspec：只提交退役移动的文件，不卷入 index 预存 staged 内容
+      const retireRels = retired.map((r) => r.from);
+      const cm = await world.run("git", ["-C", projectRoot, "commit", "--only", "-m", "chore: retire superseded design artifacts (design-code-sync)", "--", ...retireRels]);
       if (cm.exitCode !== 0) {
         finalResult = finish(
           "retire-failure",
@@ -1720,9 +1759,9 @@ try {
   log("WARN: 终态标注写盘失败（本轮矩阵此前已落盘，不影响终态数据）");
 }
 if (finalResult !== null) {
-  // final.json = 重发起 attempt 检测锚点（沿 W1 惯例）——best-effort：失败只告警
-  //（attempt 缺省检测还有 syncRoot 存在性兜底语义不受影响：探测的是本文件，失败时
-  //  下次发起按无 final.json 处理，round 目录带 attempt 后缀仍由显式 args.attempt 可控）
+  // final.json 落盘（best-effort：失败只告警）——attempt 缺省检测锚点 = runDir 轮次目录
+  // 扫描（attemptM 后缀 max+1；存在无后缀 round-* 或 final.json → 至少 attempt2 防覆盖
+  // 首轮）；syncRoot 存在性兜底语义不受影响，round 目录后缀仍可由显式 args.attempt 可控
   await auditJson(finalJsonPath, JSON.stringify(finalResult, null, 2));
 }
 if (finalResult === null) {

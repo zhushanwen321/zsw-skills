@@ -30,7 +30,8 @@ args:
   attempt:
     type: number
     description: 重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；
-      缺省时检测到 runDir 下已有 final.json 自动取 2
+      缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取
+      已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）
     default: 1
 */
 // ============================================================================
@@ -92,11 +93,9 @@ interface ReconEntry {
 }
 
 interface ReviewerVerdict {
-  /** 报告文件路径（脚本按确定性位置校验） */
-  reportFile: string;
   /** must-fix 条数（与报告一致） */
   mustFix: number;
-  /** suggestion 条数 */
+  /** suggestion 条数（与报告一致） */
   suggestion: number;
   /** R1 恒空数组；R2+ 对上轮处置表必对账集逐条申报 */
   reconciliation: ReconEntry[];
@@ -221,10 +220,8 @@ function sanitizeCount(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : null;
 }
 
-/** 报告路径校验（prl 先例）：自报路径与确定性位置不一致时回退确定性位置 */
-function normReportFile(self: unknown, expected: string): string {
-  return typeof self === "string" && self.trim() === expected ? self.trim() : expected;
-}
+/** 报告路径校验函数已删除：三审 reportFile 自报字段无消费（报告落盘走确定性位置校验），
+ *  价值审 reportFile 直接窄化比较，均不需要归一函数 */
 
 /** 不可信内容隔离（rfl wrapUntrusted 同款）：报告/处置表/修订摘要等外部 agent 产出
  *  注入 prompt 时显式宣告为数据，防其中反引号/分隔线截断 prompt 结构 */
@@ -420,10 +417,13 @@ const runDir = `${projectRoot}/.tmp/tech-design/${docName !== "" ? docName : "de
 const finalJsonPath = `${runDir}/final.json`;
 
 // 重发起检测：扫描 runDir 内已有 attempt 后缀的最大序号（round-*.attemptM），未显式传
-// attempt → 取 max+1（多次重发起不覆盖历史——固定取 2 会覆盖第三次及以后的 attempt2 产物）
+// attempt → 取 max+1（多次重发起不覆盖历史——固定取 2 会覆盖第三次及以后的 attempt2 产物）；
+// 无 attempt 后缀时 runDir 已有任何轮次产物（无后缀 round-* 或 final.json）→ 取 1
+//（缺省 attempt=2），防首次重发起覆盖首轮产物
 const ATTEMPT_SCAN =
   "try{var fs=require('fs');var names=[];try{names=fs.readdirSync(process.argv[1])}catch(e){}var mx=0;" +
   "for(var n of names){var m=/^round-\\d+\\.attempt(\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}" +
+  "if(mx===0&&(names.some(n=>/^round-\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;" +
   "if(mx>0)process.stdout.write(String(mx))}catch(e){}";
 const attemptProbe = await world.run("node", ["-e", ATTEMPT_SCAN, runDir]);
 const prevAttemptMax =
@@ -670,7 +670,7 @@ for (let round = 1; round <= maxRounds; round++) {
               : "",
             "",
             `报告落盘：${roundAbs}/${t.reportName}（绝对路径；需要时先创建目录）。每条问题一节：[must-fix|suggestion] + 所在章节 + 描述 + 原文依据（你读到的原句）+ 修复方向。报告是修复者的唯一输入。`,
-            `完成后返回 JSON：reportFile、mustFix（must-fix 条数，与报告一致）、suggestion（suggestion 条数）、reconciliation（${round === 1 ? "本轮返回空数组 []" : "对上方必对账集逐条申报"}）。`,
+            `完成后返回 JSON：mustFix（must-fix 条数，与报告一致）、suggestion（suggestion 条数）、reconciliation（${round === 1 ? "本轮返回空数组 []" : "对上方必对账集逐条申报"}）。`,
           ]
             .filter(Boolean)
             .join("\n"),
@@ -686,7 +686,6 @@ for (let round = 1; round <= maxRounds; round++) {
       );
     }
     verdicts = raw.map((v, i) => ({
-      reportFile: normReportFile(v.reportFile, `${roundAbs}/${TRIALS[i].reportName}`),
       mustFix: sanitizeCount(v.mustFix) ?? 0,
       suggestion: sanitizeCount(v.suggestion) ?? 0,
       reconciliation: sanitizeReconciliation(v.reconciliation),
@@ -728,11 +727,12 @@ for (let round = 1; round <= maxRounds; round++) {
     }
   }
   // 未确认条目（回流本轮修复者）= 必对账集中未被实证确认的（含 not-fixed/regressed
-  // 申报与完全漏报，fail-closed：漏报不视为已确认）+ escalate 复活的登记/归档条目
-  const outstanding = [
-    ...mustReconcile.filter((d) => !confirmedIds.has(d.id)),
-    ...parkedWatch.filter((d) => escalateIds.has(d.id)),
-  ];
+  // 申报与完全漏报，fail-closed：漏报不视为已确认）+ escalate 复活的登记/归档条目；
+  // 同一条目可能两源都命中（must-fix 级 deferred/archived 被 escalate 复活）——按 id 去重，
+  // 否则注入修复者的 outstanding 同 id 两遍
+  const outstandingCore = mustReconcile.filter((d) => !confirmedIds.has(d.id));
+  const coreIds = new Set(outstandingCore.map((d) => d.id));
+  const outstanding = [...outstandingCore, ...parkedWatch.filter((d) => escalateIds.has(d.id) && !coreIds.has(d.id))];
 
   // converged 判定（设计 §5.2 唯一权威公式）：must-fix==0 且上轮处置表全处置即终止——
   // 不要求当轮 suggestion==0（处置完即终止，不为 suggestion 单独驱动确认轮——2026-09-19
@@ -826,7 +826,9 @@ for (let round = 1; round <= maxRounds; round++) {
   }
 
   // 覆盖硬校验（脚本判定，不信任修复者自觉）：每条 must-fix / suggestion 原始问题
-  // 都要出现在至少一条处置的 source 里（含登记不修/归档形态——处置 ≠ 修复）
+  // 都要出现在至少一条处置的 source 里（含登记不修/归档形态——处置 ≠ 修复）；
+  // outstanding（上轮遗留）按 id 校验——漏处置的遗留条目不进任何对账集，会以 open
+  // 状态滞留台账直到假 converged（曾无此校验）
   const coveredMust = dispositions.filter((d) => d.level === "must-fix").reduce((s, d) => s + d.source.length, 0);
   const coveredSugg = dispositions.filter((d) => d.level === "suggestion").reduce((s, d) => s + d.source.length, 0);
   if (coveredMust < roundMustFix || coveredSugg < roundSuggestion) {
@@ -834,6 +836,15 @@ for (let round = 1; round <= maxRounds; round++) {
       "fix-failure",
       round,
       `覆盖校验失败：must-fix 覆盖 ${coveredMust}/${roundMustFix}，suggestion 覆盖 ${coveredSugg}/${roundSuggestion}——处置表必须覆盖本轮全部问题（含登记不修/归档形态）。恢复动作：核对修复者返回的 dispositions（source 引用是否完整、畸形条目是否被丢弃，见上方 WARN）；在途编辑已留磁盘，接管前先盘点 ${designDoc}`,
+    );
+  }
+  const coveredIds = new Set(dispositions.map((d) => d.id));
+  const missedOutstanding = outstanding.filter((d) => !coveredIds.has(d.id));
+  if (missedOutstanding.length > 0) {
+    return await finish(
+      "fix-failure",
+      round,
+      `outstanding 覆盖校验失败：上轮遗留条目 ${missedOutstanding.map((d) => d.id).join("、")} 未出现在本轮处置表（延续条目必须复用原 id 处置——含登记不修/归档形态）。恢复动作：核对修复者返回的 dispositions；在途编辑已留磁盘，接管前先盘点 ${designDoc}`,
     );
   }
 
@@ -862,7 +873,7 @@ for (let round = 1; round <= maxRounds; round++) {
     return await finish(
       "converged",
       round,
-      `第 ${round} 轮收敛：must-fix 0 且上轮处置全部经实证复核确认；当轮 suggestion ${roundSuggestion} 条已全部处置（修复 ${fixedCount} / 登记 ${deferredCount} / 归档 ${archivedCount}，处置表 ${roundAbs}/dispositions.md）。下游：T2 确认点`,
+      `第 ${round} 轮收敛：must-fix 0 且上轮 must-fix 处置全部经实证复核确认（suggestion 处置不经实证，以台账状态保留于 remaining）；当轮 suggestion ${roundSuggestion} 条已全部处置（修复 ${fixedCount} / 登记 ${deferredCount} / 归档 ${archivedCount}，处置表 ${roundAbs}/dispositions.md）。下游：T2 确认点`,
     );
   }
 }

@@ -22,6 +22,7 @@
   "testPlan": {                        // 从 impl-plan.json 的 testPlan 继承（W3 Gate A 消费，缺失即 fail-fast）
     "incremental": "…",                // 可选：修复组核验用的增量测试
     "fullSuite": { "program": "pnpm", "args": ["…"] },  // 必填：项目全量命令（含 lint/typecheck，从项目配置真实读取合成；复杂多命令封装为脚本走 bash）
+    // program 白名单（引擎启动 fail-fast）：W2 testCommand = pnpm/npm/node/git/bash；W3 fullSuite/artifacts = pnpm/npm/node/bash
     "artifacts": [{ "id": "build-e2e", "command": { "program": "…", "args": ["…"] } }]   // 可选：产物类条目（Gate A 起始第一波并行预备——命令确定、结果确定、被验证类消费；禁现用现建）
   },
   "commitTemplate": "<type>(<scope>): {unitId} — {summary}",   // 占位符 {unitId}/{summary} 必含（dev 模式引擎校验；acceptance 模式不 commit 可省略）；summary 内容契约 = 任务书要求 dev 返回的 summary 末行含「测试：<命令> 绿」
@@ -29,7 +30,7 @@
     { "id": "u-foundation", "kind": "dev", "deps": [], "wave": 1,
       "cwd": null,                      // null = projectRoot；worktree 单元填 worktree 绝对路径
       "designRef": "§3.2",              // 设计章节锚（从 impl-plan 章节映射提取；commit 渲染时前置于 summary——老三要素保真：unit id + 设计章节 + 测试结论）
-      "territory": ["packages/shared/src/..."],
+      "territory": ["packages/shared/src/..."],   // 相对该节点 cwd 所在 git 仓库根（与 files_changed / porcelain 同基准；禁绝对路径——引擎启动校验拒绝）
       "testCommand": { "program": "pnpm", "args": ["-C", "packages/shared", "test"] },
       "promptFile": ".tmp/dev-flow/<name>.prompts/u-foundation.md" }
   ],
@@ -57,7 +58,7 @@
   "events": [] }
 ```
 
-节点字段 = `status` / `attempts`（终态回写附 `commit?` / `evidence?`）；status 合法值 = `pending / in-progress / done / blocked / failed`，终局另写 `suspended`（从未派发的挂起节点——人读恢复时按 pending 对待重跑）。引擎回写保留 name/updated 顶层字段；恢复对账双向：标 done 无 commit → 回 pending；有 commit 未记 → 引擎按 git log 匹配单元 id 补写 done（status.json 缺失时初始重建后同样反查 git log，不重跑已交付单元）。
+节点字段 = `status` / `attempts`（终态回写附 `commit?` / `evidence?`）；status 合法值 = `pending / in-progress / done / blocked / failed`，终局另写 `suspended`（从未派发的挂起节点——人读恢复时按 pending 对待重跑）。引擎回写保留 name/updated 顶层字段；恢复对账双向：标 done 无 commit → 回 pending（其已 done 的直接/传递后继一并回 pending——后继的验证结论基于已消失的 commit，属陈旧验证）；有 commit 未记 → 引擎按 git log 匹配单元 id 补写 done（status.json 缺失时初始重建后同样反查 git log，不重跑已交付单元）。终局另写一条汇总事件 {node:"-", event:"run-terminal", detail:"terminated=…; done/blocked/skipped 计数"}（人读恢复入口）。
 
 ### 5. L0 前置 + 环境准备（D3 前置项此时一并核）
 

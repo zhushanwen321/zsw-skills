@@ -301,6 +301,10 @@ function parsePorcelain(out: string): string[] {
     });
 }
 
+/** workflow 产物目录判定：porcelain 路径相对 cwd，projectRoot 级 .tmp/ 在 cwd=子目录时
+ *  呈 ../.tmp/（或更深的 ../../.tmp/）形态——按「任意深度 ../ 前缀 + .tmp/」识别 */
+const isTmpArtifact = (f: string): boolean => /^(\.\.\/)*\.tmp\//.test(f);
+
 /** commitTemplate 渲染：{unitId}/{summary} 全量替换（split/join 防 replace 只换首个） */
 function renderCommit(template: string, unitId: string, summary: string): string {
   return template.split("{unitId}").join(unitId).split("{summary}").join(summary);
@@ -424,6 +428,10 @@ function validatePlan(raw: unknown): ValidateResult {
     if (kind === "dev") {
       if (!isStrArr(rn.territory) || rn.territory.length === 0) {
         errors.push(`dev 节点 ${id} 的 territory 必须是非空字符串数组（领地）`);
+      } else if (rn.territory.some((t) => t.startsWith("/"))) {
+        // 口径契约：territory 与 files_changed/porcelain 同基准 = 相对该节点 cwd 所在 git
+        // 仓库根的相对路径——绝对路径永不匹配相对路径核验，恒判越界，启动即拦
+        errors.push(`dev 节点 ${id} 的 territory 含绝对路径（${rn.territory.filter((t) => t.startsWith("/")).join("、")}）——须为相对该节点 cwd 所在 git 仓库根的相对路径`);
       } else {
         node.territory = rn.territory;
       }
@@ -735,7 +743,7 @@ async function verifyDevNode(node: PlanNode, result: NodeResult): Promise<Verify
   }
   const activeTerr = activeTerrByCwd.get(node.cwd) ?? [];
   const strays = parsePorcelain(porcelain).filter(
-    (f) => !f.startsWith(".tmp/") && !pathInTerritory(f, activeTerr),
+    (f) => !isTmpArtifact(f) && !pathInTerritory(f, activeTerr),
   );
   if (strays.length > 0) {
     return {
@@ -885,8 +893,20 @@ async function executeVerifyNode(node: PlanNode): Promise<void> {
 async function executeInspectNode(node: PlanNode): Promise<void> {
   await beginNode(node.id);
   const nodeAgent = agent(`node-${node.id}`, INSPECT_PERSONA);
+  // artifactsRefs 校验过后必须进任务书——否则存在性校验成纯摆设，agent 不知可读哪些上游产物
+  const refLines =
+    node.artifactsRefs.length > 0
+      ? [
+          "",
+          "上游产物引用（校验已就绪，可直接读取）：",
+          ...node.artifactsRefs.flatMap((r) => {
+            const vn = plan.nodes.find((x) => x.id === r);
+            return vn !== undefined && vn.kind === "verify" && vn.artifactsDir !== "" ? [`- ${r} → ${vn.artifactsDir}`] : [];
+          }),
+        ]
+      : [];
   const result = await nodeAgent.ask<NodeResult>(
-    `读取验收任务书 ${node.promptFile}（绝对路径）并按其完整执行（只检查，不修改代码、不产生 commit），返回该文件末尾定义的 JSON 契约（status / files_changed / test_evidence / deviations / blockers）。`,
+    `读取验收任务书 ${node.promptFile}（绝对路径）并按其完整执行（只检查，不修改代码、不产生 commit），返回该文件末尾定义的 JSON 契约（status / files_changed / test_evidence / deviations / blockers）。${refLines.join("\n")}`,
   );
   if (result.blockers.length > 0) {
     await markNodeBlockedOrFailed(node.id, "blocked", "任务书自报 blockers", result.blockers.join("；"), 1);
@@ -919,11 +939,13 @@ async function runSchedulingLoop(): Promise<void> {
       } catch (e) {
         // rejected（接替程序也失败/写盘失败等引擎层异常）→ 节点 blocked，其他节点照常推进；
         // 兜底写 status 失败时只 log（内存态已置 blocked，调度不受影响）——二次异常不得击穿
-        // race 造成顶层 throw（违反 failed-as-return）
+        // race 造成顶层 throw（违反 failed-as-return）。attempts 取内存态当前值（曾恒传 0，
+        // 恢复者无法从 status 判断已烧几轮）
+        const burned = state.get(n.id)?.attempts ?? 0;
         try {
-          await markNodeBlockedOrFailed(n.id, "blocked", `节点执行异常：${errText(e)}`, "", 0);
+          await markNodeBlockedOrFailed(n.id, "blocked", `节点执行异常：${errText(e)}`, "", burned);
         } catch (e2) {
-          state.set(n.id, { status: "blocked", attempts: 0, reason: `节点执行异常：${errText(e)}（status 回写失败：${errText(e2)}）` });
+          state.set(n.id, { status: "blocked", attempts: burned, reason: `节点执行异常：${errText(e)}（status 回写失败：${errText(e2)}）` });
           log(`WARN: 节点 ${n.id} 异常后的 status 回写失败（${errText(e2)}）——内存态已置 blocked`);
         }
       }
@@ -1034,7 +1056,7 @@ for (const c of allCwds) {
   if (st === null) {
     return invalidRet(`git status 无法在 ${c} 执行（须为有效 git 仓库）`, plan.statusPath);
   }
-  const dirty = parsePorcelain(st).filter((f) => !f.startsWith(".tmp/"));
+  const dirty = parsePorcelain(st).filter((f) => !isTmpArtifact(f));
   if (dirty.length > 0) {
     return invalidRet(
       `工作区不干净（${c}）：\n${dirty.join("\n")}\n引擎按活跃单元领地并集复核改动归属，启动前须为干净基线——请先提交或清理上述改动`,
@@ -1097,6 +1119,37 @@ if (existingStatus === null) {
         }
       } catch {
         // 对账输出解析失败：保留原始记录，终态核验仍有 commit 证据可查
+      }
+    }
+  }
+  // 级联失效：dev 节点被对账回 pending（commit 不在 git 对象库）时，其已 done 的后继
+  //（直接/传递依赖它的节点，含 verify/inspect）一并回 pending——后继的验证结论基于已
+  // 消失的 commit，属陈旧验证（曾保持 done 被增量跳过，信任了不存在的历史）
+  const resetIds = new Set<string>();
+  for (const n of plan.nodes) {
+    if (
+      n.kind === "dev" &&
+      (existingStatus.nodes[n.id]?.status ?? "pending") === "done" &&
+      aligned[n.id]?.status !== "done"
+    ) {
+      resetIds.add(n.id);
+    }
+  }
+  if (resetIds.size > 0) {
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const n of plan.nodes) {
+        if (aligned[n.id]?.status === "done" && n.deps.some((d) => resetIds.has(d)) && !resetIds.has(n.id)) {
+          resetIds.add(n.id);
+          grew = true;
+        }
+      }
+    }
+    for (const id of resetIds) {
+      if (aligned[id] !== undefined && aligned[id].status === "done") {
+        aligned[id] = { status: "pending", attempts: 0 };
+        log(`级联失效：${id} 依赖的单元被对账回 pending，其 done 结论基于已消失的 commit——一并回 pending`);
       }
     }
   }

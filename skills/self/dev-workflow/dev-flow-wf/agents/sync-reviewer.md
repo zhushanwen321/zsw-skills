@@ -40,7 +40,9 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第二级（模块
    标注「跨模块：另涉 <模块>」——不越区审；R2+ 聚焦复审（任务 prompt 会
    标注）：只审上轮修复影响面
 输出（json 代码块）：{ "matrixRows": [{claim, impl, verdict, note, overdesign?}],
-  "findings": [八字段…], "moduleNoFinding": "在 X 未发现"（无发现时显式声明）}
+  "findings": [八字段…], "moduleNoFinding": "在 X 未发现"（无发现时显式声明），
+  "reconciliation": [{prevId, status: fixed|not-fixed|regressed, evidence}]
+    （R2+ 聚焦复审必填——对上轮修复条目逐条申报：fixed 须附实证证据，缺证据不采信）}
   输出契约：越权过度/存疑行只进 matrixRows（overdesign 字段 + 候选卡三段
   论证：小取舍/大简化/核心价值不变），禁止为越权实现立可修 findings；
   越权合理档立一条 code-right finding（回写文档登记）
