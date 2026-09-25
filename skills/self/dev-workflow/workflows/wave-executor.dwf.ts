@@ -823,14 +823,12 @@ async function executeDevNode(node: PlanNode): Promise<void> {
     verdict = await verifyDevNode(node, result);
   }
   if (verdict.outcome === "pass") {
-    // commit 三要素保真（§8.3）：unitId（模板）+ designRef（章节锚前置）+ summary（promptFile
-    // 契约要求含「测试：<命令> 绿」一行）
+    // commit 三要素保真（§8.3）：unitId（模板）+ designRef（章节锚前置，summary 已含则不重复
+    // 前置——冒烟实测 dev 常在 summary 自带章节号）+ summary（promptFile 契约要求末行含「测试：<命令> 绿」）
     const summary = result.summary ?? "dev 单元交付";
-    const message = renderCommit(
-      plan.commitTemplate,
-      node.id,
-      node.designRef !== "" ? `${node.designRef} ${summary}` : summary,
-    );
+    const summaryWithRef =
+      node.designRef !== "" && !summary.includes(node.designRef) ? `${node.designRef} ${summary}` : summary;
+    const message = renderCommit(plan.commitTemplate, node.id, summaryWithRef);
     const cr = await gitAddCommitViaNode(node.cwd, message, result.files_changed);
     if (!cr.ok) {
       await markNodeBlockedOrFailed(node.id, "blocked", `commit 执行失败：${cr.err}`, "", attempts);
@@ -924,15 +922,6 @@ async function runSchedulingLoop(): Promise<void> {
   };
   while (true) {
     if (coreFail !== null) break;
-    // 级二粗粒度复核的基线：当前 in-flight 节点领地按 cwd 分组求并集（逐节点 settle 后重建）
-    activeTerrByCwd = new Map<string, string[]>();
-    for (const id of active.keys()) {
-      const n = plan.nodes.find((x) => x.id === id);
-      if (!n) continue;
-      const list = activeTerrByCwd.get(n.cwd) ?? [];
-      for (const t of n.territory) list.push(t);
-      activeTerrByCwd.set(n.cwd, list);
-    }
     // 非核心组在核心全绿后解锁（设计 §6.2 D3）；dev 模式核心集为空 → 空条件恒真，不引入额外门
     const coreAllDone = plan.nodes
       .filter((n) => plan.coreIds.has(n.id))
@@ -950,6 +939,17 @@ async function runSchedulingLoop(): Promise<void> {
       dispatched += 1;
     }
     if (active.size === 0) break; // 无可调度且无活跃 → 依赖挂起或全终态 → 终态判定
+    // 级二粗粒度复核的基线：当前 in-flight 节点领地按 cwd 分组求并集——必须在补派之后
+    // 重建（冒烟实测教训：重建在 launch 前则新派发节点不在并集内，核验必判自身越界）。
+    // 在飞核验持有的旧 Map 是含已落定节点的超集——超集方向安全（粗粒度复核只松不严）
+    activeTerrByCwd = new Map<string, string[]>();
+    for (const id of active.keys()) {
+      const n = plan.nodes.find((x) => x.id === id);
+      if (!n) continue;
+      const list = activeTerrByCwd.get(n.cwd) ?? [];
+      for (const t of n.territory) list.push(t);
+      activeTerrByCwd.set(n.cwd, list);
+    }
     const finishedId = await Promise.race(active.values());
     active.delete(finishedId);
     log(`节点 ${finishedId} 落定（活跃 ${active.size}），重算就绪集`);
