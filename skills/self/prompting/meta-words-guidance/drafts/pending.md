@@ -6,50 +6,7 @@
 
 | 登记日期 | 登记种类（词/模式） | 内容 | 疑点（A-H 问题类型 + 为什么不懂/怎么污染） | 来源（审查对象） |
 |---|---|---|---|---|
-| 2026-09-24 | 词 | 活性文档 | D 行业隐喻挪用（"活性"借自生物学，指现行维护中的文档）；第一遍能猜但无定义，多处使用会与其他文档的"现行文档/有效文档"叫法分叉 | 全局 AGENTS.md 失败模式防护规则 27（"不进活性文档"） |
-| 2026-09-24 | 词 | 落账 | D 行业黑话挪用（财税记账隐喻，与已裁决的清账/盘面同族未裁决成员），此处义为"写入 journal 记录"，字面需猜记账隐喻 | 全局 AGENTS.md 架构偏好·显式状态机条（"journal 落账"） |
-| 2026-09-24 | 词 | 装配器 | G 术语无定义：读者无法从字面知道指哪个组件（背景为 dev 实例装配脚本），第一遍读"端口/装配器派生是确定性的"定位不到指涉对象；若保留需首次出现加定义 | 全局 AGENTS.md 工具偏好·background bash 条 |
-| 2026-09-24 | 词 | 沉淀 | D 隐喻挪用（沉积物隐喻），此处义为"记录在 / 转化为"，第一遍需猜且易误读为"遗留"；泄漏方式② 文风模仿 | taiji AGENTS.md L48（设计决策沉淀在源码注释）、L119（e2e 项沉淀为单测） |
-| 2026-09-24 | 词 | 武装 / 不武装 / 武装前置 | B 英文直译造词（armed → 武装），义为"启用待命"；与 env 名 `TAIJI_RUNTIME_WATCHDOG_ARMED` 直接对应，替换需连同 env 语境处理，故只登记不改 | taiji AGENTS.md 规则 21（看门狗/滚动重启默认不武装，同一行 5 处） |
-| 2026-09-24 | 词 | 毕业 | D 教育隐喻挪用（graduated），"R1 毕业进 CI"义为"该类用例升级为 CI 固定环节"，字面推不出；泄漏方式③ 术语搬运 | taiji AGENTS.md 测试节（R1 毕业进 CI） |
-| 2026-09-24 | 词 | 轨（像素轨 / 行为轨 / unit 轨 / mock 轨 / real 轨） | A 砍字造词（"测试轨/track"压缩成单字类别词），"轨"未定义，读者需猜是测试类别还是数据轨道；同族 5+ 词成体系，替换需整体定名 | taiji AGENTS.md 测试节 e2e 执行准则段 |
-| 2026-09-24 | 词 | 对账 | D 行业黑话挪用（财税隐喻，与已裁决的清账/盘面同族未裁决成员），"机器对账入口"义为"机器核对登记与实际是否一致的入口" | taiji AGENTS.md 测试节（机器对账入口） |
-| 2026-09-24 | 词 | 收敛 | G 同词多义：一处义为"限定在范围内"（值域校验收敛在树内，已随句改写为"限定"），另一处义为"汇总收拢"（ADR 现行决策收敛）；需统一或分别定名 | taiji AGENTS.md L113（ADR 现行决策收敛） |
-| 2026-09-24 | 词 | 构造性（构造性成立 / 构造性全剥） | 数学词挪用未解释（constructive），义为"由结构本身保证、无需额外验证"，第一遍无法从字面准确推出 | taiji AGENTS.md 规则 9（live ≡ reload 构造性成立）、架构约定 markdown 净化条（构造性全剥） |
-| 2026-09-24 | 词 | 验收窗 / 轻载窗 / 构造窗 | A 砍字造词（"窗口"砍成"窗"）+ 类型名无定义："轻载窗/构造窗"指哪类验收窗口无解释，第一遍定位不到；若保留需首次出现展开 | taiji AGENTS.md 前端调试节（同 worktree 多验收窗共用一个 dev 实例） |
-| 2026-09-24 | 词 | 漂移面 | 自造复合词，义为"可能因上游升级而失效的风险点"，字面无法推出是风险点义 | taiji AGENTS.md 架构约定 zcode 引擎条（漂移面 = zcode 升级若改变配置读取路径…） |
-| 2026-09-24 | 词 | 采样进环 | A 砍字造词，"环"未定义（疑指采样数据环/环形缓冲），"采样进环"第一遍无法断句理解 | taiji AGENTS.md 规则 21（watchdog 纯观测：采样进环） |
-| 2026-09-24 | 模式 | 裸编号带圈数字（「④路」「①级」） | F 电报式密度：带圈数字+单字类别词的裸编号（如"MarkdownRenderer ④路""session-view-service ①级"），编号所指无就地定义，跨文档引用易漂移 | taiji AGENTS.md L155（④路）、L164（①级） |
-| 2026-09-24 | 词 | R1（同名异义） | G 同词多义：测试节"R1"是 e2e 资产三态之一（毕业进 CI），跳过检查节"R1 后惯例"的 R1 是另一套裁决轮次编号，同名不同义且都无就地定义 | taiji AGENTS.md L119（R1 毕业进 CI）与 L176（R1 后惯例） |
-| 2026-09-24 | 词 | 用户在环 | B 英文直译造词（human-in-the-loop 直译），义为"用户实时参与操作"，"在环"字面需猜环路隐喻 | 第 3A 组审查：code-harden/SKILL.md（本轮已就地改写为"用户实时参与操作"，登记供裁决是否入正式替换表） |
-| 2026-09-24 | 词 | 组杀 | A 砍字造词（"按进程组终止进程"压缩成"组杀"），与"强杀"并列时第一遍无法还原动作 | 第 3A 组审查：code-harden/SKILL.md（本轮已就地改写为"按进程组终止"，登记供裁决是否入正式替换表） |
-| 2026-09-24 | 词 | 揭新率 | A 砍字造词（"揭出新问题的比率"压缩成"揭新率"），"揭新"非词需读者自行还原 | 第 3A 组审查：architecture-improve-loop/SKILL.md（本轮已就地改写为"新问题出现率极端偏高"，全称"揭出新问题"可懂保留；登记供裁决） |
-| 2026-09-24 | 词 | 重载语义 | G 同词多义："重载"默认联想 override/overload，此处义为"disputed 通道被复用于多种含义"，第一遍无法准确推出；语义拿不准未改 | 第 3A 组审查：architecture-improve-loop/SKILL.md L190（"重载语义的误裁决"） |
-| 2026-09-24 | 词 | 去一句化压缩 | F 电报式密度 + 切分歧义："guidance 去一句化压缩"可切成"去掉『一句化压缩』"或"去一句化＋压缩"，指涉（guidance 长度限制）无就地定义；切分歧义未改 | 第 3A 组审查：architecture-improve-loop/SKILL.md L186（fork 改动清单项） |
-| 2026-09-24 | 词 | 领地（含同族"属地"） | G 同义多词：dev-flow DAG 单元表字段名「领地（精确文件路径）」义为"该单元允许修改的文件集合"，行文中与"属地""白名单内文件"混用；第 3B 组已就地改写行文用法约 10 处（design-code-sync/tech-design），dev-flow 字段体系约 35 处（dag-authoring/plan/execute/consistency-review/acceptance/parallelism-reviewer）因属字段级术语待整体定名而保留，裁决后需整体重命名 | 第 3B 组审查：dev-flow 全目录（字段名本体）+ design-code-sync/tech-design（行文用法，已改） |
-| 2026-09-24 | 词 | 面族（登记面 / 影响面 / 测试面 / 失败面 / 投影面等"XX 面"） | A 砍字造词族：「面」作"方面/范围/集合"义的构词后缀成体系使用，第一遍需猜所指（如"关联登记面""宿主投影面"）；本批已改最不可懂的 3 个（涟漪面→波及点、识别面→识别结果、文件面→文件清理），其余保留待整体定名 | 第 3B 组审查：tech-design / dev-flow / design-code-sync 多文件 |
-| 2026-09-24 | 词 | 挂账 | D 财税记账隐喻，与已裁决的清账/盘面同族未裁决成员（patterns.md 模式四已举例但未入三表），此处义为"一直搁置不处理"；本批已就地改写 1 处（"继续挂账"→"继续挂着不处理"），登记供裁决是否入正式替换表 | 第 3B 组审查：code-overdesign-audit/docs/plans/2026-09-10-over-engineering-audit-skill.md L225 |
-| 2026-09-24 | 词 | 销账 | D 财税记账隐喻，与已裁决的清账/盘面同族未裁决成员，此处义为"逐条处理完毕（关闭）"；本批已就地改写 1 处（"逐条销账"→"逐条处理关闭"），登记供裁决是否入正式替换表 | 第 3B 组审查：dev-flow/references/dag-authoring.md L37（stub-blocked 项） |
-| 2026-09-24 | 词 | 推后验证 | H 切分歧义：「push 后验证」压缩成「推后验证」，与「推迟/延后」重组出相反义（读者第一遍易读成"延后再验证"，错误执行不报错）；本批已就地改写 3 处为「推送后验证」，登记供裁决是否入正式替换表 | 第 4 组审查：merge/SKILL.md（6.5.1/6.5.3/6.5.4 三处，已改） |
-| 2026-09-24 | 词 | 确认断点 | G 同词多义：「断点」在同组文档内两义——workflow 断点恢复（checkpoint resume）与此处"需人工确认的卡点"（confirmation gate），与带条件保留表「断点恢复」词条的冲突提示直接冲突；本批已就地改写 5 处（SKILL.md 2 处 + agents/simplify-apply.md 3 处含 frontmatter description）为「人工确认环节」，登记供裁决是否入正式替换表 | 第 4 组审查：pr-cr-fix/SKILL.md + pr-cr-fix/agents/simplify-apply.md（已改） |
-| 2026-09-24 | 词 | 簿记小笔 / 簿记…小笔 | D 财税记账隐喻，已裁决词「簿记性残渣」的同族未列成员，此处指 lockfile/snapshot 重生成等 2-5 行小 commit；本批已就地改写 3 处为「流程自动生成（的）小笔」，登记供裁决是否入正式替换表 | 第 4 组审查：merge/SKILL.md 两处 + dev-merge/SKILL.md 一处（已改） |
-| 2026-09-24 | 词 | 在途 | B 英文直译造词（in flight 另一译法），与已裁决词「在飞」同族不同形，此处义为"正在运行、还没结束"；本批已就地改写 1 处为「还在运行时」，登记供裁决（可与「在飞」条目合并扩展） | 第 4 组审查：pr-cr-fix/SKILL.md（修复 worker 在途，已改） |
-| 2026-09-24 | 词 | 根修 | A 砍字造词（"从根源修复"压缩成"根修"），非通行词，第一遍需自行还原；本批已就地改写 1 处为「未从根源修复的」，登记供裁决；注意 taiji AGENTS.md 引用的 crash-forensics 附录 E 有「逐点根修」同族用法，裁决需跨文档一致 | 第 4 组审查：merge/SKILL.md（遗留债务清单节，已改） |
-| 2026-09-24 | 词 | 锚点（指依赖版本范围时） | G 同词多义补充案例：带条件保留表「锚/锚点」词条未限语义边界，「锚点跟随」「纯锚点 patch」实指 package.json 依赖版本范围随上游更新，字面推不出；本批已就地改写 2 处为「依赖版本范围跟随 / 纯版本范围 patch」，登记供裁决是否给「锚点」词条补"禁用于指依赖版本范围"边界 | 第 4 组审查：merge/SKILL.md 阶段 4N.1（已改） |
-| 2026-09-24 | 词 | 路过重构 | B 英文直译造词 + 压缩（drive-by refactoring），义为"与当前任务无关的顺带重构"；字面可猜但非常规搭配，两处出现且其中一处是 simplify-apply.md 对 code-simplify 源文件的引用式摘录（摘录须保持源文原文，不宜单点改）；登记供整体裁决（如裁决替换需连同 code-simplify 源文件一起改） | 第 4 组审查：taiji-renderer-optimize/SKILL.md 核心原则 5 + pr-cr-fix/agents/simplify-apply.md「范围收敛」节（均未改） |
-| 2026-09-25 | 词 | 实装 | B 外来词直输（日语 実装，非英文），此处义为"实际实现（的代码）"，第一遍可能误读为"实际安装"；本批按语境可推读判为低，登记供裁决是否入观察名单 | 第二轮复审：全局 AGENTS.md 规则 29（"顺调用链读实装"） |
-| 2026-09-25 | 词 | 载体（非 prompt 语境用法） | G 带条件保留表「载体」词条的使用边界限定为 prompt 类型语境；本文件 3 处按"承载物"本义使用（事故教训载体 / 产品特性的载体 / 实现载体），字面可懂但超出已登记使用边界，登记供裁决：扩宽词条（承载物本义可用）或补边界外替换（承载者 / 实现形式） | 第二轮复审：全局 AGENTS.md 规则 30（L59 事故教训载体）、输出习惯 10（L87 产品特性的载体）、架构偏好·显式状态机（L186 实现载体） |
-| 2026-09-25 | 词 | 宁漏勿拦 | E 四字自造压缩（宁可漏过、不可误拦），与带条件保留表「宁合不裂」同构；此处有「粗网」隐喻语境支撑但首次出现无展开，第一遍需自行解析（宁漏勿拦 = 宁可放过错误也不拦截正常项） | 第二轮复审：code-overdesign-audit/SKILL.md 核心原则 4（粗网细网分工，未改） |
-| 2026-09-25 | 词 | 兜捉 / 补捉 | A 砍字造词（"兜底捕捉"压成"兜捉"、"补充捕捉"压成"补捉"），两词并列出现，第一遍无法还原动作 | 第二轮复审：code-overdesign-audit/references/evidence-signals.md L17（外部 WIP 文件首审发现，按纪律未改只报告） |
-| 2026-09-25 | 词 | 暴毙 | D 死亡隐喻挪用（古语词，此处义为“进程异常终止/异常退出”）；上轮 SKILL.md 侧已改写为“脚本异常退出且无通知”，脚本源码注释 3 处漏改（pr-lifecycle.js L10 / lib.cjs L1601 / run-tests.js L409），按“脚本源码不改只登记”豁免保留，登记供裁决正式入替换表（裁决后连同 3 处脚本注释一起改） | 第二轮复审：pr-cr-fix/workflows/ 三处脚本注释残留 |
-| 2026-09-25 | 词 | ratchet | B 英文原词未译（“从 50% 起步值 ratchet 至业界事实标准 80%”），棘轮“只升不降”的隐含约束对不懂该词的读者丢失，第一遍只能猜成“提升到”；1 处 | 第二轮复审：pr-cr-fix/SKILL.md L126（Gate-1.6 阈值决策注） |
-| 2026-09-25 | 词 | 反射性 | B 英文直译造词（reflexively → 反射性）+ G 同词多义（与软件术语“反射”reflection 撞词），“反射性跑全量套件”义为“不经判断默认就跑”，第一遍可能读成反射 API 相关；1 处 | 第二轮复审：pr-cr-fix/SKILL.md L384（按包路径选择测试范围节） |
-| 2026-09-25 | 词 | 交接 framing / 交接framing | B 英文原词未译（framing），义为“向恢复方声明内容来源与性质的交接说明”；定义处（design-principles P12）有就地解释但标签本身第一遍不可解；同组两种写法并存（带空格/不带空格，15+ 处）；裁决点：整体定中文名（如「交接说明」）并统一写法，或保留英文只统一写法 | 第二轮复审：meta-prompt-guidance 全组（design-principles.md P12 / patterns system-prompt·steering-prompt·compact-prompt / steering-prompt-template / knowledge-index / carrier-taxonomy / interaction-patterns / rubric-steering·error-message） |
-| 2026-09-25 | 词 | Fidelity 约束 | B 英文原词未译（fidelity 忠实度），义为“防止模型悄悄缩小目标、保证执行贴合原目标的约束”；patterns/steering-prompt.md 维度 5 起名后 4 文件沿用，上下文有“防止目标降级”解释但词本身第一遍不可解；裁决点：定中文名（如「保真约束」）或保留 | 第二轮复审：meta-prompt-guidance（patterns/steering-prompt.md 维度 5 / rubric-steering-prompt.md / resources/failure-modes/goal-degradation.md / steering-prompt-template.md / carrier-taxonomy.md） |
-| 2026-09-25 | 词 | 对冲 | D 金融隐喻挪用，与已裁决的清账/盘面及在册的落账/对账/挂账/销账同族（记账金融隐喻族新成员），此处义为“用 A 的完成抵消 B 的未完成”；4 处，字面可猜但按族内未裁决纪律登记不改 | 第二轮复审：meta-prompt-guidance（patterns/steering-prompt.md L110 / steering-prompt-template.md L94 / resources/failure-modes/goal-degradation.md L22 / rubric-steering-prompt.md L49） |
-| 2026-09-25 | 词 | 竞合（竞合关系） | G/H 压缩外来词（竞争+合作，co-opetition），第一遍无法确定指“冲突”还是“竞争与合作并存”，原句两种解读都通，读者无法准确界定交互模式的覆盖范围；1 处 | 第二轮复审：meta-prompt-guidance/references/interaction-patterns.md L3 |
-| 2026-09-25 | 词 | justify（英文夹用） | B 英文原词未译（“每行内容都必须 justify 存在”）；本批已就地改写为「说明自己存在的理由」，登记供裁决是否入正式替换表 | 第二轮复审：meta-prompt-guidance/patterns/system-prompt.md L20（已改） |
-| 2026-09-25 | 词 | meta-prompt-creator / meta-prompt-guidance 名称双轨 | G 同义多词（技能级）：frontmatter name = meta-prompt-guidance，SKILL.md H1 = “Meta Prompt Creator”，research-index.md 引用 `meta-prompt-creator/references/…`，全局 AGENTS.md 场景路由亦写 meta-prompt-creator——同一技能三个名字；涉及跨生态改名，本组未改，报用户裁决 | 第二轮复审：meta-prompt-guidance/SKILL.md L12、resources/research-index.md L3 + 全局 AGENTS.md 场景路由表 |
+| 2026-09-25 | 词 | meta-prompt-creator / meta-prompt-guidance 名称双轨 | G 同义多词（技能级）：frontmatter name = meta-prompt-guidance，SKILL.md H1 = “Meta Prompt Creator”，research-index.md 引用 `meta-prompt-creator/references/…`，全局 AGENTS.md 场景路由亦写 meta-prompt-creator——同一技能三个名字；涉及跨生态改名，非词条项，报用户专项裁决 | 第二轮复审：meta-prompt-guidance/SKILL.md L12、resources/research-index.md L3 + 全局 AGENTS.md 场景路由表 |
 
 ## 裁决去向
 
