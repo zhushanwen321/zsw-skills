@@ -6,6 +6,9 @@
 
 | 登记日期 | 登记种类（词/模式） | 内容 | 疑点（A-H 问题类型 + 为什么不懂/怎么污染） | 来源（审查对象） |
 |---|---|---|---|---|
+| 2026-09-25 | 词：belt-and-suspenders | 已改写为「双重保险防线」 | B 英文未译（吊带背带式双保险），字面推不出实义；本次审查按「双重保险防线」落笔，待裁决定名 | code-overdesign-audit evidence-signals.md |
+| 2026-09-25 | 词：golden case / ground truth | 已改写为「golden case（金标准用例——已知正确答案、用来验证审计能否得出同样结论的仓库）」首现注 + 「原始证据（ground truth）文档」 | B 英文夹用，第一遍不可懂；golden case 在 SSOT 多处仍保留原词（同文档首现已加注），ground truth 已全改「原始证据文档」——两种处理方式待裁决统一 | code-overdesign-audit SSOT |
+| 2026-09-25 | 词：补偿机制/补偿层 | 本次新增判定用语（「靠补偿机制撑着的」「补偿机制本身进简化候选」） | A/G 嫌疑：「补偿」取「事后补救」义，与会计/理赔义的通行用法不同；已配判别法定义（删掉后问题还在），是否需更直白说法（如「事后补救层」）待裁决 | code-overdesign-audit evidence-signals.md / SKILL.md |
 
 ## 裁决去向
 
