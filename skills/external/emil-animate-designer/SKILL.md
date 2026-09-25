@@ -79,7 +79,7 @@ description: "emilkowalski/skills 的 9 个子 skill 路由入口（Emil Kowalsk
 
 4. **知识层三重叠**（三者都含 easing / spring 数值表，最容易误路由）：`emil-design-eng` = 通用哲学 + 推理；`apple-design` = Apple 手势 / 物理 / 材质深度；`animate` = 写代码动作。按动词分：「怎么想」→ emil-design-eng；「Apple 怎么做」→ apple-design；「写出来」→ animate。
 
-5. **`emil-design-eng` 空调用只回固定 intro**：用户没有具体问题时别加载它——它只会回一句指向 animations.dev 的介绍。
+5. **`emil-design-eng` 无具体问题的调用只回固定 intro**：用户没有具体问题时别加载它——它只会回一句指向 animations.dev 的介绍。
 
 6. **`animate` 遇到「需要真实组件」（toast / drawer / menu / dropdown）会转交 `pick-ui-library`**，而非手搓。若用户要的是「一个能用的 toast 组件」而非「给现有元素加动效」，直接路由到 pick-ui-library。
 
