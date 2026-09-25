@@ -9,7 +9,7 @@ description: >-
   or business logic.
 ---
 
-# Meta Prompt Creator
+# Meta Prompt Guidance
 
 设计 AI Agent 提示词的方法论系统。不直接给答案，而是引导你按场景思考、按原则设计、按清单审查。
 

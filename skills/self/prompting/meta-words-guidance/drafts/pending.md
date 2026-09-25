@@ -6,7 +6,6 @@
 
 | 登记日期 | 登记种类（词/模式） | 内容 | 疑点（A-H 问题类型 + 为什么不懂/怎么污染） | 来源（审查对象） |
 |---|---|---|---|---|
-| 2026-09-25 | 词 | meta-prompt-creator / meta-prompt-guidance 名称双轨 | G 同义多词（技能级）：frontmatter name = meta-prompt-guidance，SKILL.md H1 = “Meta Prompt Creator”，research-index.md 引用 `meta-prompt-creator/references/…`，全局 AGENTS.md 场景路由亦写 meta-prompt-creator——同一技能三个名字；涉及跨生态改名，非词条项，报用户专项裁决 | 第二轮复审：meta-prompt-guidance/SKILL.md L12、resources/research-index.md L3 + 全局 AGENTS.md 场景路由表 |
 
 ## 裁决去向
 
