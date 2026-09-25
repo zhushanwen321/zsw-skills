@@ -26,7 +26,7 @@ parameters:
   required: [execPlan]
 */
 
-// ===== zcode→pi 兼容 shim（本块 + @pi-meta + schema 常量 = 两版全部差异区）=====
+// ===== zcode→pi 兼容 shim（两版差异区之一：另含 @pi-meta 头/schema 常量/TS 剥离/agent 调用层/续聊补丁）=====
 const { spawnSync } = require("node:child_process");
 const $WS = typeof $WORKSPACE === "string" ? $WORKSPACE : process.cwd();
 // world.run：zcode facade 的命令执行（cwd=workspace、非零退出码为返回值非异常）
@@ -36,6 +36,8 @@ const world = {
       cwd: $WS, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
       timeout: opts && opts.timeoutMs ? opts.timeoutMs : 300000,
     });
+    // 执行器故障/超时 throw 对齐 zcode reject 语义（非零退出码仍是返回值不是异常）
+    if (r.error) throw r.error;
     return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   },
 };
