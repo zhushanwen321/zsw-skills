@@ -50,7 +50,7 @@
 
 ### 维度 7：有序收尾（预算耗尽场景）
 
-- [ ] **收尾三步骤明确**：susumarize progress（DONE and VERIFIED）+ identify remaining work（NOT DONE and WHY）+ clear actionable next step。
+- [ ] **收尾三步骤明确**：summarize progress（DONE and VERIFIED）+ identify remaining work（NOT DONE and WHY）+ clear actionable next step。
   - 无此 → 预算耗尽后模型突然停止，用户不知道进度
 - [ ] **跨模型交接有 [P12 交接framing]**（如适用）："The next agent will see only this summary — ensure it contains everything needed to continue without repeating work."
 

@@ -100,7 +100,7 @@ Error message 设计最大的陷阱：**只告知错误事实，不引导下一�
 ## 与其他载体的协作
 
 - **Tool Description**：工具的正常约束在 description 中，错误场景的行为引导在 error message 中。两者不重复——如果 error message 中说了"该如何重试"，tool description 不需要再说一次
-- **Steering Prompt**：steering prompt 的 completion audit 和 block audit 与 error message 的行为约束保持一致。如果 steering prompt 说"after 3 failed turns, mark blocked"，error message 中的行为约束不应是"keep retrying"
+- **Steering Prompt**：steering prompt 的 completion audit 和 blocked audit 与 error message 的行为约束保持一致。如果 steering prompt 说"after 3 failed turns, mark blocked"，error message 中的行为约束不应是"keep retrying"
 - **System Prompt**：错误处理策略中的全局规则（如"遇到错误不要放弃，先重试"）放在 system prompt 中。单个工具的错误行为引导放在 error message 中
 
 ## 设计走查

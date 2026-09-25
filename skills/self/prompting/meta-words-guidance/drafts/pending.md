@@ -41,6 +41,15 @@
 | 2026-09-25 | 词 | 载体（非 prompt 语境用法） | G 带条件保留表「载体」词条的使用边界限定为 prompt 类型语境；本文件 3 处按"承载物"本义使用（事故教训载体 / 产品特性的载体 / 实现载体），字面可懂但超出已登记使用边界，登记供裁决：扩宽词条（承载物本义可用）或补边界外替换（承载者 / 实现形式） | 第二轮复审：全局 AGENTS.md 规则 30（L59 事故教训载体）、输出习惯 10（L87 产品特性的载体）、架构偏好·显式状态机（L186 实现载体） |
 | 2026-09-25 | 词 | 宁漏勿拦 | E 四字自造压缩（宁可漏过、不可误拦），与带条件保留表「宁合不裂」同构；此处有「粗网」隐喻语境支撑但首次出现无展开，第一遍需自行解析（宁漏勿拦 = 宁可放过错误也不拦截正常项） | 第二轮复审：code-overdesign-audit/SKILL.md 核心原则 4（粗网细网分工，未改） |
 | 2026-09-25 | 词 | 兜捉 / 补捉 | A 砍字造词（"兜底捕捉"压成"兜捉"、"补充捕捉"压成"补捉"），两词并列出现，第一遍无法还原动作 | 第二轮复审：code-overdesign-audit/references/evidence-signals.md L17（外部 WIP 文件首审发现，按纪律未改只报告） |
+| 2026-09-25 | 词 | 暴毙 | D 死亡隐喻挪用（古语词，此处义为“进程异常终止/异常退出”）；上轮 SKILL.md 侧已改写为“脚本异常退出且无通知”，脚本源码注释 3 处漏改（pr-lifecycle.js L10 / lib.cjs L1601 / run-tests.js L409），按“脚本源码不改只登记”豁免保留，登记供裁决正式入替换表（裁决后连同 3 处脚本注释一起改） | 第二轮复审：pr-cr-fix/workflows/ 三处脚本注释残留 |
+| 2026-09-25 | 词 | ratchet | B 英文原词未译（“从 50% 起步值 ratchet 至业界事实标准 80%”），棘轮“只升不降”的隐含约束对不懂该词的读者丢失，第一遍只能猜成“提升到”；1 处 | 第二轮复审：pr-cr-fix/SKILL.md L126（Gate-1.6 阈值决策注） |
+| 2026-09-25 | 词 | 反射性 | B 英文直译造词（reflexively → 反射性）+ G 同词多义（与软件术语“反射”reflection 撞词），“反射性跑全量套件”义为“不经判断默认就跑”，第一遍可能读成反射 API 相关；1 处 | 第二轮复审：pr-cr-fix/SKILL.md L384（按包路径选择测试范围节） |
+| 2026-09-25 | 词 | 交接 framing / 交接framing | B 英文原词未译（framing），义为“向恢复方声明内容来源与性质的交接说明”；定义处（design-principles P12）有就地解释但标签本身第一遍不可解；同组两种写法并存（带空格/不带空格，15+ 处）；裁决点：整体定中文名（如「交接说明」）并统一写法，或保留英文只统一写法 | 第二轮复审：meta-prompt-guidance 全组（design-principles.md P12 / patterns system-prompt·steering-prompt·compact-prompt / steering-prompt-template / knowledge-index / carrier-taxonomy / interaction-patterns / rubric-steering·error-message） |
+| 2026-09-25 | 词 | Fidelity 约束 | B 英文原词未译（fidelity 忠实度），义为“防止模型悄悄缩小目标、保证执行贴合原目标的约束”；patterns/steering-prompt.md 维度 5 起名后 4 文件沿用，上下文有“防止目标降级”解释但词本身第一遍不可解；裁决点：定中文名（如「保真约束」）或保留 | 第二轮复审：meta-prompt-guidance（patterns/steering-prompt.md 维度 5 / rubric-steering-prompt.md / resources/failure-modes/goal-degradation.md / steering-prompt-template.md / carrier-taxonomy.md） |
+| 2026-09-25 | 词 | 对冲 | D 金融隐喻挪用，与已裁决的清账/盘面及在册的落账/对账/挂账/销账同族（记账金融隐喻族新成员），此处义为“用 A 的完成抵消 B 的未完成”；4 处，字面可猜但按族内未裁决纪律登记不改 | 第二轮复审：meta-prompt-guidance（patterns/steering-prompt.md L110 / steering-prompt-template.md L94 / resources/failure-modes/goal-degradation.md L22 / rubric-steering-prompt.md L49） |
+| 2026-09-25 | 词 | 竞合（竞合关系） | G/H 压缩外来词（竞争+合作，co-opetition），第一遍无法确定指“冲突”还是“竞争与合作并存”，原句两种解读都通，读者无法准确界定交互模式的覆盖范围；1 处 | 第二轮复审：meta-prompt-guidance/references/interaction-patterns.md L3 |
+| 2026-09-25 | 词 | justify（英文夹用） | B 英文原词未译（“每行内容都必须 justify 存在”）；本批已就地改写为「说明自己存在的理由」，登记供裁决是否入正式替换表 | 第二轮复审：meta-prompt-guidance/patterns/system-prompt.md L20（已改） |
+| 2026-09-25 | 词 | meta-prompt-creator / meta-prompt-guidance 名称双轨 | G 同义多词（技能级）：frontmatter name = meta-prompt-guidance，SKILL.md H1 = “Meta Prompt Creator”，research-index.md 引用 `meta-prompt-creator/references/…`，全局 AGENTS.md 场景路由亦写 meta-prompt-creator——同一技能三个名字；涉及跨生态改名，本组未改，报用户裁决 | 第二轮复审：meta-prompt-guidance/SKILL.md L12、resources/research-index.md L3 + 全局 AGENTS.md 场景路由表 |
 
 ## 裁决去向
 

@@ -82,7 +82,7 @@ Personality 设计最大的陷阱：**在风格中混入能力约束。** Person
 
 **决策指南**：
 
-- 短版（1-2 行）：Values 的一个压缩版本 + Tone 的一句话概况
+- 短版（1-2 行）：Values 的一个压缩版本 + Tone 的一句话概括
   - 好例：`"Friendly and encouraging. Use 'we' and short sentences. No flattery, no curt responses."`
 - 长版：完整的 Values/Tone/Escalation/绝对禁止项
 - 短版和长版必须语义一致——模型不应该在读到短版和长版时表现出不同的行为
@@ -93,7 +93,7 @@ Personality 设计最大的陷阱：**在风格中混入能力约束。** Person
 
 1. **Escalation 定义太模糊** → 友好型不敢指出问题，务实型变得粗暴。根源：Escalation 规则只说了"应该怎样"没说"具体说什么"
 2. **风格中混入能力约束（[F11 人格污染]）** → 切换 personality 意外改变了 agent 的功能行为。最典型：pragmatic personality 中写了"Always check the code before suggesting changes"——这是功能约束
-3. **Values 只有抽象词** → 不同 personality 的差别模糊，用户切换后感觉不到差异。根源：没有给每个 Value 跟具体的行为描述
+3. **Values 只有抽象词** → 不同 personality 的差别模糊，用户切换后感觉不到差异。根源：没有为每个 Value 给出具体的行为描述
 
 ## 与其他载体的协作
 

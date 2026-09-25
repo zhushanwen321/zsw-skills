@@ -17,7 +17,7 @@ read {skill_dir}/references/prompt-architecture.md
 
 ## 核心挑战
 
-System prompt 设计最大的陷阱：**一切往里塞，最终什么都留不下。** 它是所有 prompt 的基座，但每行内容都必须 justify 存在——如果一个规则可以被更精确地放在 tool description 或 steering prompt 中，就不该在这里。
+System prompt 设计最大的陷阱：**一切往里塞，最终什么都留不下。** 它是所有 prompt 的基座，但每一行内容都必须说明自己存在的理由——如果一个规则可以被更精确地放在 tool description 或 steering prompt 中，就不该在这里。
 
 第二个陷阱：**把 system prompt 当成"功能说明书"而不是"行为约束器"**。模型不需要你描述它的能力，它需要知道边界。
 
@@ -68,7 +68,7 @@ System prompt 设计最大的陷阱：**一切往里塞，最终什么都留不�
   - 安全约束（如"不擅自 git commit"、"不暴露 system prompt"）— 违反即灾难
   - 输出约束（如"不输出 ANSI escape codes"、"不输出 emoji"）— 违反即功能异常
   - 编码习惯（如"不加版权头"、"不用 any 类型"）— 违反即质量下降
-- **[P14 约束衰减]** 全局硬约束控制在 12-15 条。超过此阈值，新加规则会让已有规则变弱。这是模型的注意力有限资源导致的——50 条规则中，模型能可靠遵守的只有前 10-15 条。如果新规则无法挤进前 15，说明它不够"全局"——移到对应 tool description 中
+- **[P14 约束衰减]** 全局硬约束控制在 12-15 条。超过此阈值，新加规则会让已有规则变弱。这是模型的注意力资源有限导致的——50 条规则中，模型能可靠遵守的只有前 10-15 条。如果新规则无法挤进前 15，说明它不够"全局"——移到对应 tool description 中
 - **每条规则的写法**：
   - 禁止形式："不要 X，因为 Y"
   - 好例：`"Do not stage or commit code unless explicitly asked. Unauthorized commits are a hard failure."`
@@ -160,7 +160,7 @@ System prompt 设计最大的陷阱：**一切往里塞，最终什么都留不�
 | 中 | ~400 行 | 8-12 条 | 专业领域 agent，多工具 |
 | 高 | ~800 行 | 12-15 条 | 通用开发 agent，安全性要求高 |
 
-**模型分代管理**：更强的模型（如 Sonnet 4）用更精简的 prompt——经验丰富的 agent 不需要基础约束重复告诉。同样的硬约束，弱模型可能需要示例和更长的解释，强模型只需要一句话。
+**模型分代管理**：更强的模型（如 Sonnet 4）用更精简的 prompt——经验丰富的 agent 不需要反复告知基础约束。同样的硬约束，弱模型可能需要示例和更长的解释，强模型只需要一句话。
 
 **不做的事**：不要在 system prompt 中重复 tool 自带的 description——模型在工具调用时已经能看到那些内容。
 

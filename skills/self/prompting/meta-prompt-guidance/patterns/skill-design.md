@@ -115,7 +115,7 @@ SKILL.md 设计最大的陷阱：**把 description 写成能力摘要而不是�
 
 ## 最致命的 3 个失败案例
 
-1. **Description 写工作流** → 模型 probability-match 后跳过正文，按 description 的简化描述行动——丢失所有细节约束
+1. **Description 写工作流** → 模型概率匹配后跳过正文，按 description 的简化描述行动——丢失所有细节约束
 2. **正文做内容不做路由**（[F13 约束过载]）→ 600 行正文，模型加载后仍然不知道第一步该做什么，且后面的规则因约束衰减被忽略
 3. **缺少排除子句**（[F10 缺示例]）→ skill 在不该触发时被加载，如写 CLAUDE.md 时触发 skill-writing skill，在错误的上下文中执行错误的流程
 

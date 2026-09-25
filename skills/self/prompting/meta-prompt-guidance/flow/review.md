@@ -71,7 +71,7 @@
 | 包含工具名称 + 参数 schema + "when to use" | Tool Description |
 | 包含身份声明 + 全局规则 + 输出格式 | System Prompt |
 | 包含状态声明（任务状态变更/预算耗尽等）+ 运行时行为引导 | Steering Prompt |
-| 包含 "summary" / "compact" / 章节模板 + 反工具围栏 | Compact Prompt |
+| 包含 "summary" / "compact" / 章节模板 + 反工具调用围栏 | Compact Prompt |
 | 包含 "sub-agent" + 单一职责描述 + 环境信息注入 | Agent Prompt |
 | 包含错误类型 + "do not mark complete" 等防偷懒禁令 | Error Message |
 | 包含 name/description frontmatter + 路由表 + 标记说明 | SKILL.md |

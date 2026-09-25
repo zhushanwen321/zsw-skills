@@ -26,7 +26,7 @@
 - 特殊：高风险工具需生命周期结构（before → during → after）
 
 ### System Prompt
-- 核心：身份声明、全局 Anti-pattern、默认行为（"默认行动，非默认思考"）
+- 核心：身份声明、全局 Anti-pattern、默认行为（"默认行动，非默认规划"）
 - 可选：输出格式规范（按变更规模分级）、工具使用优先级、上下文感知行为
 - 特殊：按模型能力分代管理（强模型用精简 prompt）
 
@@ -41,7 +41,7 @@
 - 特殊：独立 session 运行，不继承主 agent context
 
 ### Agent Prompt
-- 核心：身份声明、任务完成约束、防递归限制、环境信息注入
+- 核心：身份声明、任务完成约束、防递归约束、环境信息注入
 - 可选：输出规范、路径规范
 - 特殊：极简（10-20 行），大部分行为规范从主 system prompt 继承
 
@@ -107,5 +107,5 @@
 | Tool Description | 优先级网络、前置依赖、约束冗余 |
 | System Prompt | static/dynamic 分层边界 |
 | Steering Prompt | 注入防御分层、约束冗余（与 tool description 配合作业） |
-| Compact Prompt | Compaction 交互模式（framing + 反工具围栏） |
+| Compact Prompt | Compaction 交互模式（framing + 反工具调用围栏） |
 | Agent Prompt | 优先级网络（继承 vs 覆盖主 prompt） |

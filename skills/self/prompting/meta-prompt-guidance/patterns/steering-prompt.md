@@ -77,7 +77,7 @@ Steering prompt 设计最大的陷阱：**只声明状态，不给行为约束�
   - 好例：`"For each requirement, check if file changes, test results, or command output provide direct evidence. Mark only those with concrete evidence as complete."`
   - 坏例：`"Continue working on the task."`
 - 行为约束的结构：**方向（该继续什么） + 停止（该停下什么） + 检查（该验证什么）**
-- 约束的粒度：按 risk-driven 分级
+- 约束的粒度：按风险分级
   - 高风险操作（状态变更）：每条约束独立一行，前后留空行
   - 低风险操作：多条约束可以并排
 - 约束和反模式的关系：行为约束的每一段后面如果加上"Don't X instead"就是反模式加固。特别是对高发失败模式（[F2 目标降级]、[F3 偷懒完成]），行为约束后追加反模式声明
@@ -157,8 +157,8 @@ Steering prompt 设计最大的陷阱：**只声明状态，不给行为约束�
 完成 Steering Prompt 设计后，按此顺序自检：
 
 1. **状态-行为配对检查**：每个状态声明是否紧跟着具体的行为约束？
-2. **三层防注入**：结构和语义和数据三层都齐全了吗？包含了用户输入或工具结果吗？
-3. **Completion audit 比重**：content audit 占全文 30% 以上吗？包含了逐项验证 + 证据标准 + 显式禁令吗？
+2. **三层防注入**：结构、语义、数据三层都齐全了吗？包含了用户输入或工具结果吗？
+3. **Completion audit 比重**：Completion audit 占全文 30% 以上吗？包含了逐项验证 + 证据标准 + 显式禁令吗？
 4. **Fidelity 三句检查**：三句 Fidelity 约束是否完整且每句含义独立不重复？
 5. **Blocked 阈值检查**：blocked 的三个条件是否都有精确数字？"what is NOT blocked"是否列出来了？
 6. **预算耗尽行为检查**：收尾三步骤是否明确？跨模型交接是否需要 framing？

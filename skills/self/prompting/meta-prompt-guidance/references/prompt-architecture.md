@@ -38,7 +38,7 @@
 | 独立 .md 文件 | 复杂模板、Agent prompt、Personality | 可独立审查；支持 Markdown 格式 | 需编译时嵌入；不支持变量替换（需后处理） |
 | .md 模板 + 变量替换 | 含多变量的 Steering Prompt | 模板与代码分离；编译时可预览 | 需模板引擎；变量类型错误运行时才暴露 |
 | 运行时动态拼接 | 按条件组合多个片段 | 灵活；每个片段独立管理 | 组装逻辑复杂；最终输出难预览 |
-| 动态生成函数 | 依赖运行时配置的 description | 可按 feature flag 切换版本；灵活性高 | 调试困难；一致性风险 |（Claude Code 特有） |
+| 动态生成函数 | 依赖运行时配置的 description（Claude Code 特有） | 可按 feature flag 切换版本；灵活性高 | 调试困难；一致性风险 |
 
 ## 三、Static/Dynamic 分层
 

@@ -31,7 +31,7 @@
 
 ### 维度 4：收尾指令
 
-- [ ] **收尾三步骤完整**（终止性错误）：susumarize progress（DONE and VERIFIED）+ identify remaining（NOT DONE and WHY）+ actionable next step。
+- [ ] **收尾三步骤完整**（终止性错误）：summarize progress（DONE and VERIFIED）+ identify remaining（NOT DONE and WHY）+ actionable next step。
 - [ ] **收尾指令在防偷懒禁令之后**：逻辑上先告诉模型"不要标记完成"（禁令），再告诉它"应该做什么"（收尾）。
 - [ ] **跨模型交接有 P12 交接framing**（如适用）。
 

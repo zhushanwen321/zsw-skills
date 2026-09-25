@@ -40,7 +40,7 @@ brainstorm 完成后，进入设计阶段：
 read {skill_dir}/flow/create.md
 ```
 
-create.md 会引导你按顺序阅读 `patterns/<carrier>.md` 的各章节（前置知识 → 核心挑战 → 逐维度设计 → 失败案例 → 载体协作 → 设计走查）。
+create.md 会引导你按顺序阅读 `patterns/<carrier>.md` 的各章节（前置知识 → 核心挑战 → 风险分级 → 逐维度设计 → 失败案例对照 → 载体协作 → 设计走查）。
 
 设计完成后，如需要格式起点，read 对应模板：
 
