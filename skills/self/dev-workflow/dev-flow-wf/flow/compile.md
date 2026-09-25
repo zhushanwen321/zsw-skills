@@ -18,6 +18,10 @@
   "designDocPath": ".tmp/tech-design/<name>.md",
   "baseline": "<git rev-parse HEAD>",
   "statusPath": ".tmp/dev-flow/<name>.status.json",
+  "testPlan": {                        // 从 impl-plan.json 的 testPlan 继承（W3 Gate A 消费，缺失即 fail-fast）
+    "incremental": "…",                // 可选：修复组核验用的增量测试
+    "fullSuite": { "program": "pnpm", "args": ["…"] }   // 必填：全量段（T1 形态拆开）
+  },
   "commitTemplate": "<type>(<scope>): {unitId} — {summary}",   // 占位符：{unitId}/{summary}
   "nodes": [
     { "id": "u-foundation", "kind": "dev", "deps": [], "wave": 1,
