@@ -52,7 +52,7 @@ description: >-
 5. **git 单点**：subagent 禁止一切 git 写；workflow 形态下 commit 由引擎 world.run 执行（精确路径 add，禁 -A），手工形态下由主 agent 执行；文档类同步改动禁止单独成笔——随触发它的单元同笔提交（files_changed 含文档路径即同笔）；确因验收结论后置的攒批成一笔，禁止一文档一笔
 6. **基线先行**：exec-plan.json 落盘即基线（`.tmp/` 不入 git）；执行态事实源 = `<name>.status.json`
 
-## Workflow 契约（zcode 环境执行体，渐进接入）
+## Workflow 契约（执行体按宿主环境选择）
 
 | workflow | 段 | args | 终态 |
 |----------|----|------|------|
@@ -60,7 +60,7 @@ description: >-
 | W3 `dev-consistency-loop`（saved） | D2 | `{ execPlan, maxRounds?, reviewerTemplate?, attempt? }` | converged / stuck / gate-a-failed / review-failure / fix-failure（终态回写 status.json events：consistency 终态一笔恒写 + gate-a 笔仅在 converged/gate-a-failed 时写；必填字段双无条目降级登记项——deferredLedger 回流；attempt>1 时 Gate A 日志带 .attemptM 后缀） |
 | W4 `design-code-sync-loop`（saved） | D5 | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath?, plannerTemplate?, reviewerTemplate?, attempt? }` | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（模板路径与 attempt 缺省自动处理，attempt>1 历史产物不覆盖；终态含 overdesignCandidates——越权候选卡呈报） |
 
-workflow 未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：workflow 用 ResumeWorkflowRun/AmendWorkflow，手工路径以 status.json + git log 对账，冲突以 git 为准）。
+执行体按宿主环境选择：**zcode**（会话可见 CreateWorkflow 工具 / saved workflows）→ 上表 saved workflow 经 `CreateWorkflow saved` 发起；**pi**（subagent-workflow extension、workflow 工具可用）→ 本 skill 安装位置上级的 `../workflows/pi/<name>.js`（四件：wave-executor / dev-consistency-loop / design-code-sync-loop）复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run <name> --args k=v`——两版脚本业务逻辑逐行一致，仅 agent 调用层与文件头不同；--args 值全字符串，数字参数脚本内自动归一，数组型不支持。两版均未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：zcode workflow 用 ResumeWorkflowRun/AmendWorkflow，pi 重新 run（attempt 递增防产物覆盖），手工路径以 status.json + git log 对账，冲突以 git 为准）。
 
 ## 关键约束
 

@@ -49,9 +49,16 @@ T1 写设计文档（Step 0-6）──确认──▶ T2 审查循环（价值�
 | 要文档骨架模板 | `resources/templates/design-doc-template.md` |
 | 优化表达 / 换个说法 / agent 说得太绕 | `flow/express.md`（一次性表达优化，不写文档不派 review） |
 
-## W1 workflow 契约（zcode 环境执行体，渐进接入）
+## W1 workflow 契约（执行体按宿主环境选择）
 
-T2 审查循环的 zcode 执行体 = saved workflow `tech-review-loop`（价值审 gate → 三 reviewer 并行 → 文档 fixer 兼做合并修复 → 聚焦复审循环；终态判定/计数/覆盖校验全脚本化）。**workflow 未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers? }`（reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件）；终态：converged / value-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作 resume 或 attempt 递增重发）——除 converged 外全部停回主 agent 处理（见 review.md 停回通道表）。
+T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 agent 调用层与文件头不同），按当前环境选择：
+
+| 宿主环境 | 判别信号 | 执行体与发起方式 |
+|---------|---------|----------------|
+| zcode | 会话可见 CreateWorkflow 工具 / saved workflows | saved workflow `tech-review-loop`（`CreateWorkflow saved` 发起） |
+| pi（subagent-workflow extension） | 宿主为 pi coding agent、workflow 工具可用 | 本 skill 安装位置上级的 `../workflows/pi/tech-review-loop.js`——复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run tech-review-loop --args designDoc=<路径> projectRoot=<路径> maxRounds=<N>`（数组型参数 reviewers 不支持——--args 值全字符串，用缺省四件模板） |
+
+**两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers? }`（reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件）；终态：converged / value-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 停回通道表）。
 
 ## 核心红线（11 条，详解见 references/design-principles.md）
 
