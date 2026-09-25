@@ -4,7 +4,7 @@
 
 ## 产物路径约定 [MANDATORY]
 
-- 报告落 `<项目根>/.tmp/tech-design/<name>/round-N/`：`review-<dimension>.md`（dimension = value / main / impact / simplicity）+ `dispositions.md`（当轮处置表）
+- 价值审报告落 runDir 根 `<项目根>/.tmp/tech-design/<name>/review-value.md`（价值审在轮次循环外——与 workflow 引擎落点一致）；三审报告落 `round-N/`：`review-<dimension>.md`（dimension = main / impact / simplicity）+ `dispositions.md`（当轮处置表）
 - 重发起（value-rejected 修完重来 / escalated 裁决后重跑）时新轮次目录带 attempt 后缀：`round-3.attempt2/`——不覆盖历史
 - 终态记录 `<name>/final.json`：`{ terminated, rounds, runDir, designDoc, oneliner, reportFile, mustFixTrajectory, suggestionDispositions, remaining, blocked, message }`——设计包的审查证据（dev-flow-wf 入口判据读它）
 - `.tmp/` 是临时产物目录不进 git；用户显式指定路径时以用户为准

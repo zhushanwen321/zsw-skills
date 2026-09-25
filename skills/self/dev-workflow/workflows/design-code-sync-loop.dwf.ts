@@ -112,7 +112,7 @@ const NODE_BACKTICK_GREP = [
   "  try{ var t=fs.readFileSync(process.argv[pi],'utf8');",
   "    var m=t.match(/`([^`\\n]{2,60})`/g)||[];",
   "    for (var s of m){ var v=s.slice(1,-1).trim();",
-  "      if(!v||v.charCodeAt(0)>126)continue;",
+  "      if(!v||!/^\\x20-\\x7e+$/.test(v))continue;",
   "      if(v.indexOf('/')>=0||v.indexOf(' ')>=0)continue;",
   "      if(v.split(/[^A-Za-z0-9_.\\-]+/).length>4)continue;",
   "      if(/v?\\d+(\\.\\d+)+/i.test(v))continue;",
@@ -412,6 +412,9 @@ function normPlanner(raw: PlannerResult, rootDir: string): PlannerResult {
             impl: asStr((mro as Record<string, unknown>).impl),
             verdict: asStr((mro as Record<string, unknown>).verdict, "未评"),
             note: asStr((mro as Record<string, unknown>).note),
+            // overdesign 必须提取（审查 N1：曾漏提取致框架行候选卡通道恒不可达——
+            // 消费点 ff.matrixRow.overdesign 判过度/存疑档）
+            overdesign: asStr((mro as Record<string, unknown>).overdesign) || undefined,
           }
         : { claim: asStr(o.id), impl: "", verdict: "未评", note: "" };
     ff.push({ id: asStr(o.id, "FF?"), matrixRow: row, severity: normSeverity(o.severity) });
@@ -725,9 +728,16 @@ const trajectoryFile = `${runDir}/trajectory.md`;
 const finalJsonPath = `${runDir}/final.json`;
 const retirementDestDir = `${projectRoot}/${RETIREMENT_DIR}`;
 
-// 重发起检测（沿 W1 惯例）：final.json 已存在且用户未显式传 attempt → attempt=2（不覆盖历史产物）
-const finalProbe = await world.run("node", ["-e", NODE_EXISTS_ONE, finalJsonPath]);
-const attempt = inputs.attempt !== null ? inputs.attempt : finalProbe.exitCode === 0 ? 2 : 1;
+// 重发起检测（沿 W1 惯例）：扫描 runDir 内已有 attempt 后缀最大序号，未显式传 → max+1
+//（固定取 2 会覆盖第三次及以后重发起的 attempt2 产物）
+const ATTEMPT_SCAN =
+  "try{var fs=require('fs');var names=[];try{names=fs.readdirSync(process.argv[1])}catch(e){}var mx=0;" +
+  "for(var n of names){var m=/^round-\\d+\\.attempt(\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}" +
+  "if(mx>0)process.stdout.write(String(mx))}catch(e){}";
+const attemptProbe = await world.run("node", ["-e", ATTEMPT_SCAN, runDir]);
+const prevAttemptMax =
+  attemptProbe.exitCode === 0 && /^\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;
+const attempt = inputs.attempt !== null ? inputs.attempt : prevAttemptMax > 0 ? prevAttemptMax + 1 : 1;
 const roundDirName = (n: number): string => (attempt > 1 ? `round-${n}.attempt${attempt}` : `round-${n}`);
 
 // 基线 HEAD 锁定（审查对象 = HEAD 终态全量；记录进矩阵供事后核对）
@@ -893,7 +903,7 @@ function renderMatrix(): string {
   }
   for (const f of ledger) {
     L.push("");
-    L.push(`### ${f.id} [${f.severity}] [${f.direction}] — ${f.status === "fixed" ? `fixed@R${f.fixedRound ?? "?"}` : "open"}（R${f.firstSeen} 立项，owner=${f.owner}）`);
+    L.push(`### ${f.id} [${f.severity}] [${f.direction}] — ${f.status === "fixed" ? `fixed@R${f.fixedRound ?? "?"}` : f.status === "deferred" ? "deferred（越权候选，待用户裁决）" : "open"}（R${f.firstSeen} 立项，owner=${f.owner}）`);
     L.push(`- location: ${f.location}`);
     L.push(`- gap: ${f.gap}`);
     L.push(`- impact: ${f.impact}`);
@@ -921,7 +931,7 @@ async function persistArtifacts(): Promise<void> {
   const okM = await writeArtifact(matrixFile, renderMatrix());
   const okT = await writeArtifact(trajectoryFile, renderTrajectory());
   if (!okM || !okT) {
-    throw new Error(`矩阵/轨迹写盘失败（matrix ok=${okM}，trajectory ok=${okT}）。恢复动作：检查 ${runDir} 可写性后 ResumeWorkflowRun`);
+    throw new Error(`矩阵/轨迹写盘失败（matrix ok=${okM}，trajectory ok=${okT}）。恢复动作：检查 ${runDir} 可写性后 attempt 递增重新发起`);
   }
 }
 
@@ -1046,7 +1056,7 @@ function fixerPrompt(g: FixGroup, byId: Map<string, FindingRecord>): string {
   L.push(`3. 领地互斥：优先只改本组文件（${g.files.map((p) => rel(p)).join("、")}）；确需触碰组外文件或新增文件（如增量测试文件），必须列入 affectedFiles 如实申报——未申报的组外改动会被引擎核验拦截。`);
   L.push("4. git 禁令：禁止一切 git 写操作（add/commit/push 等）——改动留工作区，引擎统一核验后按组 commit。");
   L.push("5. 每条修复给 selfCheck：一条可复跑命令 + 预期结果（改文档类可用 grep 断言；聚焦复审会复核它）。");
-  L.push("6. 越权候选防线：若某条的修复动作将是「删除/移除一段现有实现」而该条并非 must-fix 级（无行为矛盾/悬空引用指控，仅「设计文档没写」），不要执行删除——放入 deferred（reason 写候选卡论证：小取舍/大简化/核心价值不变），它将随终态呈报用户裁决后才动；「文档没写」更可能是文档侧漏登记而非代码越权。");
+  L.push("6. 越权候选防线：若某条的修复动作将是「删除/移除一段现有实现」而其指控仅是「设计文档没写」（无行为矛盾/悬空引用等实质缺陷证据），**无论等级（含 must-fix）**都不要执行删除——放入 deferred（reason 写候选卡论证：小取舍/大简化/核心价值不变），它将随终态呈报用户裁决后才动；「文档没写」更可能是文档侧漏登记而非代码越权，宁可多呈报一张候选卡，不可直接删码。");
   L.push("");
   L.push("完成后返回 JSON：fixes（元素 {issueId, description, selfCheck}，issueId 与上面条目一致原样引用，本组全部条目必须被 fixes 或 deferred 之一覆盖）+ deferred（元素 {issueId, reason}——仅越权候选防线场景）+ affectedFiles（实际改动文件路径数组，含新增文件）。");
   return L.join("\n");
@@ -1158,6 +1168,13 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         seq += 1;
         continue;
       }
+      // 「未评」= planner 畸形行（verdict 缺失被归一）——不立项进修复（方向判定无依据），
+      // 只留矩阵行 + WARN 供人工复核（审查 P3-3：盲目 code-right 立项会误导修复）
+      if (verdict === "未评") {
+        log(`WARN: 框架行 ${ff.id}（${ff.matrixRow.claim.slice(0, 40)}…）verdict 缺失归一为「未评」——不立项，人工复核矩阵`);
+        seq += 1;
+        continue;
+      }
       const od = ff.matrixRow.overdesign ?? "";
       if (od.includes("过度") || od.includes("存疑")) {
         overdesignCandidates.push({
@@ -1243,7 +1260,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         reviews.push(...part);
       }
     } catch (e) {
-      finalResult = finish("review-failure", round, `模块审查 fan-out 失败：${String(e)}。恢复动作：按 runDir 各轮留档定位失败模块，ResumeWorkflowRun 或重新发起`);
+      finalResult = finish("review-failure", round, `模块审查 fan-out 失败：${String(e)}。恢复动作：按 runDir 各轮留档定位失败模块，attempt 递增重新发起`);
       break;
     }
     for (const { mid, res } of reviews) {
@@ -1268,28 +1285,34 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     if (mechPrev.length > 0) {
       const implMdRe = implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md");
       const mv = await world.run("node", ["-e", NODE_BACKTICK_GREP, projectRoot, designDoc, implMdRe]);
-      let stillMissing = new Set<string>();
+      let stillMissing: Set<string> | null = null; // null = 机械步失败/输出不可解析 → 本轮不对账
       if (mv.exitCode === 0) {
         try {
           const arr: unknown = JSON.parse(mv.stdout);
           if (Array.isArray(arr)) stillMissing = new Set(arr.filter((x): x is string => typeof x === "string"));
         } catch {
-          // 解析失败视为全部未验证——保守保留 open
+          // 输出不可解析 → 保持 null，整批保留 open 下轮再验（空集会让全部条目被误判 fixed——
+          // 审查 P0 修正：失败路径绝不假清账）
         }
       }
-      for (const f of mechPrev) {
-        const mSym = /反引号符号 (\S+) 在代码库/.exec(f.gap);
-        const sym = mSym?.[1] ?? "";
-        if (sym !== "" && !stillMissing.has(sym)) {
-          f.status = "fixed";
-          f.fixedRound = round;
+      if (stillMissing !== null) {
+        for (const f of mechPrev) {
+          const mSym = /反引号符号 (\S+) 在代码库/.exec(f.gap);
+          const sym = mSym?.[1] ?? "";
+          if (sym !== "" && !stillMissing.has(sym)) {
+            f.status = "fixed";
+            f.fixedRound = round;
+          }
         }
+        log(`机械条目对账：${mechPrev.length} 条中 ${mechPrev.filter((f) => f.status === "fixed").length} 条已清（重跑机械步验证）`);
+      } else {
+        log(`WARN: 机械步重跑失败/输出不可解析——${mechPrev.length} 条机械条目本轮不对账，全部保留 open 下轮再验`);
       }
-      log(`机械条目对账：${mechPrev.length} 条中 ${mechPrev.filter((f) => f.status === "fixed").length} 条已清（重跑机械步验证）`);
     }
     const owners = [...new Set(lastDispatchedIds.map((id) => ledgerById(id)?.owner ?? "").filter((o) => o !== "" && o !== "mechanical"))];
-    if (owners.length === 0 && mechPrev.length === 0) {
-      // 防御：上轮有派发则 owners/mechPrev 至少一项非空；全空 = 状态不一致，诚实终止（不假收敛）
+    if (owners.length === 0 && mechPrev.length === 0 && lastDispatchedIds.length > 0) {
+      // 防御：lastDispatchedIds 中存在 LLM/mech 条目（非 deferred）但 owner 全部解析失败 = 状态
+      // 不一致，诚实终止（不假收敛）。全 defer 场景 lastDispatchedIds 已被过滤为空，不触发。
       finalResult = finish("fix-failure", round, "上轮有修复派发但条目归属丢失（状态不一致）。恢复动作：按 runDir 各轮留档对账后重新发起");
       break;
     }
@@ -1312,7 +1335,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         reviews.push(...part);
       }
     } catch (e) {
-      finalResult = finish("review-failure", round, `聚焦复审失败：${String(e)}。恢复动作：按 runDir 各轮留档定位失败归属，ResumeWorkflowRun 或重新发起`);
+      finalResult = finish("review-failure", round, `聚焦复审失败：${String(e)}。恢复动作：按 runDir 各轮留档定位失败归属，attempt 递增重新发起`);
       break;
     }
     let confirmed = 0;
@@ -1359,7 +1382,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     finalResult = finish(
       "contested",
       round,
-      `must-fix 级方向争议 ${contestedMust.length} 条待用户裁决（doc-right/code-right 二选一或给出裁决理由），矩阵与证据见 ${matrixFile}。恢复动作：用户逐条裁决后重新发起（runDir 自动 attempt 后缀不覆盖历史），从聚焦轮续跑`,
+      `must-fix 级方向争议 ${contestedMust.length} 条待用户裁决（doc-right/code-right 二选一或给出裁决理由），矩阵与证据见 ${matrixFile}。恢复动作：用户逐条裁决后重新发起（runDir 自动 attempt 后缀不覆盖历史；重发起首轮为 planner 全量重审，上轮修复在重审对账中确认）`,
     );
     break;
   }
@@ -1458,6 +1481,9 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         }
         for (const d of o.deferred) {
           if (!g.issueIds.includes(d.issueId)) es.push(`${g.id} deferred 引用未知条目 ${d.issueId}`);
+          // 互斥（审查 P3-2）：同 id 既在 fixes 又在 deferred = fixer 矛盾输出——该条的修复
+          // 已执行且被 commit 却被标 deferred 退出复审对账，修复无验证，拒绝
+          if (ids.has(d.issueId)) es.push(`${g.id} 条目 ${d.issueId} 同时出现在 fixes 与 deferred（矛盾输出）`);
         }
       }
       if (es.length > 0) {
@@ -1643,24 +1669,28 @@ if (finalResult === null && convergedRound > 0) {
     }
     // 退役目录 README 索引（老 skill [MANDATORY]：文件名/日期/依据/找回方式——找回不只靠 final.json）
     if (retired.length > 0 || kept.length > 0) {
-      const readmeLines = [
-        "# 退役设计文档索引",
-        "",
-        `基线 HEAD：${headHash.slice(0, 12)}（日期见 git log）；来源：design-code-sync-loop（终态同步退役判定）`,
-        "",
-        "| 原路径 | 退役后路径 | 依据 |",
-        "|--------|-----------|------|",
-        ...retired.map((r) => `| ${r.from} | ${r.to} | 见 final.json retirement 字段与 runDir 留档 |`),
-        ...(kept.length > 0 ? ["", "## 保留项（未退役）", "", ...kept.map((k) => `- ${k.path}：${k.reason}`)] : []),
-      ];
-      const wr = await world.run("node", [
-        "-e",
-        "require('fs').mkdirSync(process.argv[1],{recursive:true});require('fs').writeFileSync(process.argv[2],process.argv[3])",
-        retirementDestDir,
-        `${retirementDestDir}/README.md`,
-        readmeLines.join("\n"),
-      ]);
-      if (wr.exitCode !== 0) log(`WARN: 退役 README 索引写盘失败（exit ${wr.exitCode}）——找回信息仍完整保留在 final.json retirement 字段`);
+      try {
+        const readmeLines = [
+          "# 退役设计文档索引",
+          "",
+          `基线 HEAD：${headHash.slice(0, 12)}（日期见 git log）；来源：design-code-sync-loop（终态同步退役判定）`,
+          "",
+          "| 原路径 | 退役后路径 | 依据 |",
+          "|--------|-----------|------|",
+          ...retired.map((r) => `| ${r.from} | ${r.to} | 见 final.json retirement 字段与 runDir 留档 |`),
+          ...(kept.length > 0 ? ["", "## 保留项（未退役）", "", ...kept.map((k) => `- ${k.path}：${k.reason}`)] : []),
+        ];
+        const wr = await world.run("node", [
+          "-e",
+          "require('fs').mkdirSync(process.argv[1],{recursive:true});require('fs').writeFileSync(process.argv[2],process.argv[3])",
+          retirementDestDir,
+          `${retirementDestDir}/README.md`,
+          readmeLines.join("\n"),
+        ]);
+        if (wr.exitCode !== 0) log(`WARN: 退役 README 索引写盘失败（exit ${wr.exitCode}）——找回信息仍完整保留在 final.json retirement 字段`);
+      } catch (e) {
+        log(`WARN: 退役 README 索引写盘异常（${String(e)}）——找回信息仍完整保留在 final.json retirement 字段`);
+      }
     }
     if (finalResult === null) {
       const ds = {

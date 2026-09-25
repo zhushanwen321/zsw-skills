@@ -24,7 +24,7 @@
     "fullSuite": { "program": "pnpm", "args": ["…"] },  // 必填：项目全量命令（含 lint/typecheck，从项目配置真实读取合成；复杂多命令封装为脚本走 bash）
     "artifacts": [{ "id": "build-e2e", "command": { "program": "…", "args": ["…"] } }]   // 可选：产物类条目（Gate A 起始第一波并行预备——命令确定、结果确定、被验证类消费；禁现用现建）
   },
-  "commitTemplate": "<type>(<scope>): {unitId} — {summary}",   // 占位符 {unitId}/{summary} 必含（引擎校验）；summary 内容契约 = 任务书要求 dev 返回的 summary 末行含「测试：<命令> 绿」
+  "commitTemplate": "<type>(<scope>): {unitId} — {summary}",   // 占位符 {unitId}/{summary} 必含（dev 模式引擎校验；acceptance 模式不 commit 可省略）；summary 内容契约 = 任务书要求 dev 返回的 summary 末行含「测试：<命令> 绿」
   "nodes": [
     { "id": "u-foundation", "kind": "dev", "deps": [], "wave": 1,
       "cwd": null,                      // null = projectRoot；worktree 单元填 worktree 绝对路径
@@ -47,7 +47,7 @@
 
 ### 3. 逐节点 promptFile 构造
 
-每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·领地·验收条款/设计文档对应节摘录/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：增量测试按 testCommand；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[]}`，deviations 强制字段无偏离填空数组）/ 约束（领地白名单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报）。
+每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·领地·验收条款/设计文档对应节摘录/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：增量测试按 testCommand；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组）/ 约束（领地白名单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报）。
 
 ### 4. 初始 status.json
 
@@ -57,7 +57,7 @@
   "events": [] }
 ```
 
-节点字段 = `status` / `attempts`（终态回写附 `commit?` / `evidence?`）。引擎回写保留 name/updated 顶层字段；恢复对账双向：标 done 无 commit → 回 pending；有 commit 未记 → 引擎按 git log 匹配单元 id 补写 done。
+节点字段 = `status` / `attempts`（终态回写附 `commit?` / `evidence?`）；status 合法值 = `pending / in-progress / done / blocked / failed`，终局另写 `suspended`（从未派发的挂起节点——人读恢复时按 pending 对待重跑）。引擎回写保留 name/updated 顶层字段；恢复对账双向：标 done 无 commit → 回 pending；有 commit 未记 → 引擎按 git log 匹配单元 id 补写 done（status.json 缺失时初始重建后同样反查 git log，不重跑已交付单元）。
 
 ### 5. L0 前置 + 环境准备（D3 前置项此时一并核）
 

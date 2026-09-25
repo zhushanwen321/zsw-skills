@@ -136,7 +136,7 @@ interface ItemRecord {
   group: string;
   /** 首次出现的审查轮（R1 = 1） */
   firstRound: number;
-  /** 连续「修复后复审仍报」次数；≥3 触发单条停机线升级（1 次初始修复 + 2 次打回 = 3 次 fixer 机会，设计 §8.6） */
+  /** 连续「修复后复审仍报」次数；≥2 = 顽固条目（stuck 终态随 escalated 呈报——独立单条停机线已并入计数线，§8.6） */
   uncleanRounds: number;
   active: boolean;
   /** 修复史（每轮一句，供后续轮修复 agent 与终态诊断） */
@@ -567,7 +567,7 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
     reasonable: [...reasonablePool.values()],
     gateALog: gateALogPath,
     escalated: items
-      .filter((i) => i.active && i.uncleanRounds >= 3)
+      .filter((i) => i.active && i.uncleanRounds >= 2)
       .map((i) => ({ id: i.id, location: i.location, gap: i.gap, uncleanRounds: i.uncleanRounds })),
     deferredLedger,
     remaining: items
@@ -1027,26 +1027,24 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
       round: reviewRound,
       active: activeAfter.length,
       newFindings: newReports.length,
-      escalated: activeAfter.filter((i) => i.uncleanRounds >= 3).length,
+      escalated: activeAfter.filter((i) => i.uncleanRounds >= 2).length,
       groups: groupStates.map((g) => ({ name: g.name, committed: g.committed, testFailed: g.testFailed })),
     });
 
-    // ── 停机线一（§8.6 ③）：单条 unreasonable 修复「超 2 轮未清」→ 升级用户 ──
-    //（对齐 W2 打回语义：1 次初始修复 + 2 次打回重修 = 3 次 fixer 机会，第 3 次复审仍报才升级）
-    const escalatedNow = activeAfter.filter((i) => i.uncleanRounds >= 3);
-    if (escalatedNow.length > 0) {
-      return await finish(
-        "stuck",
-        reviewRound,
-        `单条停机线触发：${escalatedNow.map((i) => `${i.id}（${i.location}，已 ${i.uncleanRounds} 次修复仍未清）`).join("、")}——按阈值升级用户裁决；升级清单见 escalated 字段，各条修复史见台账（GetWorkflowRun 日志）`,
-      );
-    }
-    // ── 停机线二（§8.6 ①②）：审查轮累计达 3 轮仍未收敛，或任一轮活跃数不减反增（高于前轮）→ stuck ──
+    // ── 停机线（§8.6 ①②，2026-09-25 复审合并：单条升级线与计数线时序互斥——uncleanRounds
+    //    到 3 需 reviewRound=4，而计数线 reviewRound=3 必先触发——独立单条线是不可达死代码，
+    //    已删除；单条顽固语义并入 stuck 终态归因：uncleanRounds ≥2（1 次初始修复 + 1 次打回
+    //    后复审仍报）的活跃条目在 stuck 消息中标注，随 escalated 字段呈报用户裁决）──
+    const stubborn = activeAfter.filter((i) => i.uncleanRounds >= 2);
     if (activeAfter.length > 0 && (reviewRound >= 3 || activeAfter.length > prevActiveCount)) {
+      const why =
+        activeAfter.length > prevActiveCount
+          ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${activeAfter.length}）`
+          : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${activeAfter.length} 条）`;
       return await finish(
         "stuck",
         reviewRound,
-        `计数停机线触发：${activeAfter.length > prevActiveCount ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${activeAfter.length}）` : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${activeAfter.length} 条）`}——残留清单见 remaining 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`,
+        `计数停机线触发：${why}${stubborn.length > 0 ? `；顽固条目（≥2 轮修复未清，优先人工裁决）：${stubborn.map((i) => `${i.id}（${i.location}，${i.uncleanRounds} 轮）`).join("、")}` : ""}——残留清单见 remaining / 顽固清单见 escalated 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`,
       );
     }
     prevActiveCount = activeAfter.length;
@@ -1066,7 +1064,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
 }
 
 if (activeItems().length > 0) {
-  return finish(
+  return await finish(
     "stuck",
     reviewRound,
     `修复轮次上限 ${maxRounds} 耗尽仍有 ${activeItems().length} 条 unreasonable 活跃——残留清单见 remaining 字段；恢复动作：主 agent 人工裁决残留条目（定性争议转 doc_errors / 需重设计的走设计流程），不要盲目重跑本工作流`,
@@ -1081,24 +1079,46 @@ const artifactLogOf = (id: string): string => info.gateALog.replace(/\.gate-a\.l
 if (info.artifacts.length > 0) {
   phase("产物类并行预备");
   log(`产物类第一波并行启动：${info.artifacts.map((a) => a.id).join("、")}`);
-  const artOuts = await mapBatch(info.artifacts, async (a) => ({
-    a,
-    r: await world.run("node", [
-      "-e",
-      NODE_RUN_CMD,
-      info.projectRoot,
-      a.command.program,
-      JSON.stringify(a.command.args),
-      artifactLogOf(a.id),
-      String(GATE_A_TIMEOUT_MS),
-    ]),
-  }));
+  let artOuts: { a: PrepInfo["artifacts"][number]; r: { exitCode: number; stdout: string; stderr: string } }[] = [];
+  try {
+    // NODE_RUN_CMD 恒 exit 0（命令失败捕获进 JSON code 字段）——判失败须解析 stdout（与 Gate A 同构）；
+    // timeoutMs 必传（world.run 默认 300s 会误杀长产物构建——bundle/e2e 产物常态超 5min）
+    artOuts = await mapBatch(info.artifacts, async (a) => ({
+      a,
+      r: await world.run(
+        "node",
+        [
+          "-e",
+          NODE_RUN_CMD,
+          info.projectRoot,
+          a.command.program,
+          JSON.stringify(a.command.args),
+          artifactLogOf(a.id),
+          String(GATE_A_TIMEOUT_MS),
+        ],
+        { timeoutMs: GATE_A_WORLD_TIMEOUT_MS },
+      ),
+    }));
+  } catch (e) {
+    return await finish(
+      "gate-a-failed",
+      reviewRound,
+      `产物类构建执行器失败：${String(e)}——后续验证类条目依赖产物，先归因构建环境（各产物日志 ${artifactLogOf("<id>")}）再重跑；本工作流不自动归因`,
+    );
+  }
   for (const { a, r } of artOuts) {
-    if (r.exitCode !== 0) {
+    let artCode = -1;
+    try {
+      const parsed = JSON.parse(r.stdout) as { code?: number };
+      artCode = typeof parsed.code === "number" ? parsed.code : -1;
+    } catch {
+      artCode = -1;
+    }
+    if (r.exitCode !== 0 || artCode !== 0) {
       return await finish(
         "gate-a-failed",
         reviewRound,
-        `产物类构建失败（${a.id}，exit ${r.exitCode}）——后续验证类条目依赖该产物，先归因产物构建（日志 ${artifactLogOf(a.id)}）再重跑；本工作流不自动归因`,
+        `产物类构建失败（${a.id}，exit ${r.exitCode}/code ${artCode}）——后续验证类条目依赖该产物，先归因产物构建（日志 ${artifactLogOf(a.id)}）再重跑；本工作流不自动归因`,
       );
     }
   }
@@ -1130,7 +1150,7 @@ try {
 
 if (gateCode !== 0) {
   // 零容忍绕过：不自动归因、不降级、不重试——归因与补修是主 agent 的事
-  return finish(
+  return await finish(
     "gate-a-failed",
     reviewRound,
     `${gateNote || `全量测试退出码 ${gateCode}`}。日志：${gateALogPath}。归因指引：读日志定位失败用例（单测红 = 修复回归；编译/类型红 = 一致性残留漂移；超时 = 用例预算问题），由主 agent 派归因补修后重跑本工作流或全量测试——本工作流不自动归因`,

@@ -22,7 +22,8 @@ args:
 //   其他节点——长尾不拖批；活跃领地并集随活跃集动态重建）。
 // agent 会话异常 → 接替程序（新 agent 名 + 前任证据包 + 当前 diff，先核验现状再续作，
 //   设计 §6.2 F15 第一等路径）；接替者再异常才 blocked。
-// 一律 failed-as-return：throw 的 errored run 不可 resume 且丢结构化错误。
+// 一律 failed-as-return：throw 的 errored run 不可 resume 且丢结构化错误（参数校验除外
+//   ——args 非法属启动期快失败，errored 形态可接受）。
 // 边界声明（设计 §8.2）：并行单元共享工作区时，单单元改动归属无法由 git status 精确切分，
 //   核验采用两级判定——dev 自报 files_changed 为精确集（级一：⊆ 领地），引擎另跑全量
 //   status 对活跃单元领地并集做粗粒度复核（级二）；启动前工作区必须干净（级二成立前提）。
@@ -227,7 +228,7 @@ const RECONCILE_STATUS =
   "if(typeof e.commit==='string'&&e.commit.length>=7){try{x('git',['cat-file','-e',e.commit+'^{commit}'],{cwd:root,encoding:'utf8'});ok=true}catch(err){}}" +
   "if(ok)continue;nodes[id]={status:'pending',attempts:0};" +
   "events.push({seq:events.length+1,node:id,event:'reconcile-reset',detail:'status done 但 commit 不在 git 对象库，按 git 为准回 pending'})}" +
-  "else{const re=new RegExp('\\\\b'+id.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+'\\\\b');" +
+  "else{const edge='(?:^|[^A-Za-z0-9-])';const re=new RegExp(edge+id.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+edge);" +
   "const hit=logLines.split('\\n').find((l)=>{const i=l.indexOf('\\x1f');return i>0&&re.test(l.slice(i+1))});" +
   "if(hit){const h=hit.slice(0,hit.indexOf('\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 发现本单元 commit（status 未记，按 git 为准补写 done）'};" +
   "events.push({seq:events.length+1,node:id,event:'reconcile-done',detail:'status 未记但 git log 有本单元 commit，按 git 为准补写 done'})}}}" +
@@ -788,6 +789,9 @@ async function askWithSuccession(
       `- 任务书：${node.promptFile}`,
       ``,
       `先 read 任务书，再核对上述现状，判断前任已完成什么/缺什么，续作完成后返回任务书末尾定义的同一 JSON 契约。`,
+      ``,
+      `（前任本次收到的原始指令如下——含打回场景的核验失败原因与失败输出，按需定向处理：）`,
+      prompt,
     ].join("\n");
     log(`节点 ${node.id} agent 会话异常（${errText(e)}），启动接替程序`);
     return await successor.ask<NodeResult>(pack);
@@ -913,8 +917,15 @@ async function runSchedulingLoop(): Promise<void> {
       try {
         await executeNode(n);
       } catch (e) {
-        // rejected（接替程序也失败/写盘失败等引擎层异常）→ 节点 blocked，其他节点照常推进
-        await markNodeBlockedOrFailed(n.id, "blocked", `节点执行异常：${errText(e)}`, "", 0);
+        // rejected（接替程序也失败/写盘失败等引擎层异常）→ 节点 blocked，其他节点照常推进；
+        // 兜底写 status 失败时只 log（内存态已置 blocked，调度不受影响）——二次异常不得击穿
+        // race 造成顶层 throw（违反 failed-as-return）
+        try {
+          await markNodeBlockedOrFailed(n.id, "blocked", `节点执行异常：${errText(e)}`, "", 0);
+        } catch (e2) {
+          state.set(n.id, { status: "blocked", attempts: 0, reason: `节点执行异常：${errText(e)}（status 回写失败：${errText(e2)}）` });
+          log(`WARN: 节点 ${n.id} 异常后的 status 回写失败（${errText(e2)}）——内存态已置 blocked`);
+        }
       }
       return n.id;
     })();
@@ -939,21 +950,22 @@ async function runSchedulingLoop(): Promise<void> {
       dispatched += 1;
     }
     if (active.size === 0) break; // 无可调度且无活跃 → 依赖挂起或全终态 → 终态判定
-    // 级二粗粒度复核的基线：当前 in-flight 节点领地按 cwd 分组求并集——必须在补派之后
-    // 重建（冒烟实测教训：重建在 launch 前则新派发节点不在并集内，核验必判自身越界）。
-    // 在飞核验持有的旧 Map 是含已落定节点的超集——超集方向安全（粗粒度复核只松不严）
-    activeTerrByCwd = new Map<string, string[]>();
+    // 级二粗粒度复核的基线：**单调累积**（launch 时并入该节点领地，settle 后不移除）——
+    // 粗粒度复核「只松不严」原则下，移除已落定节点的领地只会收紧：兄弟节点带残留改动
+    // 落定（blocked/commit 失败）后，在飞节点的核验会把残留判为越界 stray 而被误伤打回
+    //（审查 P1 修正；launch 后并入保证新派发节点自身必在并集内）
     for (const id of active.keys()) {
       const n = plan.nodes.find((x) => x.id === id);
       if (!n) continue;
       const list = activeTerrByCwd.get(n.cwd) ?? [];
-      for (const t of n.territory) list.push(t);
+      for (const t of n.territory) if (!list.includes(t)) list.push(t);
       activeTerrByCwd.set(n.cwd, list);
     }
     const finishedId = await Promise.race(active.values());
     active.delete(finishedId);
     log(`节点 ${finishedId} 落定（活跃 ${active.size}），重算就绪集`);
-    // 核心组熔断判定：任一核心节点 blocked/failed 且 haltOnCoreFail → 记归因、停止派发
+    // 核心组熔断判定：任一核心节点 blocked/failed 且 haltOnCoreFail → 记归因、停止新派发。
+    // 在飞节点收尾不放弃（await allSettled——熔断只是不派新，已派节点的落盘/commit 照常完成）
     if (plan.haltOnCoreFail) {
       const bad = plan.nodes.find(
         (n) => plan.coreIds.has(n.id) && (nodeState(n.id) === "blocked" || nodeState(n.id) === "failed"),
@@ -964,7 +976,8 @@ async function runSchedulingLoop(): Promise<void> {
           id: bad.id,
           detail: `${rt?.reason ?? "未知原因"}\n${rt?.detail ?? ""}`.trim(),
         };
-        log(`核心组节点 ${bad.id} 失败，haltOnCoreFail 熔断：未派发节点不再派发`);
+        log(`核心组节点 ${bad.id} 失败，haltOnCoreFail 熔断：未派发节点不再派发，等待在飞节点收尾`);
+        await Promise.allSettled([...active.values()]);
         break;
       }
     }
@@ -1046,6 +1059,27 @@ if (existingStatus === null) {
   }
   log(`status.json 不存在，已创建初始态（${plan.nodes.length} 个节点全 pending）：${plan.statusPath}`);
   for (const n of plan.nodes) state.set(n.id, { status: "pending", attempts: 0 });
+  // 初始态同样走双向对账（§4.5 崩溃裁决不留人工方向）：status.json 曾被删但 commit 在 git——
+  // 非 done 的 dev 节点按 git log 反查补写 done，避免重跑已交付单元
+  const freshDevIds = plan.nodes.filter((n) => n.kind === "dev").map((n) => n.id);
+  if (freshDevIds.length > 0) {
+    const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, ...freshDevIds]);
+    if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
+      try {
+        const parsed = JSON.parse(rec.stdout) as unknown;
+        if (isRec(parsed) && isRec(parsed.nodes)) {
+          for (const id of freshDevIds) {
+            const e = normalizeEntry(parsed.nodes[id]);
+            if (e.status === "done") state.set(id, { status: "done", attempts: e.attempts });
+          }
+          const recovered = freshDevIds.filter((id) => nodeState(id) === "done").length;
+          if (recovered > 0) log(`初始态对账：git log 反查补写 ${recovered} 个已提交单元为 done（status.json 曾缺失）`);
+        }
+      } catch {
+        // 对账输出解析失败：保持全 pending 重跑（安全方向——重复执行有幂等核验兜底）
+      }
+    }
+  }
 } else {
   // 双向对账（§4.5 崩溃裁决，git 为准）：done 验证 commit 存在性（不在回 pending）；
   // 非 done 的 dev 节点反查 git log（commitTemplate 渲染的单元锚）——有 commit 未记 → 补写 done

@@ -6,7 +6,7 @@
 
 ```
 CreateWorkflow saved: design-code-sync-loop
-args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath? }   // statusPath = status.json 绝对路径——planner 职责②进度核对数据源；未传时降级单侧核对并在轨迹注明
+args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath? }   // statusPath = status.json 绝对路径——planner 职责②进度核对数据源；未传时降级单侧核对并在 frameworkFindings 的 note 注明
 终态: converged / contested / stuck + setup/planner/review/fix/retire/io-failure
 ```
 
@@ -22,7 +22,7 @@ phase 2  module fan-out：modules.map(m => agent(`module-${m.id}`))——并行
 phase 3+ 修复循环：双向修复 → 聚焦复审 →（轮）→ 退役判定 → 终态
 ```
 
-**流程排序**：机器信号（反引号 grep 脚本步）在 LLM 审查轮之前清零——确定性信号先行，语义归 reviewer。
+**流程排序**：机器信号（反引号 grep 脚本步）在模块语义审查（fan-out）之前清零——确定性信号先行（紧跟 planner 框架扫描），语义判级归 reviewer 复核。
 
 **修复分组确定性校验（reconcileGroups）**：`modules[].files` 是 LLM 自报字段，并行 fixer 组间文件相交 = 冲突——组间 files 相交传递闭包合并 + 无效组过滤 + 覆盖兜底（脚本，不信任 planner 自觉）。
 
@@ -70,8 +70,8 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 | 终态 | 主 agent 动作 |
 |------|--------------|
 | converged | 交付汇报：矩阵 + 收敛轨迹（各轮三等级计数）+ direction 分布 + contested 记录 + overdesignCandidates + 退役判定 |
-| contested | must-fix 级方向争议逐条呈报用户裁决；裁决后重新发起（runDir 自动 attempt 后缀不覆盖历史；attempt 重发起会重跑 planner 全量，延续条目语义由 ledger 延续承载——重发起后首轮聚焦审会重新对账上轮修复） |
-| stuck | must-fix ≥4 轮不收敛或单条超 2 轮 → 呈报残余差距矩阵 |
+| contested | must-fix 级方向争议逐条呈报用户裁决；裁决后重新发起（runDir 自动 attempt 后缀不覆盖历史；重发起首轮 = planner 全量重审，上轮修复在重审对账中确认——无跨 run 台账延续） |
+| stuck | must-fix ≥4 轮不收敛或单条 must-fix 超 2 轮 → 呈报残余差距矩阵 |
 | `*-failure`（setup/planner/review/fix/retire/io） | 按 message 恢复动作：ResumeWorkflowRun 或 attempt 递增重发 |
 
 **衔接**：W4 修复触及验收场景表覆盖行为时，主 agent 重跑受影响场景（局部重验，不重开整门）。

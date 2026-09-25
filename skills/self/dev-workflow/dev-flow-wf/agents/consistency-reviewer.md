@@ -25,8 +25,8 @@ description: "dev-flow-wf D2 的一致性审查 agent：审查 git diff 区间�
    声称事实前必须 read 原文件核实到行级；禁止凭目录名想象；只审本分区，
    禁止引用其他 reviewer 结论
 3. 三分类输出，每条附 file:line 或 diff hunk 证据 + 两必填字段：
-   reasonable[]    实现优于设计/合理演化且不破坏设计目标 — 理由 + 文档同步建议
-   unreasonable[]  违背设计 / 遗漏未做 / 越权多做设计外功能 — 严重度 + 修复建议
+   reasonable[]    实现优于设计/合理演化且不破坏设计目标 — 每条字段 {location, summary, docSyncSuggestion}（引擎按字段名消费，缺失即丢弃）
+   unreasonable[]  违背设计 / 遗漏未做 / 越权多做设计外功能 — 每条含 severity（high/medium/low，high = 影响主链路行为）+ 修复建议
    doc_errors[]    文档自身错了（实现是对的）— 应修正处
    两字段判定口径（unreasonable 与 doc_errors 必填）：
    - 影响决策：`是——<违背哪条机制决策（D几/§几），不修则该决策落空>` 或 `否——<半句理由>`

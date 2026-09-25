@@ -65,7 +65,7 @@ workflow 未就绪或发起失败 → 各段 flow 文件的手工路径（与 wo
 ## 关键约束
 
 - [MANDATORY] 并发 ≤5（全局 subagent 约束）；模型按全局路由表、thinking max；task 三段式
-- [MANDATORY] 数字阈值：单元 dev→fix 超 2 轮 = blocked 升级用户；一致性审查累计 ≥3 轮不收敛或单条 unreasonable 超 2 轮 = stuck 呈报；终态同步 must-fix ≥4 轮不收敛或单条超 2 轮 = 呈报
+- [MANDATORY] 数字阈值：单元 dev→fix 超 2 轮 = blocked 升级用户；一致性审查累计 ≥3 轮不收敛或活跃数不减反增 = stuck 呈报（顽固条目 ≥2 轮修复未清随 escalated 清单标注，优先人工裁决）；终态同步 must-fix ≥4 轮不收敛或单条 must-fix 超 2 轮 = 呈报
 - [MANDATORY] e2e 只在开发阶段按改动面跑（清单继承 T3 验收计划表），空载串行；PR/merge/CI 门禁只跑单测（SSOT = 项目 AGENTS.md 测试节）；自动化回归的长期方向 = e2e 逐步单测化——能以 mock/fixture 重放等价覆盖的圈定项，随所属单元沉淀为 L1/L2 单测
 - [MANDATORY] 偏差三分类：合理 → 登记表固化；不合理 → 打回修；doc_errors → 主 agent 改设计文档并记录
 - [MANDATORY] D3 全绿 + D4 最终 commit 后自动进 D5（仅用户明示跳过可免，跳过须记录）；D5 收敛 = 整体交付

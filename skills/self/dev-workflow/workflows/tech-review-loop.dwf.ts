@@ -419,10 +419,16 @@ const docName = docBase.replace(/\.[^.]+$/, "");
 const runDir = `${projectRoot}/.tmp/tech-design/${docName !== "" ? docName : "design"}`;
 const finalJsonPath = `${runDir}/final.json`;
 
-// 重发起检测：final.json 已存在且用户未显式传 attempt → attempt=2（不覆盖历史产物）
-const finalProbe = await world.run("node", ["-e", NODE_EXISTS_ONE, finalJsonPath]);
-const finalPreExists = finalProbe.exitCode === 0;
-const attempt = inputs.attempt !== null ? inputs.attempt : finalPreExists ? 2 : 1;
+// 重发起检测：扫描 runDir 内已有 attempt 后缀的最大序号（round-*.attemptM），未显式传
+// attempt → 取 max+1（多次重发起不覆盖历史——固定取 2 会覆盖第三次及以后的 attempt2 产物）
+const ATTEMPT_SCAN =
+  "try{var fs=require('fs');var names=[];try{names=fs.readdirSync(process.argv[1])}catch(e){}var mx=0;" +
+  "for(var n of names){var m=/^round-\\d+\\.attempt(\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}" +
+  "if(mx>0)process.stdout.write(String(mx))}catch(e){}";
+const attemptProbe = await world.run("node", ["-e", ATTEMPT_SCAN, runDir]);
+const prevAttemptMax =
+  attemptProbe.exitCode === 0 && /^\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;
+const attempt = inputs.attempt !== null ? inputs.attempt : prevAttemptMax > 0 ? prevAttemptMax + 1 : 1;
 const roundDirName = (n: number): string => (attempt > 1 ? `round-${n}.attempt${attempt}` : `round-${n}`);
 
 // 默认 reviewer 模板（脚本内字面量，~ 运行时展开）；args.reviewers 按 basename 覆盖同名维度
@@ -545,7 +551,7 @@ artifact.chart("trajectory", {
 
 // ── phase 1：价值审 gate ──
 const valueReportAbs = `${runDir}/review-value.md`;
-log(`审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${finalPreExists ? "（检测到已有 final.json，历史产物不覆盖）" : ""}）；价值审先行`);
+log(`审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttemptMax > 0 ? `（检测到历史 attempt 后缀至 ${prevAttemptMax}，历史产物不覆盖）` : ""}）；价值审先行`);
 
 let valueVerdict: ValueVerdict;
 try {
@@ -567,7 +573,7 @@ try {
     ].join("\n"),
   );
 } catch (e) {
-  return await finish("review-failure", 0, `价值审调用失败：${String(e)}。恢复动作：provider 类问题解决后 ResumeWorkflowRun，或经 args.attempt 重新发起（历史产物不覆盖）`);
+  return await finish("review-failure", 0, `价值审调用失败：${String(e)}。恢复动作：provider 类问题解决后 args.attempt 递增重新发起（历史产物不覆盖）`);
 }
 const vMust = sanitizeCount(valueVerdict.mustFix);
 const vSugg = sanitizeCount(valueVerdict.suggestion);
@@ -660,7 +666,7 @@ for (let round = 1; round <= maxRounds; round++) {
             round === 1 ? "本轮为首轮全面审：按模板 checklist 全项覆盖。" : "",
             focusBlock,
             t.dim === "simplicity"
-              ? "（简洁审特例）若本设计属纯文案/参数调整类记录（无结构、方案主干、验收形态变化），可声明跳过：报告开头写明跳过理由，并返回 mustFix=0、suggestion=0。"
+              ? "（简洁审一律执行——设计 B8 裁决无跳过通道）若本设计属纯文案/参数调整类记录（无结构、方案主干、验收形态变化），照常逐项过 checklist，在报告开头说明该分类并给出简洁面结论（零发现就写「简洁面零发现」）。"
               : "",
             "",
             `报告落盘：${roundAbs}/${t.reportName}（绝对路径；需要时先创建目录）。每条问题一节：[must-fix|suggestion] + 所在章节 + 描述 + 原文依据（你读到的原句）+ 修复方向。报告是修复者的唯一输入。`,
@@ -687,7 +693,7 @@ for (let round = 1; round <= maxRounds; round++) {
       dim: TRIALS[i].dim,
     }));
   } catch (e) {
-    return await finish("review-failure", round, `三审调用失败：${String(e)}。恢复动作：provider 类问题解决后 ResumeWorkflowRun，或 args.attempt 递增重新发起`);
+    return await finish("review-failure", round, `三审调用失败：${String(e)}。恢复动作：provider 类问题解决后 args.attempt 递增重新发起`);
   }
 
   const rChk = await world.run("node", ["-e", NODE_CHECK_EXISTS, ...TRIALS.map((t) => `${roundAbs}/${t.reportName}`)]);
@@ -799,7 +805,7 @@ for (let round = 1; round <= maxRounds; round++) {
         .join("\n"),
     );
   } catch (e) {
-    return await finish("fix-failure", round, `修复者调用失败：${String(e)}。恢复动作：provider 类问题解决后 ResumeWorkflowRun，或 args.attempt 递增重新发起（在途编辑已留磁盘，接管前先盘点 ${designDoc}）`);
+    return await finish("fix-failure", round, `修复者调用失败：${String(e)}。恢复动作：provider 类问题解决后 args.attempt 递增重新发起（在途编辑已留磁盘，接管前先盘点 ${designDoc}）`);
   }
 
   const dispositions = sanitizeDispositions(fix.dispositions);
