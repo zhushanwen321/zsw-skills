@@ -9,6 +9,12 @@
 3. L0 静态守卫全绿——引用 Gate A 时点证据（status.json events 的 gate-a-pass；HEAD 未前进则免重跑）
 4. fail 回流重验场景：先声明重验范围——未触及共享接线点只重验影响面，触及则全量重来
 
+## 分层铁律 [MANDATORY]
+
+- L0 未清不进 L2；L2 不绿不派任何端到端；L3 能覆盖的场景不升 L4
+- 机器可判定的修复（lint 报错、守卫红灯、悬空引用）在任何 agent 端到端之前清零——把它们留到 L4 才发现是最贵的返工路径
+- 五级定义与各级执行者（L0 静态规则 → L1 增量单测 → L2 全量套件 → L3 脚本端到端 → L4 agent 端到端）见 SKILL.md 核心原则；成本不另打分，L 级即承载
+
 ## 执行形态
 
 **W2 第二实例化（zcode 默认）**：`CreateWorkflow saved: wave-executor, args: { execPlan }`（mode=acceptance——节点 = verify/inspect，D0 已编译）。核心组 fail → haltOnCoreFail 挂起未派发节点 → 终态 core-failed + 归因；core-failed → 修复走 W2 修复节点形态或主 agent 派 fixer（重验子集 exec-plan），主 agent 只裁决与重发起。

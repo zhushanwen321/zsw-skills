@@ -32,7 +32,7 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第二级（模块
      contested（影响 API/行为语义/数据格式，不得自行裁决）,
      severity: must-fix|suggestion|info,
      impact: 误导了什么交付判断/造成什么返工——写不出 = 不立项或降 info,
-     rationale: 方向裁决理由, fix-hint: 修复建议（执行方须重演验证） }
+     rationale: 方向裁决理由, fixHint: 修复建议（执行方须重演验证——JSON 键名用驼峰，与脚本 parse 一致） }
    severity 判据（按是否误导后来者划线）：must-fix = 过时登记/悬空符号/
    行为与文档矛盾；suggestion = 不同步但不误导；info = 知晓级
 5. 声称事实前必须 read 原文件核实到行级；只审本模块，禁止引用其他
