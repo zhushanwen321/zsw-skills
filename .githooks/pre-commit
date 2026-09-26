@@ -1,0 +1,20 @@
+#!/bin/sh
+# zsw-skills pre-commit
+# 启用：git config core.hooksPath .githooks
+#
+# 段 1：dev-workflow 双平台 workflow 脚本对账（zcode .dwf.ts ↔ pi .js）
+# 改任一侧而漏另一侧时拦截；对账规则见 scripts/check-workflow-parity.mjs 头注释
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- 'skills/self/dev-workflow/workflows/')
+if [ -n "$STAGED" ]; then
+  echo "pre-commit[workflow-parity]: staged 变更含 workflow 脚本，跑双平台对账…"
+  node scripts/check-workflow-parity.mjs || {
+    echo ""
+    echo "[workflow-parity] 双平台 workflow 脚本出现未登记差异（处理见上）。"
+    echo "  恢复动作：①业务逻辑漂移 → 把改动同步到另一侧后再提交；"
+    echo "            ②确认属登记差异区（B/E/F/G）→ 把新串按分区注释回填 scripts/check-workflow-parity.mjs 的 WHITELIST"
+    exit 1
+  }
+fi
+
+exit 0
