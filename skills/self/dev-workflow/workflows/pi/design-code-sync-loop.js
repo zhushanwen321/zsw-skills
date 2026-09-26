@@ -1,9 +1,9 @@
 /* @pi-meta
 name: design-code-sync-loop
 description: >-
-  dev-flow-wf 技能 W4 终态同步循环（design-code-sync 的 workflow 化 + 升级语义）：两级审查拓扑（R1 framework-scan planner 单 agent → 模块 fan-out 并行 reviewer；R2+ 聚焦复审只审上轮修复影响面）→ 矩阵脚本 concat（无 LLM 聚合层，跨模块不去重）→ must-fix 级 contested 拦截停回用户 → reconcileGroups 机器分组并行双向修复（doc-right 修代码跑增量测试 / code-right 修文档过联动自检五处，组级一笔 commit）→ 聚焦复审收敛 → 伴生产物退役判定（agent 只判定清单，引擎执行移动 + 引用验证）。矩阵 + 收敛轨迹落盘 <projectRoot>/.tmp/dev-flow/<设计文档名>.sync/（round-N[.attemptM]/ 子目录），终态档案 final.json。终态 converged / contested / stuck / *-failure
+  dev-flow-wf 技能 W4 终态同步循环：planner 规划后模块 reviewer 并行审差距，must-fix 级 contested 停回用户，分组并行双向修复收敛，伴生产物退役判定，矩阵与终态档案全由脚本落盘，不信任 agent 自报收敛
 when: >-
-  dev-flow-wf 技能 D5 终态同步段——交付后把「代码实现 vs 设计文档」差距双向校准到 0 must-fix 时调用（审查对象 = 当前 HEAD 终态全量，不是 diff 区间）；必传 designDoc / implPlan / projectRoot
+  dev-flow-wf 技能 D5 终态同步段——交付后把代码实现与设计文档差距双向校准到 0 must-fix 时调用，审查对象是当前 HEAD 终态全量，必传 designDoc / implPlan / projectRoot
 notFor: >-
   diff 区间代码评审（用 review-fix-loop）或设计文档审查（用 tech-review-loop）
 phases: ['框架对照与模块规划', '机械信号扫描', '并行模块审查', '聚焦复审', '并行修复与复审', '伴生产物退役判定']

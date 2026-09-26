@@ -650,33 +650,37 @@ for (let round = 1; round <= maxRounds; round++) {
 
   log(`第 ${round} 轮审查：三审并行（${TRIALS.map((t) => t.label).join("、")}），产物目录 ${roundAbs}`);
 
+  // 三审拆显式调用点：agent 名字须以静态字面前缀开头（zcode GUI 泳道按编译期静态分析
+  // 预建，`${t.label}-r${round}` 这类变量开头的名字整条泳道显示「未命名子代理」）；
+  // prompt 构造共享本函数保持单一来源，TRIALS[i] ↔ raw[i] 顺序对应由调用点顺序保证
+  const reviewerPrompt = (t: (typeof TRIALS)[number]): string =>
+    [
+      `第 ${round} 轮评审（维度：${t.label}；产物目录 ${roundAbs}）。`,
+      "",
+      `第一步：Read 评审模板 ${templates.get(t.dim) ?? ""}——其中是你的完整审查 checklist，按它执行评审。`,
+      `评审 rubric（分级依据，先读）：${rubricPath}`,
+      `审查对象：${designDoc}`,
+      `项目上下文（存在则读，作产品与规范基准）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
+      "只读评审：禁止修改设计文档与项目内任何文件。",
+      round === 1 ? "本轮为首轮全面审：按模板 checklist 全项覆盖。" : "",
+      focusBlock,
+      t.dim === "simplicity"
+        ? "（简洁审一律执行——设计 B8 裁决无跳过通道）若本设计属纯文案/参数调整类记录（无结构、方案主干、验收形态变化），照常逐项过 checklist，在报告开头说明该分类并给出简洁面结论（零发现就写「简洁面零发现」）。"
+        : "",
+      "",
+      `报告落盘：${roundAbs}/${t.reportName}（绝对路径；需要时先创建目录）。每条问题一节：[must-fix|suggestion] + 所在章节 + 描述 + 原文依据（你读到的原句）+ 修复方向。报告是修复者的唯一输入。`,
+      `完成后返回 JSON：mustFix（must-fix 条数，与报告一致）、suggestion（suggestion 条数）、reconciliation（${round === 1 ? "本轮返回空数组 []" : "对上方必对账集逐条申报"}）。`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
   let verdicts: (ReviewerVerdict & { dim: string })[];
   try {
-    const raw = await Promise.all(
-      TRIALS.map((t) =>
-        agent(`${t.label}-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(
-          [
-            `第 ${round} 轮评审（维度：${t.label}；产物目录 ${roundAbs}）。`,
-            "",
-            `第一步：Read 评审模板 ${templates.get(t.dim) ?? ""}——其中是你的完整审查 checklist，按它执行评审。`,
-            `评审 rubric（分级依据，先读）：${rubricPath}`,
-            `审查对象：${designDoc}`,
-            `项目上下文（存在则读，作产品与规范基准）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
-            "只读评审：禁止修改设计文档与项目内任何文件。",
-            round === 1 ? "本轮为首轮全面审：按模板 checklist 全项覆盖。" : "",
-            focusBlock,
-            t.dim === "simplicity"
-              ? "（简洁审一律执行——设计 B8 裁决无跳过通道）若本设计属纯文案/参数调整类记录（无结构、方案主干、验收形态变化），照常逐项过 checklist，在报告开头说明该分类并给出简洁面结论（零发现就写「简洁面零发现」）。"
-              : "",
-            "",
-            `报告落盘：${roundAbs}/${t.reportName}（绝对路径；需要时先创建目录）。每条问题一节：[must-fix|suggestion] + 所在章节 + 描述 + 原文依据（你读到的原句）+ 修复方向。报告是修复者的唯一输入。`,
-            `完成后返回 JSON：mustFix（must-fix 条数，与报告一致）、suggestion（suggestion 条数）、reconciliation（${round === 1 ? "本轮返回空数组 []" : "对上方必对账集逐条申报"}）。`,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        ),
-      ),
-    );
+    const raw = await Promise.all([
+      agent(`主审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(reviewerPrompt(TRIALS[0])),
+      agent(`影响面审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(reviewerPrompt(TRIALS[1])),
+      agent(`简洁审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(reviewerPrompt(TRIALS[2])),
+    ]);
     const bad = raw.findIndex((v) => sanitizeCount(v.mustFix) === null || sanitizeCount(v.suggestion) === null);
     if (bad >= 0) {
       return await finish(

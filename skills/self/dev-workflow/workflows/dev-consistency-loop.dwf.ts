@@ -1022,7 +1022,8 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           ]
             .filter(Boolean)
             .join("\n");
-          const review = await agent(`${g.name}复审-r${fixRound}`, RE_PERSONA).ask<ReviewResult>(prompt);
+          // agent 名字静态前缀开头（zcode GUI 泳道静态分析预建，变量开头显示「未命名子代理」）
+          const review = await agent(`定向复审-${g.name}-r${fixRound}`, RE_PERSONA).ask<ReviewResult>(prompt);
           return { name: g.name, review: normalizeReview(review, `复审-${g.name}-r${fixRound}`) };
         },
       );

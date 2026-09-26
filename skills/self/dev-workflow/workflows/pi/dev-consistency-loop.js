@@ -1,9 +1,9 @@
 /* @pi-meta
 name: dev-consistency-loop
 description: >-
-  dev-flow-wf W3 一致性审查循环（D2）：R1 分区全面审（分区互斥契约，git diff 基线..HEAD 文件清单按顶层段不相交划分）→ 脚本聚合（无 LLM 聚合层——分区互斥契约下聚合退化为脚本操作）→ 修复组并行（组 = 分区边界，组级一笔 commit）→ R2+ 每组定向复审（只审三条，不全面重审）→ Gate A 全量测试（零容忍绕过：无任何 SKIP 逻辑，脚本不传环境变量）→ 终态回流 doc_errors/reasonable 给主 agent。停止线（合并语义）：审查轮累计 3 轮不收敛（或 unreasonable 活跃数不减反增）→ stuck；顽固条目（连续 ≥2 轮修复未清，按 location+gap 文本身份键追踪）随 stuck 终态 escalated 清单呈报——单条独立停机线与时序互斥（到点必晚于计数线），已并入计数停机线
+  dev-flow-wf W3 一致性审查循环：R1 分区全面审后修复组并行修复并定向复审，Gate A 全量测试零容忍绕过，循环至 converged 或 stuck，终态判定与顽固条目追踪全由脚本完成，不信任 agent 自报收敛
 when: >-
-  dev-flow-wf 主流程 D2 阶段——W2 开发循环终态（blocked 已升级处理）后由主 agent 发起；输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/环节失败由主 agent 接力（Gate A 红不自动归因，归因补修是主 agent 的事）
+  dev-flow-wf 主流程 D2 阶段——W2 开发循环终态后由主 agent 发起，输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/环节失败由主 agent 接力处理
 phases: ['生成分区并全面审查', '并行修复与定向复审', '产物类并行预备', '跑全量测试 Gate A']
 parameters:
   type: object
@@ -1007,7 +1007,8 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           ]
             .filter(Boolean)
             .join("\n");
-          const review = await zcAgent(`${g.name}复审-r${fixRound}`, RE_PERSONA).ask(prompt, SCHEMA_ReviewResult);
+          // agent 名字静态前缀开头（zcode GUI 泳道静态分析预建，变量开头显示「未命名子代理」）
+          const review = await zcAgent(`定向复审-${g.name}-r${fixRound}`, RE_PERSONA).ask(prompt, SCHEMA_ReviewResult);
           return { name: g.name, review: normalizeReview(review, `复审-${g.name}-r${fixRound}`) };
         },
       );
