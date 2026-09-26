@@ -214,6 +214,10 @@ const HINT_REVIEW_BAD_COUNT = "修订脚本 prompt 后重新 run，或 args.atte
 const DEFAULT_MAX_ROUNDS = 10;
 const STUCK_THRESHOLD = 3;
 const FIX_RETRY_MAX = 2; // 修复者结构化返回校验失败的重试上限（初始 1 次 + 回喂重试 1 次）
+// T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
+//（定义置于文件顶部常量区：价值审的顶层 await 调用早于 persona 常量区，晚定义会 TDZ）
+const NO_ASK_RULE = "禁止向用户提问（无 AskUserQuestion / ask-user / 任何等待用户输入的操作）——workflow 内没有用户交互位；" +
+    "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
 const VALID_ARG_KEYS = new Set(["designDoc", "projectRoot", "maxRounds", "reviewers", "attempt"]);
 // node -e 通道（argv 传参，无 shell 注入面；node 代码不受脚本 facade 限制）
 const NODE_WRITE_FILE = "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2])";
@@ -582,7 +586,8 @@ const valueReportAbs = `${runDir}/review-value.md`;
 log(`审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttemptMax > 0 ? `（检测到历史 attempt 后缀至 ${prevAttemptMax}，历史产物不覆盖）` : ""}）；价值审先行`);
 let valueVerdict;
 try {
-    valueVerdict = await wfAgent("价值评审", "你是设计价值评审员：判断这份设计是否值得做、方向是否正确、是否回答了正确的问题；只读评审，绝不修改任何文件；每个判断都要有你亲自读到的文档原文依据；指令无法执行或有矛盾时如实说明，不伪造结论。").ask("ValueVerdict", [
+    valueVerdict = await wfAgent("价值评审", "你是设计价值评审员：判断这份设计是否值得做、方向是否正确、是否回答了正确的问题；只读评审，绝不修改任何文件；每个判断都要有你亲自读到的文档原文依据；指令无法执行或有矛盾时如实说明，不伪造结论。" +
+        NO_ASK_RULE).ask("ValueVerdict", [
         "价值门评审（先于审查循环）。",
         "",
         `第一步：Read 价值审模板 ${templates.get("value") ?? ""}——其中是你的完整评审基准，按它执行。`,
@@ -618,8 +623,7 @@ if (vMust > 0) {
 log(`价值审通过（must-fix 0${vSugg > 0 ? `，suggestion ${vSugg} 条随首轮全面审一并处置` : ""}）：${valueOneliner}`);
 // ── 审查-修复主循环 ──
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
-const NO_ASK_RULE = "禁止向用户提问（无 AskUserQuestion / ask-user / 任何等待用户输入的操作）——workflow 内没有用户交互位；" +
-    "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
+//（NO_ASK_RULE 定义在文件顶部常量区）
 const REVIEWER_PERSONA = "你是资深设计文档评审员：只读评审，绝不修改任何文件；每个发现都要有你亲自读到的文档原文依据；报告与返回计数一致；指令无法执行或有矛盾时如实说明，不伪造结论。" +
     NO_ASK_RULE;
 const FIXER_PERSONA = "你是设计文档修复者：先核实再修改、反例重演验证修复、联动同步关联章节；方案性意见修不动时如实申报 blocked，不硬改、不静默跳过。" +

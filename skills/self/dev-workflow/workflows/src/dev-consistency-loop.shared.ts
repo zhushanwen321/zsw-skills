@@ -703,7 +703,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             : "2b. 本组无增量测试命令——改完必须做与改动直接相关的最小自检（相关 typecheck / 单文件测试）。",
           "3. git 禁令：禁止 git add / commit / push / stash——提交由工作流引擎统一执行（组级一笔）。",
           "4. 每条修复申报 affectedFiles（含波及文件，相对仓库根路径）；修不动 / 需上游裁决的条目放 skipped 带具体 reason，不静默跳过。",
-          "5. 其他分区修复组并行工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属，漏报会导致整轮作废）。",
+          "5. 其他分区修复组并行工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属；未申报的改动引擎不处置不阻塞，留盘随终态呈报主 agent 判归属）。",
           foreignNote
             ? ["", "工作区说明（存在无人申报的改动，引擎不处置不阻塞，留盘待认领；在现状基础上继续修复）：", foreignNote].join("\n")
             : "",
