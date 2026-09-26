@@ -306,6 +306,12 @@ function validatePlan(raw: unknown): ValidateResult {
         // 口径契约：territory 与 files_changed/porcelain 同基准 = 相对该节点 cwd 所在 git
         // 仓库根的相对路径——绝对路径永不匹配相对路径核验，恒判越界，启动即拦
         errors.push(`dev 节点 ${id} 的 territory 含绝对路径（${rn.territory.filter((t) => t.startsWith("/")).join("、")}）——须为相对该节点 cwd 所在 git 仓库根的相对路径`);
+      } else if (rn.territory.some((t) => /\s/.test(t) || /[()（）]/.test(t))) {
+        // 混合形态（目录+括号注释，如「src/**（含测试）」）在 pathInTerritory 匹配上
+        // 100% 失败——机器门拦截，注释性说明须拆出，条目 = 纯路径（compile.md 同款义务）
+        errors.push(
+          `dev 节点 ${id} 的 territory 含混合形态条目（空格/括号注释）：${rn.territory.filter((t) => /\s/.test(t) || /[()（）]/.test(t)).join("、")}——领地是核验的机器输入，条目须为纯路径`,
+        );
       } else {
         node.territory = rn.territory;
       }
@@ -857,6 +863,36 @@ async function runSchedulingLoop(): Promise<void> {
   };
   while (true) {
     if (coreFail !== null) break;
+    // 执行期授权连带生效通道：主会话在 run 进行中修订 exec-plan 的 territory（如升级
+    // 裁决授权领地外文件）→ 每轮派发前重读一次，领地扩大即时生效（曾无此通道：授权后
+    // 引擎仍按启动时内存快照判越界，节点原样重交烧完 retry 进 blocked 再人工恢复）。
+    // 只跟随领地**扩大**（收缩不跟随——运行中变卦破坏核验基线）；deps/节点集等结构
+    // 变更不跟随（那是重发 run 的范畴）；变化记 status 事件留痕
+    await (async () => {
+      const text = await readTextViaNode(execPlanPath);
+      if (text === null) return; // 读失败保持内存态（下轮再试）
+      try {
+        const parsed = JSON.parse(text) as unknown;
+        if (!isRec(parsed) || !Array.isArray(parsed.nodes)) return;
+        for (const rn of parsed.nodes) {
+          if (!isRec(rn) || typeof rn.id !== "string" || !isStrArr(rn.territory)) continue;
+          const node = plan.nodes.find((n) => n.id === rn.id);
+          if (!node || node.kind !== "dev") continue;
+          const added = rn.territory.filter((t) => !node.territory.includes(t));
+          if (added.length === 0) continue;
+          node.territory = [...new Set([...node.territory, ...added])];
+          log(`INFO: 节点 ${node.id} 领地运行中扩大（exec-plan 修订生效）：+${added.join("、")}`);
+          await statusUpdate(
+            node.id,
+            { status: nodeState(node.id), attempts: state.get(node.id)?.attempts ?? 0 },
+            "territory-extended",
+            `授权连带生效：+${added.join("、")}`,
+          );
+        }
+      } catch {
+        // exec-plan 解析失败（主会话写入中途）保持内存态，下轮再读
+      }
+    })();
     // 非核心组在核心全绿后解锁（设计 §6.2 D3）；dev 模式核心集为空 → 空条件恒真，不引入额外门
     const coreAllDone = plan.nodes
       .filter((n) => plan.coreIds.has(n.id))
