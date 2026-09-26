@@ -25,6 +25,7 @@ T1 写设计文档（Step 0-6）──确认──▶ T2 审查循环（价值�
 ```
 
 - **跳过确认的唯一通道 = 前期授权**：用户宣布全托管/夜间托管，或显式说「一路执行」时三阶段连续推进，阶段产出仍完整呈现（陈述性展示，不构成等待点）
+- **用语规范 [MANDATORY]**：T1 动笔写设计文档前必须加载 meta-words-guidance skill（zcode 用 Skill 工具；pi / 无 Skill 工具环境直接 Read `~/.agents/skills/meta-words-guidance/SKILL.md` 及其词表），写出的文档必须遵守其中的用语规范（四张词表逐条适用 + 该 skill 的扫描自查），细则见 `flow/write.md` 头部
 - 确认的裁决维度：T1 = 问题定义与方案方向；T2 = 审查是否真收敛（含价值审复述的理解校验）；T3 = 拆分粒度与验收计划。打回 = 回该阶段或上一阶段修订
 - **与老 tech-design 的关系（灰度并行）**：本技能是流程重构版（impl-plan 创建从 dev-flow 上移至 T3；审查循环 workflow 化），老 tech-design 原样保留——判据面（红线/准则/rubric/reviewer）与老版一致，变量只锁流程形态；任一时点可切回老版
 
