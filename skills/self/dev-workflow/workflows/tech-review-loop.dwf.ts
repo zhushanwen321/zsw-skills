@@ -702,7 +702,7 @@ try {
     ].join("\n"),
   );
 } catch (e) {
-  return await finish("review-failure", 0, `价值审调用失败：${String(e)}。恢复动作：provider 类问题解决后 args.attempt 递增重新发起（历史产物不覆盖）`);
+  return await finish("review-failure", 0, `价值审调用失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——结构化校验不过 / 上下文超限则拆分投喂精简模板 / IO 失败）；args.attempt 递增重新发起（历史产物不覆盖）`);
 }
 if (valueVerdict === null) {
   return await finish(
@@ -852,7 +852,7 @@ for (let round = 1; round <= maxRounds; round++) {
       return { mustFix: mf, suggestion: sf, problems, reconciliation: sanitizeReconciliation(v.reconciliation), dim: TRIALS[i].dim };
     });
   } catch (e) {
-    return await finish("review-failure", round, `三审调用或归并失败：${String(e)}。恢复动作：provider 类问题解决后 args.attempt 递增重新发起`);
+    return await finish("review-failure", round, `三审调用或归并失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——上下文超限则拆分投喂 / 结构化校验不过见当轮报告）；args.attempt 递增重新发起`);
   }
 
   const rChk = await world.run("node", ["-e", NODE_CHECK_EXISTS, ...TRIALS.map((t) => `${roundAbs}/${t.reportName}`)]);
@@ -1004,7 +1004,7 @@ for (let round = 1; round <= maxRounds; round++) {
     try {
       fix = await fixer.ask<FixOutcome>(instructions);
     } catch (e) {
-      return await finish("fix-failure", round, `修复者调用失败：${String(e)}。恢复动作：provider 类问题解决后 args.attempt 递增重新发起（在途编辑已留磁盘，接管前先盘点 ${designDoc}）`);
+      return await finish("fix-failure", round, `修复者调用失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——上下文超限则拆分投喂）；args.attempt 递增重新发起（在途编辑已留磁盘，接管前先盘点 ${designDoc}）`);
     }
     dispositions = sanitizeDispositions(fix.dispositions);
     revisionSummary = typeof fix.revisionSummary === "string" ? fix.revisionSummary : "";

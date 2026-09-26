@@ -184,7 +184,8 @@ interface FindingRecord {
   rationale: string;
   fixHint: string;
   firstSeen: number;
-  status: "open" | "fixed" | "deferred";
+  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报） */
+  status: "open" | "fixed" | "deferred" | "frozen";
   fixedRound?: number;
 }
 
@@ -1502,9 +1503,9 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
   }
   if (finalResult !== null) break;
 
-  // ── 矩阵合并落盘（脚本 concat，无 LLM 聚合层；contested 拦截前保证矩阵已落盘）──
-  const active = ledger.filter((f) => f.status === "open");
-  const activeMust = active.filter((f) => f.severity === "must-fix").length;
+  // ── 矩阵合并落盘（脚本 concat，无 LLM 聚合层；contested 分流前保证矩阵已落盘）──
+  let active = ledger.filter((f) => f.status === "open");
+  let activeMust = active.filter((f) => f.severity === "must-fix").length;
   try {
     await persistArtifacts();
   } catch (e) {
@@ -1512,7 +1513,10 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     break;
   }
 
-  // ── contested 拦截：任一 must-fix 级方向争议 → 立即停回用户裁决，不进修复 ──
+  // ── contested 分流（2026-09-26 用户裁决，同依赖可达性原则）：must-fix 级方向争议
+  // 按「是否 block 后续」处置——争议条目编辑集与其余待修条目编辑集相交 = block
+  //（并行修复会撞同文件）→ 立即停回用户裁决；不相交 = 冻结该条目（status=frozen：
+  // 不修、不参与收敛计数），其余条目照常修复，全部执行完随终态汇报争议清单 ──
   const contestedMust = active.filter((f) => f.direction === "contested" && f.severity === "must-fix");
   // 停机终态轮也入收敛轨迹（此前 contested/stuck 尾轮缺数据点，轨迹断在修复轮）
   const pushStopRoundStat = (): void => {
@@ -1528,23 +1532,33 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     });
   };
   if (contestedMust.length > 0) {
-    pushStopRoundStat();
-    finalNote = `contested（R${round}）：must-fix 级方向争议 ${contestedMust.length} 条待用户裁决`;
-    try {
-      await persistArtifacts();
-    } catch {
-      // 矩阵本轮已落盘过，终态标注写失败不改变拦截语义
+    const contestedFiles = new Set(contestedMust.flatMap((f) => findingEditFiles(f)));
+    const others = active.filter((f) => f.direction !== "contested" || f.severity !== "must-fix");
+    const blocksOthers = others.some((f) => findingEditFiles(f).some((p) => contestedFiles.has(p)));
+    if (blocksOthers) {
+      pushStopRoundStat();
+      finalNote = `contested（R${round}）：must-fix 级方向争议 ${contestedMust.length} 条与待修条目编辑文件相交（阻塞后续修复）`;
+      try {
+        await persistArtifacts();
+      } catch {
+        // 矩阵本轮已落盘过，终态标注写失败不改变拦截语义
+      }
+      log(`第 ${round} 轮：must-fix 级方向争议 ${contestedMust.length} 条（${contestedMust.map((f) => f.id).join("、")}）——与待修条目编辑文件相交（block），立即停回用户裁决`);
+      finalResult = finish(
+        "contested",
+        round,
+        `must-fix 级方向争议 ${contestedMust.length} 条与待修条目编辑文件相交（阻塞后续修复），停回用户裁决（doc-right/code-right 二选一或给出裁决理由），矩阵与证据见 ${matrixFile}。恢复动作：用户逐条裁决后重新发起（runDir 自动 attempt 后缀不覆盖历史；重发起首轮为 planner 全量重审，上轮修复在重审对账中确认）`,
+      );
+      break;
     }
-    log(`第 ${round} 轮：must-fix 级方向争议 ${contestedMust.length} 条（${contestedMust.map((f) => f.id).join("、")}）——停回用户裁决，不进修复`);
-    finalResult = finish(
-      "contested",
-      round,
-      `must-fix 级方向争议 ${contestedMust.length} 条待用户裁决（doc-right/code-right 二选一或给出裁决理由），矩阵与证据见 ${matrixFile}。恢复动作：用户逐条裁决后重新发起（runDir 自动 attempt 后缀不覆盖历史；重发起首轮为 planner 全量重审，上轮修复在重审对账中确认）`,
-    );
-    break;
+    for (const f of contestedMust) f.status = "frozen";
+    log(`第 ${round} 轮：must-fix 级方向争议 ${contestedMust.length} 条（${contestedMust.map((f) => f.id).join("、")}）——编辑集与其余条目不相交，冻结不修（随终态 contestedList 呈报），其余条目继续修复`);
+    // 冻结条目退出活跃集：后续收敛判定 / 停机线 / 修复派发均按重算后的 active
+    active = ledger.filter((f) => f.status === "open");
+    activeMust = active.filter((f) => f.severity === "must-fix").length;
   }
 
-  // ── 全清判定（R1 零发现或 R2+ 全部确认且无新立项）──
+  // ── 全清判定（R1 零发现或 R2+ 全部确认且无新立项；冻结争议另走 contested 终态）──
   if (active.length === 0) {
     roundsHist.push({
       round,
@@ -1556,6 +1570,22 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       contestedActive: 0,
       fixGroups: 0,
     });
+    const frozenContested = ledger.filter((f) => f.status === "frozen");
+    if (frozenContested.length > 0) {
+      // 非争议条目已全部修复收敛；冻结争议不阻塞（编辑集不相交已判），随终态汇报
+      finalNote = `contested（R${round}）：非争议条目已全部修复收敛；must-fix 级方向争议 ${frozenContested.length} 条冻结待用户裁决`;
+      try {
+        await persistArtifacts();
+      } catch {
+        // 矩阵本轮已落盘过，终态标注写失败不改变终态语义
+      }
+      finalResult = finish(
+        "contested",
+        round,
+        `非争议条目已全部修复收敛；must-fix 级方向争议 ${frozenContested.length} 条冻结待用户裁决（doc-right/code-right 二选一或给出裁决理由），清单随终态 contestedList，矩阵与证据见 ${matrixFile}。恢复动作：用户逐条裁决后重新发起（重发起首轮为 planner 全量重审，已修部分在重审对账中确认）`,
+      );
+      break;
+    }
     convergedRound = round;
     break;
   }

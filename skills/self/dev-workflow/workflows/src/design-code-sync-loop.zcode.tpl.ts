@@ -184,7 +184,8 @@ interface FindingRecord {
   rationale: string;
   fixHint: string;
   firstSeen: number;
-  status: "open" | "fixed" | "deferred";
+  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报） */
+  status: "open" | "fixed" | "deferred" | "frozen";
   fixedRound?: number;
 }
 
