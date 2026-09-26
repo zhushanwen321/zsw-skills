@@ -23,7 +23,7 @@
 # u-foundation 固定为共享契约根节点，初始即就绪的 DAG 根
 ## 3 DAG 图       # mermaid
 ## 4 测试与验收计划  # 测试命令从项目 AGENTS.md / package.json scripts / 项目测试策略文档（若存在，典型 docs/TEST-STRATEGY.md）真实读取；增量与全量分开列
-                    # 全量段 = 改动面 + 依赖闭包（防跨单元叠加回归），逐条标注 产物类/验证类
+                    # 全量段 = 改动范围 + 依赖闭包（防跨单元叠加回归），逐条标注 产物类/验证类
 ## 5 合理偏差登记表  # 初始空；| 偏差 | 内容与理由 | 影响面 | 处置 |
                     # 影响面 = 误导了什么/造成什么返工，写不出影响的不入表；处置 = 已接受 / 待回写设计文档 / 移交 D5 终态同步
 ## 6 残留风险与变更历史  # 残留风险四要素：触发条件/影响/处置/重审触发条件
@@ -71,6 +71,24 @@
 ```
 
 **一致性校验（写完即跑，D0 也会复跑）**：单元数 / 单元 id 集 / 依赖边数 / 验收项 id 集——markdown 与 json 两边一致，不一致 fail-fast 当场修（双格式漂移零容忍）。
+
+## 符号词表 [MANDATORY]
+
+设计文档（含 impl-plan.md）会被下游 design-code-sync 的机械扫描消费：扫描器不再自行抓取反引号词，**只读本节产出的词表**——哪些词该扫由本节的语义分析裁决，扫描器与文档作者之间不再有隐式形态约定。
+
+1. **抓草稿**：`node <本技能>/scripts/extract-backticks.mjs .tmp/tech-design/<name>.md .tmp/tech-design/<name>.impl-plan.md`（stdout = JSON 词数组；提取规则与扫描器逐字同源，勿手抄手补）
+2. **语义甄别**：对照设计文档逐词判定——`scan` = 本项目代码里可定位、悬空时应被揪出的符号；`skip` = 其余一切（外部/上游包符号、shell 命令、协议词、JSON 字段名、纯排版标注……），每个 skip 词必须带一句理由（典型：「pi 上游符号」「命令行示例」）。拿不准的词归 skip——漏扫的代价由下游 LLM 语义审查兜底，误扫的代价是下游误报死循环
+3. **落盘**：`.tmp/tech-design/<basename>.symbol-watchlist.json`（与设计文档同目录），格式：
+
+```jsonc
+{
+  "designDoc": ".tmp/tech-design/<name>.md",
+  "scan": ["exitPlanMode", "u-foundation"],
+  "skip": [{ "word": "executeToolCallsSequential", "reason": "pi 上游符号，非本项目代码" }]
+}
+```
+
+**一致性**：scan ∪ skip 的词集必须等于设计文档（+impl-plan.md）当前反引号词全集——design-code-sync 发起时机器复验等集，不等即跳过扫描并呈报「词表过期，回 T3 重产」。文档在本节之后有改动 → 重跑本节（脚本 + 甄别合计分钟级）。
 
 ## 计划自检 [MANDATORY]
 

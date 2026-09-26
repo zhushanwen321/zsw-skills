@@ -149,6 +149,10 @@ interface FixOutcome {
   /** 越权候选 defer 申报（§7.3 机器落点）：条目的修复动作将是删码而条目非 must-fix 级 →
    *  fixer 不执行删除，申报转呈报；引擎放行（不算漏修）并随终态 overdesignCandidates 呈报 */
   deferred: { issueId: string; reason: string }[];
+  /** 符号豁免申报（2026-09-27 用户裁决）：fixer 核实某机械条目指向的词不该被扫描（典型 =
+   *  外部/上游包符号）→ 申报豁免；引擎转 exempt 终态、落豁免登记、随终态 exemptList 呈报
+   *  主 agent 终审——豁免是 fixer 的语义判断，主 agent 可推翻 */
+  exempt: { issueId: string; reason: string }[];
 }
 
 /** 修复分组（reconcileGroups 输出） */
@@ -184,8 +188,8 @@ interface FindingRecord {
   rationale: string;
   fixHint: string;
   firstSeen: number;
-  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报） */
-  status: "open" | "fixed" | "deferred" | "frozen";
+  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报）/ exempt=符号豁免（fixer 核实不该扫的词，主 agent 终审，随终态 exemptList 呈报） */
+  status: "open" | "fixed" | "deferred" | "frozen" | "exempt";
   fixedRound?: number;
 }
 
@@ -224,6 +228,9 @@ interface SyncResult {
   retirement: { retired: { from: string; to: string }[]; kept: { path: string; reason: string }[] };
   /** 方向争议记录（contested 终态 = 待用户裁决清单；converged = 非 must-fix 级默认 doc-right 的已处理记录） */
   contestedList: { id: string; location: string; gap: string; severity: string; rationale: string }[];
+  /** 符号豁免清单（fixer 申报「不该被扫描的词」的机械条目——豁免登记文件 + 本清单双落点，
+   *  交主 agent 终审：认可则无动作，推翻则改词表后 attempt 递增重发） */
+  exemptList: { id: string; word: string; reason: string }[];
   /** 越权候选卡清单（§7.3「过度/存疑只报告不删码，用户裁决后才动」的结构化呈报——
    *  矩阵 overdesign 行 + fixer defer 申报条目；用户裁决前不产生任何删码动作） */
   overdesignCandidates: { id: string; location: string; gap: string; reason: string }[];
@@ -244,6 +251,10 @@ interface NarrowedInputs {
   projectRoot: string;
   /** 可选：status.json 绝对路径（planner 职责②进度核对数据源；空串 = 未传，降级单侧核对） */
   statusPath: string;
+  /** 可选：符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）；
+   *  空串 = 未传，机械信号步跳过（不回退文档反引号抓取——抓取依赖「反引号 = 本项目符号」
+   *  的隐式约定，2026-09-27 起词表是唯一扫描词源） */
+  watchlist: string;
   maxRounds: number;
   plannerTemplate: string;
   reviewerTemplate: string;

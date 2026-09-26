@@ -216,8 +216,20 @@ const SCHEMA_FixOutcome = {
         required: ["issueId", "reason"],
       },
     },
+    exempt: {
+      type: "array",
+      description: "符号豁免申报（2026-09-27 用户裁决）：仅机械信号条目可用——核实某「词表符号零命中」条目指向的词本就不该被扫描（典型 = 外部/上游包符号且文档已就地解释）时申报；引擎转 exempt 终态、落豁免登记、随终态 exemptList 呈报主 agent 终审。真悬空引用不属于豁免，照常修复。无申报时显式 []",
+      items: {
+        type: "object",
+        properties: {
+          issueId: { type: "string" },
+          reason: { type: "string", description: "核实证据：依赖包中命中位置 / 文档解释所在位置" },
+        },
+        required: ["issueId", "reason"],
+      },
+    },
   },
-  required: ["fixes", "affectedFiles", "deferred"],
+  required: ["fixes", "affectedFiles", "deferred", "exempt"],
 };
 
 // 退役判定 agent 结构化返回（只判定，不执行）

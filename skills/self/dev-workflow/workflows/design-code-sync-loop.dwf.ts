@@ -149,6 +149,10 @@ interface FixOutcome {
   /** 越权候选 defer 申报（§7.3 机器落点）：条目的修复动作将是删码而条目非 must-fix 级 →
    *  fixer 不执行删除，申报转呈报；引擎放行（不算漏修）并随终态 overdesignCandidates 呈报 */
   deferred: { issueId: string; reason: string }[];
+  /** 符号豁免申报（2026-09-27 用户裁决）：fixer 核实某机械条目指向的词不该被扫描（典型 =
+   *  外部/上游包符号）→ 申报豁免；引擎转 exempt 终态、落豁免登记、随终态 exemptList 呈报
+   *  主 agent 终审——豁免是 fixer 的语义判断，主 agent 可推翻 */
+  exempt: { issueId: string; reason: string }[];
 }
 
 /** 修复分组（reconcileGroups 输出） */
@@ -184,8 +188,8 @@ interface FindingRecord {
   rationale: string;
   fixHint: string;
   firstSeen: number;
-  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报） */
-  status: "open" | "fixed" | "deferred" | "frozen";
+  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报）/ exempt=符号豁免（fixer 核实不该扫的词，主 agent 终审，随终态 exemptList 呈报） */
+  status: "open" | "fixed" | "deferred" | "frozen" | "exempt";
   fixedRound?: number;
 }
 
@@ -224,6 +228,9 @@ interface SyncResult {
   retirement: { retired: { from: string; to: string }[]; kept: { path: string; reason: string }[] };
   /** 方向争议记录（contested 终态 = 待用户裁决清单；converged = 非 must-fix 级默认 doc-right 的已处理记录） */
   contestedList: { id: string; location: string; gap: string; severity: string; rationale: string }[];
+  /** 符号豁免清单（fixer 申报「不该被扫描的词」的机械条目——豁免登记文件 + 本清单双落点，
+   *  交主 agent 终审：认可则无动作，推翻则改词表后 attempt 递增重发） */
+  exemptList: { id: string; word: string; reason: string }[];
   /** 越权候选卡清单（§7.3「过度/存疑只报告不删码，用户裁决后才动」的结构化呈报——
    *  矩阵 overdesign 行 + fixer defer 申报条目；用户裁决前不产生任何删码动作） */
   overdesignCandidates: { id: string; location: string; gap: string; reason: string }[];
@@ -244,6 +251,10 @@ interface NarrowedInputs {
   projectRoot: string;
   /** 可选：status.json 绝对路径（planner 职责②进度核对数据源；空串 = 未传，降级单侧核对） */
   statusPath: string;
+  /** 可选：符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）；
+   *  空串 = 未传，机械信号步跳过（不回退文档反引号抓取——抓取依赖「反引号 = 本项目符号」
+   *  的隐式约定，2026-09-27 起词表是唯一扫描词源） */
+  watchlist: string;
   maxRounds: number;
   plannerTemplate: string;
   reviewerTemplate: string;
@@ -317,6 +328,7 @@ const VALID_ARG_KEYS = new Set([
   "implPlan",
   "projectRoot",
   "statusPath",
+  "watchlist",
   "maxRounds",
   "plannerTemplate",
   "reviewerTemplate",
@@ -326,18 +338,29 @@ const TILDE_PLANNER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/sync-planner
 const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/sync-reviewer.md";
 const RETIREMENT_DIR = ".tmp/design-doc-retirement"; // 退役候选移动目标（projectRoot 相对，gitignore 产物）
 
-// 机械信号步（§7.1 反引号 grep——[HISTORICAL] 悬空引用防线，机器产确定性信号）：
-// argv: [projectRoot, ...docPaths] → 提取文档反引号标识符（纯 ASCII 词、非路径、词数 ≤4、
-// 非版本号，上限 300 防爆）→ 分批单进程多 pattern 验证（git grep -oh -F -e s1 -e s2… 一次
-// 查批内全部符号，-o 输出实际命中的匹配文本，与输入清单差集 = 零命中清单）→ stdout = JSON
-// 零命中符号数组。原逐符号串行 spawnSync 在大仓上 300 符号可达 5-15min（world.run 默认
-// 300s 必超时，2026-09-26 修复：3 批进程替代 300 个进程）。批 git 错误（exit 128）保守
-// 跳过不立项（与原单符号 128 语义一致——机器信号只报确定性悬空）
+// 机械信号步（§7.1 符号词表 grep——[HISTORICAL] 悬空引用防线，机器产确定性信号）：
+// argv: [projectRoot, watchlistPath, ...docPaths] → 读 T3 产出的符号词表（scan/skip 两桶，
+// skip 带理由——语义甄别在 tech-design 写词表时完成，扫描器不做任何词源猜测）→ 复验词表
+// 与文档反引号集等集（文档改动 = 词表过期，脚本层直接判不通过）→ scan 词分批单进程多
+// pattern 验证（git grep -oh -F -e s1 -e s2… 一次查批内全部，-o 输出实际命中，与 scan 差集
+// = 零命中清单）→ stdout = JSON { ok, missing } 或 { ok: false, reason, ...差异 }。
+// 2026-09-27 重建：旧版自行抓取文档反引号并假设「反引号 = 本项目符号」——上游符号
+// （如 pi dist 内部函数）零命中被误立项且修复闭环死锁（正确处置 = 文档保留词 + 解释，
+// 与「报警消失」判据永不同时成立，10 轮耗尽）。词表把「该不该扫」的裁决前移到 T3 语义
+// 分析，扫描器回归纯机械定位。批 git 错误（exit 128）保守跳过不立项（机器信号只报
+// 确定性悬空）。
 const NODE_BACKTICK_GREP = [
   "var fs=require('fs'),cp=require('child_process');",
-  "var root=process.argv[1];",
-  "var syms=new Set();",
-  "for (var pi=2; pi<process.argv.length; pi++){",
+  "var root=process.argv[1],wl=process.argv[2];",
+  "var out=function(o){console.log(JSON.stringify(o))};",
+  "var wlRaw=null;try{wlRaw=JSON.parse(fs.readFileSync(wl,'utf8'))}catch(e){out({ok:false,reason:'词表不可读或非合法 JSON：'+wl});process.exit(0)}",
+  "var scan=Array.isArray(wlRaw.scan)?wlRaw.scan.filter(function(s){return typeof s==='string'&&s!==''}):null;",
+  "var skip=Array.isArray(wlRaw.skip)?wlRaw.skip:null;",
+  "if(scan===null||skip===null){out({ok:false,reason:'词表缺 scan 数组或 skip 数组：'+wl});process.exit(0)}",
+  "var badSkip=skip.filter(function(s){return !s||typeof s.word!=='string'||s.word===''||typeof s.reason!=='string'||s.reason.trim()===''});",
+  "if(badSkip.length>0){out({ok:false,reason:'词表 skip 元素畸形（须 {word, reason 非空}）'+badSkip.length+' 条'});process.exit(0)}",
+  "var words=new Set();",
+  "for (var pi=3; pi<process.argv.length; pi++){",
   "  try{ var t=fs.readFileSync(process.argv[pi],'utf8');",
   "    var m=t.match(/`([^`\\n]{2,60})`/g)||[];",
   "    for (var s of m){ var v=s.slice(1,-1).trim();",
@@ -345,22 +368,23 @@ const NODE_BACKTICK_GREP = [
   "      if(v.indexOf('/')>=0||v.indexOf(' ')>=0)continue;",
   "      if(v.split(/[^A-Za-z0-9_.\\-]+/).length>4)continue;",
   "      if(/v?\\d+(\\.\\d+)+/i.test(v))continue;",
-  "      syms.add(v); }",
+  "      words.add(v); }",
   "  }catch(e){}",
   "}",
-  "var all=[...syms];",
-  "if(all.length>300)console.error('WARN: 反引号符号 '+all.length+' 个超上限，仅核验前 300');",
-  "var list=all.slice(0,300);",
+  "var declared=new Set(scan);for (var s2 of skip)declared.add(s2.word);",
+  "var under=[...words].filter(function(w){return !declared.has(w)});",
+  "var over=scan.filter(function(w){return !words.has(w)}).concat(skip.filter(function(s){return !words.has(s.word)}).map(function(s){return s.word}));",
+  "if(under.length>0||over.length>0){out({ok:false,reason:'词表与文档反引号集不一致（词表过期——回 tech-design-wf T3 重产）',inDocNotInWatchlist:under,inWatchlistNotInDoc:over});process.exit(0)}",
+  "if(scan.length===0){out({ok:true,missing:[]});process.exit(0)}",
   "var hit=new Set();",
-  "for (var b=0; b<list.length; b+=100){",
+  "for (var b=0; b<scan.length; b+=100){",
   "  var pat=[];",
-  "  for (var k=b; k<b+100 && k<list.length; k++){ pat.push('-e'); pat.push(list[k]); }",
+  "  for (var k=b; k<b+100 && k<scan.length; k++){ pat.push('-e'); pat.push(scan[k]); }",
   "  var r=cp.spawnSync('git',['grep','-oh','-F'].concat(pat),{cwd:root,encoding:'utf8',maxBuffer:67108864});",
   "  if (r.status === 128) { console.error('WARN: 批 '+b+' git 错误，该批符号保守跳过不立项'); continue; }",
   "  if (r.stdout) { for (var ln of r.stdout.split('\\n')) { var tt=ln.trim(); if (tt) hit.add(tt); } }",
   "}",
-  "var missing=list.filter(function(s){ return !hit.has(s); });",
-  "console.log(JSON.stringify(missing));",
+  "out({ok:true,missing:scan.filter(function(s){return !hit.has(s)})});",
 ].join("\n");
 
 // node -e 通道（argv 传参，无 shell 注入面；node 代码不受脚本 facade 限制）
@@ -409,7 +433,8 @@ function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
   const attempt =
     typeof raw.attempt === "number" && Number.isFinite(raw.attempt) && raw.attempt >= 1 ? Math.floor(raw.attempt) : null;
   const statusPath = isAbs(raw.statusPath) ? (raw.statusPath as string).trim() : "";
-  return { designDoc, implPlan, projectRoot, statusPath, maxRounds, plannerTemplate, reviewerTemplate, attempt, problems };
+  const watchlist = isAbs(raw.watchlist) ? (raw.watchlist as string).trim() : "";
+  return { designDoc, implPlan, projectRoot, statusPath, watchlist, maxRounds, plannerTemplate, reviewerTemplate, attempt, problems };
 }
 
 // ── 纯函数（归一 / 解析 / 渲染，不触 world） ──
@@ -555,6 +580,14 @@ function normFixOutcome(raw: FixOutcome, rootDir: string): FixOutcome {
     if (id === "") continue;
     deferred.push({ issueId: id, reason: asStr(o.reason) });
   }
+  const exempt: { issueId: string; reason: string }[] = [];
+  for (const d of Array.isArray(raw.exempt) ? raw.exempt : []) {
+    if (d === null || typeof d !== "object") continue;
+    const o = d as unknown as Record<string, unknown>;
+    const id = asStr(o.issueId).trim();
+    if (id === "") continue;
+    exempt.push({ issueId: id, reason: asStr(o.reason) });
+  }
   const affected: string[] = [];
   for (const p of Array.isArray(raw.affectedFiles) ? raw.affectedFiles : []) {
     if (typeof p !== "string") continue;
@@ -563,7 +596,7 @@ function normFixOutcome(raw: FixOutcome, rootDir: string): FixOutcome {
     const abs = tok.startsWith("/") ? tok : `${rootDir}/${tok}`;
     if (!affected.includes(abs)) affected.push(abs);
   }
-  return { fixes, deferred, affectedFiles: affected };
+  return { fixes, deferred, exempt, affectedFiles: affected };
 }
 
 /** 退役判定返回防御：数组/字段窄化 */
@@ -688,8 +721,7 @@ if (inputs.problems.length > 0) {
     message: `参数校验失败：${inputs.problems.join("；")}。${HINT_RELAUNCH_WITH_ARGS}`,
   };
 }
-const { designDoc, implPlan, projectRoot, maxRounds } = inputs;
-const statusPathArg = inputs.statusPath;
+const { designDoc, implPlan, projectRoot, statusPath: statusPathArg, watchlist, maxRounds } = inputs;
 
 // ── 环境准备（home 展开 / runDir / attempt / 模板探针 / 基线 HEAD） ──
 
@@ -843,6 +875,9 @@ let lastDispatchedIds: string[] = [];
 let lastFixRecords: FixRecord[] = [];
 /** 越权候选卡收集（§7.3：矩阵过度/存疑行 + fixer defer 申报——用户裁决前不删码） */
 const overdesignCandidates: { id: string; location: string; gap: string; reason: string }[] = [];
+/** 符号豁免清单（fixer exempt 申报累积；双落点 = runDir/exempted.json + finish.exemptList，
+ *  交主 agent 终审——fixer 的豁免是语义判断，主 agent 可推翻：改词表后 attempt 递增重发） */
+const exemptList: { id: string; word: string; reason: string }[] = [];
 // 工作区残留登记（无人认领 + 多组冲突的改动）：不提交不作废留盘，随终态 residualFiles
 // 呈报主 agent 判归属处置（2026-09-26 用户裁决——各组只对自己的改动负责）
 const residualFiles = new Set<string>();
@@ -998,6 +1033,7 @@ function finish(terminated: SyncResult["terminated"], round: number, message: st
     contestedList: ledger
       .filter((f) => f.direction === "contested")
       .map((f) => ({ id: f.id, location: f.location, gap: f.gap, severity: f.severity, rationale: f.rationale })),
+    exemptList,
     overdesignCandidates,
     remaining: ledger
       .filter((f) => f.status === "open")
@@ -1098,13 +1134,14 @@ function validateModuleReview(v: unknown): Validated<ModuleReview> {
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as ModuleReview };
 }
 
-/** 修复组返回校验：fixes 对象数组 + affectedFiles 字符串数组 + deferred 对象数组 */
+/** 修复组返回校验：fixes 对象数组 + affectedFiles 字符串数组 + deferred/exempt 对象数组 */
 function validateFixOutcome(v: unknown): Validated<FixOutcome> {
   const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
   const errors: string[] = [];
   if (!isObjArr(o["fixes"])) errors.push("fixes 须为对象数组（每条 { issueId, description, selfCheck }）");
   if (!isStrArr(o["affectedFiles"])) errors.push("affectedFiles 须为字符串数组");
   if (!isObjArr(o["deferred"])) errors.push("deferred 须为对象数组（无申报时显式 []）");
+  if (!isObjArr(o["exempt"])) errors.push("exempt 须为对象数组（无申报时显式 []）");
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as FixOutcome };
 }
 
@@ -1190,8 +1227,9 @@ function fixerPrompt(g: FixGroup, byId: Map<string, FindingRecord>): string {
   L.push("4. git 禁令：禁止一切 git 写操作（add/commit/push 等）——改动留工作区，引擎统一核验后按组 commit。");
   L.push("5. 每条修复给 selfCheck：一条可复跑命令 + 预期结果（改文档类可用 grep 断言；聚焦复审会复核它）。");
   L.push("6. 越权候选防线：若某条的修复动作将是「删除/移除一段现有实现」而其指控仅是「设计文档没写」（无行为矛盾/悬空引用等实质缺陷证据），**无论等级（含 must-fix）**都不要执行删除——放入 deferred（reason 写候选卡论证：小取舍/大简化/核心价值不变），它将随终态呈报用户裁决后才动；「文档没写」更可能是文档侧漏登记而非代码越权，宁可多呈报一张候选卡，不可直接删码。");
+  L.push("7. 符号豁免申报（仅机械信号条目可用）：若某条指控「词表符号 X 在代码库零命中」，而你核实 X 本就不该被扫描（典型 = 外部/上游包符号、且文档已就地解释其来源）——不要为消信号去删改文档（会丢失对外部依赖行为的关键描述），放入 exempt（reason 写核实证据：如在依赖包中的命中位置 / 文档解释所在位置），它将转豁免终态、落豁免登记并随终态呈报主 agent 终审。真悬空引用（本项目符号被删/改名）不属于豁免，照常修复。");
   L.push("");
-  L.push("完成后返回 JSON：fixes（元素 {issueId, description, selfCheck}，issueId 与上面条目一致原样引用，本组全部条目必须被 fixes 或 deferred 之一覆盖）+ deferred（元素 {issueId, reason}——仅越权候选防线场景）+ affectedFiles（实际改动文件路径数组，含新增文件）。");
+  L.push("完成后返回 JSON：fixes（元素 {issueId, description, selfCheck}，issueId 与上面条目一致原样引用，本组全部条目必须被 fixes / deferred / exempt 之一覆盖）+ deferred（元素 {issueId, reason}——仅越权候选防线场景）+ exempt（元素 {issueId, reason}——仅机械条目的符号豁免场景，无申报时显式 []）+ affectedFiles（实际改动文件路径数组，含新增文件）。");
   return L.join("\n");
 }
 
@@ -1340,40 +1378,50 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       seq += 1;
     }
 
-    // ── phase 1.5：机械信号步（§7.1 反引号 grep，R1 一次；机器产确定性信号，
+    // ── phase 1.5：机械信号步（§7.1 符号词表 grep，R1 一次；机器产确定性信号，
     //    severity/direction 语义判级归后续复核——机械对账见 R2+ 分支）──
+    // 词源 = T3 符号词表（watchlist，语义甄别在词表产出时完成）；未传词表 → 整步跳过，
+    // 不回退文档反引号抓取（旧抓取依赖「反引号 = 本项目符号」隐式约定，2026-09-27 废除）
     if (round === 1) {
-      phase("机械信号扫描");
-      const implMdPath = implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md");
-      const mechRes = await world.run("node", ["-e", NODE_BACKTICK_GREP, projectRoot, designDoc, implMdPath]);
-      if (mechRes.exitCode === 0) {
-        try {
-          const parsed: unknown = JSON.parse(mechRes.stdout);
-          if (Array.isArray(parsed)) {
-            for (const sym of parsed) {
-              if (typeof sym !== "string" || sym === "") continue;
-              ledger.push({
-                id: `F${round}-${seq}`,
-                owner: "mechanical",
-                location: `${designDoc}（反引号符号 ${sym}）`,
-                gap: `反引号符号 ${sym} 在代码库零命中（git grep）——文档引用悬空`,
-                direction: "code-right",
-                severity: "suggestion",
-                impact: "悬空引用误导后来者按图索骥找不到目标（[HISTORICAL] 事故防线）",
-                rationale: "机械信号：文档引用了代码库不存在的符号，默认实现期删改未回写文档",
-                fixHint: `核实 ${sym} 是否被删/改名——改文档引用到现存符号；若确认应补实现，改按 doc-right 处理`,
-                firstSeen: round,
-                status: "open",
-              });
-              seq += 1;
-            }
-            log(`机械信号：反引号悬空 ${parsed.length} 条立项（owner=mechanical，severity 默认 suggestion 待复核）`);
-          }
-        } catch {
-          log("WARN: 机械信号步输出解析失败——跳过机械立项（LLM 审查通道不受影响）");
-        }
+      if (watchlist === "") {
+        log("WARN: 未传 watchlist（符号词表）——机械信号步跳过，悬空引用防线本轮不生效。恢复动作：按 tech-design-wf flow/plan.md「符号词表」节产出 <basename>.symbol-watchlist.json 后，携 watchlist 参数重新发起");
       } else {
-        log(`WARN: 机械信号步执行失败（exit ${mechRes.exitCode}）——跳过，不阻断循环：${mechRes.stderr.trim().slice(0, 200)}`);
+        phase("机械信号扫描");
+        const implMdPath = implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md");
+        const mechRes = await world.run("node", ["-e", NODE_BACKTICK_GREP, projectRoot, watchlist, designDoc, implMdPath]);
+        if (mechRes.exitCode === 0) {
+          try {
+            const parsed: unknown = JSON.parse(mechRes.stdout);
+            const rec = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+            if (rec["ok"] === true && isStrArr(rec["missing"])) {
+              for (const sym of rec["missing"]) {
+                ledger.push({
+                  id: `F${round}-${seq}`,
+                  owner: "mechanical",
+                  location: `${designDoc}（词表符号 ${sym}）`,
+                  gap: `词表符号 ${sym} 在代码库零命中（git grep）——文档引用悬空`,
+                  direction: "code-right",
+                  severity: "suggestion",
+                  impact: "悬空引用误导后来者按图索骥找不到目标（[HISTORICAL] 事故防线）",
+                  rationale: "机械信号：词表收录的符号在代码库不存在，默认实现期删改未回写文档",
+                  fixHint: `核实 ${sym} 是否被删/改名——改文档引用到现存符号；若确认应补实现，改按 doc-right 处理；若核实为不该扫描的词（如上游包符号），申报 exempt 豁免`,
+                  firstSeen: round,
+                  status: "open",
+                });
+                seq += 1;
+              }
+              log(`机械信号：词表符号零命中 ${rec["missing"].length} 条立项（owner=mechanical，severity 默认 suggestion 待复核）`);
+            } else if (rec["ok"] === false && typeof rec["reason"] === "string" && rec["reason"] !== "") {
+              log(`WARN: 机械信号步跳过——${rec["reason"]}`);
+            } else {
+              log("WARN: 机械信号步输出解析失败——跳过机械立项（LLM 审查通道不受影响）");
+            }
+          } catch {
+            log("WARN: 机械信号步输出解析失败——跳过机械立项（LLM 审查通道不受影响）");
+          }
+        } else {
+          log(`WARN: 机械信号步执行失败（exit ${mechRes.exitCode}）——跳过，不阻断循环：${mechRes.stderr.trim().slice(0, 200)}`);
+        }
       }
     }
 
@@ -1438,7 +1486,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       }
       if (stillMissing !== null) {
         for (const f of mechPrev) {
-          const mSym = /反引号符号 (\S+) 在代码库/.exec(f.gap);
+          const mSym = /词表符号 (\S+) 在代码库/.exec(f.gap);
           const sym = mSym?.[1] ?? "";
           if (sym !== "" && !stillMissing.has(sym)) {
             f.status = "fixed";
@@ -1665,14 +1713,16 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
           }),
         ),
       );
-      // ES 硬校验：本组全部条目必须被 fixes ∪ deferred 覆盖（全等级当轮修完不留尾巴；
-      // deferred = 越权候选防线申报，引擎放行并转终态呈报，不算漏修）；未知 id 引用违规
+      // ES 硬校验：本组全部条目必须被 fixes ∪ deferred ∪ exempt 覆盖（全等级当轮修完不留
+      // 尾巴；deferred = 越权候选防线申报、exempt = 符号豁免申报，引擎放行并转终态呈报，
+      // 都不算漏修）；未知 id 引用违规；三桶两两互斥（同 id 多桶 = 矛盾输出）
       const es: string[] = [];
       for (const { g, o } of outcomes) {
         const ids = new Set(o.fixes.map((fx) => fx.issueId));
         const defIds = new Set(o.deferred.map((d) => d.issueId));
+        const exemptIds = new Set(o.exempt.map((d) => d.issueId));
         for (const fid of g.issueIds) {
-          if (!ids.has(fid) && !defIds.has(fid)) es.push(`${g.id} 漏修 ${fid}`);
+          if (!ids.has(fid) && !defIds.has(fid) && !exemptIds.has(fid)) es.push(`${g.id} 漏修 ${fid}`);
         }
         for (const fx of o.fixes) {
           if (!g.issueIds.includes(fx.issueId)) es.push(`${g.id} fixes 引用未知条目 ${fx.issueId}`);
@@ -1682,6 +1732,12 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
           // 互斥（审查 P3-2）：同 id 既在 fixes 又在 deferred = fixer 矛盾输出——该条的修复
           // 已执行且被 commit 却被标 deferred 退出复审对账，修复无验证，拒绝
           if (ids.has(d.issueId)) es.push(`${g.id} 条目 ${d.issueId} 同时出现在 fixes 与 deferred（矛盾输出）`);
+          if (exemptIds.has(d.issueId)) es.push(`${g.id} 条目 ${d.issueId} 同时出现在 deferred 与 exempt（矛盾输出）`);
+        }
+        for (const d of o.exempt) {
+          if (!g.issueIds.includes(d.issueId)) es.push(`${g.id} exempt 引用未知条目 ${d.issueId}`);
+          if (ids.has(d.issueId)) es.push(`${g.id} 条目 ${d.issueId} 同时出现在 fixes 与 exempt（矛盾输出）`);
+          if (d.reason.trim() === "") es.push(`${g.id} exempt 条目 ${d.issueId} 缺豁免理由`);
         }
       }
       if (es.length > 0) {
@@ -1739,6 +1795,25 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
             log(`条目 ${f.id} 被 fixer 申报 defer（越权候选防线）——转终态呈报，不执行删除`);
           }
         }
+        // exempt 申报消费（2026-09-27 用户裁决）：fixer 核实机械条目指向的词不该被扫描
+        // （典型 = 外部/上游包符号）→ 条目转 exempt 终态；登记文件 + exemptList 双落点，
+        // 交主 agent 终审（fixer 的语义判断可被推翻：改词表后 attempt 递增重发）
+        for (const d of o.exempt) {
+          const f = activeById.get(d.issueId);
+          if (f && f.status === "open") {
+            const mSym = /词表符号 (\S+) 在代码库/.exec(f.gap);
+            const word = mSym?.[1] ?? "";
+            f.status = "exempt";
+            exemptList.push({ id: f.id, word, reason: d.reason });
+            log(`条目 ${f.id} 被 fixer 申报豁免（词「${word}」不该被扫描：${d.reason}）——转终态呈报主 agent 终审`);
+          }
+        }
+        if (o.exempt.some((d) => activeById.get(d.issueId)?.status === "exempt")) {
+          await writeArtifact(
+            `${runDir}/exempted.json`,
+            JSON.stringify({ note: "fixer 申报的符号豁免登记（主 agent 终审：认可则无动作，推翻则改词表后重发）", exempted: exemptList }, null, 2),
+          );
+        }
         const files = [...attributed.entries()]
           .filter(([, gid]) => gid === g.id)
           .map(([p]) => p);
@@ -1752,7 +1827,10 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
   }
   lastDispatchedIds = groups
     .flatMap((g) => g.issueIds)
-    .filter((id) => ledgerById(id)?.status !== "deferred"); // deferred 条目已转终态呈报，不进复审对账
+    .filter((id) => {
+      const st = ledgerById(id)?.status;
+      return st !== "deferred" && st !== "exempt"; // deferred/exempt 条目已转终态呈报，不进复审对账
+    });
   lastFixRecords = roundFixes;
   roundsHist.push({
     round,

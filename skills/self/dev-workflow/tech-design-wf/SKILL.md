@@ -35,6 +35,7 @@ T1 写设计文档（Step 0-6）──确认──▶ T2 审查循环（价值�
 |------|--------|-------------|
 | `<项目根>/.tmp/tech-design/<name>.md` | T1 | 文件存在 |
 | `<name>.impl-plan.md` + `<name>.impl-plan.json`（双格式） | T3 | 两文件存在且单元 id 集一致 |
+| `<name>.symbol-watchlist.json`（符号词表） | T3 | 文件存在且 scan ∪ skip 词集 = 设计文档+impl-plan.md 反引号词全集（design-code-sync 发起时机器复验） |
 | `.tmp/tech-design/<name>/`（审查报告目录）+ `<name>/final.json`（终态记录） | T2 | 目录存在且 final.json.terminated == "converged" |
 | `<name>.plan-review.md`（并行度复审） | T3 | 触发门槛（关键路径深度 ≥3 或单元 ≥4）时必须存在；未触发缺省合法 |
 

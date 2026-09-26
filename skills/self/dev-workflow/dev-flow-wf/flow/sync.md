@@ -6,7 +6,10 @@
 
 ```
 CreateWorkflow saved: design-code-sync-loop
-args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath? }   // statusPath = status.json 绝对路径——planner 职责②进度核对数据源；未传时降级单侧核对并在 frameworkFindings 的 note 注明
+args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath?, watchlist? }
+// statusPath = status.json 绝对路径——planner 职责②进度核对数据源；未传时降级单侧核对并在 frameworkFindings 的 note 注明
+// watchlist = 符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）——机械信号步唯一扫描词源；
+//   未传时机械步跳过并在日志注明（不回退文档反引号抓取——该路径依赖「反引号 = 本项目符号」隐式约定，已废除）
 终态: converged / contested / stuck + setup/planner/review/fix/retire/io-failure
 ```
 
@@ -14,7 +17,7 @@ args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath? }   // statusP
 
 ```
 phase 1  framework-scan（planner，1 agent）：
-   输入 = 设计文档(§3 机制/§5 拆分) × 代码目录结构 × HEAD 终态 × impl-plan × 关联登记面清单
+   输入 = 设计文档(§3 机制/§5 拆分) × 代码目录结构 × HEAD 终态 × impl-plan × 关联登记清单
    职责 = ① 框架级对照（架构/分层/数据流与设计的差异——架构漂移直接进矩阵顶层行）
           ② 模块分解 ModulePlan[]（结构化，驱动 phase 2 fan-out）
 phase 2  module fan-out：modules.map(m => agent(`module-${m.id}`))——并行
@@ -22,7 +25,7 @@ phase 2  module fan-out：modules.map(m => agent(`module-${m.id}`))——并行
 phase 3+ 修复循环：双向修复 → 聚焦复审 →（轮）→ 退役判定 → 终态
 ```
 
-**流程排序**：机器信号（反引号 grep 脚本步）紧跟 planner 框架扫描执行立项（确定性信号先行），修复随第一轮修复组进行，语义判级归 reviewer 复核。
+**流程排序**：机器信号（符号词表 grep 脚本步，词源 = T3 词表 watchlist）紧跟 planner 框架扫描执行立项（确定性信号先行），修复随第一轮修复组进行，语义判级归 reviewer 复核。机械条目被 fixer 核实为不该扫描的词（上游符号等）时走 exempt 豁免申报——条目转豁免终态、落 `runDir/exempted.json` 登记并随终态 exemptList 呈报主 agent 终审，不要求删改文档。
 
 **修复分组确定性校验（reconcileGroups）**：`modules[].files` 是 LLM 自报字段，并行 fixer 组间文件相交 = 冲突——组间 files 相交传递闭包合并 + 无效组过滤 + 覆盖兜底（脚本，不信任 planner 自觉）。
 
@@ -34,7 +37,7 @@ phase 3+ 修复循环：双向修复 → 聚焦复审 →（轮）→ 退役判�
 | **code-right** | 代码更合理（实现期发现的文档盲区/错误，实现行为有证据确认更合理） | **修文档**（过联动自检五处：正文/数据流图/错误规格/拆分清单/验收场景） |
 | **contested** | 两边有实质道理且影响公开 API / 行为语义 / 数据格式 | must-fix 级**停回用户**；suggestion 级默认 doc-right 并汇报列出 |
 
-**selfCheck 口径**：selfCheck 由聚焦复审消费（reviewer 复跑命令/核对预期），非引擎执行——复跑不过或无证据 = 条目回流重修；无测试套件的仓库可用 grep 断言，测试面缺失如实呈现不虚构。
+**selfCheck 口径**：selfCheck 由聚焦复审消费（reviewer 复跑命令/核对预期），非引擎执行——复跑不过或无证据 = 条目回流重修；无测试套件的仓库可用 grep 断言，测试清单缺失如实呈现不虚构。
 
 ## 三向功能对照矩阵（审查报告主体，findings 是单元格展开）
 
@@ -56,7 +59,7 @@ phase 3+ 修复循环：双向修复 → 聚焦复审 →（轮）→ 退役判�
 
 ## 审查关系五条（全量保留，落点）
 
-a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；b. 现实 ↔ impl-plan（进度/残留风险/变更历史反映当前）→ planner；c. impl-plan 内部一致性 → planner；d. 注释口径（测试文件头/生产文件注释 vs 当前实现）→ 模块 reviewer；e. 关联登记面 × 存量文档同步 → planner 末项。**机械信号**：R1 内置 world.run 机械步（引擎自动提取反引号标识符批量 git grep，悬空立项 owner=mechanical；R2+ 引擎重跑机械步对账）——reviewer 模板的反引号职责是复核机械条目与补漏，不是唯一防线；行号坐标漂移不立项（符号可定位语义成立 = 无影响——核实目标是交付一致性）。
+a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；b. 现实 ↔ impl-plan（进度/残留风险/变更历史反映当前）→ planner；c. impl-plan 内部一致性 → planner；d. 注释口径（测试文件头/生产文件注释 vs 当前实现）→ 模块 reviewer；e. 关联登记清单 × 存量文档同步 → planner 末项。**机械信号**：R1 内置 world.run 机械步（引擎自动提取反引号标识符批量 git grep，悬空立项 owner=mechanical；R2+ 引擎重跑机械步对账）——reviewer 模板的反引号职责是复核机械条目与补漏，不是唯一防线；行号坐标漂移不立项（符号可定位语义成立 = 无影响——核实目标是交付一致性）。
 
 ## 修复纪律（每轮）
 
@@ -82,4 +85,4 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 
 ## 手工降级路径
 
-workflow 未就绪时：主 agent 按「两级拓扑」手工执行——先派 1 个 planner（task = framework-scan 职责，模板 `agents/sync-planner.md`，输出模块计划文件），按计划并行派模块 reviewer（模板 `agents/sync-reviewer.md`），聚合判定矩阵，修复循环按上节纪律，全程本文件语义。差距面小（设计只动一模块）时 planner 返回单模块 = 自动单 reviewer。
+workflow 未就绪时：主 agent 按「两级拓扑」手工执行——先派 1 个 planner（task = framework-scan 职责，模板 `agents/sync-planner.md`，输出模块计划文件），按计划并行派模块 reviewer（模板 `agents/sync-reviewer.md`），聚合判定矩阵，修复循环按上节纪律，全程本文件语义。差距小（设计只动一模块）时 planner 返回单模块 = 自动单 reviewer。
