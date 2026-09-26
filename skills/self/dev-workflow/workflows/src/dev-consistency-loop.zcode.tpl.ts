@@ -158,6 +158,9 @@ interface FinalResult {
   remaining: { id: string; location: string; gap: string; severity: string; group: string }[];
   /** 分区概览（诊断） */
   partitions: { name: string; files: number }[];
+  /** 终态工作区无人申报的残留改动（历轮留盘待认领未被认领的）——主 agent 判归属后
+   *  处置（属修复成果 → 补提交；无主/临时 → 清理；判不了 → 呈报用户，禁静默丢弃） */
+  residualFiles: string[];
   /** 一句话终态说明（含恢复动作） */
   message: string;
 }

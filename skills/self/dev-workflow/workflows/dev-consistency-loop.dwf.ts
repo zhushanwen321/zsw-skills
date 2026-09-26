@@ -158,6 +158,9 @@ interface FinalResult {
   remaining: { id: string; location: string; gap: string; severity: string; group: string }[];
   /** 分区概览（诊断） */
   partitions: { name: string; files: number }[];
+  /** 终态工作区无人申报的残留改动（历轮留盘待认领未被认领的）——主 agent 判归属后
+   *  处置（属修复成果 → 补提交；无主/临时 → 清理；判不了 → 呈报用户，禁静默丢弃） */
+  residualFiles: string[];
   /** 一句话终态说明（含恢复动作） */
   message: string;
 }
@@ -613,6 +616,17 @@ async function appendStatusEvent(node: string, event: string, detail: string): P
 }
 
 async function finish(terminated: FinalResult["terminated"], roundsDone: number, message: string): Promise<FinalResult> {
+  // 终态残留对账（2026-09-26 用户裁决承接面）：历轮留盘待认领、终态仍未被任何组申报的
+  // 改动——主 agent 判归属后处置（补提交/清理/呈报），引擎不提交不回滚
+  let residualFiles: string[] = [];
+  try {
+    const fin = await world.run("node", ["-e", NODE_VERIFY, info.projectRoot, JSON.stringify([...declaredPool])]);
+    if (fin.exitCode === 0) {
+      residualFiles = (JSON.parse(fin.stdout) as { foreign: string[] }).foreign;
+    }
+  } catch {
+    // 终态对账失败不改变终态（残留处置是主 agent 职责，工具性失败在 message 外另见日志）
+  }
   const result: FinalResult = {
     terminated,
     rounds: roundsDone,
@@ -627,6 +641,7 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
       .filter((i) => i.active)
       .map((i) => ({ id: i.id, location: i.location, gap: i.gap, severity: i.severity, group: i.group })),
     partitions: info.partitions.map((p) => ({ name: p.name, files: p.files.length })),
+    residualFiles,
     message,
   };
   // §4.5：W3 终态回写 status.json events——consistency 终态一笔 + Gate A 结果一笔（converged/gate-a-failed）
@@ -635,6 +650,13 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
     "consistency-terminal",
     `terminated=${terminated}; rounds=${roundsDone}; ${message.slice(0, 160)}`,
   );
+  if (residualFiles.length > 0) {
+    await appendStatusEvent(
+      "consistency",
+      "residual-files",
+      `工作区 ${residualFiles.length} 项无人申报改动留盘（判归属后处置：${residualFiles.slice(0, 5).join("、")}${residualFiles.length > 5 ? " 等" : ""}）`,
+    );
+  }
   if (terminated === "converged") {
     await appendStatusEvent("gate-a", "gate-a-pass", `全量测试通过，日志：${gateALogPath ?? info.gateALog}`);
   } else if (terminated === "gate-a-failed") {
@@ -777,16 +799,13 @@ function renderItem(it: ItemRecord): string {
 }
 
 let prevActiveCount = items.length;
-let foreignRound = false;
-// 收敛停机线计数（只计有效轮——有复审、修复被采信的轮）：越界作废轮对收敛进度零贡献，
-// 不烧收敛预算；作废轮死循环由连续作废线（consecutiveForeign ≥2）独立兜底
-let effectiveRounds = 0;
-let consecutiveForeign = 0;
+// 收敛停机线计数（轮轮有效——无人申报改动不再作废轮次，2026-09-26 裁决后无作废形态）
+// 历轮全部修复组的申报文件并集（终态残留对账的豁免集：终态工作区改动 − 此并集 = 残留）
+const declaredPool = new Set<string>();
 
 for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRound++) {
   phase("并行修复与定向复审");
   reviewRound = fixRound + 1;
-  foreignRound = false;
   const roundActiveAll = activeItems();
   // 必填字段分流（老一致性纪律保留）：影响决策=否 且 影响交付=无 → 降级登记项，
   // 不进修复批次（低价值条目不烧修复轮次），随终态 deferredLedger 回流主 agent 登记残留风险
@@ -850,7 +869,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           "4. 每条修复申报 affectedFiles（含波及文件，相对仓库根路径）；修不动 / 需上游裁决的条目放 skipped 带具体 reason，不静默跳过。",
           "5. 其他分区修复组并行工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属，漏报会导致整轮作废）。",
           foreignNote
-            ? ["", "上轮遗留（上轮存在未申报改动，整轮作废重来；工作区可能已有上轮未提交改动，在现状基础上继续修复）：", foreignNote].join("\n")
+            ? ["", "工作区说明（存在无人申报的改动，引擎不处置不阻塞，留盘待认领；在现状基础上继续修复）：", foreignNote].join("\n")
             : "",
           "",
           "返回 JSON：{ fixes: [{ id, description, affectedFiles: [] }], skipped: [{ id, reason }] }（id 原样引用清单中的 U 编号）。",
@@ -912,6 +931,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     };
   });
   const pool = [...new Set(groupStates.flatMap((g) => g.own))];
+  for (const g of groupStates) for (const f of g.own) declaredPool.add(f); // 历轮并集累积（终态残留对账）
   const vRes = await world.run("node", ["-e", NODE_VERIFY, info.projectRoot, JSON.stringify(pool)]);
   if (vRes.exitCode !== 0) {
     return await finish("fix-failure", reviewRound, `改动归属核验执行失败：${vRes.stderr.trim() || vRes.stdout.trim()}`);
@@ -923,71 +943,73 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     return await finish("fix-failure", reviewRound, "核验输出解析失败（不应发生）");
   }
 
+  // 无人申报的改动：登记不处置（2026-09-26 用户裁决，与 wave-executor 同一语义——
+  // 每个修复组只对自己的改动负责，工作区多出来的改动不归任何组管）：不阻塞本轮提交
+  // 与复审、不回滚留盘；下轮 prompt 注入清单供相关组认领（认领 = 纳入其 affectedFiles
+  // 申报，随该组提交），无人认领的终态随 residualFiles 呈报主 agent 处置
+  foreignNote =
+    verify.foreign.length > 0
+      ? wrapUntrusted(
+          `工作区存在无人申报的改动（引擎不处置、不阻塞，仍留在工作区）：\n${verify.foreign.join("\n")}\n请本组修复时判定：属本组条目波及的 → 纳入你的 affectedFiles 申报（随本组提交）；与本组无关的 → 不要动它。`,
+        )
+      : "";
   if (verify.foreign.length > 0) {
-    // 越界：有改动不在任何组的申报文件并集内——归属不明的状态不提交（整轮作废，
-    // 条目全部保留重派；下轮 prompt 注入越界清单；死循环由计数停机线兜底）
-    foreignRound = true;
-    foreignNote = wrapUntrusted(
-      `上轮越界改动文件（未被任何修复组申报，引擎未提交，仍留在工作区）：\n${verify.foreign.join("\n")}\n请本组修复时判定：属本组条目波及的 → 纳入你的 affectedFiles 申报；与本组无关的残留 → 不要动它，在 skipped 里说明。`,
-    );
     log(
-      `WARN 第 ${fixRound} 轮核验：${verify.foreign.length} 个文件改动未被任何组申报（${verify.foreign.slice(0, 5).join("、")}${verify.foreign.length > 5 ? " 等" : ""}）——整轮作废不提交，下轮重派`,
+      `WARN 第 ${fixRound} 轮核验：${verify.foreign.length} 个文件改动未被任何组申报（${verify.foreign.slice(0, 5).join("、")}${verify.foreign.length > 5 ? " 等" : ""}）——不阻塞本轮，留盘待认领（终态 residualFiles 呈报）`,
     );
-    for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));
-  } else {
-    foreignNote = "";
-    for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));
-    // 增量测试组间并行（曾逐组串行 await，多组 × 10min 级增量拖成串行长尾——组间无
-    // 共享状态，NODE_RUN_CMD 只读工作区；缺省无 incremental 则跳过测试只验 diff）
-    const incrCmd = info.incremental;
-    if (incrCmd !== null) {
-      await mapBatch(
-        groupStates.filter((g) => g.changedFiles.length > 0),
-        async (g): Promise<void> => {
-          const t = await world.run(
-            "node",
-            ["-e", NODE_RUN_CMD, info.projectRoot, incrCmd.program, JSON.stringify(incrCmd.args), "null", String(INCREMENTAL_TIMEOUT_MS)],
-            { timeoutMs: INCREMENTAL_WORLD_TIMEOUT_MS },
-          );
-          let tCode = -1;
-          let tTail = "";
-          try {
-            const parsed = JSON.parse(t.stdout) as { code: number; stdoutHead: string; stderrHead: string };
-            tCode = parsed.code;
-            tTail = parsed.stdoutHead + (parsed.stderrHead ? `\n[stderr]\n${parsed.stderrHead}` : "");
-          } catch {
-            tTail = t.stderr.trim() || t.stdout.trim();
-          }
-          if (t.exitCode !== 0 || tCode !== 0) {
-            g.testFailed = true;
-            g.testTail = tTail;
-            log(`WARN 组 ${g.name} 增量测试未通过——改动留工作区，随复审反馈重修`);
-          }
-        },
-      );
+  }
+  for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));
+
+  // 增量测试组间并行（曾逐组串行 await，多组 × 10min 级增量拖成串行长尾——组间无
+  // 共享状态，NODE_RUN_CMD 只读工作区；缺省无 incremental 则跳过测试只验 diff）
+  const incrCmd = info.incremental;
+  if (incrCmd !== null) {
+    await mapBatch(
+      groupStates.filter((g) => g.changedFiles.length > 0),
+      async (g): Promise<void> => {
+        const t = await world.run(
+          "node",
+          ["-e", NODE_RUN_CMD, info.projectRoot, incrCmd.program, JSON.stringify(incrCmd.args), "null", String(INCREMENTAL_TIMEOUT_MS)],
+          { timeoutMs: INCREMENTAL_WORLD_TIMEOUT_MS },
+        );
+        let tCode = -1;
+        let tTail = "";
+        try {
+          const parsed = JSON.parse(t.stdout) as { code: number; stdoutHead: string; stderrHead: string };
+          tCode = parsed.code;
+          tTail = parsed.stdoutHead + (parsed.stderrHead ? `\n[stderr]\n${parsed.stderrHead}` : "");
+        } catch {
+          tTail = t.stderr.trim() || t.stdout.trim();
+        }
+        if (t.exitCode !== 0 || tCode !== 0) {
+          g.testFailed = true;
+          g.testTail = tTail;
+          log(`WARN 组 ${g.name} 增量测试未通过——改动留工作区，随复审反馈重修`);
+        }
+      },
+    );
+  }
+  for (const g of groupStates) {
+    if (g.changedFiles.length === 0) {
+      g.commitNote = "无工作区改动（全部 skipped 或修复零 diff）——不提交";
+      continue;
     }
-    for (const g of groupStates) {
-      if (g.changedFiles.length === 0) {
-        g.commitNote = "无工作区改动（全部 skipped 或修复零 diff）——不提交";
-        continue;
-      }
-      if (g.testFailed) continue; // 核验未过：不 commit（随复审反馈重修）
-      // 组级一笔 commit（引擎执行；只 add 本组实际改动文件，精确路径纪律；commit 保持
-      // 串行——NODE_COMMIT 的 index.lock 退避是兜底，不主动制造锁竞争）
-      const commitMsg = `fix(consistency): ${g.name} ${g.items.length} unreasonable`;
-      const c = await world.run("node", ["-e", NODE_COMMIT, info.projectRoot, JSON.stringify(g.changedFiles), commitMsg]);
-      if (c.exitCode === 0) {
-        g.committed = true;
-        g.commitNote = commitMsg;
-      } else {
-        g.commitNote = `commit 失败（exit ${c.exitCode}）：${c.stderr.trim() || c.stdout.trim()}——改动留工作区`;
-        log(`WARN 组 ${g.name} ${g.commitNote}`);
-      }
+    if (g.testFailed) continue; // 核验未过：不 commit（随复审反馈重修）
+    // 组级一笔 commit（引擎执行；只 add 本组实际改动文件，精确路径纪律；commit 保持
+    // 串行——NODE_COMMIT 的 index.lock 退避是兜底，不主动制造锁竞争）
+    const commitMsg = `fix(consistency): ${g.name} ${g.items.length} unreasonable`;
+    const c = await world.run("node", ["-e", NODE_COMMIT, info.projectRoot, JSON.stringify(g.changedFiles), commitMsg]);
+    if (c.exitCode === 0) {
+      g.committed = true;
+      g.commitNote = commitMsg;
+    } else {
+      g.commitNote = `commit 失败（exit ${c.exitCode}）：${c.stderr.trim() || c.stdout.trim()}——改动留工作区`;
+      log(`WARN 组 ${g.name} ${g.commitNote}`);
     }
   }
 
   // ── 阶段 C：定向复审（每组修完即审该组影响面；无改动组不派——无新信息可审）──
-  if (!foreignRound) {
+  {
     const reviewTargets = groupStates.filter((g) => g.changedFiles.length > 0 || g.testFailed);
     let reviews: { name: string; review: ReviewResult }[];
     try {
@@ -1121,39 +1143,22 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
       groups: groupStates.map((g) => ({ name: g.name, committed: g.committed, testFailed: g.testFailed })),
     });
 
-    // ── 停机线（§8.6 ①②，2026-09-25 复审合并：单条升级线与计数线时序互斥——uncleanRounds
+    // ── 停机线（§8.6 ①②，2025-09-25 复审合并：单条升级线与计数线时序互斥——uncleanRounds
     //    到 3 需 reviewRound=4，而计数线 reviewRound=3 必先触发——独立单条线是不可达死代码，
     //    已删除；单条顽固语义并入 stuck 终态归因：uncleanRounds ≥2（1 次初始修复 + 1 次打回
     //    后复审仍报）的活跃条目在 stuck 消息中标注，随 escalated 字段呈报用户裁决。
-    //    2026-09-26：收敛计数改用 effectiveRounds（只计有效轮）——越界作废轮对收敛进度
-    //    零贡献（无复审、修复未采信），却烧掉停机预算，曾实测 3 轮预算含 1 作废轮即 stuck、
-    //    白烧后手工收口；作废轮死循环改由连续作废线兜底（见 else 分支）──
+    //    2026-09-26 二次裁决：无人申报改动不再作废轮次（每轮都走提交+复审，轮轮有效），
+    //    计数回归单线 reviewRound；无人申报的改动留盘待认领、终态随 residualFiles 呈报）──
     const stubborn = activeAfter.filter((i) => i.uncleanRounds >= 2);
-    effectiveRounds += 1;
-    consecutiveForeign = 0;
-    if (activeAfter.length > 0 && (effectiveRounds >= 3 || activeAfter.length > prevActiveCount)) {
+    if (activeAfter.length > 0 && (reviewRound >= 3 || activeAfter.length > prevActiveCount)) {
       const why =
         activeAfter.length > prevActiveCount
           ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${activeAfter.length}）`
-          : `有效修复轮累计 ${effectiveRounds} 轮仍未收敛（另有作废轮 ${fixRound - effectiveRounds} 轮不占收敛预算；活跃 ${activeAfter.length} 条）`;
+          : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${activeAfter.length} 条）`;
       return await finish(
         "stuck",
         reviewRound,
         `计数停机线触发：${why}${stubborn.length > 0 ? `；顽固条目（≥2 轮修复未清，优先人工裁决）：${stubborn.map((i) => `${i.id}（${i.location}，${i.uncleanRounds} 轮）`).join("、")}` : ""}——残留清单见 remaining / 顽固清单见 escalated 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`,
-      );
-    }
-    prevActiveCount = activeAfter.length;
-  } else {
-    // foreign 轮：无复审（状态归属不明，复审无意义）；条目全保留。收敛停机线不计作废轮
-    // （作废轮对收敛进度零贡献，不烧 effectiveRounds 预算）；作废轮死循环由连续作废线
-    // 兜底：连续 ≥2 轮修复改动都无人申报 = 修复反复越界，续跑只重复作废，需人工盘点
-    consecutiveForeign += 1;
-    const activeAfter = activeItems();
-    if (activeAfter.length > 0 && consecutiveForeign >= 2) {
-      return await finish(
-        "stuck",
-        reviewRound,
-        `越界作废停机线触发：连续 ${consecutiveForeign} 轮修复改动未被任何组申报（第 ${fixRound} 轮，活跃 ${activeAfter.length} 条全部保留未采信）——修复反复产生未归属改动，续跑只会继续作废。恢复动作：先人工 git status 盘点工作区残留、核对各组修复为何持续触碰申报外文件，处置后重新发起`,
       );
     }
     prevActiveCount = activeAfter.length;

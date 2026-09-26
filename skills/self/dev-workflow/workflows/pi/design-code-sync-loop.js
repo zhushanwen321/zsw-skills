@@ -842,6 +842,9 @@ let lastDispatchedIds = [];
 let lastFixRecords = [];
 /** 越权候选卡收集（§7.3：矩阵过度/存疑行 + fixer defer 申报——用户裁决前不删码） */
 const overdesignCandidates = [];
+// 工作区残留登记（无人认领 + 多组冲突的改动）：不提交不作废留盘，随终态 residualFiles
+// 呈报主 agent 判归属处置（2026-09-26 用户裁决——各组只对自己的改动负责）
+const residualFiles = new Set();
 const ledgerById = (id) => ledger.find((f) => f.id === id);
 /** 条目编辑目标集（领地/闭包判交用）：code-right → 文档侧；doc-right → location 锚点
  *  ∪ 所属模块 files（模块 files 并集语义：波及扫描的合法领地）；planner 域 doc-right
@@ -997,6 +1000,7 @@ function finish(terminated, round, message) {
         remaining: ledger
             .filter((f) => f.status === "open")
             .map((f) => ({ id: f.id, severity: f.severity, direction: f.direction, location: f.location, gap: f.gap })),
+        residualFiles: [...residualFiles],
         message,
     };
 }
@@ -1084,7 +1088,7 @@ function fixerPrompt(g, byId) {
     L.push("修复纪律：");
     L.push("1. 修复前重演每条 fix-hint：建议站不住就换更稳方案并在该条 description 里说明。");
     L.push("2. 波及扫描：每修一处 grep 同模式实例（同类注释/测试文件头/其他文档引用点）一并修——漂移从来不是单点；组外文件里的同模式实例不改（并行冲突），在对应条目 description 标注「组外波及：<位置>」留给聚焦复审立项。");
-    L.push(`3. 领地互斥：优先只改本组文件（${g.files.map((p) => rel(p)).join("、")}）；确需触碰组外文件或新增文件（如增量测试文件），必须列入 affectedFiles 如实申报——未申报的组外改动会被引擎核验拦截。`);
+    L.push(`3. 领地互斥：优先只改本组文件（${g.files.map((p) => rel(p)).join("、")}）；确需触碰组外文件或新增文件（如增量测试文件），必须列入 affectedFiles 如实申报——未申报的改动不会被提交（留盘随终态呈报主 agent 处置，本组条目可能因修复未落盘而复检重派）。`);
     L.push("4. git 禁令：禁止一切 git 写操作（add/commit/push 等）——改动留工作区，引擎统一核验后按组 commit。");
     L.push("5. 每条修复给 selfCheck：一条可复跑命令 + 预期结果（改文档类可用 grep 断言；聚焦复审会复核它）。");
     L.push("6. 越权候选防线：若某条的修复动作将是「删除/移除一段现有实现」而其指控仅是「设计文档没写」（无行为矛盾/悬空引用等实质缺陷证据），**无论等级（含 must-fix）**都不要执行删除——放入 deferred（reason 写候选卡论证：小取舍/大简化/核心价值不变），它将随终态呈报用户裁决后才动；「文档没写」更可能是文档侧漏登记而非代码越权，宁可多呈报一张候选卡，不可直接删码。");
@@ -1559,18 +1563,27 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
             }
             const claims = outcomes.map(({ g, o }) => ({ gid: g.id, files: new Set([...g.files, ...o.affectedFiles]) }));
             const attributed = new Map();
-            const viol = [];
+            let unclaimed = 0;
+            let conflicted = 0;
             for (const p of changed) {
                 const owners = claims.filter((c) => c.files.has(p)).map((c) => c.gid);
-                if (owners.length === 0)
-                    viol.push(`${rel(p)}（无组认领——未申报的组外改动）`);
-                else if (owners.length > 1)
-                    viol.push(`${rel(p)}（${owners.join("/")} 多组认领——并行冲突）`);
+                if (owners.length === 0) {
+                    // 无组认领：不提交留盘、不阻塞本批（2026-09-26 用户裁决——每个组只对自己的
+                    // 改动负责，无人认领的改动随终态 residualFiles 呈报主 agent 判归属处置）
+                    residualFiles.add(rel(p));
+                    unclaimed += 1;
+                }
+                else if (owners.length > 1) {
+                    // 多组认领（并行冲突）：提交任何一版都会丢另一组的工作——不提交留盘，
+                    // 相关条目经下轮聚焦复审自然重派对账，冲突文件随终态呈报人工合并
+                    residualFiles.add(`${rel(p)}（${owners.join("/")} 多组认领冲突）`);
+                    conflicted += 1;
+                }
                 else
                     attributed.set(p, owners[0] ?? "");
             }
-            if (viol.length > 0) {
-                throw new Error(`领地核验违规：${viol.join("；")}。恢复动作：核对 fixer affectedFiles 申报；在途编辑已留工作区未提交，接管前先 git status 盘点`);
+            if (unclaimed > 0 || conflicted > 0) {
+                log(`WARN: 本批 ${unclaimed} 项无组认领 + ${conflicted} 项多组认领冲突——不提交留盘（认领唯一的各组照常提交），随终态 residualFiles 呈报`);
             }
             // 组级一笔 commit（引擎执行，fixer 全程无 git 写）
             for (const { g, o } of outcomes) {

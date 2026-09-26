@@ -950,8 +950,12 @@ for (const n of plan.nodes) {
   }
 }
 
-// 工作区干净基线（全部去重 cwd；.tmp/ 为 workflow 产物目录不计）——
-// 这是级二「领地并集复核」成立的必要前提：历史脏文件会让粗粒度归属判定产生假阳性
+// 启动基线扫描（全部去重 cwd；.tmp/ 为 workflow 产物目录不计）——记录启动前既有改动
+// 为豁免集，不拒绝启动（2026-09-26 用户裁决：启动前的工作区改动与本次节点无关，不该
+// 卡死发起——续跑/恢复场景工作区常有上次残留，拒启动 = 强迫人工先清理再重发）。
+// 该豁免集只服务终态对账口径：residualFiles 排除启动前既有项（它们不是本次 run 产生的，
+// 是否处置由主 agent 按自身语境判断）
+const preExistingByCwd = new Map<string, Set<string>>();
 const allCwds = [...new Set(plan.nodes.map((n) => n.cwd))];
 for (const c of allCwds) {
   const st = await gitPorcelainViaNode(c);
@@ -960,9 +964,9 @@ for (const c of allCwds) {
   }
   const dirty = parsePorcelain(st).filter((f) => !isTmpArtifact(f));
   if (dirty.length > 0) {
-    return invalidRet(
-      `工作区不干净（${c}）：\n${dirty.join("\n")}\n引擎按活跃单元领地并集复核改动归属，启动前须为干净基线——请先提交或清理上述改动`,
-      plan.statusPath,
+    preExistingByCwd.set(c, new Set(dirty));
+    log(
+      `WARN: 启动时 ${c} 工作区已有 ${dirty.length} 项未提交改动（${dirty.slice(0, 5).join("、")}${dirty.length > 5 ? " 等" : ""}）——不阻塞启动，终态对账单独列示（启动前既有，非本次节点产生）`,
     );
   }
 }
@@ -1125,10 +1129,13 @@ const terminated: WaveExecutorOutcome["terminated"] =
 const allTerr: string[] = [];
 for (const n of plan.nodes) if (n.kind === "dev") for (const t of n.territory) if (!allTerr.includes(t)) allTerr.push(t);
 const finalPorcelain = await gitPorcelainViaNode(plan.projectRoot);
-const residualFiles =
+const preExisting = preExistingByCwd.get(plan.projectRoot) ?? new Set<string>();
+const residualAll =
   finalPorcelain === null
     ? []
     : parsePorcelain(finalPorcelain).filter((f) => !isTmpArtifact(f) && !pathInTerritory(f, allTerr) && !declaredFiles.has(f));
+const residualFiles = residualAll.filter((f) => !preExisting.has(f));
+const preExistingLeft = residualAll.filter((f) => preExisting.has(f));
 
 // 终局回写：挂起节点落 suspended + run-terminal 事件（status.json 即人读恢复入口）
 await serializedStatus(async () => {
@@ -1166,6 +1173,14 @@ await serializedStatus(async () => {
       node: "-",
       event: "residual-files",
       detail: residualFiles.join("\n"),
+    });
+  }
+  if (preExistingLeft.length > 0) {
+    events.push({
+      seq: events.length + 1,
+      node: "-",
+      event: "pre-existing-files",
+      detail: `启动前既有未提交改动 ${preExistingLeft.length} 项（非本次 run 产生，是否处置按主 agent 语境判断）：\n${preExistingLeft.join("\n")}`,
     });
   }
   await writeTextViaNode(plan.statusPath, JSON.stringify({ ...st.extra, baseline: st.baseline, nodes, events }, null, 2));

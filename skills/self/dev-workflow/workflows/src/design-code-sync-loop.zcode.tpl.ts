@@ -228,6 +228,9 @@ interface SyncResult {
   overdesignCandidates: { id: string; location: string; gap: string; reason: string }[];
   /** 残余活跃条目（stuck / *-failure 随终态呈报；设计 §7 停机线：清单随终态） */
   remaining: { id: string; severity: string; direction: string; location: string; gap: string }[];
+  /** 工作区无人认领/多组冲突的残留改动（各组只对自己的改动负责，无人认领的不提交
+   *  不作废留盘）——主 agent 判归属后处置（补提交/人工合并/清理/呈报用户，禁静默丢弃） */
+  residualFiles: string[];
   /** 一句话终态说明（含恢复动作） */
   message: string;
 }
