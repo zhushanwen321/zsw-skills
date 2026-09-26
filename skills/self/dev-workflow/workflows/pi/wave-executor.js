@@ -348,7 +348,7 @@ function validatePlan(raw) {
     }
     else {
         if (!isRec(raw.acceptance)) {
-            errors.push("mode=acceptance 时必须提供 acceptance 对象（nodes/groups/haltOnCoreFail）");
+            errors.push("mode=acceptance 时必须提供 acceptance 对象（nodes/groups；core/haltOnCoreFail 已退役被忽略）");
         }
         else {
             accRec = raw.acceptance;
@@ -490,42 +490,12 @@ function validatePlan(raw) {
     const cycleHit = detectCycle(nodes.map((n) => n.id), depsOf);
     if (cycleHit !== null)
         errors.push(`依赖图存在环，环上节点：${cycleHit}`);
-    // acceptance 分组
-    let coreIds = new Set();
-    let haltOnCoreFail = false;
+    // acceptance 分组：groups.core / haltOnCoreFail 已退役（2026-09-26 用户裁决——依赖可达性
+    // 熔断统一判据后核心场景标注不再承载语义）。字段保留宽容解析（旧 exec-plan 不报错、直接忽略）
     if (mode === "acceptance" && accRec !== null) {
         const groups = accRec.groups;
         if (!isRec(groups)) {
-            errors.push("acceptance.groups 必须是对象 {core, nonCore}");
-        }
-        else {
-            if (!isStrArr(groups.core)) {
-                errors.push("acceptance.groups.core 必须是字符串数组");
-            }
-            else {
-                coreIds = new Set(groups.core);
-                for (const c of groups.core) {
-                    if (!idSet.has(c))
-                        errors.push(`groups.core 引用了不存在的节点：${c}`);
-                }
-            }
-            if (groups.nonCore !== undefined) {
-                if (!isStrArr(groups.nonCore)) {
-                    errors.push("acceptance.groups.nonCore 必须是字符串数组");
-                }
-                else {
-                    for (const c of groups.nonCore) {
-                        if (!idSet.has(c))
-                            errors.push(`groups.nonCore 引用了不存在的节点：${c}`);
-                    }
-                }
-            }
-        }
-        if (typeof accRec.haltOnCoreFail !== "boolean") {
-            errors.push("acceptance.haltOnCoreFail 必须是布尔值");
-        }
-        else {
-            haltOnCoreFail = accRec.haltOnCoreFail;
+            errors.push("acceptance.groups 必须是对象 {core, nonCore}（core/haltOnCoreFail 已退役，保留字段被忽略）");
         }
     }
     const commitTemplate = isStr(raw.commitTemplate) ? raw.commitTemplate : null;
@@ -549,8 +519,6 @@ function validatePlan(raw) {
             commitTemplate: commitTemplate ?? "{unitId} — {summary}",
             baseline: typeof raw.baseline === "string" ? raw.baseline : null,
             nodes,
-            coreIds,
-            haltOnCoreFail,
         },
     };
 }
@@ -1124,13 +1092,8 @@ async function runSchedulingLoop() {
                 // exec-plan 解析失败（主会话写入中途）保持内存态，下轮再读
             }
         })();
-        // 非核心组在核心全绿后解锁（设计 §6.2 D3）；dev 模式核心集为空 → 空条件恒真，不引入额外门
-        const coreAllDone = plan.nodes
-            .filter((n) => plan.coreIds.has(n.id))
-            .every((n) => nodeState(n.id) === "done");
         const ready = plan.nodes.filter((n) => nodeState(n.id) === "pending" &&
-            n.deps.every((d) => nodeState(d) === "done") &&
-            (plan.coreIds.has(n.id) || coreAllDone));
+            n.deps.every((d) => nodeState(d) === "done"));
         // 游标防同轮重复派发（launch 后 state 同步变 in-progress，游标是双保险）
         let dispatched = 0;
         while (active.size < MAX_CONCURRENCY && dispatched < ready.length) {
@@ -1158,40 +1121,27 @@ async function runSchedulingLoop() {
         log(`节点 ${finishedId} 落定（活跃 ${active.size}），重算就绪集`);
         // 核心组熔断判定：任一核心节点 blocked/failed 且 haltOnCoreFail → 记归因、停止新派发。
         // 在飞节点收尾不放弃（await allSettled——熔断只是不派新，已派节点的落盘/commit 照常完成）
-        if (plan.haltOnCoreFail) {
-            const bad = plan.nodes.find((n) => plan.coreIds.has(n.id) && (nodeState(n.id) === "blocked" || nodeState(n.id) === "failed"));
-            if (bad !== undefined) {
-                const rt = state.get(bad.id);
-                coreFail = {
-                    id: bad.id,
-                    detail: `${rt?.reason ?? "未知原因"}\n${rt?.detail ?? ""}`.trim(),
-                };
-                log(`核心组节点 ${bad.id} 失败，haltOnCoreFail 熔断：未派发节点不再派发，等待在飞节点收尾`);
-                await Promise.allSettled([...active.values()]);
-                break;
-            }
-        }
-        // §8.7 依赖可达性熔断（2026-09-26 用户裁决）：非 core 节点 failed 且卡住未终态后继
-        //（verify 自愈不收敛 / product-bug）→ 立即停止派发；不卡的 failed 已被记录跳过，不
-        // 影响其余节点调度。通用原则：处理不了的问题，不影响后续执行就先记录并跳过；影响则停止
-        if (coreFail === null && plan.mode === "acceptance") {
+        // §8.7 依赖可达性熔断（2026-09-26 用户裁决，统一判据）：任一节点 blocked/failed 且
+        // 卡住未终态后继（verify 自愈不收敛 / product-bug / dev 打回超限 / 自报 blockers）→
+        // 立即停止派发（在飞收尾不放弃）；不卡的失败已被记录跳过，其余节点照常调度。原静态
+        // coreIds/haltOnCoreFail 短路已退役（核心场景标注不再承载熔断语义——依赖闭包是唯一判据）
+        {
             const stuckBad = plan.nodes.find((n) => {
-                if (plan.coreIds.has(n.id))
-                    return false; // core 已由 haltOnCoreFail 承接
-                if (nodeState(n.id) !== "failed")
+                const st = nodeState(n.id);
+                if (st !== "failed" && st !== "blocked")
                     return false;
                 return successorsOf(n.id).some((s) => {
-                    const st = nodeState(s);
-                    return st === "pending" || st === "in-progress";
+                    const sst = nodeState(s);
+                    return sst === "pending" || sst === "in-progress";
                 });
             });
             if (stuckBad !== undefined) {
                 const rt = state.get(stuckBad.id);
                 coreFail = {
                     id: stuckBad.id,
-                    detail: `${rt?.reason ?? "验收失败卡住后继"}\n${rt?.detail ?? ""}`.trim(),
+                    detail: `${rt?.reason ?? "节点失败卡住后继"}\n${rt?.detail ?? ""}`.trim(),
                 };
-                log(`节点 ${stuckBad.id} 验收失败且卡住后继（依赖可达性熔断 §8.7）：未派发节点不再派发，等待在飞节点收尾`);
+                log(`节点 ${stuckBad.id} 失败/受阻且卡住后继（依赖可达性熔断 §8.7）：未派发节点不再派发，等待在飞节点收尾`);
                 await Promise.allSettled([...active.values()]);
                 break;
             }

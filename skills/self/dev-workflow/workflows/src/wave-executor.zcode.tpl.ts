@@ -3,8 +3,8 @@ description: dev-flow-wf W2 通用 DAG 调度引擎（wave-executor）：读 exe
   （schema/依赖环/文件存在性/工作区干净基线），依赖就绪节点流式派发（≤5 并发，wave 字段
   仅展示不参与调度），每节点确定性核验（files_changed ⊆ 领地 + 全量 status 粗粒度复核 +
   节点测试命令重跑）→ commit → 解锁后继；核验不过打回同名 agent 定向修（≤2 轮，超限
-  blocked 且后继挂起）；acceptance 模式承载 verify/inspect 节点 + 核心组 haltOnCoreFail
-  熔断；终态 completed / blocked / core-failed，全程 failed-as-return 不 throw。
+  blocked 且后继挂起）；acceptance 模式承载 verify/inspect 节点 + §8.7 依赖可达性熔断
+  （blocked/failed 卡未终态后继即停；原 coreIds/haltOnCoreFail 静态短路已退役）；终态 completed / blocked / core-failed，全程 failed-as-return 不 throw。
 whenToUse: dev-flow-wf 的 D1 开发循环与 D3 端到端验收发起本 workflow（CreateWorkflow path
   指向本文件 + args.execPlan）。exec-plan.json 由 D0 从设计包编译产出；断点恢复走
   ResumeWorkflowRun（node-<unitId> 命名保缓存）或按 status.json 人读恢复（git 为准）。
@@ -89,8 +89,6 @@ interface ParsedPlan {
   commitTemplate: string;
   baseline: string | null;
   nodes: PlanNode[];
-  coreIds: Set<string>;
-  haltOnCoreFail: boolean;
 }
 
 type ValidateResult = { ok: true; plan: ParsedPlan } | { ok: false; errors: string[] };

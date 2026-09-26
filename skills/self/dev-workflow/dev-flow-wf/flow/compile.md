@@ -36,8 +36,7 @@
   ],
   "acceptance": {                       // D3 实例化时生成（本步先空着）
     "nodes": [],                        // kind=verify（script/artifactsDir）| inspect（promptFile/artifactsRefs/deps）
-    "groups": { "core": [], "nonCore": [] },
-    "haltOnCoreFail": true
+    "groups": { "core": [], "nonCore": [] }   // core/haltOnCoreFail 已退役被引擎忽略（依赖可达性熔断为唯一判据，设计 §8.7）——字段保留仅为旧 exec-plan 兼容
   }
 }
 ```
@@ -71,7 +70,7 @@
 
 ### 6. 验收编译规则（为 D3 预生成 acceptance 面）
 
-验收计划表逐行：**L3 → verify 节点**（script = 剧本路径，artifactsDir）；**L4 → inspect 节点**（promptFile 任务书含「确定性产物已就绪」指针，deps 指向其 verify 前驱）；**L0/L2 不编译成节点**——已由 D1 单元测试与 D2 Gate A 覆盖，行标注「已覆盖」，D3 入口门引用 Gate A 证据（HEAD 未前进则免重跑）。混合行拆行（确定性部分降 L3 先行，判断行依赖它）。分组按「组」列；核心短路 haltOnCoreFail = true。
+验收计划表逐行：**L3 → verify 节点**（script = 剧本路径，artifactsDir）；**L4 → inspect 节点**（promptFile 任务书含「确定性产物已就绪」指针，deps 指向其 verify 前驱）；**L0/L2 不编译成节点**——已由 D1 单元测试与 D2 Gate A 覆盖，行标注「已覆盖」，D3 入口门引用 Gate A 证据（HEAD 未前进则免重跑）。混合行拆行（确定性部分降 L3 先行，判断行依赖它）。分组按「组」列；熔断判据 = 依赖可达性（设计 §8.7；核心短路 haltOnCoreFail 已退役被引擎忽略）。
 
 **剧本实装硬门槛 [MANDATORY]**：verify 节点引用的每个 script 文件必须在 D0 编译完成前已写好并对样本数据跑通过（exit 0）——D0 只填路径不写剧本 = 给 D3 埋启动即炸的雷（引擎启动校验 verify 节点 script 必须存在；曾实测留占位引用 batch-rerun.mjs 未实装，D3 无法按默认形态发起，被迫全程手工）。剧本确实写不出的行，降级为 L4 判断行（promptFile 派 agent 按断言清单执行）并在验收计划表标注——禁止引用未来文件。
 

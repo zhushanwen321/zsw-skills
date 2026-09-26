@@ -337,7 +337,7 @@ const HINT_RETIRE_INVALID = "修订脚本退役 prompt 后重跑";
 const DEFAULT_MAX_ROUNDS = 10;
 const REVIEWER_BATCH = 4; // 模块 fan-out 分批（全局 subagent 并发 ≤5 约束）
 const FIXER_CONCURRENCY = 3; // 修复组并行批大小（rfl 同款；领地互斥由闭包合并保证）
-const STUCK_STALL_ROUNDS = 4; // 停机线：must-fix 连续 N 轮不降判 stuck（设计 §7：≥4 轮不收敛）
+const STUCK_STALL_ROUNDS = 3; // 停机线：must-fix 连续 N 轮不降判 stuck（2026-09-26 用户裁决三 loop 统一 3 轮；原设计 §7 为 4）
 const STUCK_PER_FINDING_ROUNDS = 2; // 停机线：单条活跃存活超过 N 轮判 stuck（设计 §7：单条超 2 轮）
 const VALID_ARG_KEYS = new Set([
     "designDoc",
@@ -354,8 +354,11 @@ const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/sync-review
 const RETIREMENT_DIR = ".tmp/design-doc-retirement"; // 退役候选移动目标（projectRoot 相对，gitignore 产物）
 // 机械信号步（§7.1 反引号 grep——[HISTORICAL] 悬空引用防线，机器产确定性信号）：
 // argv: [projectRoot, ...docPaths] → 提取文档反引号标识符（纯 ASCII 词、非路径、词数 ≤4、
-// 非版本号，上限 300 防爆）→ 逐个 git grep -l -F 验证 → stdout = JSON 零命中符号数组
-//（exit 1 = 无匹配；128 = git 错误跳过不立项——机器信号只报确定性悬空）
+// 非版本号，上限 300 防爆）→ 分批单进程多 pattern 验证（git grep -oh -F -e s1 -e s2… 一次
+// 查批内全部符号，-o 输出实际命中的匹配文本，与输入清单差集 = 零命中清单）→ stdout = JSON
+// 零命中符号数组。原逐符号串行 spawnSync 在大仓上 300 符号可达 5-15min（world.run 默认
+// 300s 必超时，2026-09-26 修复：3 批进程替代 300 个进程）。批 git 错误（exit 128）保守
+// 跳过不立项（与原单符号 128 语义一致——机器信号只报确定性悬空）
 const NODE_BACKTICK_GREP = [
     "var fs=require('fs'),cp=require('child_process');",
     "var root=process.argv[1];",
@@ -374,11 +377,15 @@ const NODE_BACKTICK_GREP = [
     "var all=[...syms];",
     "if(all.length>300)console.error('WARN: 反引号符号 '+all.length+' 个超上限，仅核验前 300');",
     "var list=all.slice(0,300);",
-    "var missing=[];",
-    "for (var li=0; li<list.length; li++){ var sym=list[li];",
-    "  var r=cp.spawnSync('git',['grep','-l','-F',sym],{cwd:root,encoding:'utf8',maxBuffer:1048576});",
-    "  if(r.status===1)missing.push(sym);",
+    "var hit=new Set();",
+    "for (var b=0; b<list.length; b+=100){",
+    "  var pat=[];",
+    "  for (var k=b; k<b+100 && k<list.length; k++){ pat.push('-e'); pat.push(list[k]); }",
+    "  var r=cp.spawnSync('git',['grep','-oh','-F'].concat(pat),{cwd:root,encoding:'utf8',maxBuffer:67108864});",
+    "  if (r.status === 128) { console.error('WARN: 批 '+b+' git 错误，该批符号保守跳过不立项'); continue; }",
+    "  if (r.stdout) { for (var ln of r.stdout.split('\\n')) { var tt=ln.trim(); if (tt) hit.add(tt); } }",
     "}",
+    "var missing=list.filter(function(s){ return !hit.has(s); });",
     "console.log(JSON.stringify(missing));",
 ].join("\n");
 // node -e 通道（argv 传参，无 shell 注入面；node 代码不受脚本 facade 限制）
