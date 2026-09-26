@@ -62,8 +62,32 @@ const SCHEMA_NodeResult = {
 // wfAgent：公共体的 agent(name, persona).ask<T>(prompt) 的 pi 等价。构建管线把公共体
 // 调用点改写为 wfAgent(、泛型参数转为首个字符串参数（typeKey），这里查 SCHEMA_BY_KEY。
 // persona 拼 prompt 头（pi agent() 无 system 通道）；每次调用都是新 agent（pi 无续聊）。
+const SCHEMA_HealVerdict = {
+  type: "object",
+  properties: {
+    class: {
+      type: "string",
+      enum: ["spec-bug", "product-bug", "environment"],
+      description: "spec-bug=验收资产自身缺陷（可修复重验）/ product-bug=被测产品缺陷（不修，依赖判定）/ environment=超时资源类（重试一次）",
+    },
+    evidence: { type: "string", description: "一句话证据（引用失败输出原文）" },
+    failureFiles: { type: "array", items: { type: "string" }, description: "归因指向的文件（spec-bug 时为验收资产文件；product-bug 时为产品文件——只读呈报不修复）" },
+    fixHint: { type: "string", description: "spec-bug 修复要点（可空串）" },
+  },
+  required: ["class", "evidence", "failureFiles", "fixHint"],
+};
+const SCHEMA_HealFixReport = {
+  type: "object",
+  properties: {
+    fixed: { type: "array", items: { type: "string" }, description: "实际修改的验收资产文件" },
+    summary: { type: "string", description: "一句话修复说明" },
+  },
+  required: ["fixed", "summary"],
+};
 const SCHEMA_BY_KEY = {
   NodeResult: SCHEMA_NodeResult,
+  HealVerdict: SCHEMA_HealVerdict,
+  HealFixReport: SCHEMA_HealFixReport,
 };
 function wfAgent(name, persona) {
   return {

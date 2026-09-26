@@ -29,21 +29,44 @@ const execPlanPath = args.execPlan.trim();
 
 const MAX_CONCURRENCY = 5; // 用户指定的全局并发上限（批大小）
 const MAX_REJECT_ROUNDS = 2; // 打回定向修上限（初始 1 次 + 打回 2 次 = 至多 3 次 ask）
+const MAX_HEAL_ROUNDS = 10; // 验收自愈轮次上限（设计 §8.7：沿用现成 maxRounds=10；超限走依赖可达性判定）
 const TAIL_LINES = 40; // 失败输出贴入打回 prompt 的行数上限
 const TEST_TIMEOUT_MS = 1800000; // 节点测试命令兜底墙钟（单元级=数十分钟；world.run 默认 300s 会误杀大仓单测）
 const VERIFY_SCRIPT_TIMEOUT_MS = 3600000; // 验收剧本兜底墙钟（任务级=小时级，按超时默认原则校准）
 const TEST_WHITELIST = ["pnpm", "npm", "node", "git", "bash"] as const;
 const VALID_ENTRY_STATUS = new Set(["pending", "in-progress", "done", "blocked", "failed", "suspended"]);
 
+// T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——无法自决的
+// 按职责内默认规则处置 + 记录待裁决事项随终态呈报。随 persona 固化进全部 agent。
+const NO_ASK_RULE =
+  "禁止向用户提问（无 AskUserQuestion / ask-user / 任何等待用户输入的操作）——workflow 内没有用户交互位；" +
+  "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
+
 const DEV_PERSONA =
   "你是开发单元执行者：严格按任务书改码，只改任务书领地内的文件；自己跑通任务书定义的单元测试后再交付；" +
   "不要自行 git add / git commit——引擎核验通过后统一提交，自行提交会破坏状态对账与并行调度；" +
   "引擎会确定性核验领地与测试，伪造 files_changed 或测试证据必被抓住；任务书与现实冲突、环境缺失时如实填报 " +
-  "blockers/deviations，不要硬编绕过。";
+  "blockers/deviations，不要硬编绕过。" +
+  NO_ASK_RULE;
 
 const INSPECT_PERSONA =
   "你是验收检查执行者：只读检查（可运行只读命令、读文件），不修改任何代码、不产生 commit；" +
-  "按任务书逐项核对并如实返回结论；证据不足就如实说，不猜测、不夸大。";
+  "按任务书逐项核对并如实返回结论；证据不足就如实说，不猜测、不夸大。" +
+  NO_ASK_RULE;
+
+// ── 验收自愈 persona（设计 §8.7）──
+
+const DIAGNOSE_PERSONA =
+  "你是验收失败归因员：只读分析（可读失败日志 / 产物文件，可跑只读命令），不修改任何文件；" +
+  "判定失败根因类别并给证据——证据必须引用失败输出原文，不猜测；" +
+  NO_ASK_RULE;
+
+const HEAL_PERSONA =
+  "你是验收资产修复者：只修改归因指定的验收资产文件（测试 spec / 验收剧本 / 断言），禁止修改任何产品代码；" +
+  "修复必须以归因证据为依据（断言口径错→改对口径 / 等待时序错→改等待点 / 窗口失配→按实测校准），" +
+  "禁止无证据地放宽断言、删除断言或跳过用例换绿灯；修完如实返回修改清单；" +
+  NO_ASK_RULE;
+
 
 // ── node -e 通道（脚本无 fs/process：写盘/读文件/git/带 cwd 的子进程全走 world.run node -e，
 //    argv 传参无 shell 注入面；代码串内可 require Node 内建） ──
@@ -584,6 +607,84 @@ async function markNodeBlockedOrFailed(
   log(`节点 ${id} ${st === "failed" ? "验收失败" : "blocked"}：${reason}`);
 }
 
+// ── 验收自愈（设计 §8.7）：verify fail → 归因 → 分流 → 修资产重验 / 依赖可达性判定 ──
+
+/** 归因输出防御性归一：class 非法 → product-bug（保守：不修资产，直接依赖判定——
+ *  坏输出绝不触发误修）；数组字段非字符串数组 → 空数组；文本字段非字符串 → 空串。 */
+function sanitizeHealVerdict(v: unknown): HealVerdict {
+  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const cls = o["class"];
+  const klass: HealVerdict["class"] =
+    cls === "spec-bug" || cls === "product-bug" || cls === "environment" ? cls : "product-bug";
+  const txt = (k: string): string => (typeof o[k] === "string" ? (o[k] as string) : "");
+  const files = Array.isArray(o["failureFiles"]) ? o["failureFiles"].filter((f): f is string => typeof f === "string") : [];
+  return { class: klass, evidence: txt("evidence"), failureFiles: files, fixHint: txt("fixHint") };
+}
+
+/** 修复自报防御性归一（自报仅供历史记录，重验由引擎机器判定）。 */
+function summarizeHealFix(v: unknown): string {
+  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const fixed = Array.isArray(o["fixed"]) ? o["fixed"].filter((f): f is string => typeof f === "string") : [];
+  const summary = typeof o["summary"] === "string" ? o["summary"] : "";
+  return `${fixed.join("、") || "（无自报文件）"}${summary !== "" ? `——${summary}` : ""}`;
+}
+
+/** DAG 后继闭包（直接或传递依赖本节点的全部节点）——依赖可达性熔断的机器判据。 */
+function successorsOf(id: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>([id]);
+  const queue = [id];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const n of plan.nodes) {
+      if (n.deps.includes(cur) && !seen.has(n.id)) {
+        seen.add(n.id);
+        out.push(n.id);
+        queue.push(n.id);
+      }
+    }
+  }
+  return out;
+}
+
+async function runVerifyScript(node: PlanNode): Promise<{ exitCode: number; output: string }> {
+  const r = await world.run("node", ["-e", RUN_IN_CWD, "bash", node.cwd, node.script], {
+    timeoutMs: VERIFY_SCRIPT_TIMEOUT_MS,
+  });
+  return { exitCode: r.exitCode, output: `${r.stdout}\n${r.stderr}` };
+}
+
+/** 归因 agent（§8.7 ①）：三分类 + 证据 + 失败面文件集；自愈历史回喂（跨轮记忆）。 */
+async function diagnoseVerifyFailure(
+  node: PlanNode,
+  run: { exitCode: number; output: string },
+  history: string[],
+): Promise<HealVerdict> {
+  const diag = agent(`诊断-${node.id}`, DIAGNOSE_PERSONA);
+  const raw = await diag.ask<HealVerdict>(
+    [
+      `验收节点 ${node.id} 的剧本执行失败，请归因（只读分析）。`,
+      `- 剧本：${node.script}（cwd ${node.cwd}）；本次退出码 ${run.exitCode}`,
+      `- 失败输出（tail）：\n${tailLines(run.output, TAIL_LINES)}`,
+      `- 完整日志与产物在剧本同目录（*.log / RESULT* / diag JSON）与产物目录 ${node.artifactsDir}`,
+      history.length > 0
+        ? `- 本节点自愈历史（前几轮归因与修复，均已重验仍红——本轮归因必须解释为何未收敛）：\n${history.join("\n")}`
+        : "",
+      "",
+      "归类三选一（class 字段）：",
+      '- spec-bug：验收资产自身缺陷（断言口径错 / 等待时序错 / 窗口失配 / 剧本 bug）——failureFiles 填验收资产文件，fixHint 给修复要点',
+      '- product-bug：被测产品实现缺陷——failureFiles 填产品文件（只读呈报，不会被修复）',
+      "- environment：超时 / 资源 / 环境类失败（非断言红）",
+      "",
+      '返回 JSON：{ "class": "spec-bug"|"product-bug"|"environment", "evidence": "一句话证据（引用失败输出原文）", "failureFiles": ["文件路径"], "fixHint": "修复要点（可空串）" }',
+    ]
+      .filter((s) => s !== "")
+      .join("\n"),
+  );
+  return sanitizeHealVerdict(raw);
+}
+
+
 // ── 测试命令白名单通道（program 字面量分支——编译期命令集可见；cwd 经 node -e 参数传入） ──
 
 async function runTestCommand(cmd: TestCommand, cwd: string): Promise<RunOutcome | null> {
@@ -769,20 +870,79 @@ async function executeDevNode(node: PlanNode): Promise<void> {
 
 async function executeVerifyNode(node: PlanNode): Promise<void> {
   await beginNode(node.id);
-  // 剧本由 D0 预编译，引擎只执行断言退出码；bash 白名单分支 + cwd 参数化
-  const r = await world.run("node", ["-e", RUN_IN_CWD, "bash", node.cwd, node.script], {
-    timeoutMs: VERIFY_SCRIPT_TIMEOUT_MS,
-  });
-  if (r.exitCode !== 0) {
+  // 剧本由 D0 预编译，引擎只执行断言退出码；bash 白名单分支 + cwd 参数化。
+  // fail → run 内自愈循环（§8.7）：归因 → spec-bug 修验收资产重验 / product-bug 不修 /
+  // environment 重试一次；不收敛按依赖可达性判定（卡后继 = 熔断上报；不卡 = 跳过跑完上报）
+  let run = await runVerifyScript(node);
+  let attempt = 1;
+  const healHistory: string[] = [];
+  const healer = agent(`修复-${node.id}`, HEAL_PERSONA); // 同名续聊承载多轮修复上下文（pi 侧靠 healHistory 回喂）
+  while (run.exitCode !== 0) {
+    const verdict = await diagnoseVerifyFailure(node, run, healHistory);
+    healHistory.push(`第 ${attempt} 轮归因 ${verdict.class}：${verdict.evidence}`);
+    if (verdict.class === "spec-bug" && attempt < MAX_HEAL_ROUNDS) {
+      const fix = await healer.ask<HealFixReport>(
+        [
+          `验收节点 ${node.id} 的失败归因为 spec-bug（验收资产自身缺陷），请修复验收资产。`,
+          `- 归因证据：${verdict.evidence}`,
+          `- 归因指向的验收资产文件：${verdict.failureFiles.join("、") || node.script}`,
+          `- 修复要点：${verdict.fixHint !== "" ? verdict.fixHint : "（归因未给——按证据自行判定）"}`,
+          `- 失败输出（tail）：\n${tailLines(run.output, TAIL_LINES)}`,
+          healHistory.length > 1 ? `- 历史修复（均已重验仍红——不要重复无效修复，换思路或修正归因未覆盖的口径）：\n${healHistory.join("\n")}` : "",
+          `只改上述验收资产文件（禁止产品代码）；修复后引擎会原样重跑剧本（${node.script}）机器判定，不采信自报。`,
+          '返回 JSON：{ "fixed": ["实际修改的文件"], "summary": "一句话修复说明" }',
+        ]
+          .filter((s) => s !== "")
+          .join("\n"),
+      );
+      healHistory.push(`  修复：${summarizeHealFix(fix)}`);
+      attempt += 1;
+      await statusUpdate(
+        node.id,
+        { status: "in-progress", attempts: attempt },
+        "heal-round",
+        `spec-bug 修复后重验（第 ${attempt - 1} 轮自愈）：${verdict.evidence}`,
+      );
+      run = await runVerifyScript(node);
+      continue;
+    }
+    if (verdict.class === "environment" && attempt === 1) {
+      attempt += 1;
+      await statusUpdate(
+        node.id,
+        { status: "in-progress", attempts: attempt },
+        "heal-retry",
+        `environment 类失败重试一次：${verdict.evidence}`,
+      );
+      run = await runVerifyScript(node);
+      continue;
+    }
+    // product-bug（用户裁决 2026-09-26：验收 fixer 不碰产品代码）或 spec-bug 自愈不收敛 /
+    // environment 重试仍红 → 依赖可达性判定（调度循环据此熔断或继续）
+    const stuck = successorsOf(node.id).filter((s) => {
+      const st = nodeState(s);
+      return st === "pending" || st === "in-progress";
+    });
+    const mode =
+      stuck.length > 0
+        ? `卡住后继（${stuck.join("、")}）——立即熔断上报，由主 agent / 用户裁决`
+        : "不卡后续——记录跳过，其余节点照常执行，终态统一上报";
     await markNodeBlockedOrFailed(
       node.id,
       "failed",
-      `验收脚本退出码 ${r.exitCode}`,
-      tailLines(`${r.stdout}\n${r.stderr}`, TAIL_LINES),
-      1,
+      `验收失败（${verdict.class}，${attempt} 次尝试；${mode}）：${verdict.evidence}`,
+      [
+        tailLines(run.output, TAIL_LINES),
+        verdict.failureFiles.length > 0 ? `归因指向：${verdict.failureFiles.join("、")}` : "",
+        `自愈历史：\n${healHistory.join("\n")}`,
+      ]
+        .filter((s) => s !== "")
+        .join("\n"),
+      attempt,
     );
     return;
   }
+  if (healHistory.length > 0) log(`Verify 节点 ${node.id} 经 ${attempt - 1} 轮自愈后收敛`);
   const artOk = await existsViaNode(node.artifactsDir);
   if (!artOk) {
     await markNodeBlockedOrFailed(
@@ -790,11 +950,11 @@ async function executeVerifyNode(node: PlanNode): Promise<void> {
       "failed",
       `产物目录不存在：${node.artifactsDir}`,
       "脚本 exit 0 但 artifactsDir 缺失",
-      1,
+      Math.max(attempt, 1),
     );
     return;
   }
-  await finishNodeDone(node.id, 1, undefined, `verify exit 0；产物目录 ${node.artifactsDir}`);
+  await finishNodeDone(node.id, Math.max(attempt, 1), undefined, `verify exit 0；产物目录 ${node.artifactsDir}`);
   log(`Verify 节点 ${node.id} 脚本退出 0，产物目录存在，通过`);
 }
 
@@ -937,6 +1097,29 @@ async function runSchedulingLoop(): Promise<void> {
           detail: `${rt?.reason ?? "未知原因"}\n${rt?.detail ?? ""}`.trim(),
         };
         log(`核心组节点 ${bad.id} 失败，haltOnCoreFail 熔断：未派发节点不再派发，等待在飞节点收尾`);
+        await Promise.allSettled([...active.values()]);
+        break;
+      }
+    }
+    // §8.7 依赖可达性熔断（2026-09-26 用户裁决）：非 core 节点 failed 且卡住未终态后继
+    //（verify 自愈不收敛 / product-bug）→ 立即停止派发；不卡的 failed 已被记录跳过，不
+    // 影响其余节点调度。通用原则：处理不了的问题，不影响后续执行就先记录并跳过；影响则停止
+    if (coreFail === null && plan.mode === "acceptance") {
+      const stuckBad = plan.nodes.find((n) => {
+        if (plan.coreIds.has(n.id)) return false; // core 已由 haltOnCoreFail 承接
+        if (nodeState(n.id) !== "failed") return false;
+        return successorsOf(n.id).some((s) => {
+          const st = nodeState(s);
+          return st === "pending" || st === "in-progress";
+        });
+      });
+      if (stuckBad !== undefined) {
+        const rt = state.get(stuckBad.id);
+        coreFail = {
+          id: stuckBad.id,
+          detail: `${rt?.reason ?? "验收失败卡住后继"}\n${rt?.detail ?? ""}`.trim(),
+        };
+        log(`节点 ${stuckBad.id} 验收失败且卡住后继（依赖可达性熔断 §8.7）：未派发节点不再派发，等待在飞节点收尾`);
         await Promise.allSettled([...active.values()]);
         break;
       }

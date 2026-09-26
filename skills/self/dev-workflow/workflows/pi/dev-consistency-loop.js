@@ -642,9 +642,15 @@ const ctxBlock = [
     `- 设计文档：${info.designDocPath}`,
     `- impl-plan（「0 章节映射」在其中的章节映射数据）：${info.planPath}${info.planMdPath ? `；人读版：${info.planMdPath}` : ""}`,
 ].join("\n");
-const R1_PERSONA = "你是对抗式一致性审查者：只报告、绝不修改任何文件；每个发现都要有你亲自读到的 file:line 证据，禁止凭目录名想象；只审本分区文件，不引用其他审查者的结论。";
-const FIX_PERSONA = "你是资深修复工程师：先读设计文档对应节核实条目属实再动手、小步修改、如实申报改动文件与未修项（不静默跳过）；确信设计文档自身有错时改走 skipped 申报而不盲改代码；绝不自行执行任何 git 提交类操作。";
-const RE_PERSONA = "你是对抗式一致性复审者：只报告、绝不修改任何文件；逐条亲自核实修复声称（读到行级才算数，修复方声称不算证据）；只审指定影响面，不全面重审。";
+// T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
+const NO_ASK_RULE = "禁止向用户提问（无 AskUserQuestion / ask-user / 任何等待用户输入的操作）——workflow 内没有用户交互位；" +
+    "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
+const R1_PERSONA = "你是对抗式一致性审查者：只报告、绝不修改任何文件；每个发现都要有你亲自读到的 file:line 证据，禁止凭目录名想象；只审本分区文件，不引用其他审查者的结论。" +
+    NO_ASK_RULE;
+const FIX_PERSONA = "你是资深修复工程师：先读设计文档对应节核实条目属实再动手、小步修改、如实申报改动文件与未修项（不静默跳过）；确信设计文档自身有错时改走 skipped 申报而不盲改代码；绝不自行执行任何 git 提交类操作。" +
+    NO_ASK_RULE;
+const RE_PERSONA = "你是对抗式一致性复审者：只报告、绝不修改任何文件；逐条亲自核实修复声称（读到行级才算数，修复方声称不算证据）；只审指定影响面，不全面重审。" +
+    NO_ASK_RULE;
 function r1Prompt(p) {
     return [
         `第 1 轮全面一致性审查（分区：${p.name}）。`,

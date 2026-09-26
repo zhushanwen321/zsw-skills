@@ -40,6 +40,26 @@ interface VerifyVerdict {
   detail: string;
 }
 
+/** 验收自愈归因结论（设计 §8.7）：三分类 + 证据 + 失败面文件集 */
+interface HealVerdict {
+  /** spec-bug=验收资产自身缺陷（可修复重验）/ product-bug=被测产品缺陷（不修，依赖判定）/ environment=超时资源类（重试一次） */
+  class: "spec-bug" | "product-bug" | "environment";
+  /** 一句话证据（引用失败输出原文） */
+  evidence: string;
+  /** 归因指向的文件（spec-bug 时为验收资产文件；product-bug 时为产品文件——只读呈报不修复） */
+  failureFiles: string[];
+  /** spec-bug 修复要点（可空串） */
+  fixHint: string;
+}
+
+/** 验收资产修复自报（自报仅供历史记录，重验由引擎机器判定） */
+interface HealFixReport {
+  /** 实际修改的验收资产文件 */
+  fixed: string[];
+  /** 一句话修复说明 */
+  summary: string;
+}
+
 interface TestCommand {
   program: string;
   args: string[];

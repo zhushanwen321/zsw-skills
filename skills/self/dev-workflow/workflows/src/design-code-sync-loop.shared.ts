@@ -727,14 +727,23 @@ function finish(terminated: SyncResult["terminated"], round: number, message: st
 
 // ── 主循环：R1 两级审查全量 → 修复 → R2+ 聚焦复审 → 修复 → … → 全清/停机 ──
 
+// T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
+const NO_ASK_RULE =
+  "禁止向用户提问（无 AskUserQuestion / ask-user / 任何等待用户输入的操作）——workflow 内没有用户交互位；" +
+  "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
+
 const PLANNER_PERSONA =
-  "你是终态同步的两级审查第一级（framework-scan planner）：框架级对照与模块分解；只报告与产出计划，不修改任何文件；声称事实前核实到行级。";
+  "你是终态同步的两级审查第一级（framework-scan planner）：框架级对照与模块分解；只报告与产出计划，不修改任何文件；声称事实前核实到行级。" +
+  NO_ASK_RULE;
 const REVIEWER_PERSONA =
-  "你是终态同步的模块审查者：只报告，绝不改代码改文档；每个发现都有你亲自读到的代码证据。";
+  "你是终态同步的模块审查者：只报告，绝不改代码改文档；每个发现都有你亲自读到的代码证据。" +
+  NO_ASK_RULE;
 const FIXER_PERSONA =
-  "你是终态同步修复工程师：先重演验证再动手、修完全量自检、如实申报改动面；做不完的如实说明，不静默跳过。";
+  "你是终态同步修复工程师：先重演验证再动手、修完全量自检、如实申报改动面；做不完的如实说明，不静默跳过。" +
+  NO_ASK_RULE;
 const RETIRE_PERSONA =
-  "你是交付收尾判定者：按规则产退役/保留清单，只判定不执行；拿不准的列保留并说明理由。";
+  "你是交付收尾判定者：按规则产退役/保留清单，只判定不执行；拿不准的列保留并说明理由。" +
+  NO_ASK_RULE;
 
 const plannerPromptText = [
   "终态同步 framework-scan（两级拓扑第一级，首轮全量）。",

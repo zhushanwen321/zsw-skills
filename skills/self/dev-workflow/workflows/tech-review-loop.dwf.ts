@@ -655,10 +655,17 @@ if (vMust > 0) {
 log(`价值审通过（must-fix 0${vSugg > 0 ? `，suggestion ${vSugg} 条随首轮全面审一并处置` : ""}）：${valueOneliner}`);
 
 // ── 审查-修复主循环 ──
+// T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
+const NO_ASK_RULE =
+  "禁止向用户提问（无 AskUserQuestion / ask-user / 任何等待用户输入的操作）——workflow 内没有用户交互位；" +
+  "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
+
 const REVIEWER_PERSONA =
-  "你是资深设计文档评审员：只读评审，绝不修改任何文件；每个发现都要有你亲自读到的文档原文依据；报告与返回计数一致；指令无法执行或有矛盾时如实说明，不伪造结论。";
+  "你是资深设计文档评审员：只读评审，绝不修改任何文件；每个发现都要有你亲自读到的文档原文依据；报告与返回计数一致；指令无法执行或有矛盾时如实说明，不伪造结论。" +
+  NO_ASK_RULE;
 const FIXER_PERSONA =
-  "你是设计文档修复者：先核实再修改、反例重演验证修复、联动同步关联章节；方案性意见修不动时如实申报 blocked，不硬改、不静默跳过。";
+  "你是设计文档修复者：先核实再修改、反例重演验证修复、联动同步关联章节；方案性意见修不动时如实申报 blocked，不硬改、不静默跳过。" +
+  NO_ASK_RULE;
 
 let prevDispositions: Disposition[] = [];
 let prevRevisionSummary = "";

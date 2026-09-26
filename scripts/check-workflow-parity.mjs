@@ -93,6 +93,9 @@ const WHITELIST = new Set([
   "ReviewerVerdict",
   "ValueVerdict",
   "PlannerResult",
+  // —— 验收自愈（§8.7，2026-09-26）：pi SCHEMA_BY_KEY 新登记两键，zcode 侧为 interface 声明 ——
+  "HealVerdict",
+  "HealFixReport",
   "ModuleReview",
   "RetirementVerdict",
   // —— 拼接壳 W4 G 常量（planner/退役恢复指引两侧措辞；W4 已迁移） ——
