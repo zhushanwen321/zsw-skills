@@ -131,7 +131,8 @@ for (const key of Object.keys(args)) {
     }
 }
 if (typeof args.execPlan !== "string" || args.execPlan.trim() === "") {
-    throw new Error("缺少必填参数 execPlan（exec-plan.json 绝对路径，由 D0 编译产出）");
+    throw new Error("缺少必填参数 execPlan（exec-plan.json 绝对路径，由 D0 编译产出）。" +
+        "若本次经 AmendWorkflow 重发：派生 run 不继承原 run 的 args，须改用 CreateWorkflow 携 args 重新发起");
 }
 const execPlanPath = args.execPlan.trim();
 // ── 常量 ──
@@ -730,15 +731,20 @@ function successorsOf(id) {
     return out;
 }
 async function runVerifyScript(node) {
-    const r = await world.run("node", ["-e", RUN_IN_CWD, "bash", node.cwd, node.script], {
+    // 解释器按扩展名分派：.sh → bash，其余（.mjs/.js/.cjs）→ node——node 剧本走 bash 必炸
+    // （import 语句报 command not found，2026-09-26 W1 验收实测）
+    const interpreter = node.script.endsWith(".sh") ? "bash" : "node";
+    const r = await world.run("node", ["-e", RUN_IN_CWD, interpreter, node.cwd, node.script], {
         timeoutMs: VERIFY_SCRIPT_TIMEOUT_MS,
     });
     return { exitCode: r.exitCode, output: `${r.stdout}\n${r.stderr}` };
 }
 /** 归因 agent（§8.7 ①）：三分类 + 证据 + 失败面文件集；自愈历史回喂（跨轮记忆）。
  *  返回 3 次回喂重试仍不合规时保守按 product-bug（不修验收资产，直接依赖判定）。 */
-async function diagnoseVerifyFailure(node, run, history) {
-    const diag = wfAgent(`诊断-${node.id}`, DIAGNOSE_PERSONA);
+async function diagnoseVerifyFailure(node, run, history, round) {
+    // 名字带轮次：自愈循环每轮调用本函数，run 内 agent 名唯一——同名二建直接杀 run；
+    // 每轮新 agent + history 显式回喂，与 pi 侧（每次新 agent）行为对齐
+    const diag = wfAgent(`诊断-${node.id}-r${round}`, DIAGNOSE_PERSONA);
     const prompt = [
         `验收节点 ${node.id} 的剧本执行失败，请归因（只读分析）。`,
         `- 剧本：${node.script}（cwd ${node.cwd}）；本次退出码 ${run.exitCode}`,
@@ -938,7 +944,7 @@ async function executeVerifyNode(node) {
     const healHistory = [];
     const healer = wfAgent(`修复-${node.id}`, HEAL_PERSONA); // 同名续聊承载多轮修复上下文（pi 侧靠 healHistory 回喂）
     while (run.exitCode !== 0) {
-        const verdict = await diagnoseVerifyFailure(node, run, healHistory);
+        const verdict = await diagnoseVerifyFailure(node, run, healHistory, attempt);
         healHistory.push(`第 ${attempt} 轮归因 ${verdict.class}：${verdict.evidence}`);
         if (verdict.class === "spec-bug" && attempt < MAX_HEAL_ROUNDS) {
             const fix = await askValidated(validateHealFixReport, (p) => healer.ask("HealFixReport", p), [
@@ -1307,11 +1313,19 @@ else {
         state.set(n.id, { status: st, attempts: e.attempts });
     }
     // 对账结果写回磁盘（含反查补 done 与级联失效的最终态）——只更新内存会在重启后
-    // 重复对账且补 done 不落盘（RECONCILE 输出含 reconcile-done 事件，直接整文写回）
+    // 重复对账且补 done 不落盘（RECONCILE 输出含 reconcile-done 事件，直接整文写回）。
+    // nodes 必须以既有条目为底、aligned 只覆盖当前 plan 节点：dev/acceptance 两 plan 可共用
+    // 同一 statusPath，aligned 只含当前 plan 节点集，整文替换会抹掉其他 plan 的条目
+    // （2026-09-26 W1 实测：u8 dev run 启动抹掉验收 v-* 条目；增量/终局回写均保留外部条目）
     const alignedAny = allDevIds.some((id) => (aligned[id]?.status ?? "pending") !== (existingStatus.nodes[id]?.status ?? "pending")) ||
         resetIds.size > 0;
     if (alignedAny) {
-        await writeTextViaNode(plan.statusPath, JSON.stringify({ ...existingStatus.extra, baseline: existingStatus.baseline, nodes: aligned, events: existingStatus.events }, null, 2));
+        await writeTextViaNode(plan.statusPath, JSON.stringify({
+            ...existingStatus.extra,
+            baseline: existingStatus.baseline,
+            nodes: { ...existingStatus.nodes, ...aligned },
+            events: existingStatus.events,
+        }, null, 2));
         log(`对账结果已写回 ${plan.statusPath}（补 done / 级联失效条目落盘，重启不再重复对账）`);
     }
 }

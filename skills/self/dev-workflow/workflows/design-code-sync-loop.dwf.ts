@@ -1036,7 +1036,7 @@ type Validated<T> = { ok: true; value: T } | { ok: false; errors: string[] };
 
 async function askValidated<T>(
   validate: (v: unknown) => Validated<T>,
-  rawAsk: (prompt: string) => Promise<T>,
+  rawAsk: (prompt: string) => PromiseLike<T>,
   prompt: string,
 ): Promise<T | null> {
   let last = await rawAsk(prompt);

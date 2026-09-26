@@ -6,7 +6,7 @@
 # workflows/src/ 是单源（壳×2 + 公共体），产物由 scripts/build-workflows.mjs 生成；
 # 改源忘 build、或绕过源直接改产物 → 这里拦截
 
-STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- 'skills/self/dev-workflow/workflows/' 'scripts/build-workflows.mjs')
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- 'skills/self/dev-workflow/workflows/' 'scripts/build-workflows.mjs' 'scripts/check-workflow-types.mjs' 'scripts/wf-facade.d.ts')
 if [ -n "$STAGED" ]; then
   echo "pre-commit[workflow-build]: staged 变更含 workflow 源/产物，跑构建一致性检查…"
   node scripts/build-workflows.mjs --check || {
@@ -18,6 +18,12 @@ if [ -n "$STAGED" ]; then
     echo ""
     echo "[workflow-parity] 双平台产物出现未登记差异（处理见上）。"
     echo "  恢复动作：改 src/ 单源后重新 build，不要直接改产物"
+    exit 1
+  }
+  node scripts/check-workflow-types.mjs || {
+    echo ""
+    echo "[workflow-types] zcode 产物类型检查未过（真实平台 facade 口径）。"
+    echo "  恢复动作：修 src/ 单源至类型绿后重新 build 再提交"
     exit 1
   }
 fi
