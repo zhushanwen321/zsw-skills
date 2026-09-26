@@ -122,6 +122,12 @@ interface WaveExecutorOutcome {
   coreFailure: { id: string; detail: string } | null;
   /** 启动校验失败详情（terminated=blocked 且未派发任何节点时非 null） */
   validationError: string | null;
+  /** 核验通过但 commit 被拒（多为仓库钩子全仓检查 × 并行半成品）转待办的节点——
+   *  主 agent 收尾代提交（git commit <message> -- <files>，钩子照常执行） */
+  deferredCommits: { id: string; message: string; files: string[]; err: string }[];
+  /** 收尾全工作区对账后的清单外残留（不属于任何节点领地 ∪ 自报 files_changed 并集，
+   *  含并行单元新建文件与未申报改动）——主 agent 判归属后处置（提交/清理/登记新领地） */
+  residualFiles: string[];
 }
 
 interface RunOutcome {

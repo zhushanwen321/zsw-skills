@@ -63,6 +63,10 @@ const GIT_PORCELAIN =
 const GIT_ADD_COMMIT =
   "try{const a=process.argv.slice(1);const c=a[0],m=a[1],f=a.slice(2);const p=require('path');const x=require('child_process').execFileSync;" +
   "const abs=f.map(t=>p.resolve(c,t));" +
+  // 幂等分支：目标文件零改动（如节点产物已在恢复对账时提交过）→ 直接返回当前 HEAD，
+  // 不走 add/commit（git commit 对空暂存区报 nothing to commit 非零退出，曾误判 commit 失败）
+  "if(abs.length>0){const st=String(x('git',['status','--porcelain','--',...abs],{cwd:c,encoding:'utf8',maxBuffer:33554432}));" +
+  "if(st.trim()===''){const h0=String(x('git',['rev-parse','HEAD'],{cwd:c,encoding:'utf8',maxBuffer:33554432})).trim();process.stdout.write(h0);process.exit(0)}}" +
   "if(abs.length>0)x('git',['add','--',...abs],{cwd:c,encoding:'utf8',maxBuffer:33554432});" +
   "x('git',['commit','--only','-m',m,'--',...abs],{cwd:c,encoding:'utf8',maxBuffer:33554432,stdio:['ignore','pipe','pipe']});" +
   "const h=String(x('git',['rev-parse','HEAD'],{cwd:c,encoding:'utf8',maxBuffer:33554432})).trim();process.stdout.write(h)}" +
@@ -120,6 +124,8 @@ function invalidRet(message: string, statusFile: string): WaveExecutorOutcome {
     statusFile,
     coreFailure: null,
     validationError: message,
+    deferredCommits: [],
+    residualFiles: [],
   };
 }
 
@@ -463,6 +469,13 @@ let plan: ParsedPlan; // 赋值点在「校验执行计划」段；其后所有�
 let coreFail: { id: string; detail: string } | null = null;
 /** 当前 in-flight 节点的领地并集（按 cwd 分组）——级二粗粒度复核的基线，逐节点 settle 后重建 */
 let activeTerrByCwd = new Map<string, string[]>();
+/** 全部 dev 节点核验通过时自报的 files_changed 并集（终态残留对账的豁免集——静态领地
+ *  不含运行中新建文件，自报并集补上这一段） */
+const declaredFiles = new Set<string>();
+/** commit 被拒（多为仓库 pre-commit 钩子全仓检查 × 并行半成品）转待办的节点——节点核验
+ *  已过、编码成果有效，不 blocked（2026-09-26 用户裁决：全部做完留给主 agent 处理，
+ *  钩子在主会话代提交时照常执行）；收尾统一呈报 */
+const deferredCommits: { id: string; message: string; files: string[]; err: string }[] = [];
 
 function nodeState(id: string): NodeRt["status"] {
   return state.get(id)?.status ?? "pending";
@@ -603,22 +616,23 @@ async function verifyDevNode(node: PlanNode, result: NodeResult): Promise<Verify
       detail: `超界路径：\n${outside.join("\n")}\n领地：\n${node.territory.join("\n")}`,
     };
   }
-  // 查二级（粗粒度）：引擎另跑全量 status——改动集须 ⊆ 当前活跃单元领地并集
-  //（并行共享工作区无法按单元切分 status，故只做并集级复核——设计 §8.2 边界声明）
+  // 查二级（粗粒度）：引擎另跑全量 status，观察清单外残留——只登记不拦截（2026-09-26
+  // 用户裁决：并行单元运行中新建的文件天然不在启动时载入的静态领地里，把「别人的
+  // 改动」判为当前单元越界是连坐——曾致 d3 被兄弟单元 7 个残留文件卡死、u5/u2a 互卡
+  // 成对 blocked。本节点只对自己的纪律负责（查一级自报 ⊆ 领地 + 查二测试绿）；全工作
+  // 区残留统一由收尾对账呈报主 agent 处理，防漏报价值由终态呈报承接）
   const porcelain = await gitPorcelainViaNode(node.cwd);
   if (porcelain === null) {
     return { outcome: "blocked", reason: "git status --porcelain 执行失败（引擎层）", detail: `cwd=${node.cwd}` };
   }
   const activeTerr = activeTerrByCwd.get(node.cwd) ?? [];
   const strays = parsePorcelain(porcelain).filter(
-    (f) => !isTmpArtifact(f) && !pathInTerritory(f, activeTerr),
+    (f) => !isTmpArtifact(f) && !pathInTerritory(f, activeTerr) && !declaredFiles.has(f),
   );
   if (strays.length > 0) {
-    return {
-      outcome: "retry",
-      reason: "工作区存在不属于任何活跃单元领地的未提交改动",
-      detail: `越界路径：\n${strays.join("\n")}\n（领地并集核对——共享工作区并行改动的归属边界）`,
-    };
+    log(
+      `WARN: 工作区存在清单外未提交改动 ${strays.length} 项（${strays.slice(0, 5).join("、")}${strays.length > 5 ? " 等" : ""}）——多为并行单元新建文件，不阻塞本节点，收尾统一呈报`,
+    );
   }
   // 查二：节点测试命令重跑（program+args，cwd=节点 cwd），断言退出码 0
   const tr = node.testCommand === null ? null : await runTestCommand(node.testCommand, node.cwd);
@@ -716,8 +730,22 @@ async function executeDevNode(node: PlanNode): Promise<void> {
       node.designRef !== "" && !summary.includes(node.designRef) ? `${node.designRef} ${summary}` : summary;
     const message = renderCommit(plan.commitTemplate, node.id, summaryWithRef);
     const cr = await gitAddCommitViaNode(node.cwd, message, result.files_changed);
+    for (const f of result.files_changed) declaredFiles.add(f);
     if (!cr.ok) {
-      await markNodeBlockedOrFailed(node.id, "blocked", `commit 执行失败：${cr.err}`, "", attempts);
+      // commit 被拒不 blocked：核验已过、编码成果有效；拒因多为仓库 pre-commit 钩子的
+      // 全仓检查看到并行兄弟单元的半成品（钩子要求「当场修复」，而修那些文件超出本
+      // 节点领地纪律——节点内无解）。转待办，收尾呈报主 agent 代提交（钩子照常执行）
+      deferredCommits.push({ id: node.id, message, files: result.files_changed, err: cr.err });
+      const evidence = `${result.test_evidence}；deviations: ${result.deviations.join("；") || "无"}；commit 待主 agent 代提交（被拒输出见 event）`;
+      state.set(node.id, { status: "done", attempts });
+      await statusUpdate(
+        node.id,
+        { status: "done", attempts, evidence },
+        "commit-deferred",
+        `核验通过但 commit 被拒（多为仓库钩子全仓检查 × 并行半成品，节点内无解）：${message}`,
+      );
+      report({ id: node.id, state: "done", detail: "commit-deferred" }, "nodes");
+      log(`节点 ${node.id} 核验通过，commit 被拒转待办（收尾由主 agent 代提交）`);
       return;
     }
     const evidence = `${result.test_evidence}；deviations: ${result.deviations.join("；") || "无"}`;
@@ -969,7 +997,12 @@ if (existingStatus === null) {
             if (e.status === "done") state.set(id, { status: "done", attempts: e.attempts });
           }
           const recovered = freshDevIds.filter((id) => nodeState(id) === "done").length;
-          if (recovered > 0) log(`初始态对账：git log 反查补写 ${recovered} 个已提交单元为 done（status.json 曾缺失）`);
+          if (recovered > 0) {
+            // 对账结果写回磁盘（RECONCILE stdout 即完整 status.json）——只更新内存会造成
+            // 磁盘全 pending 与内存 done 漂移，重启后对账重复跑（曾实测：补 done 蒸发）
+            await writeTextViaNode(plan.statusPath, rec.stdout.trim());
+            log(`初始态对账：git log 反查补写 ${recovered} 个已提交单元为 done 并写回 status.json（status.json 曾缺失）`);
+          }
         }
       } catch {
         // 对账输出解析失败：保持全 pending 重跑（安全方向——重复执行有幂等核验兜底）
@@ -1032,6 +1065,22 @@ if (existingStatus === null) {
     const st: NodeRt["status"] = e.status === "done" ? "done" : "pending";
     state.set(n.id, { status: st, attempts: e.attempts });
   }
+  // 对账结果写回磁盘（含反查补 done 与级联失效的最终态）——只更新内存会在重启后
+  // 重复对账且补 done 不落盘（RECONCILE 输出含 reconcile-done 事件，直接整文写回）
+  const alignedAny =
+    allDevIds.some((id) => (aligned[id]?.status ?? "pending") !== (existingStatus.nodes[id]?.status ?? "pending")) ||
+    resetIds.size > 0;
+  if (alignedAny) {
+    await writeTextViaNode(
+      plan.statusPath,
+      JSON.stringify(
+        { ...existingStatus.extra, baseline: existingStatus.baseline, nodes: aligned, events: existingStatus.events },
+        null,
+        2,
+      ),
+    );
+    log(`对账结果已写回 ${plan.statusPath}（补 done / 级联失效条目落盘，重启不再重复对账）`);
+  }
 }
 
 const depEdgeCount = plan.nodes.reduce((s, n) => s + n.deps.length, 0);
@@ -1069,6 +1118,18 @@ const skippedIds = plan.nodes.filter((n) => nodeState(n.id) === "pending").map((
 const terminated: WaveExecutorOutcome["terminated"] =
   coreFail !== null ? "core-failed" : badNodes.length === 0 && skippedIds.length === 0 ? "completed" : "blocked";
 
+// 收尾残留对账（2026-09-26 用户裁决的承接面）：核验不再拦截清单外残留（多为并行单元
+// 运行中新建的文件——静态领地天然不含），全部节点 settle 后统一盘点一次全工作区，
+// 残留 = 全部改动 −（所有 dev 节点领地并集 ∪ 已核验节点自报 files_changed 并集）——
+// 既呈报并行新文件，也承接原查二级的防漏报价值（漏报越界的文件会出现在这里被看见）
+const allTerr: string[] = [];
+for (const n of plan.nodes) if (n.kind === "dev") for (const t of n.territory) if (!allTerr.includes(t)) allTerr.push(t);
+const finalPorcelain = await gitPorcelainViaNode(plan.projectRoot);
+const residualFiles =
+  finalPorcelain === null
+    ? []
+    : parsePorcelain(finalPorcelain).filter((f) => !isTmpArtifact(f) && !pathInTerritory(f, allTerr) && !declaredFiles.has(f));
+
 // 终局回写：挂起节点落 suspended + run-terminal 事件（status.json 即人读恢复入口）
 await serializedStatus(async () => {
   const st = (await readStatusFile()) ?? { baseline: plan.baseline, nodes: {}, events: [], extra: {} };
@@ -1076,20 +1137,42 @@ await serializedStatus(async () => {
   for (const n of plan.nodes) {
     if (nodeState(n.id) === "pending") nodes[n.id] = { status: "suspended", attempts: 0 };
   }
+  const residualNote =
+    residualFiles.length > 0
+      ? `; residual=${residualFiles.length}（清单外残留，判归属后处置：${residualFiles.slice(0, 5).join("、")}${residualFiles.length > 5 ? " 等" : ""}）`
+      : "";
+  const deferredNote =
+    deferredCommits.length > 0 ? `; commit-deferred=${deferredCommits.map((d) => d.id).join("、")}（主 agent 代提交）` : "";
   const events: StatusEvent[] = [
     ...st.events,
     {
       seq: st.events.length + 1,
       node: "-",
       event: "run-terminal",
-      detail: `terminated=${terminated}; done=${doneIds.length}; blocked=${blockedOut.length}; skipped=${skippedIds.length}`,
+      detail: `terminated=${terminated}; done=${doneIds.length}; blocked=${blockedOut.length}; skipped=${skippedIds.length}${deferredNote}${residualNote}`,
     },
   ];
+  if (deferredCommits.length > 0) {
+    events.push({
+      seq: events.length + 1,
+      node: "-",
+      event: "commit-deferred-list",
+      detail: deferredCommits.map((d) => `${d.id}：${d.message}`).join("\n"),
+    });
+  }
+  if (residualFiles.length > 0) {
+    events.push({
+      seq: events.length + 1,
+      node: "-",
+      event: "residual-files",
+      detail: residualFiles.join("\n"),
+    });
+  }
   await writeTextViaNode(plan.statusPath, JSON.stringify({ ...st.extra, baseline: st.baseline, nodes, events }, null, 2));
 });
 
 log(
-  `调度终态：${terminated}（done ${doneIds.length} / 未竟 ${blockedOut.length} / 挂起 ${skippedIds.length}）——状态文件 ${plan.statusPath}`,
+  `调度终态：${terminated}（done ${doneIds.length} / 未竟 ${blockedOut.length} / 挂起 ${skippedIds.length}${deferredCommits.length > 0 ? ` / commit 待办 ${deferredCommits.length}` : ""}${residualFiles.length > 0 ? ` / 清单外残留 ${residualFiles.length}` : ""}）——状态文件 ${plan.statusPath}`,
 );
 
 return {
@@ -1100,4 +1183,6 @@ return {
   statusFile: plan.statusPath,
   coreFailure: coreFail,
   validationError: null,
+  deferredCommits,
+  residualFiles,
 };

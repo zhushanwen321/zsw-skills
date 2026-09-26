@@ -6,7 +6,7 @@
 
 ### 1. 双格式一致性校验（fail-fast）
 
-读 `.impl-plan.json`，逐项与 `.impl-plan.md` 核对：单元数 / 单元 id 集 / 依赖边数 / 验收项 id 集。不一致 → 停，回 tech-design-wf T3 修双格式（不猜测哪边是对的）。
+读 `.impl-plan.json`，逐项与 `.impl-plan.md` 核对：单元数 / 单元 id 集 / 依赖边数 / 验收项 id 集 / **每个单元的领地文件清单**（md 版以「及测试/配套测试族」等归纳语收尾的，json 版必须展开为逐文件条目——归纳语直接丢弃会让配套测试文件游离在领地外，实测曾致核验必挂）。不一致 → 停，回 tech-design-wf T3 修双格式（不猜测哪边是对的）。
 
 ### 2. exec-plan.json 生成
 
@@ -45,6 +45,7 @@
 - **wave** = 编译期展示分组（拓扑分层编号，人看进度用；**调度只看依赖边，wave 不是边界**）
 - **testCommand** = 每节点增量测试命令（T1 形态：program + args 拆开；含管道/&& 的复杂命令落临时脚本走 bash 通道）——从 impl-plan §4 测试计划逐单元提取
 - **cwd** = worktree 隔离单元（判据见 references/dag-authoring.md）填 worktree 绝对路径，其余 null
+- **territory 磁盘核对 [MANDATORY]**：每条领地路径必须与磁盘实际对得上——已存在文件/目录逐条 read 核对；运行中才诞生的文件（新测试、新模块）必须逐文件显式登记（禁用「及测试」「配套族」等归纳语代替——领地是引擎核验的机器输入，不是人读描述）。必然连带产物（pnpm-lock.yaml、被改模块的配套测试文件、授权连带修改）一并登记。路径在磁盘不存在且非预期新建 → 停，回 T3 修计划（实测曾因登记路径与磁盘目录结构不符致单元核验 100% 失败）
 
 ### 3. 逐节点 promptFile 构造
 
@@ -71,6 +72,8 @@
 ### 6. 验收编译规则（为 D3 预生成 acceptance 面）
 
 验收计划表逐行：**L3 → verify 节点**（script = 剧本路径，artifactsDir）；**L4 → inspect 节点**（promptFile 任务书含「确定性产物已就绪」指针，deps 指向其 verify 前驱）；**L0/L2 不编译成节点**——已由 D1 单元测试与 D2 Gate A 覆盖，行标注「已覆盖」，D3 入口门引用 Gate A 证据（HEAD 未前进则免重跑）。混合行拆行（确定性部分降 L3 先行，判断行依赖它）。分组按「组」列；核心短路 haltOnCoreFail = true。
+
+**剧本实装硬门槛 [MANDATORY]**：verify 节点引用的每个 script 文件必须在 D0 编译完成前已写好并对样本数据跑通过（exit 0）——D0 只填路径不写剧本 = 给 D3 埋启动即炸的雷（引擎启动校验 verify 节点 script 必须存在；曾实测留占位引用 batch-rerun.mjs 未实装，D3 无法按默认形态发起，被迫全程手工）。剧本确实写不出的行，降级为 L4 判断行（promptFile 派 agent 按断言清单执行）并在验收计划表标注——禁止引用未来文件。
 
 补编规则：
 

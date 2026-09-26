@@ -13,8 +13,8 @@ args: { execPlan: "<项目根>/.tmp/dev-flow/<name>.exec-plan.json" }
 
 1. 就绪集 = deps 全 done 的节点，批内并行（≤5），完成即重算（谁先提交谁的后继先开跑）
 2. `agent(node-<unitId>)` 读 promptFile 全文执行（prompt 编译期已构造，引擎零拼接）
-3. world.run 核验：`git status --porcelain` + diff 归属核对（files_changed ⊆ territory；**并行单元共享工作区时 = dev 自报精确路径 + 引擎按并集粗粒度复核两级判定**）+ 重跑 testCommand 断言退出码
-4. 核验过 → world.run commit（`git add -- <files_changed>` + commitTemplate 渲染）→ status.json 回写 → 解锁下游
+3. world.run 核验：`git status --porcelain` + diff 归属核对（files_changed ⊆ territory + 重跑 testCommand 断言退出码；全工作区清单外残留只登记不拦截——并行单元运行中新建的文件天然不在静态领地里，别人的改动与本节点无关，收尾统一呈报处置）
+4. 核验过 → world.run commit（`git add -- <files_changed>` + commitTemplate 渲染；空改动幂等通过，commit 被仓库钩子拒不 blocked 转待办）→ status.json 回写 → 解锁下游
 
 打回（核验不过）：原节点 agent 会话续聊定向修（贴 diff/失败输出/违反条款），≤2 轮；agent 不可用 → 接替程序（新 agent + 前任证据包：状态表该单元最后一轮 files_changed/test_evidence/deviations + 当前 `git diff --stat`，令其先核验现状再续作）；接替者亦异常 → 节点 blocked（引擎层，其他节点照常推进）。超 2 轮 → 节点 blocked，后继自动挂起（deps 不满足），无依赖节点照常推进 → 全场无可调度且存在 blocked → 终态 `blocked`（+清单+已试方案）→ 主 agent 升级用户。全节点 done → 终态 `completed` → 进 D2。
 
@@ -44,3 +44,10 @@ worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 workt
 | completed | 全节点 done——D1 完成转 D2（consistency-review.md）；D3 完成转 D4 收尾 |
 | blocked | 读 blocked 清单逐条处置：打回超限类 → 人工裁决（采纳修复方案/放弃该单元）；引擎层异常 → ResumeWorkflowRun 或修复 exec-plan 后重发 |
 | core-failed | 读 coreFailure 归因——缺陷修复走 W2 修复节点形态重验（exec-plan 更新为重验子集），主 agent 只裁决与重发起，不亲编码 |
+
+**commit-deferred 与清单外残留（终态 result 携带，status.json events 有 commit-deferred-list / residual-files 同名事件）**：
+
+- `deferredCommits`：节点核验已过、编码成果有效，仅 commit 被仓库钩子拒（多为钩子全仓检查看到并行兄弟单元的半成品，节点内无解）——主 agent 收尾逐条代提交：`git commit <message> -- <files>`（message/files 在 result 里给全，钩子照常执行；钩子红则当场修复后重试）。处置完重发 run，启动对账按 git log 补 done 自动续跑
+- `residualFiles`：全工作区清单外残留（并行单元运行中新建的文件 + 未申报改动）——主 agent 判归属：属某单元成果 → 补提交（commit subject 埋单元 id，供下次对账反查）；无主/临时 → 清理；判不了 → 呈报用户，禁静默丢弃
+
+**主 agent 降级边界**：恢复调度时主 agent 只做三类事——代提交 deferredCommits、处置 residualFiles、重发 run；不替 agent 修半成品代码（那是 W2 修复节点形态 / 重派单元的职责——曾发生主 agent 从恢复调度滑到亲手修测试，边界失守）。
