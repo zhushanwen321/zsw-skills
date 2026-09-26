@@ -19,16 +19,23 @@
 //   ③ typescript.transpileModule 剥 TS（标注/as/非空!/类型谓词）
 //
 // 用法：node scripts/build-workflows.mjs [--check]
-//   默认构建全部产物；--check 校验产物与重生成结果一致（pre-commit 防改源忘构建）
+//   默认构建全部产物并同步 zcode saved 副本（~/.zcode/workflows/）；--check 校验产物
+//   与重生成结果一致 + saved 副本未滞后（pre-commit 防改源忘构建 / 忘同步 saved）
+//
+// saved 同步背景：zcode CreateWorkflow 的 saved 发现目录是 ~/.zcode/workflows/，与仓内
+// 产物是两份文件——saved 滞后于仓内产物时实际执行的是旧版（曾因此 attempt 后缀逻辑
+// 已修但 run 仍写旧版行为），故 build 一并同步、--check 一并拦截
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WF = join(ROOT, "skills/self/dev-workflow/workflows");
 const SRC = join(WF, "src");
+const SAVED_DIR = join(homedir(), ".zcode", "workflows");
 const NAMES = ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop"];
 
 // typescript 从安装环境解析（zsw-skills devDependencies）
@@ -187,16 +194,19 @@ for (const name of NAMES) {
   const targets = [
     [join(WF, `${name}.dwf.ts`), zcOut],
     [join(WF, "pi", `${name}.js`), piOut],
+    // zcode saved 副本与仓内产物同内容（CreateWorkflow 的 saved 发现目录）
+    [join(SAVED_DIR, `${name}.dwf.ts`), zcOut],
   ];
   for (const [path, content] of targets) {
-    const rel = path.slice(ROOT.length + 1);
+    const rel = path.startsWith(ROOT) ? path.slice(ROOT.length + 1) : path.replace(homedir(), "~");
     const existing = (() => { try { return readFileSync(path, "utf8"); } catch { return null; } })();
     if (existing === content) {
       console.log(`✓ ${rel}（一致）`);
     } else if (check) {
-      console.error(`✗ ${rel} 与重生成结果不一致——改了 src/ 忘了重新 build`);
+      console.error(`✗ ${rel} 与重生成结果不一致（产物过期或 saved 副本滞后）——重跑 node scripts/build-workflows.mjs`);
       dirty++;
     } else {
+      mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, content);
       console.log(`已生成 ${rel}`);
     }

@@ -82,18 +82,33 @@ const SCHEMA_ValueVerdict = {
   required: ["reportFile", "mustFix", "suggestion", "oneliner"],
 };
 
+const SCHEMA_ProblemRef = {
+  type: "object",
+  properties: {
+    ref: { type: "string", description: "报告内问题锚点，格式 review-<维度>#<序>（如 review-main#2），与报告小节标题一致" },
+    level: { type: "string", enum: ["must-fix", "suggestion"], description: "must-fix 级或 suggestion 级（与报告小节分级一致）" },
+    title: { type: "string", description: "一句话问题标题" },
+  },
+  required: ["ref", "level", "title"],
+};
+
 const SCHEMA_ReviewerVerdict = {
   type: "object",
   properties: {
-    mustFix: { type: "number", description: "must-fix 条数（与报告一致）" },
-    suggestion: { type: "number", description: "suggestion 条数（与报告一致）" },
+    mustFix: { type: "number", description: "must-fix 条数（与报告一致；脚本以 problems 清单派生计数为准，此字段做交叉校验）" },
+    suggestion: { type: "number", description: "suggestion 条数（与报告一致；同上做交叉校验）" },
+    problems: {
+      type: "array",
+      items: SCHEMA_ProblemRef,
+      description: "逐条问题清单（处置表覆盖校验的对账锚点；条数须与 mustFix/suggestion 计数一致）",
+    },
     reconciliation: {
       type: "array",
       items: SCHEMA_ReconEntry,
       description: "R1 恒空数组；R2+ 对上轮处置表必对账集逐条申报",
     },
   },
-  required: ["mustFix", "suggestion", "reconciliation"],
+  required: ["mustFix", "suggestion", "problems", "reconciliation"],
 };
 
 const SCHEMA_Disposition = {
@@ -155,6 +170,21 @@ function wfAgent(name, persona) {
   };
 }
 
+// ── 修复者重试前情补丁（F 区钩子）：pi 侧 ask 每次新 agent（无续聊），重试指令必须
+// 自包含前情（首次指令 + 上次返回 + 校验报告）；zcode 侧同 actor 续聊上下文天然可见 ──
+function withRetryContext(firstInstructions, firstReturn, checkReport) {
+  return [
+    "【前情】你此前收到过修复任务指令并已返回结果，但处置表未通过脚本校验，本轮是重试。",
+    "=====",
+    "此前任务指令：",
+    String(firstInstructions),
+    "上次返回的 dispositions（JSON）：",
+    JSON.stringify((firstReturn && firstReturn.dispositions) || []),
+    "=====",
+    "",
+  ].join("\n");
+}
+
 // ── 平台恢复指引（G 区：机制词两侧平台化，公共体经常量引用） ──
 const HINT_RELAUNCH_WITH_ARGS = "修正参数后重新 workflow run 发起（pi runs 一次性：修订脚本后重跑即可，防产物覆盖用 attempt 递增）";
 const HINT_REVIEW_BAD_COUNT = "修订脚本 prompt 后重新 run，或 args.attempt 递增重新发起";
@@ -183,6 +213,7 @@ const HINT_REVIEW_BAD_COUNT = "修订脚本 prompt 后重新 run，或 args.atte
 // ── 常量（控制流专用，不内插进任何 ask 文本） ──
 const DEFAULT_MAX_ROUNDS = 10;
 const STUCK_THRESHOLD = 3;
+const FIX_RETRY_MAX = 2; // 修复者结构化返回校验失败的重试上限（初始 1 次 + 回喂重试 1 次）
 const VALID_ARG_KEYS = new Set(["designDoc", "projectRoot", "maxRounds", "reviewers", "attempt"]);
 // node -e 通道（argv 传参，无 shell 注入面；node 代码不受脚本 facade 限制）
 const NODE_WRITE_FILE = "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2])";
@@ -290,6 +321,26 @@ function sanitizeBlocked(raw) {
     if (items.length === 0 && reason === "")
         return null;
     return { items, reason };
+}
+/** reviewer 返回的问题清单防御：ref/level 形态非法的条目丢弃；当轮计数以清单派生为准
+ *  （自报 mustFix/suggestion 仅做交叉校验——单一事实源，防「计数对、清单漏」的对账失配） */
+function sanitizeProblems(raw) {
+    if (!Array.isArray(raw))
+        return [];
+    const out = [];
+    for (const item of raw) {
+        if (item === null || typeof item !== "object")
+            continue;
+        const p = item;
+        const ref = typeof p.ref === "string" ? p.ref.trim() : "";
+        const level = p.level === "must-fix" || p.level === "suggestion" ? p.level : null;
+        if (ref === "" || level === null) {
+            log(`WARN: 问题清单条目畸形被丢弃（ref=${JSON.stringify(p.ref)} level=${JSON.stringify(p.level)}）——丢弃后计数以剩余清单派生`);
+            continue;
+        }
+        out.push({ ref, level, title: typeof p.title === "string" ? p.title.trim() : "" });
+    }
+    return out;
 }
 /** 处置表台账合并：延续条目（id 命中）原位更新并按 action 重置复核状态；新条目入账 */
 function mergeRound(disps, round, ledger) {
@@ -422,6 +473,9 @@ const TEMPLATE_BASENAMES = [
 ];
 const TILDE_ROOT = "~/.agents/skills/tech-design-wf/agents";
 const RUBRIC_TILDE = "~/.agents/skills/tech-design-wf/review/rubric-design-doc.md";
+// 处置表业务级校验 CLI（覆盖完整性 + 条目一致性；workflow 与 flow/review.md 手工路径
+// 双轨共用同一实现——校验器单一来源，双轨语义等价由同一脚本保证）
+const CHECK_CLI_TILDE = "~/.agents/skills/tech-design-wf/scripts/check-dispositions.mjs";
 const overrides = new Map();
 for (const p of inputs.reviewers) {
     const base = p.split("/").pop() ?? p;
@@ -438,14 +492,15 @@ for (const t of TEMPLATE_BASENAMES) {
     templates.set(t.dim, overrides.get(t.dim) ?? expandTilde(`${TILDE_ROOT}/${t.file}`));
 }
 const rubricPath = expandTilde(RUBRIC_TILDE);
+const checkCliAbs = expandTilde(CHECK_CLI_TILDE);
 // 三审维度（固定三席并行；报告名确定性）
 const TRIALS = [
     { dim: "main", label: "主审", reportName: "review-main.md" },
     { dim: "impact", label: "影响面审", reportName: "review-impact.md" },
     { dim: "simplicity", label: "简洁审", reportName: "review-simplicity.md" },
 ];
-// 必读文件存在性探针：designDoc + 四模板（rubric 是提示性路径，不挡启动）
-const requiredPaths = [designDoc, ...TEMPLATE_BASENAMES.map((t) => templates.get(t.dim) ?? "")].filter((p) => p !== "");
+// 必读文件存在性探针：designDoc + 四模板 + 校验 CLI（rubric 是提示性路径，不挡启动）
+const requiredPaths = [designDoc, checkCliAbs, ...TEMPLATE_BASENAMES.map((t) => templates.get(t.dim) ?? "")].filter((p) => p !== "");
 const probe = await world.run("node", ["-e", NODE_CHECK_EXISTS, ...requiredPaths]);
 if (probe.exitCode !== 0) {
     return {
@@ -616,8 +671,8 @@ for (let round = 1; round <= maxRounds; round++) {
             ? "（简洁审一律执行——设计 B8 裁决无跳过通道）若本设计属纯文案/参数调整类记录（无结构、方案主干、验收形态变化），照常逐项过 checklist，在报告开头说明该分类并给出简洁面结论（零发现就写「简洁面零发现」）。"
             : "",
         "",
-        `报告落盘：${roundAbs}/${t.reportName}（绝对路径；需要时先创建目录）。每条问题一节：[must-fix|suggestion] + 所在章节 + 描述 + 原文依据（你读到的原句）+ 修复方向。报告是修复者的唯一输入。`,
-        `完成后返回 JSON：mustFix（must-fix 条数，与报告一致）、suggestion（suggestion 条数）、reconciliation（${round === 1 ? "本轮返回空数组 []" : "对上方必对账集逐条申报"}）。`,
+        `报告落盘：${roundAbs}/${t.reportName}（绝对路径；需要时先创建目录）。每条问题一节：锚点编号（${t.reportName.replace(".md", "")}#<序>，如 ${t.reportName.replace(".md", "")}#2，报告小节标题必须带此锚点）+ [must-fix|suggestion] + 所在章节 + 描述 + 原文依据（你读到的原句）+ 修复方向。报告是修复者的唯一输入。`,
+        `完成后返回 JSON：mustFix（must-fix 条数，与报告一致）、suggestion（suggestion 条数）、problems（逐条问题清单，每条 {ref, level, title}——ref 即报告小节锚点（${t.reportName.replace(".md", "")}#<序>）、level 与报告小节分级一致、title 一句话；条数合计须等于 mustFix+suggestion）、reconciliation（${round === 1 ? "本轮返回空数组 []" : "对上方必对账集逐条申报"}）。`,
     ]
         .filter(Boolean)
         .join("\n");
@@ -632,19 +687,34 @@ for (let round = 1; round <= maxRounds; round++) {
         if (bad >= 0) {
             return await finish("review-failure", round, `维度 ${TRIALS[bad].label} 返回畸形计数（mustFix=${JSON.stringify(raw[bad].mustFix)} suggestion=${JSON.stringify(raw[bad].suggestion)}，须为非负整数且与报告一致）。恢复动作：报告已落盘可读 ${roundAbs} 人工核对；${HINT_REVIEW_BAD_COUNT}`);
         }
-        verdicts = raw.map((v, i) => ({
-            mustFix: sanitizeCount(v.mustFix) ?? 0,
-            suggestion: sanitizeCount(v.suggestion) ?? 0,
-            reconciliation: sanitizeReconciliation(v.reconciliation),
-            dim: TRIALS[i].dim,
-        }));
+        verdicts = raw.map((v, i) => {
+            const problems = sanitizeProblems(v.problems);
+            const selfMf = sanitizeCount(v.mustFix) ?? 0;
+            const selfSf = sanitizeCount(v.suggestion) ?? 0;
+            // 防线：自报计数非零但清单缺失/全畸形 → 派生计数归零会假 converged，fail-fast
+            if (selfMf + selfSf > 0 && problems.length === 0) {
+                throw new Error(`维度 ${TRIALS[i].label} 自报计数（must-fix ${selfMf}/suggestion ${selfSf}）非零但 problems 清单缺失或全畸形——覆盖校验无对账锚点，报告可读 ${roundAbs}/${TRIALS[i].reportName} 人工核对`);
+            }
+            const mf = problems.filter((p) => p.level === "must-fix").length;
+            const sf = problems.filter((p) => p.level === "suggestion").length;
+            if (mf !== selfMf || sf !== selfSf) {
+                log(`WARN: ${TRIALS[i].label} 自报计数（${selfMf}/${selfSf}）与 problems 清单派生（${mf}/${sf}）不一致，以清单为准`);
+            }
+            return { mustFix: mf, suggestion: sf, problems, reconciliation: sanitizeReconciliation(v.reconciliation), dim: TRIALS[i].dim };
+        });
     }
     catch (e) {
-        return await finish("review-failure", round, `三审调用失败：${String(e)}。恢复动作：provider 类问题解决后 args.attempt 递增重新发起`);
+        return await finish("review-failure", round, `三审调用或归并失败：${String(e)}。恢复动作：provider 类问题解决后 args.attempt 递增重新发起`);
     }
     const rChk = await world.run("node", ["-e", NODE_CHECK_EXISTS, ...TRIALS.map((t) => `${roundAbs}/${t.reportName}`)]);
     if (rChk.exitCode !== 0) {
         return await finish("review-failure", round, `评审报告未落盘：${rChk.stdout.trim()}——报告是修复者的唯一输入，缺失即失败。恢复动作：args.attempt 递增重新发起`);
+    }
+    // 问题清单落盘（覆盖校验的输入 + 修复者 source 引用锚点 + 断点恢复人读）
+    const roundProblems = verdicts.flatMap((v) => v.problems);
+    const probWrite = await world.run("node", ["-e", NODE_WRITE_FILE, `${roundAbs}/problems.json`, JSON.stringify({ round, problems: roundProblems }, null, 2)]);
+    if (probWrite.exitCode !== 0) {
+        return await finish("review-failure", round, `问题清单落盘失败（${roundAbs}/problems.json，exit ${probWrite.exitCode}）：${probWrite.stderr.trim() || probWrite.stdout.trim()}。恢复动作：args.attempt 递增重新发起`);
     }
     const roundMustFix = verdicts.reduce((s, v) => s + v.mustFix, 0);
     const roundSuggestion = verdicts.reduce((s, v) => s + v.suggestion, 0);
@@ -712,60 +782,115 @@ for (let round = 1; round <= maxRounds; round++) {
             wrapUntrusted(JSON.stringify(outstanding)),
         ].join("\n")
         : "";
-    let fix;
-    try {
-        fix = await wfAgent(`文档修复者-r${round}`, FIXER_PERSONA).ask("FixOutcome", [
-            `第 ${round} 轮设计文档修复（产物目录 ${roundAbs}）。`,
+    // 本轮问题清单内联：处置表 source 引用的唯一合法锚点集（覆盖校验按此集合判定）
+    const problemsBlock = roundProblems.length > 0
+        ? [
             "",
-            "第一步：Read 三份评审报告：",
-            ...TRIALS.map((t) => `- ${roundAbs}/${t.reportName}`),
-            `审查对象：${designDoc}——直接编辑该文件完成修复（你有文件工具，逐处小步修改）。`,
-            "",
-            "任务：",
-            "1. 语义去重合并：同根因跨维度表述的问题合并为一条处置（source 记录全部来源引用，如 review-main#2；跨报告编号自明）。",
-            "2. 修全部 must-fix：直接编辑设计文档落实修复。",
-            "3. suggestion 逐条三选一处置：fixed（修复）/ deferred（登记不修，理由必须具体：涉及章节/机制/代价）/ archived（归档——已过时或不适用，理由必须具体）。",
-            "4. 方案性意见（需要用户裁决的方向变化，如推翻问题定义、方案主干、最小形态）修不动 → 不要硬改：在 blocked 里申报（items=卡住的问题清单，reason=为什么需要用户裁决）；其余可修的照常完成并产出处置表。",
-            outstandingBlock,
-            "",
-            "修复纪律：",
-            "- 反例重演：每条处置的 reenactment 写清该问题如何被发现，且修复后在修订稿上重演验证问题已消除。",
-            "- 否决记录：方案对比中被否决的候选，修复时把否决理由写进「不采用」栏，不删除候选项。",
-            "- 联动同步：修复触及的陈述须同步设计文档内关联章节（问题定义、方案对比、验收标准、风险登记、实施计划五处及其他关联处），不留前后矛盾。",
-            "- 语言回归：修订语言与原稿一致（中文），术语沿用文档既有词表，不引入未解释的新术语。",
-            "",
-            "返回 JSON：dispositions / revisionSummary / blocked。",
-            `dispositions 每条字段：id（新条目格式 D-${round}-<序>；延续上轮的条目复用原 id）、title（一句话标题）、source（数组：该条覆盖的原始问题引用，合并几条列几条）、level（must-fix|suggestion）、action（fixed|deferred|archived）、location（修订位置）、reenactment（反例重演）、attackHints（给下轮聚焦复审的攻击点建议）、affectsDecision（影响决策，必填，无影响也显式写「无」）、affectsDelivery（影响交付，必填，同前）。`,
-        ]
-            .filter(Boolean)
-            .join("\n"));
+            "本轮问题清单（三份报告的逐条问题锚点，ref 形如 review-main#2）：",
+            wrapUntrusted(JSON.stringify(roundProblems)),
+        ].join("\n")
+        : "";
+    const fixer = wfAgent(`文档修复者-r${round}`, FIXER_PERSONA);
+    const baseFixInstructions = [
+        `第 ${round} 轮设计文档修复（产物目录 ${roundAbs}）。`,
+        "",
+        "第一步：Read 三份评审报告：",
+        ...TRIALS.map((t) => `- ${roundAbs}/${t.reportName}`),
+        `审查对象：${designDoc}——直接编辑该文件完成修复（你有文件工具，逐处小步修改）。`,
+        "",
+        "任务：",
+        "1. 语义去重合并：同根因跨维度表述的问题合并为一条处置（source 记录该条覆盖的全部问题 ref）。",
+        "2. 修全部 must-fix：直接编辑设计文档落实修复。",
+        "3. suggestion 逐条三选一处置：fixed（修复）/ deferred（登记不修，理由必须具体：涉及章节/机制/代价）/ archived（归档——已过时或不适用，理由必须具体）。",
+        "4. 方案性意见（需要用户裁决的方向变化，如推翻问题定义、方案主干、最小形态）修不动 → 不要硬改：在 blocked 里申报（items=卡住的问题清单，reason=为什么需要用户裁决）；其余可修的照常完成并产出处置表。",
+        outstandingBlock,
+        problemsBlock,
+        "",
+        "修复纪律：",
+        "- 反例重演：每条处置的 reenactment 写清该问题如何被发现，且修复后在修订稿上重演验证问题已消除。",
+        "- 否决记录：方案对比中被否决的候选，修复时把否决理由写进「不采用」栏，不删除候选项。",
+        "- 联动同步：修复触及的陈述须同步设计文档内关联章节（问题定义、方案对比、验收标准、风险登记、实施计划五处及其他关联处），不留前后矛盾。",
+        "- 语言回归：修订语言与原稿一致（中文），术语沿用文档既有词表，不引入未解释的新术语。",
+        "",
+        "返回 JSON：dispositions / revisionSummary / blocked。",
+        `dispositions 每条字段：id（新条目格式 D-${round}-<序>；延续上轮的条目复用原 id）、title（一句话标题）、source（数组：该条覆盖的问题 ref 清单——每条必须取自上方「本轮问题清单」，合并处置时把覆盖的 ref 全部列入同一条；上轮延续条目的历史 ref 保留并列）、level（must-fix|suggestion）、action（fixed|deferred|archived）、location（修订位置）、reenactment（反例重演）、attackHints（给下轮聚焦复审的攻击点建议）、affectsDecision（影响决策，必填，无影响也显式写「无」）、affectsDelivery（影响交付，必填，同前）。`,
+        "硬约束：清单中每条问题（含 suggestion）都必须被至少一条处置的 source 覆盖——登记不修/归档也算处置；脚本按 source 引用集合机器校验，漏引用会整轮打回。",
+    ]
+        .filter(Boolean)
+        .join("\n");
+    // 修复者结构化返回的业务校验与回喂重试：覆盖完整性/条目一致性经 check-dispositions
+    // CLI 判定（与 flow/review.md 手工路径同一实现——双轨语义等价由同一校验器保证）；
+    // 失败不直接终态，先带校验报告回喂重试（夜间托管场景 fix-failure = 停机等人，
+    // 而结构化缺失多数可由修复者自查补正）；outstanding（上轮遗留）按 id 校验——漏处置
+    // 的遗留条目不进任何对账集，会以 open 状态滞留台账直到假 converged（曾无此校验）
+    let fix = null;
+    let dispositions = [];
+    let revisionSummary = "";
+    let lastCheckReport = "";
+    let checkPassed = false;
+    for (let fixAttempt = 1; fixAttempt <= FIX_RETRY_MAX && !checkPassed; fixAttempt++) {
+        const instructions = fixAttempt === 1
+            ? baseFixInstructions
+            : [
+                withRetryContext(baseFixInstructions, fix, lastCheckReport),
+                "你此前对设计文档的修订都保留在磁盘上，本轮不要重复修改文档。",
+                "只需修正处置表的结构化返回：按下方校验报告逐条修正（补齐缺失的 source 引用、修正字段形态），重新返回完整 JSON（dispositions / revisionSummary / blocked 全量重新给出，不是增量补丁）。",
+                `校验报告（每条 error 都必须在本轮返回中修正）：\n${lastCheckReport}`,
+            ].join("\n\n");
+        try {
+            fix = await fixer.ask("FixOutcome", instructions);
+        }
+        catch (e) {
+            return await finish("fix-failure", round, `修复者调用失败：${String(e)}。恢复动作：provider 类问题解决后 args.attempt 递增重新发起（在途编辑已留磁盘，接管前先盘点 ${designDoc}）`);
+        }
+        dispositions = sanitizeDispositions(fix.dispositions);
+        revisionSummary = typeof fix.revisionSummary === "string" ? fix.revisionSummary : "";
+        const blocked = sanitizeBlocked(fix.blocked);
+        if (blocked !== null) {
+            // 部分修复照常入账（escalated 带出已完成的处置），停回用户裁决（卡点是「修不动」
+            // 的方向问题而非结构化格式，不进重试）
+            mergeRound(dispositions, round, ledger);
+            prevDispositions = dispositions;
+            prevRevisionSummary = revisionSummary;
+            return await finish("escalated", round, `方案性意见修不动，停回用户裁决：${blocked.reason}。停回通道：用户裁决新候选后重写设计文档再重新发起 W1（价值审必送）；本轮已完成的部分处置见处置表`, blocked);
+        }
+        const checkInput = `${roundAbs}/.dispositions-check.json`;
+        const wIn = await world.run("node", ["-e", NODE_WRITE_FILE, checkInput, JSON.stringify({ dispositions })]);
+        const chk = wIn.exitCode === 0 ? await world.run("node", [checkCliAbs, checkInput, "--problems", `${roundAbs}/problems.json`]) : null;
+        if (chk === null || chk.exitCode >= 2) {
+            return await finish("fix-failure", round, `校验器调用失败（写输入 exit ${wIn.exitCode}${chk !== null ? ` / 校验器 exit ${chk.exitCode}` : ""}）：${(chk !== null ? chk.stderr : wIn.stderr).trim()}。恢复动作：确认 skill 安装位的 ${CHECK_CLI_TILDE} 存在且 node 可执行后 args.attempt 递增重新发起`);
+        }
+        let check = null;
+        try {
+            check = JSON.parse(chk.stdout);
+        }
+        catch {
+            check = null;
+        }
+        if (check === null) {
+            return await finish("fix-failure", round, `校验器输出无法解析（stdout 前 200 字符：${JSON.stringify(chk.stdout.slice(0, 200))}）。恢复动作：人工跑 ${CHECK_CLI_TILDE} ${checkInput} --problems ${roundAbs}/problems.json 核对后 args.attempt 递增重新发起`);
+        }
+        for (const w of check.warnings)
+            log(`WARN: ${w}`);
+        const coveredIds = new Set(dispositions.map((d) => d.id));
+        const missedOutstanding = outstanding.filter((d) => !coveredIds.has(d.id));
+        if (check.ok && missedOutstanding.length === 0) {
+            checkPassed = true;
+            break;
+        }
+        const errLines = check.errors.map((e) => `- [${e.kind}] ${e.detail}`);
+        if (missedOutstanding.length > 0) {
+            errLines.push(`- [outstanding] 上轮遗留条目 ${missedOutstanding.map((d) => `${d.id}（${d.title}）`).join("、")} 未出现在本轮处置表（延续条目必须复用原 id 处置——含登记不修/归档形态）`);
+        }
+        lastCheckReport = errLines.join("\n");
+        // 失败留档：原始返回 + 校验报告（终态后接管者可对账——修复者的原始 dispositions
+        // 只存在于返回值里，不落盘即无处可寻）
+        const rawArchive = { attempt: fixAttempt, round, returned: fix, sanitized: dispositions, checkReport: lastCheckReport };
+        await world.run("node", ["-e", NODE_WRITE_FILE, `${roundAbs}/raw-fix-return-${fixAttempt}.json`, JSON.stringify(rawArchive, null, 2)]);
+        log(`WARN: 修复者处置表第 ${fixAttempt} 次未过校验（${errLines.length} 项）${fixAttempt < FIX_RETRY_MAX ? "，回喂校验报告重试" : "，重试预算耗尽"}`);
     }
-    catch (e) {
-        return await finish("fix-failure", round, `修复者调用失败：${String(e)}。恢复动作：provider 类问题解决后 args.attempt 递增重新发起（在途编辑已留磁盘，接管前先盘点 ${designDoc}）`);
-    }
-    const dispositions = sanitizeDispositions(fix.dispositions);
-    const revisionSummary = typeof fix.revisionSummary === "string" ? fix.revisionSummary : "";
-    const blocked = sanitizeBlocked(fix.blocked);
-    if (blocked !== null) {
-        // 部分修复照常入账（escalated 带出已完成的处置），停回用户裁决
-        mergeRound(dispositions, round, ledger);
-        prevDispositions = dispositions;
-        prevRevisionSummary = revisionSummary;
-        return await finish("escalated", round, `方案性意见修不动，停回用户裁决：${blocked.reason}。停回通道：用户裁决新候选后重写设计文档再重新发起 W1（价值审必送）；本轮已完成的部分处置见处置表`, blocked);
-    }
-    // 覆盖硬校验（脚本判定，不信任修复者自觉）：每条 must-fix / suggestion 原始问题
-    // 都要出现在至少一条处置的 source 里（含登记不修/归档形态——处置 ≠ 修复）；
-    // outstanding（上轮遗留）按 id 校验——漏处置的遗留条目不进任何对账集，会以 open
-    // 状态滞留台账直到假 converged（曾无此校验）
-    const coveredMust = dispositions.filter((d) => d.level === "must-fix").reduce((s, d) => s + d.source.length, 0);
-    const coveredSugg = dispositions.filter((d) => d.level === "suggestion").reduce((s, d) => s + d.source.length, 0);
-    if (coveredMust < roundMustFix || coveredSugg < roundSuggestion) {
-        return await finish("fix-failure", round, `覆盖校验失败：must-fix 覆盖 ${coveredMust}/${roundMustFix}，suggestion 覆盖 ${coveredSugg}/${roundSuggestion}——处置表必须覆盖本轮全部问题（含登记不修/归档形态）。恢复动作：核对修复者返回的 dispositions（source 引用是否完整、畸形条目是否被丢弃，见上方 WARN）；在途编辑已留磁盘，接管前先盘点 ${designDoc}`);
-    }
-    const coveredIds = new Set(dispositions.map((d) => d.id));
-    const missedOutstanding = outstanding.filter((d) => !coveredIds.has(d.id));
-    if (missedOutstanding.length > 0) {
-        return await finish("fix-failure", round, `outstanding 覆盖校验失败：上轮遗留条目 ${missedOutstanding.map((d) => d.id).join("、")} 未出现在本轮处置表（延续条目必须复用原 id 处置——含登记不修/归档形态）。恢复动作：核对修复者返回的 dispositions；在途编辑已留磁盘，接管前先盘点 ${designDoc}`);
+    if (!checkPassed) {
+        return await finish("fix-failure", round, `处置表校验 ${FIX_RETRY_MAX} 次未通过（初始 1 次 + 回喂重试）：\n${lastCheckReport}\n原始返回与校验报告已留档 ${roundAbs}/raw-fix-return-*.json；文档修订已留磁盘（修复内容通常有效，仅结构化返回不合规），接管前先盘点 ${designDoc}。恢复动作：人工按校验报告补正后落 ${roundAbs}/dispositions.json 续下轮，或 args.attempt 递增重新发起`);
     }
     // 处置表落盘（json + md 由脚本从结构化数据确定性渲染，两版严格一致）
     const dispJson = JSON.stringify({ round, designDoc, revisionSummary, dispositions }, null, 2);

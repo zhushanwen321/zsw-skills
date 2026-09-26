@@ -59,11 +59,22 @@ interface ReconEntry {
   evidence: string;
 }
 
+interface ProblemRef {
+  /** 报告内问题锚点，格式 review-<维度>#<序>（如 review-main#2），与报告小节标题一致 */
+  ref: string;
+  /** must-fix 级或 suggestion 级（与报告小节分级一致） */
+  level: "must-fix" | "suggestion";
+  /** 一句话问题标题 */
+  title: string;
+}
+
 interface ReviewerVerdict {
-  /** must-fix 条数（与报告一致） */
+  /** must-fix 条数（与报告一致；脚本以 problems 清单派生计数为准，此字段做交叉校验） */
   mustFix: number;
-  /** suggestion 条数（与报告一致） */
+  /** suggestion 条数（与报告一致；同上做交叉校验） */
   suggestion: number;
+  /** 逐条问题清单（处置表覆盖校验的对账锚点；条数须与 mustFix/suggestion 计数一致） */
+  problems: ProblemRef[];
   /** R1 恒空数组；R2+ 对上轮处置表必对账集逐条申报 */
   reconciliation: ReconEntry[];
 }
@@ -151,5 +162,14 @@ interface NarrowedInputs {
 // ── 平台恢复指引（G 区：机制词两侧平台化，公共体经常量引用） ──
 const HINT_RELAUNCH_WITH_ARGS = "修正参数后经 CreateWorkflow 重新发起（注意 AmendWorkflow 不透传 args——修订脚本时参数值需写进脚本常量后 amend）";
 const HINT_REVIEW_BAD_COUNT = "修 prompt 后 AmendWorkflow，或 args.attempt 递增重新发起";
+
+// ── 修复者重试前情补丁（F 区钩子）：zcode 同 actor 续 ask，上下文天然可见，重试指令
+// 只需说明「上一轮返回未过校验」；pi 侧 ask 每次新 agent，钩子返回自包含前情 ──
+function withRetryContext(firstInstructions: string, firstReturn: { dispositions: unknown } | null, checkReport: string): string {
+  void firstInstructions;
+  void firstReturn;
+  void checkReport;
+  return "你上一轮返回的处置表未通过脚本校验（同会话续聊，此前的任务指令与你的返回仍可见）。";
+}
 
 @@STITCH@@

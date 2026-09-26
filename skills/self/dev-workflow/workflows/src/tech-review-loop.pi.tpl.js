@@ -82,18 +82,33 @@ const SCHEMA_ValueVerdict = {
   required: ["reportFile", "mustFix", "suggestion", "oneliner"],
 };
 
+const SCHEMA_ProblemRef = {
+  type: "object",
+  properties: {
+    ref: { type: "string", description: "报告内问题锚点，格式 review-<维度>#<序>（如 review-main#2），与报告小节标题一致" },
+    level: { type: "string", enum: ["must-fix", "suggestion"], description: "must-fix 级或 suggestion 级（与报告小节分级一致）" },
+    title: { type: "string", description: "一句话问题标题" },
+  },
+  required: ["ref", "level", "title"],
+};
+
 const SCHEMA_ReviewerVerdict = {
   type: "object",
   properties: {
-    mustFix: { type: "number", description: "must-fix 条数（与报告一致）" },
-    suggestion: { type: "number", description: "suggestion 条数（与报告一致）" },
+    mustFix: { type: "number", description: "must-fix 条数（与报告一致；脚本以 problems 清单派生计数为准，此字段做交叉校验）" },
+    suggestion: { type: "number", description: "suggestion 条数（与报告一致；同上做交叉校验）" },
+    problems: {
+      type: "array",
+      items: SCHEMA_ProblemRef,
+      description: "逐条问题清单（处置表覆盖校验的对账锚点；条数须与 mustFix/suggestion 计数一致）",
+    },
     reconciliation: {
       type: "array",
       items: SCHEMA_ReconEntry,
       description: "R1 恒空数组；R2+ 对上轮处置表必对账集逐条申报",
     },
   },
-  required: ["mustFix", "suggestion", "reconciliation"],
+  required: ["mustFix", "suggestion", "problems", "reconciliation"],
 };
 
 const SCHEMA_Disposition = {
@@ -153,6 +168,21 @@ function wfAgent(name, persona) {
       return raw;
     },
   };
+}
+
+// ── 修复者重试前情补丁（F 区钩子）：pi 侧 ask 每次新 agent（无续聊），重试指令必须
+// 自包含前情（首次指令 + 上次返回 + 校验报告）；zcode 侧同 actor 续聊上下文天然可见 ──
+function withRetryContext(firstInstructions, firstReturn, checkReport) {
+  return [
+    "【前情】你此前收到过修复任务指令并已返回结果，但处置表未通过脚本校验，本轮是重试。",
+    "=====",
+    "此前任务指令：",
+    String(firstInstructions),
+    "上次返回的 dispositions（JSON）：",
+    JSON.stringify((firstReturn && firstReturn.dispositions) || []),
+    "=====",
+    "",
+  ].join("\n");
 }
 
 // ── 平台恢复指引（G 区：机制词两侧平台化，公共体经常量引用） ──

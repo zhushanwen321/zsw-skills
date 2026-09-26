@@ -84,19 +84,23 @@ task:
        匹配改动大小、宿主表面不变量场景
     6. 报告写到 <runDir>/round-N/review-main.md
   验收：
-    - 返回 structured-output { report_file, must_fix, suggestion, reconciliation[] }
+    - 返回 structured-output { report_file, must_fix, suggestion, problems[], reconciliation[] }——
+      problems = 逐条问题清单，每条 { ref, level, title }（ref 即报告小节锚点
+      review-main#<序>，报告每条问题的小节标题带此锚点；level 取 must-fix|suggestion；
+      条数合计须等于 must_fix+suggestion）
     - 每个 MUST_FIX 引用 P0-N 检查项编号 + 文档位置
 ```
 
-（impact / simplicity 同构，判据分工按 rubric：impact 审 P0-12/19/20 副作用遗漏；simplicity 审 P0-22/23、P1-6 机制必要性——报告名 review-impact.md / review-simplicity.md。**简洁审一律派**——agent 在报告中说明本设计是否纯文案/参数调整类、简洁面零发现即可（无需跳过通道）。）
+（impact / simplicity 同构，判据分工按 rubric：impact 审 P0-12/19/20 副作用遗漏；simplicity 审 P0-22/23、P1-6 机制必要性——报告名 review-impact.md / review-simplicity.md，锚点前缀随报告名（review-impact#N / review-simplicity#N）。**简洁审一律派**——agent 在报告中说明本设计是否纯文案/参数调整类、简洁面零发现即可（无需跳过通道）。）
 
 ## 手工路径 Step 4：修复轮（主 agent 亲为）
 
-1. 读三份结构化返回，合并去重（同根因跨维度表述合并）
+1. 读三份结构化返回，合并去重（同根因跨维度表述合并）；三审 problems 清单合并落 `<runDir>/round-N/problems.json`（`{ round, problems: [...] }`）
 2. 按 `flow/write.md` Step 7.1/7.2 修复全部 must-fix + suggestion 三选一处置
-3. 产出当轮处置表 `<runDir>/round-N/dispositions.md`（每条：id / 来源报告 / 处置（修复|登记不修|归档）/ 修订位置 / 反例重演 / 攻击点建议 / 影响决策 / 影响交付）
-4. 终态判定（机械）：三报告 must-fix==0 且上轮处置表无未处置条目即终止（converged，写 final.json）——不要求当轮 suggestion 清零（suggestion 逐条处置完即终止，不为 suggestion 单独驱动确认轮，老实测教训）；R1 全 0 且零 suggestion 直接收敛不派修复者。否则 → 下一轮聚焦复审（Step 3 的 R2+ 形态），轮次 +1
-5. 停机线：maxRounds（默认 10）；连续 3 轮 must-fix 不降 → stuck 呈报用户
+3. 产出当轮处置表 `<runDir>/round-N/dispositions.md`（每条：id（D-<轮>-<序>）/ 来源 ref（source 数组，逐条引用 problems.json 的 ref）/ 处置（修复|登记不修|归档）/ 修订位置 / 反例重演 / 攻击点建议 / 影响决策 / 影响交付），并同步落 `<runDir>/round-N/dispositions.json`（结构：`{ dispositions: [...] }`，字段同 workflow 路径）
+4. 处置表机器校验（与 workflow 路径同一校验器——双轨语义等价由此保证）：`node ~/.agents/skills/tech-design-wf/scripts/check-dispositions.mjs <runDir>/round-N/dispositions.json --problems <runDir>/round-N/problems.json`；exit 1 时按 stdout 校验报告（缺失 ref 清单）补正处置表后重跑，至 exit 0
+5. 终态判定（机械）：三报告 must-fix==0 且上轮处置表无未处置条目即终止（converged，写 final.json）——不要求当轮 suggestion 清零（suggestion 逐条处置完即终止，不为 suggestion 单独驱动确认轮，老实测教训）；R1 全 0 且零 suggestion 直接收敛不派修复者。否则 → 下一轮聚焦复审（Step 3 的 R2+ 形态），轮次 +1
+6. 停机线：maxRounds（默认 10）；连续 3 轮 must-fix 不降 → stuck 呈报用户
 
 ## 手工路径 Step 5：终态与 T2 确认
 

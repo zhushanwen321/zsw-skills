@@ -63,6 +63,13 @@ const WHITELIST = new Set([
   "修正参数后经 CreateWorkflow 重新发起（注意 AmendWorkflow 不透传 args——修订脚本时参数值需写进脚本常量后 amend）",
   "修正参数后重新 workflow run 发起（pi runs 一次性：修订脚本后重跑即可，防产物覆盖用 attempt 递增）",
 
+  // —— 拼接壳 W1 修复者重试钩子（F 区：zcode 同 actor 续聊只需说明，pi 新 agent 须自包含前情） ——
+  "你上一轮返回的处置表未通过脚本校验（同会话续聊，此前的任务指令与你的返回仍可见）。",
+  "【前情】你此前收到过修复任务指令并已返回结果，但处置表未通过脚本校验，本轮是重试。",
+  "=====",
+  "此前任务指令：",
+  "上次返回的 dispositions（JSON）：",
+
   // —— E/C TS 形态（属性键/枚举字符串仅一侧以字符串形式出现） ——
   "artifacts",
   "deferredLedger",
