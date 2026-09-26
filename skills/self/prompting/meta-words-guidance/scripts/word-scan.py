@@ -9,12 +9,14 @@
     word-scan.py --wordlist <path>   指定词表文件（默认全局 AGENTS.md：
                                      ~/.zcode/AGENTS.md，回退 ~/.pi/agent/AGENTS.md）
 
+白名单是放行词，不参与扫描；启动时校验白名单与其他三表无同词冲突，有冲突即报错退出。
+
 目录扫描递归并追符号链接；跳过 .git/node_modules 等目录、点开头目录、
 超过 5MB 的文件与无法按 UTF-8 解码的文件（跳过计数在末尾报告）。
-扫描目标是词表 SSOT 文件本身时，跳过三张表区内的表格行（枚举必然命中），其余行文照扫。
+扫描目标是词表 SSOT 文件本身时，跳过各表区（含白名单）内的表格行（枚举必然命中），其余行文照扫。
 
 输出: 每行一条命中「路径:行号: [表] 「命中词」→ 建议 ｜ 原文片段」，末尾汇总计数。
-退出码: 0 = 无命中，1 = 有命中，2 = 参数或读取错误。
+退出码: 0 = 无命中，1 = 有命中，2 = 参数或读取错误、或白名单与其他表同词冲突。
 
 匹配规则: 词表单元格按 / 、拆分变体；尾部括号注（如「盘面（作业）」）不参与匹配，
 括号内含 / 时视为变体列表（如「gate 族（Gate/门禁/…）」）；「…」视为通配（≤30 字）；
@@ -44,6 +46,9 @@ TABLE_HEADERS = {
     "带条件保留表": "条件",
     "观察名单": "观察",
 }
+SECTION_OF_LABEL = {label: section for section, label in TABLE_HEADERS.items()}
+WHITELIST_TABLE = "白名单"
+ALL_TABLE_NAMES = (*TABLE_HEADERS, WHITELIST_TABLE)
 
 
 def split_variants(cell):
@@ -103,6 +108,27 @@ def load_terms(path, tables):
     return terms
 
 
+def load_whitelist(path):
+    """解析白名单表，返回词面集合；「候选：」前缀行去前缀后计入。"""
+    words = set()
+    section = False
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^#{2,5}\s*(.+?)\s*$", raw)
+        if m:
+            section = m.group(1).startswith(WHITELIST_TABLE)
+            continue
+        if not section or not raw.startswith("|"):
+            continue
+        cells = [c.strip() for c in raw.strip().strip("|").split("|")]
+        if len(cells) < 2 or cells[0] == "词" or set(cells[0]) <= {"-", ":"}:
+            continue
+        word_cell = cells[0]
+        if word_cell.startswith("候选："):
+            word_cell = word_cell[len("候选："):]
+        words.update(split_variants(word_cell))
+    return words
+
+
 def iter_files(paths):
     for p in paths:
         path = Path(p)
@@ -132,7 +158,7 @@ def scan_file(path, terms, is_wordlist):
             # 词表 SSOT 自身：三张表区内的表格行是枚举必然命中，跳过；其余行文照扫
             h = re.match(r"^#{2,5}\s*(.+?)\s*$", line)
             if h:
-                in_table_section = any(h.group(1).startswith(t) for t in TABLE_HEADERS)
+                in_table_section = any(h.group(1).startswith(t) for t in ALL_TABLE_NAMES)
             if in_table_section and line.startswith("|"):
                 continue
         found = []
@@ -169,7 +195,15 @@ def main():
         print(f"错误：词表不存在 {args.wordlist}——用 --wordlist 指定有效路径", file=sys.stderr)
         return 2
 
-    terms = load_terms(args.wordlist, tables)
+    full_terms = load_terms(args.wordlist, set(TABLE_HEADERS))
+    terms = [t for t in full_terms if SECTION_OF_LABEL[t[2]] in tables]
+
+    whitelist = load_whitelist(args.wordlist)
+    conflicts = sorted({v for _, v, _, _ in full_terms} & whitelist)
+    if conflicts:
+        for w in conflicts:
+            print(f"错误：词「{w}」同时登记在白名单与其他表中，放行与限制矛盾——先修词表再扫描", file=sys.stderr)
+        return 2
     all_hits, skipped = [], 0
     wordlist_resolved = args.wordlist.resolve()
     for f in iter_files(args.paths):
