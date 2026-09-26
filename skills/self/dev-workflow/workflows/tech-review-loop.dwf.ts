@@ -197,7 +197,7 @@ function withRetryContext(firstInstructions: string, firstReturn: { dispositions
 // ── 常量（控制流专用，不内插进任何 ask 文本） ──
 const DEFAULT_MAX_ROUNDS = 10;
 const STUCK_THRESHOLD = 3;
-const FIX_RETRY_MAX = 2; // 修复者结构化返回校验失败的重试上限（初始 1 次 + 回喂重试 1 次）
+const FIX_RETRY_MAX = 3; // 修复者结构化返回校验失败的重试上限（初始 1 次 + 回喂重试 3 次，与其他 agent 的 STRUCTURED_RETRY_MAX 对齐）
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
 //（定义置于文件顶部常量区：价值审的顶层 await 调用早于 persona 常量区，晚定义会 TDZ）
 const NO_ASK_RULE =
@@ -340,10 +340,79 @@ function sanitizeProblems(raw: unknown): { ref: string; level: "must-fix" | "sug
       log(`WARN: 问题清单条目畸形被丢弃（ref=${JSON.stringify(p.ref)} level=${JSON.stringify(p.level)}）——丢弃后计数以剩余清单派生`);
       continue;
     }
-    out.push({ ref, level, title: typeof p.title === "string" ? p.title.trim() : "" });
+    out.push({ ref, level: level!, title: typeof p.title === "string" ? p.title.trim() : "" });
   }
   return out;
 }
+
+// ── 结构化返回校验回喂（用户裁决 2026-09-26：全部 agent 结构化返回必备，回喂重试上限 3 次）──
+// rawAsk 由调用方闭包提供（用各自具体类型调 ask——pi 构建管线按泛型名查 SCHEMA_BY_KEY，
+// 帮手内不能出现平台 ask 的泛型调用）；回喂 prompt 自包含重发原指令（pi 侧每次新 agent）。
+const STRUCTURED_RETRY_MAX = 3;
+
+type Validated<T> = { ok: true; value: T } | { ok: false; errors: string[] };
+
+async function askValidated<T>(
+  validate: (v: unknown) => Validated<T>,
+  rawAsk: (prompt: string) => Promise<T>,
+  prompt: string,
+): Promise<T | null> {
+  let last = await rawAsk(prompt);
+  for (let i = 1; i <= STRUCTURED_RETRY_MAX; i++) {
+    const v = validate(last);
+    if (v.ok) return v.value;
+    last = await rawAsk(
+      [
+        `你上一轮的结构化返回未通过机器校验，错误清单：`,
+        ...v.errors.map((e) => `- ${e}`),
+        ``,
+        `重新返回完整 JSON（全量重新给出，不是增量补丁；除该 JSON 外不要改任何已落盘产物）。`,
+        ``,
+        `（原始任务指令重发——）`,
+        prompt,
+      ].join("\n"),
+    );
+  }
+  const fin = validate(last);
+  return fin.ok ? fin.value : null;
+}
+
+/** 价值审返回校验：计数非负整数 + 文本字段为字符串 */
+function validateValueVerdict(v: unknown): Validated<ValueVerdict> {
+  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const errors: string[] = [];
+  if (sanitizeCount(o["mustFix"]) === null) errors.push("mustFix 须为非负整数（与报告一致）");
+  if (sanitizeCount(o["suggestion"]) === null) errors.push("suggestion 须为非负整数（与报告一致）");
+  if (typeof o["oneliner"] !== "string") errors.push("oneliner 须为字符串");
+  if (typeof o["reportFile"] !== "string") errors.push("reportFile 须为字符串");
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as ValueVerdict };
+}
+
+/** 三审返回校验：计数非负整数 + problems 清单逐条形态合法（ref/level/title）+ reconciliation 数组 */
+function validateReviewerVerdict(v: unknown): Validated<ReviewerVerdict> {
+  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const errors: string[] = [];
+  if (sanitizeCount(o["mustFix"]) === null) errors.push("mustFix 须为非负整数（与报告一致）");
+  if (sanitizeCount(o["suggestion"]) === null) errors.push("suggestion 须为非负整数（与报告一致）");
+  const rawProblems = o["problems"];
+  if (!Array.isArray(rawProblems)) errors.push("problems 须为数组（逐条 {ref, level, title}）");
+  else {
+    const badIdx: string[] = [];
+    rawProblems.forEach((item, i) => {
+      if (item === null || typeof item !== "object") {
+        badIdx.push(String(i + 1));
+        return;
+      }
+      const p = item as Partial<{ ref: string; level: string; title: string }>;
+      if (typeof p.ref !== "string" || p.ref.trim() === "" || (p.level !== "must-fix" && p.level !== "suggestion"))
+        badIdx.push(String(i + 1));
+    });
+    if (badIdx.length > 0) errors.push(`problems 第 ${badIdx.join("、")} 条畸形（ref 须非空字符串，level 须 must-fix|suggestion）`);
+  }
+  if (!Array.isArray(o["reconciliation"])) errors.push("reconciliation 须为数组（R1 为空数组）");
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as ReviewerVerdict };
+}
+
 
 /** 处置表台账合并：延续条目（id 命中）原位更新并按 action 重置复核状态；新条目入账 */
 function mergeRound(disps: Disposition[], round: number, ledger: LedgerEntry[]): void {
@@ -609,13 +678,16 @@ artifact.chart("trajectory", {
 const valueReportAbs = `${runDir}/review-value.md`;
 log(`审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttemptMax > 0 ? `（检测到历史 attempt 后缀至 ${prevAttemptMax}，历史产物不覆盖）` : ""}）；价值审先行`);
 
-let valueVerdict: ValueVerdict;
+let valueVerdict: ValueVerdict | null;
 try {
-  valueVerdict = await agent(
-    "价值评审",
-    "你是设计价值评审员：判断这份设计是否值得做、方向是否正确、是否回答了正确的问题；只读评审，绝不修改任何文件；每个判断都要有你亲自读到的文档原文依据；指令无法执行或有矛盾时如实说明，不伪造结论。" +
-      NO_ASK_RULE,
-  ).ask<ValueVerdict>(
+  valueVerdict = await askValidated(
+    validateValueVerdict,
+    (p) =>
+      agent(
+        "价值评审",
+        "你是设计价值评审员：判断这份设计是否值得做、方向是否正确、是否回答了正确的问题；只读评审，绝不修改任何文件；每个判断都要有你亲自读到的文档原文依据；指令无法执行或有矛盾时如实说明，不伪造结论。" +
+          NO_ASK_RULE,
+      ).ask<ValueVerdict>(p),
     [
       "价值门评审（先于审查循环）。",
       "",
@@ -632,16 +704,16 @@ try {
 } catch (e) {
   return await finish("review-failure", 0, `价值审调用失败：${String(e)}。恢复动作：provider 类问题解决后 args.attempt 递增重新发起（历史产物不覆盖）`);
 }
-const vMust = sanitizeCount(valueVerdict.mustFix);
-const vSugg = sanitizeCount(valueVerdict.suggestion);
-if (vMust === null || vSugg === null) {
+if (valueVerdict === null) {
   return await finish(
     "review-failure",
     0,
-    `价值审返回畸形：mustFix=${JSON.stringify(valueVerdict.mustFix)} suggestion=${JSON.stringify(valueVerdict.suggestion)}（须为非负整数，与报告一致）。恢复动作：报告若已写好，读 ${valueReportAbs} 人工核对后重新发起`,
+    `价值审结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规。恢复动作：报告若已写好，读 ${valueReportAbs} 人工核对后重新发起`,
   );
 }
-valueOneliner = typeof valueVerdict.oneliner === "string" ? valueVerdict.oneliner : "";
+const vMust = valueVerdict.mustFix;
+const vSugg = valueVerdict.suggestion;
+valueOneliner = valueVerdict.oneliner;
 if (valueVerdict.reportFile !== valueReportAbs) {
   log(`价值审自报 reportFile（${JSON.stringify(valueVerdict.reportFile)}）与确定性位置不一致，回退采用 ${valueReportAbs}`);
 }
@@ -738,19 +810,31 @@ for (let round = 1; round <= maxRounds; round++) {
   let verdicts: (ReviewerVerdict & { dim: string })[];
   try {
     const raw = await Promise.all([
-      agent(`主审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(reviewerPrompt(TRIALS[0])),
-      agent(`影响面审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(reviewerPrompt(TRIALS[1])),
-      agent(`简洁审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(reviewerPrompt(TRIALS[2])),
+      askValidated(
+        validateReviewerVerdict,
+        (p) => agent(`主审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(p),
+        reviewerPrompt(TRIALS[0]),
+      ),
+      askValidated(
+        validateReviewerVerdict,
+        (p) => agent(`影响面审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(p),
+        reviewerPrompt(TRIALS[1]),
+      ),
+      askValidated(
+        validateReviewerVerdict,
+        (p) => agent(`简洁审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(p),
+        reviewerPrompt(TRIALS[2]),
+      ),
     ]);
-    const bad = raw.findIndex((v) => sanitizeCount(v.mustFix) === null || sanitizeCount(v.suggestion) === null);
-    if (bad >= 0) {
+    const badNull = raw.findIndex((v) => v === null);
+    if (badNull >= 0) {
       return await finish(
         "review-failure",
         round,
-        `维度 ${TRIALS[bad].label} 返回畸形计数（mustFix=${JSON.stringify(raw[bad].mustFix)} suggestion=${JSON.stringify(raw[bad].suggestion)}，须为非负整数且与报告一致）。恢复动作：报告已落盘可读 ${roundAbs} 人工核对；${HINT_REVIEW_BAD_COUNT}`,
+        `维度 ${TRIALS[badNull].label} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规。恢复动作：报告已落盘可读 ${roundAbs} 人工核对；${HINT_REVIEW_BAD_COUNT}`,
       );
     }
-    verdicts = raw.map((v, i) => {
+    verdicts = (raw as ReviewerVerdict[]).map((v, i) => {
       const problems = sanitizeProblems(v.problems);
       const selfMf = sanitizeCount(v.mustFix) ?? 0;
       const selfSf = sanitizeCount(v.suggestion) ?? 0;

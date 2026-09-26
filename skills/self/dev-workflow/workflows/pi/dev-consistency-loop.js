@@ -651,6 +651,75 @@ const FIX_PERSONA = "你是资深修复工程师：先读设计文档对应节�
     NO_ASK_RULE;
 const RE_PERSONA = "你是对抗式一致性复审者：只报告、绝不修改任何文件；逐条亲自核实修复声称（读到行级才算数，修复方声称不算证据）；只审指定影响面，不全面重审。" +
     NO_ASK_RULE;
+// ── 结构化返回校验回喂（用户裁决 2026-09-26：全部 agent 结构化返回必备，回喂重试上限 3 次）──
+// rawAsk 由调用方闭包提供（用各自具体类型调 ask——pi 构建管线按泛型名查 SCHEMA_BY_KEY，
+// 帮手内不能出现平台 ask 的泛型调用）；回喂 prompt 自包含重发原指令（pi 侧每次新 agent）。
+const STRUCTURED_RETRY_MAX = 3;
+async function askValidated(validate, rawAsk, prompt) {
+    let last = await rawAsk(prompt);
+    for (let i = 1; i <= STRUCTURED_RETRY_MAX; i++) {
+        const v = validate(last);
+        if (v.ok)
+            return v.value;
+        last = await rawAsk([
+            `你上一轮的结构化返回未通过机器校验，错误清单：`,
+            ...v.errors.map((e) => `- ${e}`),
+            ``,
+            `重新返回完整 JSON（全量重新给出，不是增量补丁；空数组须显式返回 []；除该 JSON 外不要改任何已落盘产物）。`,
+            ``,
+            `（原始任务指令重发——）`,
+            prompt,
+        ].join("\n"));
+    }
+    const fin = validate(last);
+    return fin.ok ? fin.value : null;
+}
+function isStrArr(v) {
+    return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+function isObjArr(v) {
+    return Array.isArray(v) && v.every((x) => typeof x === "object" && x !== null && !Array.isArray(x));
+}
+/** 审查返回浅层结构校验（三分类数组；字段级归一仍由 normalizeReview 承接） */
+function validateReviewResult(v) {
+    const o = typeof v === "object" && v !== null ? v : {};
+    const errors = [];
+    if (!isObjArr(o["reasonable"]))
+        errors.push("reasonable 须为对象数组（无发现时显式 []）");
+    if (!isObjArr(o["unreasonable"]))
+        errors.push("unreasonable 须为对象数组（无发现时显式 []）");
+    if (!isObjArr(o["docErrors"]))
+        errors.push("docErrors 须为对象数组（无发现时显式 []）");
+    return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v };
+}
+/** 修复返回浅层结构校验：fixes 元素 {id, description, affectedFiles[]} / skipped 元素 {id, reason} */
+function validateFixReport(v) {
+    const o = typeof v === "object" && v !== null ? v : {};
+    const errors = [];
+    if (!isObjArr(o["fixes"]))
+        errors.push("fixes 须为对象数组（每条 { id, description, affectedFiles }）");
+    else {
+        const bad = [];
+        o["fixes"].forEach((f, i) => {
+            if (typeof f["id"] !== "string" || !isStrArr(f["affectedFiles"]))
+                bad.push(String(i + 1));
+        });
+        if (bad.length > 0)
+            errors.push(`fixes 第 ${bad.join("、")} 条畸形（id 须字符串、affectedFiles 须字符串数组）`);
+    }
+    if (!isObjArr(o["skipped"]))
+        errors.push("skipped 须为对象数组（每条 { id, reason }）");
+    else {
+        const bad = [];
+        o["skipped"].forEach((s, i) => {
+            if (typeof s["id"] !== "string" || typeof s["reason"] !== "string")
+                bad.push(String(i + 1));
+        });
+        if (bad.length > 0)
+            errors.push(`skipped 第 ${bad.join("、")} 条畸形（id / reason 须字符串）`);
+    }
+    return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v };
+}
 function r1Prompt(p) {
     return [
         `第 1 轮全面一致性审查（分区：${p.name}）。`,
@@ -672,7 +741,11 @@ function r1Prompt(p) {
 log(`W3 一致性审查循环：仓库 ${info.projectRoot}，基线 ${info.baseline}，diff ${info.diffFileCount} 文件 / ${info.diffChurn} 行，分区 ${info.partitions.length} 个（${info.partitions.map((p) => `${p.name}(${p.files.length})`).join("、")}）`);
 let r1Norm;
 try {
-    const r1Raw = await mapBatch(info.partitions, (p) => wfAgent(`一致性审查-${p.name}`, R1_PERSONA).ask("ReviewResult", r1Prompt(p)));
+    const r1Raw = await mapBatch(info.partitions, (p) => askValidated(validateReviewResult, (q) => wfAgent(`一致性审查-${p.name}`, R1_PERSONA).ask("ReviewResult", q), r1Prompt(p)));
+    const badPart = r1Raw.findIndex((v) => v === null);
+    if (badPart >= 0) {
+        return await finish("review-failure", 1, `分区 ${info.partitions[badPart]?.name ?? badPart} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规——${HINT_R1_FAILED}`);
+    }
     r1Norm = r1Raw.map((v, i) => normalizeReview(v, `分区 ${info.partitions[i]?.name ?? i}`));
 }
 catch (e) {
@@ -806,7 +879,9 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             ]
                 .filter(Boolean)
                 .join("\n");
-            const fix = await wfAgent(`修复-${name}-r${fixRound}`, FIX_PERSONA).ask("FixReport", prompt);
+            const fix = await askValidated(validateFixReport, (q) => wfAgent(`修复-${name}-r${fixRound}`, FIX_PERSONA).ask("FixReport", q), prompt);
+            if (fix === null)
+                throw new Error(`修复组 ${name} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
             return { name, fix: normalizeFix(fix, `修复-${name}-r${fixRound}`) };
         });
     }
@@ -979,7 +1054,9 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
                     .filter(Boolean)
                     .join("\n");
                 // agent 名字静态前缀开头（zcode GUI 泳道静态分析预建，变量开头显示「未命名子代理」）
-                const review = await wfAgent(`定向复审-${g.name}-r${fixRound}`, RE_PERSONA).ask("ReviewResult", prompt);
+                const review = await askValidated(validateReviewResult, (q) => wfAgent(`定向复审-${g.name}-r${fixRound}`, RE_PERSONA).ask("ReviewResult", q), prompt);
+                if (review === null)
+                    throw new Error(`组 ${g.name} 复审结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
                 return { name: g.name, review: normalizeReview(review, `复审-${g.name}-r${fixRound}`) };
             });
         }

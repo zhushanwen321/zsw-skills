@@ -745,6 +745,87 @@ const RETIRE_PERSONA =
   "你是交付收尾判定者：按规则产退役/保留清单，只判定不执行；拿不准的列保留并说明理由。" +
   NO_ASK_RULE;
 
+// ── 结构化返回校验回喂（用户裁决 2026-09-26：全部 agent 结构化返回必备，回喂重试上限 3 次）──
+// rawAsk 由调用方闭包提供（用各自具体类型调 ask——pi 构建管线按泛型名查 SCHEMA_BY_KEY，
+// 帮手内不能出现平台 ask 的泛型调用）；回喂 prompt 自包含重发原指令（pi 侧每次新 agent）。
+const STRUCTURED_RETRY_MAX = 3;
+
+type Validated<T> = { ok: true; value: T } | { ok: false; errors: string[] };
+
+async function askValidated<T>(
+  validate: (v: unknown) => Validated<T>,
+  rawAsk: (prompt: string) => Promise<T>,
+  prompt: string,
+): Promise<T | null> {
+  let last = await rawAsk(prompt);
+  for (let i = 1; i <= STRUCTURED_RETRY_MAX; i++) {
+    const v = validate(last);
+    if (v.ok) return v.value;
+    last = await rawAsk(
+      [
+        `你上一轮的结构化返回未通过机器校验，错误清单：`,
+        ...v.errors.map((e) => `- ${e}`),
+        ``,
+        `重新返回完整 JSON（全量重新给出，不是增量补丁；空数组须显式返回 []；除该 JSON 外不要改任何已落盘产物）。`,
+        ``,
+        `（原始任务指令重发——）`,
+        prompt,
+      ].join("\n"),
+    );
+  }
+  const fin = validate(last);
+  return fin.ok ? fin.value : null;
+}
+
+function isStrArr(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+
+function isObjArr(v: unknown): v is Record<string, unknown>[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "object" && x !== null && !Array.isArray(x));
+}
+
+/** planner 返回校验：两数组结构 + normPlanner 归一后 modules 非空（归一结果即返回值） */
+function validatePlannerResult(v: unknown): Validated<PlannerResult> {
+  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const errors: string[] = [];
+  if (!isObjArr(o["frameworkFindings"])) errors.push("frameworkFindings 须为对象数组（无发现时显式 []）");
+  if (!isObjArr(o["modules"])) errors.push("modules 须为对象数组（至少 1 个模块，规模小返回单模块）");
+  if (errors.length > 0) return { ok: false, errors };
+  const norm = normPlanner(v as PlannerResult, projectRoot);
+  if (norm.modules.length === 0) return { ok: false, errors: ["modules 为空（至少 1 个模块，规模小返回单模块）"] };
+  return { ok: true, value: norm };
+}
+
+/** 模块审查返回校验：两数组结构 + findings 元素方向/严重度枚举合法 */
+function validateModuleReview(v: unknown): Validated<ModuleReview> {
+  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const errors: string[] = [];
+  if (!isObjArr(o["matrixRows"])) errors.push("matrixRows 须为对象数组");
+  if (!isObjArr(o["findings"])) errors.push("findings 须为对象数组（无发现时显式 []）");
+  else {
+    const bad: string[] = [];
+    (o["findings"] as Record<string, unknown>[]).forEach((f, i) => {
+      const d = f["direction"];
+      const s = f["severity"];
+      if (d !== "doc-right" && d !== "code-right" && d !== "contested") bad.push(String(i + 1));
+      else if (s !== "must-fix" && s !== "suggestion" && s !== "info") bad.push(String(i + 1));
+    });
+    if (bad.length > 0) errors.push(`findings 第 ${bad.join("、")} 条畸形（direction 须 doc-right|code-right|contested，severity 须 must-fix|suggestion|info）`);
+  }
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as ModuleReview };
+}
+
+/** 修复组返回校验：fixes 对象数组 + affectedFiles 字符串数组 + deferred 对象数组 */
+function validateFixOutcome(v: unknown): Validated<FixOutcome> {
+  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const errors: string[] = [];
+  if (!isObjArr(o["fixes"])) errors.push("fixes 须为对象数组（每条 { issueId, description, selfCheck }）");
+  if (!isStrArr(o["affectedFiles"])) errors.push("affectedFiles 须为字符串数组");
+  if (!isObjArr(o["deferred"])) errors.push("deferred 须为对象数组（无申报时显式 []）");
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as FixOutcome };
+}
+
 const plannerPromptText = [
   "终态同步 framework-scan（两级拓扑第一级，首轮全量）。",
   `第一步：Read planner 模板 ${plannerTplAbs}——按其中任务契约执行全部职责（框架级对照 / impl-plan 现实性与内部一致性 / 关联登记面核对 / 模块分解）。`,
@@ -909,23 +990,18 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     // 与本分支未再打标的步骤）
     let plan: PlannerResult | null = null;
     let planErr = "";
-    for (let attempt2 = 1; attempt2 <= 2 && plan === null; attempt2++) {
-      try {
-        const retryNote =
-          attempt2 > 1
-            ? ["", `上一次返回被判为无效（原因：${planErr}）。按模板输出节重新输出有效 JSON；modules 至少 1 个。`]
-            : [];
-        const cand = await plannerAgent.ask<PlannerResult>([plannerPromptText, ...retryNote].join("\n"));
-        if (cand === null || typeof cand !== "object") throw new Error("返回畸形：非对象");
-        const norm = normPlanner(cand, projectRoot);
-        if (norm.modules.length === 0) throw new Error("modules 为空（至少 1 个模块，规模小返回单模块）");
-        plan = norm;
-      } catch (e) {
-        planErr = String(e);
-      }
+    try {
+      plan = await askValidated(
+        validatePlannerResult,
+        (q) => plannerAgent.ask<PlannerResult>(q),
+        plannerPromptText,
+      );
+      if (plan === null) throw new Error("返回不合规（结构/枚举/modules 空均回喂重试过）");
+    } catch (e) {
+      planErr = String(e);
     }
     if (plan === null) {
-      finalResult = finish("planner-failure", round, `planner 返回无效（${planErr}）。恢复动作：检查模板 ${plannerTplAbs} ，${HINT_PLANNER_INVALID}`);
+      finalResult = finish("planner-failure", round, `planner 返回无效（${planErr}，${STRUCTURED_RETRY_MAX} 次回喂重试后仍不合规）。恢复动作：检查模板 ${plannerTplAbs} ，${HINT_PLANNER_INVALID}`);
       break;
     }
     log(`第 ${round} 轮 framework-scan：框架发现 ${plan.frameworkFindings.length} 条，模块分解 ${plan.modules.length} 个${plan.modules.length === 1 ? "（单模块退化 = 单 reviewer）" : ""}`);
@@ -1031,8 +1107,12 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
           batch.map(async (m) => {
             const a = moduleAgents.get(m.id);
             if (!a) throw new Error(`模块 agent 缺失：${m.id}`);
-            const res = await a.ask<ModuleReview>(reviewPrompt(m));
-            if (res === null || typeof res !== "object") throw new Error(`模块 ${m.id} 审查返回畸形（非对象）`);
+            const res = await askValidated(
+              validateModuleReview,
+              (q) => a.ask<ModuleReview>(q),
+              reviewPrompt(m),
+            );
+            if (res === null) throw new Error(`模块 ${m.id} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
             return { mid: m.id, res };
           }),
         );
@@ -1107,7 +1187,9 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
               .map((id) => ledgerById(id))
               .filter((f): f is FindingRecord => f !== undefined && f.owner === owner);
             const mm = owner !== "planner" ? moduleById.get(owner) : undefined;
-            const res = await a.ask<ModuleReview>(
+            const res = await askValidated(
+              validateModuleReview,
+              (q) => a.ask<ModuleReview>(q),
               [
                 r2PrevContextBlock(owner, mm, projectRoot, designDoc, implPlan, headHash, plannerTplAbs, reviewerTplAbs, rel),
                 reReviewPrompt(round, scopeFindings),
@@ -1115,7 +1197,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
                 .filter(Boolean)
                 .join("\n\n"),
             );
-            if (res === null || typeof res !== "object") throw new Error(`聚焦复审（${owner}）返回畸形（非对象）`);
+            if (res === null) throw new Error(`聚焦复审（${owner}）结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
             return { owner, res };
           }),
         );
@@ -1262,12 +1344,14 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       const snapshot = parsePorcelain(snapRes.stdout);
       const outcomes = await Promise.all(
         batch.map((g) =>
-          agent(`同步修复-R${round}-${g.id}`, FIXER_PERSONA)
-            .ask<FixOutcome>(fixerPrompt(g, activeById))
-            .then((o) => {
-              if (o === null || typeof o !== "object") throw new Error(`组 ${g.id} fixer 返回畸形（非对象）`);
-              return { g, o: normFixOutcome(o, projectRoot) };
-            }),
+          askValidated(
+            validateFixOutcome,
+            (q) => agent(`同步修复-R${round}-${g.id}`, FIXER_PERSONA).ask<FixOutcome>(q),
+            fixerPrompt(g, activeById),
+          ).then((o) => {
+            if (o === null) throw new Error(`组 ${g.id} fixer 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
+            return { g, o: normFixOutcome(o, projectRoot) };
+          }),
         ),
       );
       // ES 硬校验：本组全部条目必须被 fixes ∪ deferred 覆盖（全等级当轮修完不留尾巴；
@@ -1387,15 +1471,19 @@ if (finalResult === null && convergedRound > 0) {
   const retireAgent = agent("伴生产物判定", RETIRE_PERSONA);
   let verdict: RetirementVerdict | null = null;
   let rErr = "";
-  for (let attempt3 = 1; attempt3 <= 2 && verdict === null; attempt3++) {
-    try {
-      const retryNote = attempt3 > 1 ? ["", `上一次返回被判为无效（原因：${rErr}）。按规则重新输出有效 JSON。`] : [];
-      const cand = await retireAgent.ask<RetirementVerdict>([retirePromptText, ...retryNote].join("\n"));
-      if (cand === null || typeof cand !== "object") throw new Error("返回畸形：非对象");
-      verdict = normRetirement(cand);
-    } catch (e) {
-      rErr = String(e);
-    }
+  try {
+    const cand = await askValidated(
+      (v: unknown): Validated<RetirementVerdict> => {
+        if (typeof v !== "object" || v === null) return { ok: false, errors: ["返回须为对象"] };
+        return { ok: true, value: normRetirement(v as RetirementVerdict) };
+      },
+      (q) => retireAgent.ask<RetirementVerdict>(q),
+      retirePromptText,
+    );
+    if (cand === null) throw new Error("结构化返回不合规（3 次回喂重试后仍失败）");
+    verdict = cand;
+  } catch (e) {
+    rErr = String(e);
   }
   if (verdict === null) {
     finalResult = finish("retire-failure", convergedRound, `退役判定 agent 返回无效（${rErr}）。恢复动作：同步修复成果已在工作区/commit 中，${HINT_RETIRE_INVALID}`);

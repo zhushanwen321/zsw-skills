@@ -775,24 +775,72 @@ async function markNodeBlockedOrFailed(
 
 // ── 验收自愈（设计 §8.7）：verify fail → 归因 → 分流 → 修资产重验 / 依赖可达性判定 ──
 
-/** 归因输出防御性归一：class 非法 → product-bug（保守：不修资产，直接依赖判定——
- *  坏输出绝不触发误修）；数组字段非字符串数组 → 空数组；文本字段非字符串 → 空串。 */
-function sanitizeHealVerdict(v: unknown): HealVerdict {
-  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
-  const cls = o["class"];
-  const klass: HealVerdict["class"] =
-    cls === "spec-bug" || cls === "product-bug" || cls === "environment" ? cls : "product-bug";
-  const txt = (k: string): string => (typeof o[k] === "string" ? (o[k] as string) : "");
-  const files = Array.isArray(o["failureFiles"]) ? o["failureFiles"].filter((f): f is string => typeof f === "string") : [];
-  return { class: klass, evidence: txt("evidence"), failureFiles: files, fixHint: txt("fixHint") };
+// ── 结构化返回校验回喂（用户裁决 2026-09-26：全部 agent 结构化返回必备，回喂重试上限 3 次）──
+// rawAsk 由调用方闭包提供（用各自具体类型调 ask——pi 构建管线按泛型名查 SCHEMA_BY_KEY，
+// 帮手内不能出现平台 ask 的泛型调用）；回喂 prompt 自包含重发原指令（pi 侧每次新 agent）。
+const STRUCTURED_RETRY_MAX = 3;
+
+type Validated<T> = { ok: true; value: T } | { ok: false; errors: string[] };
+
+async function askValidated<T>(
+  validate: (v: unknown) => Validated<T>,
+  rawAsk: (prompt: string) => Promise<T>,
+  prompt: string,
+): Promise<T | null> {
+  let last = await rawAsk(prompt);
+  for (let i = 1; i <= STRUCTURED_RETRY_MAX; i++) {
+    const v = validate(last);
+    if (v.ok) return v.value;
+    last = await rawAsk(
+      [
+        `你上一轮的结构化返回未通过机器校验，错误清单：`,
+        ...v.errors.map((e) => `- ${e}`),
+        ``,
+        `重新返回完整 JSON（全量重新给出，不是增量补丁；除该 JSON 外不要改任何已落盘产物）。`,
+        ``,
+        `（原始任务指令重发——）`,
+        prompt,
+      ].join("\n"),
+    );
+  }
+  const fin = validate(last);
+  return fin.ok ? fin.value : null;
 }
 
-/** 修复自报防御性归一（自报仅供历史记录，重验由引擎机器判定）。 */
-function summarizeHealFix(v: unknown): string {
+function validateNodeResult(v: unknown): Validated<NodeResult> {
   const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
-  const fixed = Array.isArray(o["fixed"]) ? o["fixed"].filter((f): f is string => typeof f === "string") : [];
-  const summary = typeof o["summary"] === "string" ? o["summary"] : "";
-  return `${fixed.join("、") || "（无自报文件）"}${summary !== "" ? `——${summary}` : ""}`;
+  const errors: string[] = [];
+  if (o["status"] !== "done" && o["status"] !== "fail" && o["status"] !== "blocked") errors.push("status 须为 done|fail|blocked");
+  if (!isStrArr(o["files_changed"])) errors.push("files_changed 须为字符串数组");
+  if (typeof o["test_evidence"] !== "string") errors.push("test_evidence 须为字符串");
+  if (!isStrArr(o["deviations"])) errors.push("deviations 须为字符串数组");
+  if (!isStrArr(o["blockers"])) errors.push("blockers 须为字符串数组");
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as NodeResult };
+}
+
+function validateHealVerdict(v: unknown): Validated<HealVerdict> {
+  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const errors: string[] = [];
+  if (o["class"] !== "spec-bug" && o["class"] !== "product-bug" && o["class"] !== "environment")
+    errors.push('class 须为 "spec-bug"|"product-bug"|"environment"');
+  if (typeof o["evidence"] !== "string") errors.push("evidence 须为字符串");
+  if (!isStrArr(o["failureFiles"])) errors.push("failureFiles 须为字符串数组");
+  if (typeof o["fixHint"] !== "string") errors.push("fixHint 须为字符串（可空串）");
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as HealVerdict };
+}
+
+function validateHealFixReport(v: unknown): Validated<HealFixReport> {
+  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const errors: string[] = [];
+  if (!isStrArr(o["fixed"])) errors.push("fixed 须为字符串数组");
+  if (typeof o["summary"] !== "string") errors.push("summary 须为字符串");
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as HealFixReport };
+}
+
+/** 修复自报摘要（自报仅供历史记录，重验由引擎机器判定；null = 3 次回喂重试仍不合规）。 */
+function summarizeHealFix(v: HealFixReport | null): string {
+  if (v === null) return `自报 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规（引擎仍会机器重验）`;
+  return `${v.fixed.join("、") || "（无自报文件）"}${v.summary !== "" ? `——${v.summary}` : ""}`;
 }
 
 /** DAG 后继闭包（直接或传递依赖本节点的全部节点）——依赖可达性熔断的机器判据。 */
@@ -820,34 +868,41 @@ async function runVerifyScript(node: PlanNode): Promise<{ exitCode: number; outp
   return { exitCode: r.exitCode, output: `${r.stdout}\n${r.stderr}` };
 }
 
-/** 归因 agent（§8.7 ①）：三分类 + 证据 + 失败面文件集；自愈历史回喂（跨轮记忆）。 */
+/** 归因 agent（§8.7 ①）：三分类 + 证据 + 失败面文件集；自愈历史回喂（跨轮记忆）。
+ *  返回 3 次回喂重试仍不合规时保守按 product-bug（不修验收资产，直接依赖判定）。 */
 async function diagnoseVerifyFailure(
   node: PlanNode,
   run: { exitCode: number; output: string },
   history: string[],
 ): Promise<HealVerdict> {
   const diag = agent(`诊断-${node.id}`, DIAGNOSE_PERSONA);
-  const raw = await diag.ask<HealVerdict>(
-    [
-      `验收节点 ${node.id} 的剧本执行失败，请归因（只读分析）。`,
-      `- 剧本：${node.script}（cwd ${node.cwd}）；本次退出码 ${run.exitCode}`,
-      `- 失败输出（tail）：\n${tailLines(run.output, TAIL_LINES)}`,
-      `- 完整日志与产物在剧本同目录（*.log / RESULT* / diag JSON）与产物目录 ${node.artifactsDir}`,
-      history.length > 0
-        ? `- 本节点自愈历史（前几轮归因与修复，均已重验仍红——本轮归因必须解释为何未收敛）：\n${history.join("\n")}`
-        : "",
-      "",
-      "归类三选一（class 字段）：",
-      '- spec-bug：验收资产自身缺陷（断言口径错 / 等待时序错 / 窗口失配 / 剧本 bug）——failureFiles 填验收资产文件，fixHint 给修复要点',
-      '- product-bug：被测产品实现缺陷——failureFiles 填产品文件（只读呈报，不会被修复）',
-      "- environment：超时 / 资源 / 环境类失败（非断言红）",
-      "",
-      '返回 JSON：{ "class": "spec-bug"|"product-bug"|"environment", "evidence": "一句话证据（引用失败输出原文）", "failureFiles": ["文件路径"], "fixHint": "修复要点（可空串）" }',
-    ]
-      .filter((s) => s !== "")
-      .join("\n"),
-  );
-  return sanitizeHealVerdict(raw);
+  const prompt = [
+    `验收节点 ${node.id} 的剧本执行失败，请归因（只读分析）。`,
+    `- 剧本：${node.script}（cwd ${node.cwd}）；本次退出码 ${run.exitCode}`,
+    `- 失败输出（tail）：\n${tailLines(run.output, TAIL_LINES)}`,
+    `- 完整日志与产物在剧本同目录（*.log / RESULT* / diag JSON）与产物目录 ${node.artifactsDir}`,
+    history.length > 0
+      ? `- 本节点自愈历史（前几轮归因与修复，均已重验仍红——本轮归因必须解释为何未收敛）：\n${history.join("\n")}`
+      : "",
+    "",
+    "归类三选一（class 字段）：",
+    '- spec-bug：验收资产自身缺陷（断言口径错 / 等待时序错 / 窗口失配 / 剧本 bug）——failureFiles 填验收资产文件，fixHint 给修复要点',
+    '- product-bug：被测产品实现缺陷——failureFiles 填产品文件（只读呈报，不会被修复）',
+    "- environment：超时 / 资源 / 环境类失败（非断言红）",
+    "",
+    '返回 JSON：{ "class": "spec-bug"|"product-bug"|"environment", "evidence": "一句话证据（引用失败输出原文）", "failureFiles": ["文件路径"], "fixHint": "修复要点（可空串）" }',
+  ]
+    .filter((s) => s !== "")
+    .join("\n");
+  const validated = await askValidated(validateHealVerdict, (p) => diag.ask<HealVerdict>(p), prompt);
+  if (validated !== null) return validated;
+  log(`WARN: 节点 ${node.id} 归因返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规——保守按 product-bug 处理`);
+  return {
+    class: "product-bug",
+    evidence: `归因返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规——保守按产品缺陷处理（不修验收资产）`,
+    failureFiles: [],
+    fixHint: "",
+  };
 }
 
 
@@ -928,37 +983,42 @@ async function verifyDevNode(node: PlanNode, result: NodeResult): Promise<Verify
 
 // ── 三类节点执行体 ──
 
-/** agent ask 的接替包装（设计 §6.2 F15 第一等路径）：会话异常 → 接替 actor + 前任证据包
- *  + 当前 git diff --stat，令其先核验现状再续作，禁止盲目重做；接替者再异常才向上抛（→ blocked）。
- *  注意 actor 引用在 executeDevNode 开头一次性创建——同名续聊 = 单 actor 多次 ask，
- *  每次 ask 都调 agent(name) 会创建同名新 actor，run 直接炸（冒烟实测） */
+/** agent ask 的接替包装（设计 §6.2 F15 第一等路径）：结构化返回不合规（3 次回喂重试后）
+ *  或会话异常 → 接替 actor + 前任证据包 + 当前 git diff --stat，令其先核验现状再续作，禁止
+ *  盲目重做；接替者仍不合规 / 再异常才返回 null（调用方 blocked）。注意 actor 引用在
+ *  executeDevNode 开头一次性创建——同名续聊 = 单 actor 多次 ask，每次 ask 都调 agent(name)
+ *  会创建同名新 actor，run 直接炸（冒烟实测） */
 async function askWithSuccession(
   primary: Agent,
   successor: Agent,
   prompt: string,
   node: PlanNode,
   lastResult: NodeResult | null,
-): Promise<NodeResult> {
+): Promise<NodeResult | null> {
+  let failReason = "";
   try {
-    return await primary.ask<NodeResult>(prompt);
+    const r = await askValidated(validateNodeResult, (p) => primary.ask<NodeResult>(p), prompt);
+    if (r !== null) return r;
+    failReason = `结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`;
   } catch (e) {
-    const diff = await world.run("node", ["-e", GIT_DIFF_STAT, node.cwd]);
-    const pack = [
-      `前任 agent 会话异常（${errText(e)}）——你是接替者，先核验现状再续作，禁止盲目重做已完成的改动：`,
-      `- 前任最后自报：files_changed = ${lastResult?.files_changed.join("、") ?? "（无）"}`,
-      `  test_evidence = ${lastResult?.test_evidence ?? "（无）"}；deviations = ${lastResult?.deviations.join("；") || "无"}`,
-      `- 当前 git diff --stat（工作区现状）：`,
-      diff.stdout.trim() === "" ? "  （工作区无未提交改动——前任可能尚未落盘任何文件）" : diff.stdout.trim(),
-      `- 任务书：${node.promptFile}`,
-      ``,
-      `先 read 任务书，再核对上述现状，判断前任已完成什么/缺什么，续作完成后返回任务书末尾定义的同一 JSON 契约。`,
-      ``,
-      `（前任本次收到的原始指令如下——含打回场景的核验失败原因与失败输出，按需定向处理：）`,
-      prompt,
-    ].join("\n");
-    log(`节点 ${node.id} agent 会话异常（${errText(e)}），启动接替程序`);
-    return await successor.ask<NodeResult>(pack);
+    failReason = errText(e);
   }
+  const diff = await world.run("node", ["-e", GIT_DIFF_STAT, node.cwd]);
+  const pack = [
+    `前任 agent 会话异常或返回不合规（${failReason}）——你是接替者，先核验现状再续作，禁止盲目重做已完成的改动：`,
+    `- 前任最后自报：files_changed = ${lastResult?.files_changed.join("、") ?? "（无）"}`,
+    `  test_evidence = ${lastResult?.test_evidence ?? "（无）"}；deviations = ${lastResult?.deviations.join("；") || "无"}`,
+    `- 当前 git diff --stat（工作区现状）：`,
+    diff.stdout.trim() === "" ? "  （工作区无未提交改动——前任可能尚未落盘任何文件）" : diff.stdout.trim(),
+    `- 任务书：${node.promptFile}`,
+    ``,
+    `先 read 任务书，再核对上述现状，判断前任已完成什么/缺什么，续作完成后返回任务书末尾定义的同一 JSON 契约。`,
+    ``,
+    `（前任本次收到的原始指令如下——含打回场景的核验失败原因与失败输出，按需定向处理：）`,
+    prompt,
+  ].join("\n");
+  log(`节点 ${node.id} agent 会话异常或返回不合规（${failReason}），启动接替程序`);
+  return await askValidated(validateNodeResult, (p) => successor.ask<NodeResult>(p), pack);
 }
 
 async function executeDevNode(node: PlanNode): Promise<void> {
@@ -976,6 +1036,16 @@ async function executeDevNode(node: PlanNode): Promise<void> {
     node,
     null,
   );
+  if (result === null) {
+    await markNodeBlockedOrFailed(
+      node.id,
+      "blocked",
+      `结构化返回经接替仍不合规（${STRUCTURED_RETRY_MAX} 次回喂重试 × 主/接替两路径）`,
+      "任务书可读，接管前先核对 git status 盘点前任落盘",
+      1,
+    );
+    return;
+  }
   let attempts = 1;
   let verdict = await verifyDevNode(node, result);
   while (verdict.outcome === "retry" && attempts <= MAX_REJECT_ROUNDS) {
@@ -991,6 +1061,16 @@ async function executeDevNode(node: PlanNode): Promise<void> {
       node,
       result,
     );
+    if (result === null) {
+      await markNodeBlockedOrFailed(
+        node.id,
+        "blocked",
+        `打回轮结构化返回经接替仍不合规（${STRUCTURED_RETRY_MAX} 次回喂重试 × 主/接替两路径）`,
+        `上一轮核验未过原因：${verdict.reason}`,
+        attempts,
+      );
+      return;
+    }
     attempts += 1;
     await statusUpdate(node.id, { status: "in-progress", attempts }, "reject-round", verdict.reason);
     verdict = await verifyDevNode(node, result);
@@ -1047,7 +1127,9 @@ async function executeVerifyNode(node: PlanNode): Promise<void> {
     const verdict = await diagnoseVerifyFailure(node, run, healHistory);
     healHistory.push(`第 ${attempt} 轮归因 ${verdict.class}：${verdict.evidence}`);
     if (verdict.class === "spec-bug" && attempt < MAX_HEAL_ROUNDS) {
-      const fix = await healer.ask<HealFixReport>(
+      const fix = await askValidated(
+        validateHealFixReport,
+        (p) => healer.ask<HealFixReport>(p),
         [
           `验收节点 ${node.id} 的失败归因为 spec-bug（验收资产自身缺陷），请修复验收资产。`,
           `- 归因证据：${verdict.evidence}`,
@@ -1139,9 +1221,21 @@ async function executeInspectNode(node: PlanNode): Promise<void> {
           }),
         ]
       : [];
-  const result = await nodeAgent.ask<NodeResult>(
+  const result = await askValidated(
+    validateNodeResult,
+    (p) => nodeAgent.ask<NodeResult>(p),
     `读取验收任务书 ${node.promptFile}（绝对路径）并按其完整执行（只检查，不修改代码、不产生 commit），返回该文件末尾定义的 JSON 契约（status / files_changed / test_evidence / deviations / blockers）。${refLines.join("\n")}`,
   );
+  if (result === null) {
+    await markNodeBlockedOrFailed(
+      node.id,
+      "blocked",
+      `inspect 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`,
+      "任务书可读，接管前先核对上游产物",
+      1,
+    );
+    return;
+  }
   if (result.blockers.length > 0) {
     await markNodeBlockedOrFailed(node.id, "blocked", "任务书自报 blockers", result.blockers.join("；"), 1);
     return;
