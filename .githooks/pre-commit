@@ -2,17 +2,22 @@
 # zsw-skills pre-commit
 # 启用：git config core.hooksPath .githooks
 #
-# 段 1：dev-workflow 双平台 workflow 脚本对账（zcode .dwf.ts ↔ pi .js）
-# 改任一侧而漏另一侧时拦截；对账规则见 scripts/check-workflow-parity.mjs 头注释
+# 段 1：dev-workflow 双平台 workflow 构建一致性 + 对账
+# workflows/src/ 是单源（壳×2 + 公共体），产物由 scripts/build-workflows.mjs 生成；
+# 改源忘 build、或绕过源直接改产物 → 这里拦截
 
-STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- 'skills/self/dev-workflow/workflows/')
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- 'skills/self/dev-workflow/workflows/' 'scripts/build-workflows.mjs')
 if [ -n "$STAGED" ]; then
-  echo "pre-commit[workflow-parity]: staged 变更含 workflow 脚本，跑双平台对账…"
+  echo "pre-commit[workflow-build]: staged 变更含 workflow 源/产物，跑构建一致性检查…"
+  node scripts/build-workflows.mjs --check || {
+    echo ""
+    echo "[workflow-build] 产物与源不一致。恢复动作：node scripts/build-workflows.mjs 重新生成后再提交"
+    exit 1
+  }
   node scripts/check-workflow-parity.mjs || {
     echo ""
-    echo "[workflow-parity] 双平台 workflow 脚本出现未登记差异（处理见上）。"
-    echo "  恢复动作：①业务逻辑漂移 → 把改动同步到另一侧后再提交；"
-    echo "            ②确认属登记差异区（B/E/F/G）→ 把新串按分区注释回填 scripts/check-workflow-parity.mjs 的 WHITELIST"
+    echo "[workflow-parity] 双平台产物出现未登记差异（处理见上）。"
+    echo "  恢复动作：改 src/ 单源后重新 build，不要直接改产物"
     exit 1
   }
 fi

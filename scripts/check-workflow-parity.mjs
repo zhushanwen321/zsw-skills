@@ -48,16 +48,20 @@ const WHITELIST = new Set([
   "R1 审查失败：␘——恢复动作：读 run 日志定位失败分区，修订脚本后重发",
   "planner 返回无效（␘）。恢复动作：检查模板 ␘ 与设计文档可达性、AmendWorkflow 修订 prompt 后重跑",
   "planner 返回无效（␘）。恢复动作：检查模板 ␘ 与设计文档可达性，修订脚本 prompt 后重跑",
-  "参数校验失败：␘。恢复动作：修正参数后经 CreateWorkflow 重新发起（注意 AmendWorkflow 不透传 args——修订脚本时参数值需写进脚本常量后 amend）",
-  "参数校验失败：␘。恢复动作：修正参数后重新 workflow run 发起（pi runs 一次性：修订脚本后重跑即可，防产物覆盖用 attempt 递增）",
   "恢复动作：经 CreateWorkflow 重新发起并传 execPlan。注意 AmendWorkflow 不透传 args——",
   "恢复动作：重新 workflow run 发起并传 execPlan（--args execPlan=<路径>）；",
   "修订脚本时 args 恒空，请把 execPlan 路径直接写进脚本 const 后再发起。",
   "runs 一次性无续跑通道，修订脚本后重跑即可。",
-  "维度 ␘ 返回畸形计数（mustFix=␘ suggestion=␘，须为非负整数且与报告一致）。恢复动作：报告已落盘可读 ␘ 人工核对；修 prompt 后 AmendWorkflow，或 args.attempt 递增重新发起",
-  "维度 ␘ 返回畸形计数（mustFix=␘ suggestion=␘，须为非负整数且与报告一致）。恢复动作：报告已落盘可读 ␘ 人工核对；修订脚本 prompt 后重新 run，或 args.attempt 递增重新发起",
   "退役判定 agent 返回无效（␘）。恢复动作：同步修复成果已在工作区/commit 中，AmendWorkflow 修订退役 prompt 后重跑",
   "退役判定 agent 返回无效（␘）。恢复动作：同步修复成果已在工作区/commit 中，修订脚本退役 prompt 后重跑",
+  // —— 迁移期活条目（W3/W4 未切分，整句 G 措辞仍在产物中；四对全迁完后删除） ——
+  "参数校验失败：␘。恢复动作：修正参数后经 CreateWorkflow 重新发起（注意 AmendWorkflow 不透传 args——修订脚本时参数值需写进脚本常量后 amend）",
+  "参数校验失败：␘。恢复动作：修正参数后重新 workflow run 发起（pi runs 一次性：修订脚本后重跑即可，防产物覆盖用 attempt 递增）",
+  // —— 拼接壳 G 常量（恢复指引拆为壳常量后两侧措辞各自成串；W1 已迁移） ——
+  "修 prompt 后 AmendWorkflow，或 args.attempt 递增重新发起",
+  "修订脚本 prompt 后重新 run，或 args.attempt 递增重新发起",
+  "修正参数后经 CreateWorkflow 重新发起（注意 AmendWorkflow 不透传 args——修订脚本时参数值需写进脚本常量后 amend）",
+  "修正参数后重新 workflow run 发起（pi runs 一次性：修订脚本后重跑即可，防产物覆盖用 attempt 递增）",
 
   // —— E/C TS 形态（属性键/枚举字符串仅一侧以字符串形式出现） ——
   "artifacts",
@@ -69,7 +73,28 @@ const WHITELIST = new Set([
   // —— B shim（pi 专属运行环境） ——
   "node:child_process",
   "utf8",
+  // —— 拼接壳 W3（HINT 常量两侧措辞 + SCHEMA_BY_KEY 键；W3 已迁移） ——
+  "恢复动作：经 CreateWorkflow 重新发起并传 execPlan。注意 AmendWorkflow 不透传 args——修订脚本时 args 恒空，请把 execPlan 路径直接写进脚本 const 后再发起。",
+  "恢复动作：重新 workflow run 发起并传 execPlan（--args execPlan=<路径>）；runs 一次性无续跑通道，修订脚本后重跑即可。",
+  "读 run 日志定位失败分区，AmendWorkflow 修订后重发",
+  "读 run 日志定位失败分区，修订脚本后重发",
+  "ReviewResult",
+  "FixReport",
+  "NodeResult",
+  // —— E/D 拼接壳（pi wfAgent 的 SCHEMA_BY_KEY 键串，zcode 侧为泛型参数不生成串） ——
+  "FixOutcome",
+  "ReviewerVerdict",
+  "ValueVerdict",
+  "PlannerResult",
+  "ModuleReview",
+  "RetirementVerdict",
+  // —— 拼接壳 W4 G 常量（planner/退役恢复指引两侧措辞；W4 已迁移） ——
+  "AmendWorkflow 修订 prompt 后重跑",
+  "AmendWorkflow 修订退役 prompt 后重跑",
+  "修订脚本 prompt 后重跑",
+  "修订脚本退役 prompt 后重跑",
 ]);
+
 
 // ── 分段 ──
 
@@ -88,11 +113,12 @@ function zcodeBody(src) {
 // pi 正文 = 剥 @pi-meta 头 → 剥 shim prologue（到 zcAgent 定义结束的顶格 }）→ 剥 SCHEMA 常量段
 function piBody(src) {
   let s = sliceOut(src, "/* @pi-meta", "*/");
-  const adapterStart = s.indexOf("function zcAgent(");
-  if (adapterStart < 0) throw new Error("找不到 zcAgent adapter 定义（shim prologue 锚失效）");
-  const afterAdapter = s.indexOf("\n}", adapterStart);
-  if (afterAdapter < 0) throw new Error("找不到 zcAgent adapter 结束锚");
-  s = s.slice(0, adapterStart) + s.slice(afterAdapter + 2);
+  // 拼接产物适配名为 wfAgent；迁移期旧手写产物为 zcAgent——兼容双形态
+  const adapterStart = ["function wfAgent(", "function zcAgent("].map((m) => s.indexOf(m)).filter((x) => x >= 0);
+  if (adapterStart.length === 0) throw new Error("找不到 wfAgent/zcAgent 适配定义（shim prologue 锚失效）");
+  const afterAdapter = s.indexOf("\n}", Math.min(...adapterStart));
+  if (afterAdapter < 0) throw new Error("找不到 adapter 结束锚");
+  s = s.slice(0, Math.min(...adapterStart)) + s.slice(afterAdapter + 2);
   s = s.replace(/^const SCHEMA_\w+ = [\s\S]*?^\};$/gm, "");
   return s;
 }
@@ -171,7 +197,7 @@ function extractPhases(src) {
 }
 
 function extractAgentNames(src, isPi) {
-  const call = isPi ? /\bzcAgent\(\s*(`[^`]*`|"[^"]*")/g : /(?<![\w.])agent\(\s*(`[^`]*`|"[^"]*")/g;
+  const call = isPi ? /(?<![\w.$])(?:wf|zc)Agent\(\s*(`[^`]*`|"[^"]*")/g : /(?<![\w.$])agent\(\s*(`[^`]*`|"[^"]*")/g;
   return [...src.matchAll(call)]
     .map((m) => m[1].slice(1, -1).replace(/\$\{[^}]*\}/g, "\u2418"));
 }
