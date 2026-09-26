@@ -196,22 +196,29 @@ const RUN_IN_CWD = "try{const a=process.argv.slice(1);const p=a[0],c=a[1],r=a.sl
     "catch(e){process.stderr.write(String((e&&e.message)||'spawn failed'));process.exit(1)}";
 // argv: [cwd] → stdout = git diff --stat 原文（接替程序的前任证据包成分）；失败 exit 1 输出空
 const GIT_DIFF_STAT = "try{const o=require('child_process').execFileSync('git',['diff','--stat'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});process.stdout.write(o)}catch(e){process.stdout.write('(diff 不可用)')}";
-// argv: [statusPath, projectRoot, ...devIds] → 双向对账（§4.5 崩溃裁决，git 为准）：
+// argv: [statusPath, projectRoot, commitTemplate, ...devIds] → 双向对账（§4.5 崩溃裁决，git 为准）：
 //   ①status=done 的节点：commit 不在 git 对象库 → 回 pending；
-//   ②status≠done 的 dev 节点：git log（HEAD 起 500 条）subject 含完整词 <id>（commitTemplate 渲染
-//     的单元锚）→ 补写 done（commit 哈希 + 证据）；双向都是引擎行为，不留人工方向。
+//   ②status≠done 的 dev 节点：git log 反查补写 done（commit 哈希 + 证据）。反查命中条件
+//     双保险：a) 时间窗 = baseline..HEAD（status.baseline 缺失时回退 HEAD 起 500 条）；
+//     b) subject 前缀锚定 = commitTemplate 按 {unitId} 切出的静态前段 + <id>，且 <id> 后继
+//     字符非字母数字连字符（模板缺失时退化为 <id> 前缀 + 同一边界检查）。历史工作线的
+//     commit message 正文含同名词（如 W1 线的 u1-u6 编号）由此构造性排除——曾实测按
+//     「完整词含 <id>」匹配把 5 个历史 commit 误配成本次单元、节点被跳过未派发。
 //   stdout = 对账后的完整 status.json（保留 schema 外顶层字段）
-const RECONCILE_STATUS = "try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],ids=process.argv.slice(3);" +
+const RECONCILE_STATUS = "try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',ids=process.argv.slice(4);" +
     "const x=require('child_process').execFileSync;const st=JSON.parse(fs.readFileSync(sp,'utf8'));const nodes={};" +
     "for(const k of Object.keys(st.nodes||{}))nodes[k]=st.nodes[k];const events=(st.events||[]).slice();" +
-    "let logLines='';try{logLines=String(x('git',['log','--format=%H%x1f%s','-n','500'],{cwd:root,encoding:'utf8',maxBuffer:33554432}))}catch(err){}" +
+    "const range=typeof st.baseline==='string'&&st.baseline?st.baseline+'..HEAD':null;" +
+    "let logLines='';try{logLines=String(x('git',['log','--format=%H%x1f%s','-n','500'].concat(range?[range]:[]),{cwd:root,encoding:'utf8',maxBuffer:33554432}))}catch(err){}" +
+    "const preOf=(id)=>(tpl.split('{unitId}')[0]||'')+id;" +
     "for(const id of ids){const e=nodes[id]||{status:'pending',attempts:0};" +
     "if(e.status==='done'){let ok=false;" +
     "if(typeof e.commit==='string'&&e.commit.length>=7){try{x('git',['cat-file','-e',e.commit+'^{commit}'],{cwd:root,encoding:'utf8'});ok=true}catch(err){}}" +
     "if(ok)continue;nodes[id]={status:'pending',attempts:0};" +
     "events.push({seq:events.length+1,node:id,event:'reconcile-reset',detail:'status done 但 commit 不在 git 对象库，按 git 为准回 pending'})}" +
-    "else{const edge='(?:^|[^A-Za-z0-9-])';const re=new RegExp(edge+id.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+edge);" +
-    "const hit=logLines.split('\\n').find((l)=>{const i=l.indexOf('\\x1f');return i>0&&re.test(l.slice(i+1))});" +
+    "else{const pre=preOf(id);" +
+    "const hit=logLines.split('\\n').find((l)=>{const i=l.indexOf('\\x1f');if(i<=0)return false;const s=l.slice(i+1);" +
+    "return s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)))});" +
     "if(hit){const h=hit.slice(0,hit.indexOf('\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 发现本单元 commit（status 未记，按 git 为准补写 done）'};" +
     "events.push({seq:events.length+1,node:id,event:'reconcile-done',detail:'status 未记但 git log 有本单元 commit，按 git 为准补写 done'})}}}" +
     "const out={};for(const k of Object.keys(st))if(k!=='nodes'&&k!=='events')out[k]=st[k];out.baseline=st.baseline||null;out.nodes=nodes;out.events=events;" +
@@ -1236,7 +1243,7 @@ if (existingStatus === null) {
     // 非 done 的 dev 节点按 git log 反查补写 done，避免重跑已交付单元
     const freshDevIds = plan.nodes.filter((n) => n.kind === "dev").map((n) => n.id);
     if (freshDevIds.length > 0) {
-        const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, ...freshDevIds]);
+        const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, ...freshDevIds]);
         if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
             try {
                 const parsed = JSON.parse(rec.stdout);
@@ -1269,7 +1276,7 @@ else {
     for (const n of plan.nodes)
         aligned[n.id] = existingStatus.nodes[n.id] ?? { status: "pending", attempts: 0 };
     if (allDevIds.length > 0) {
-        const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, ...allDevIds]);
+        const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, ...allDevIds]);
         if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
             try {
                 const parsed = JSON.parse(rec.stdout);
