@@ -37,6 +37,9 @@ const TAIL_LINES = 40; // 失败输出贴入打回 prompt 的行数上限
 const TEST_TIMEOUT_MS = 1800000; // 节点测试命令兜底墙钟（单元级=数十分钟；world.run 默认 300s 会误杀大仓单测）
 const VERIFY_SCRIPT_TIMEOUT_MS = 3600000; // 验收剧本兜底墙钟（任务级=小时级，按超时默认原则校准）
 const TEST_WHITELIST = ["pnpm", "npm", "node", "git", "bash"] as const;
+/** verify 剧本合法扩展名（启动 fail-fast；解释器分派判据 = .sh→bash、其余→node——
+ *  调整本集合须同步核对 runVerifyScript 的分派） */
+const VERIFY_SCRIPT_EXTS = new Set([".sh", ".mjs", ".js", ".cjs"]);
 const VALID_ENTRY_STATUS = new Set(["pending", "in-progress", "done", "blocked", "failed", "suspended"]);
 
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——无法自决的
@@ -1224,6 +1227,12 @@ for (const n of plan.nodes) {
   }
   if (n.kind === "verify" && !(await existsViaNode(n.script))) {
     return invalidRet(`verify 节点 ${n.id} 的 script 不存在：${n.script}`, plan.statusPath);
+  }
+  if (n.kind === "verify" && !VERIFY_SCRIPT_EXTS.has(n.script.slice(n.script.lastIndexOf(".")))) {
+    return invalidRet(
+      `verify 节点 ${n.id} 的 script 扩展名不受支持：${n.script}（合法：${[...VERIFY_SCRIPT_EXTS].join(" / ")}；解释器分派 = .sh→bash、其余→node）`,
+      plan.statusPath,
+    );
   }
 }
 
