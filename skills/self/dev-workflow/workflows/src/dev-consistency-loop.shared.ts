@@ -609,6 +609,10 @@ function renderItem(it: ItemRecord): string {
 
 let prevActiveCount = items.length;
 let foreignRound = false;
+// 收敛停机线计数（只计有效轮——有复审、修复被采信的轮）：越界作废轮对收敛进度零贡献，
+// 不烧收敛预算；作废轮死循环由连续作废线（consecutiveForeign ≥2）独立兜底
+let effectiveRounds = 0;
+let consecutiveForeign = 0;
 
 for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRound++) {
   phase("并行修复与定向复审");
@@ -951,13 +955,18 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     // ── 停机线（§8.6 ①②，2026-09-25 复审合并：单条升级线与计数线时序互斥——uncleanRounds
     //    到 3 需 reviewRound=4，而计数线 reviewRound=3 必先触发——独立单条线是不可达死代码，
     //    已删除；单条顽固语义并入 stuck 终态归因：uncleanRounds ≥2（1 次初始修复 + 1 次打回
-    //    后复审仍报）的活跃条目在 stuck 消息中标注，随 escalated 字段呈报用户裁决）──
+    //    后复审仍报）的活跃条目在 stuck 消息中标注，随 escalated 字段呈报用户裁决。
+    //    2026-09-26：收敛计数改用 effectiveRounds（只计有效轮）——越界作废轮对收敛进度
+    //    零贡献（无复审、修复未采信），却烧掉停机预算，曾实测 3 轮预算含 1 作废轮即 stuck、
+    //    白烧后手工收口；作废轮死循环改由连续作废线兜底（见 else 分支）──
     const stubborn = activeAfter.filter((i) => i.uncleanRounds >= 2);
-    if (activeAfter.length > 0 && (reviewRound >= 3 || activeAfter.length > prevActiveCount)) {
+    effectiveRounds += 1;
+    consecutiveForeign = 0;
+    if (activeAfter.length > 0 && (effectiveRounds >= 3 || activeAfter.length > prevActiveCount)) {
       const why =
         activeAfter.length > prevActiveCount
           ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${activeAfter.length}）`
-          : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${activeAfter.length} 条）`;
+          : `有效修复轮累计 ${effectiveRounds} 轮仍未收敛（另有作废轮 ${fixRound - effectiveRounds} 轮不占收敛预算；活跃 ${activeAfter.length} 条）`;
       return await finish(
         "stuck",
         reviewRound,
@@ -966,14 +975,16 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     }
     prevActiveCount = activeAfter.length;
   } else {
-    // foreign 轮：无复审（状态归属不明，复审无意义）；条目全保留。
-    // 计数停机线照常累计（active 不降烧轮次 → 兜底终止）
+    // foreign 轮：无复审（状态归属不明，复审无意义）；条目全保留。收敛停机线不计作废轮
+    // （作废轮对收敛进度零贡献，不烧 effectiveRounds 预算）；作废轮死循环由连续作废线
+    // 兜底：连续 ≥2 轮修复改动都无人申报 = 修复反复越界，续跑只重复作废，需人工盘点
+    consecutiveForeign += 1;
     const activeAfter = activeItems();
-    if (activeAfter.length > 0 && (reviewRound >= 3 || activeAfter.length > prevActiveCount)) {
+    if (activeAfter.length > 0 && consecutiveForeign >= 2) {
       return await finish(
         "stuck",
         reviewRound,
-        `计数停机线触发（累计 ${reviewRound} 轮或规模反增，其中含越界作废轮）：当前 ${activeAfter.length} 条活跃，且存在未申报改动残留——先人工 git status 盘点工作区再决定恢复方式`,
+        `越界作废停机线触发：连续 ${consecutiveForeign} 轮修复改动未被任何组申报（第 ${fixRound} 轮，活跃 ${activeAfter.length} 条全部保留未采信）——修复反复产生未归属改动，续跑只会继续作废。恢复动作：先人工 git status 盘点工作区残留、核对各组修复为何持续触碰申报外文件，处置后重新发起`,
       );
     }
     prevActiveCount = activeAfter.length;
