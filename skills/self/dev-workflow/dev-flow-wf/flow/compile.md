@@ -28,7 +28,7 @@
   "commitTemplate": "<type>(<scope>): {unitId} — {summary}",   // 占位符 {unitId}/{summary} 必含（dev 模式引擎校验；acceptance 模式不 commit 可省略）；summary 内容契约 = 任务书要求 dev 返回的 summary 末行含「测试：<命令> 绿」
   "nodes": [
     { "id": "u-foundation", "kind": "dev", "deps": [], "wave": 1,
-      "cwd": null,                      // null = projectRoot；worktree 单元填 worktree 绝对路径
+      "cwd": null,                      // null = projectRoot；worktree 单元填 worktree 绝对路径。禁填仓库子目录——引擎启动断言 cwd == git rev-parse --show-toplevel，子目录会被拒绝（porcelain 相对 cwd / territory 相对仓库根，基准错位）
       "designRef": "§3.2",              // 设计章节锚（从 impl-plan 章节映射提取；commit 渲染时前置于 summary——老三要素保真：unit id + 设计章节 + 测试结论）
       "territory": ["packages/shared/src/..."],   // 相对该节点 cwd 所在 git 仓库根（与 files_changed / porcelain 同基准；禁绝对路径——引擎启动校验拒绝）
       "testCommand": { "program": "pnpm", "args": ["-C", "packages/shared", "test"] },
@@ -43,7 +43,7 @@
 
 - **wave** = 编译期展示分组（拓扑分层编号，人看进度用；**调度只看依赖边，wave 不是边界**）
 - **testCommand** = 每节点增量测试命令（T1 形态：program + args 拆开；含管道/&& 的复杂命令落临时脚本走 bash 通道）——从 impl-plan §4 测试计划逐单元提取
-- **cwd** = worktree 隔离单元（判据见 references/dag-authoring.md）填 worktree 绝对路径，其余 null
+- **cwd** = worktree 隔离单元（判据见 references/dag-authoring.md）填 worktree 绝对路径，其余 null。禁填仓库子目录：引擎启动断言 cwd 必须等于其所在 git 仓库根（projectRoot 与 worktree 根都满足），子目录直接拒绝启动
 - **territory 磁盘核对 [MANDATORY]**：每条领地路径必须与磁盘实际对得上——已存在文件/目录逐条 read 核对；运行中才诞生的文件（新测试、新模块）必须逐文件显式登记（禁用「及测试」「配套族」等归纳语代替——领地是引擎核验的机器输入，不是人读描述）。必然连带产物（pnpm-lock.yaml、被改模块的配套测试文件、授权连带修改）一并登记。路径在磁盘不存在且非预期新建 → 停，回 T3 修计划（实测曾因登记路径与磁盘目录结构不符致单元核验 100% 失败）
 
 ### 3. 逐节点 promptFile 构造

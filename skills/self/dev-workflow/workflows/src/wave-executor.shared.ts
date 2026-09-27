@@ -86,6 +86,10 @@ const EXISTS = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
 const GIT_PORCELAIN =
   "try{const o=require('child_process').execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});process.stdout.write(o)}catch(e){process.stderr.write(String((e&&e.stderr)||e.message));process.exit(1)}";
 
+// argv: [cwd] → stdout = rev-parse --show-toplevel（该 cwd 所在 git 仓库根，绝对路径）；非 git 仓库/工具错误 exit 1
+const GIT_TOPLEVEL =
+  "try{const o=require('child_process').execFileSync('git',['rev-parse','--show-toplevel'],{cwd:process.argv[1],encoding:'utf8'});process.stdout.write(o.trim())}catch(e){process.stderr.write(String((e&&e.stderr)||e.message));process.exit(1)}";
+
 // argv: [cwd, message, ...files] → stdout = 新 commit hash；add 用绝对路径（pathspec 相对 cwd
 // 解析，cwd 非 repo 根时相对路径会指错文件）；commit 用 --only 限定路径——共享工作区并行
 // 调度时暂存区可能有其他单元的 staged 内容，普通 commit 会连带提交，破坏「每单元独立成笔」
@@ -466,6 +470,15 @@ async function gitPorcelainViaNode(cwd: string): Promise<string | null> {
   const r = await world.run("node", ["-e", GIT_PORCELAIN, cwd]);
   if (r.exitCode !== 0) return null;
   return r.stdout;
+}
+
+/** cwd 必须等于其所在 git 仓库根（projectRoot 或 worktree 根）：porcelain 输出相对 cwd、
+ * territory 相对仓库根——cwd 落在仓库子目录时两基准全链错位（领地恒判越界、提交被拒）。
+ * null = git 命令失败；否则返回 toplevel 绝对路径，由调用方比对。 */
+async function gitToplevelViaNode(cwd: string): Promise<string | null> {
+  const r = await world.run("node", ["-e", GIT_TOPLEVEL, cwd]);
+  if (r.exitCode !== 0) return null;
+  return r.stdout.trim();
 }
 
 async function gitAddCommitViaNode(
@@ -1251,6 +1264,18 @@ for (const n of plan.nodes) {
 const preExistingByCwd = new Map<string, Set<string>>();
 const allCwds = [...new Set(plan.nodes.map((n) => n.cwd))];
 for (const c of allCwds) {
+  // 口径断言：cwd 须为其所在 git 仓库根（projectRoot / worktree 根均满足；仓库子目录拒绝）
+  const top = await gitToplevelViaNode(c);
+  if (top === null) {
+    return invalidRet(`git rev-parse 无法在 ${c} 执行（须为有效 git 仓库根）`, plan.statusPath);
+  }
+  if (top !== c) {
+    const ids = plan.nodes.filter((n) => n.cwd === c).map((n) => n.id).join("、");
+    return invalidRet(
+      `节点 ${ids} 的 cwd ${c} 不是其所在 git 仓库根（rev-parse --show-toplevel = ${top}）——cwd 只能为 projectRoot 或 worktree 绝对路径：porcelain 输出相对 cwd、territory 相对仓库根，子目录会使两基准全链错位（领地恒判越界、提交被拒）。恢复动作：exec-plan 中该节点 cwd 改为仓库根后重发`,
+      plan.statusPath,
+    );
+  }
   const st = await gitPorcelainViaNode(c);
   if (st === null) {
     return invalidRet(`git status 无法在 ${c} 执行（须为有效 git 仓库）`, plan.statusPath);
