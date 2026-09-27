@@ -73,7 +73,7 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 | 终态 | 主 agent 动作 |
 |------|--------------|
 | converged | 交付汇报：矩阵 + 收敛轨迹（各轮三等级计数）+ direction 分布 + contested 记录 + overdesignCandidates + 退役判定 |
-| contested | must-fix 级方向争议逐条呈报用户裁决；裁决后重新发起（runDir 自动 attempt 后缀不覆盖历史；重发起首轮 = planner 全量重审，上轮修复在重审对账中确认——无跨 run 台账延续） |
+| contested | must-fix 级方向争议逐条呈报用户裁决；裁决后重新发起（runDir 自动 attempt 后缀不覆盖历史；重发起首轮 = planner 全量重审，上轮修复在重审对账中确认——条目不跨 run 延续） |
 | stuck | must-fix ≥3 轮不收敛或单条 must-fix 超 2 轮 → 呈报残余差距矩阵（2026-09-26 用户裁决三 loop 统一 3 轮） |
 | `*-failure`（setup/planner/review/fix/retire/io） | 按 message 恢复动作：ResumeWorkflowRun 或 attempt 递增重发 |
 
