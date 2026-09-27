@@ -1566,7 +1566,14 @@ for (const c of allCwds) {
 const existingStatus = await readStatusFile();
 // 运行唯一标识（commit trailer Run-Id 的反查锚）：初建时生成；恢复时沿用磁盘值（旧格式
 // 无 runId → 生成新值，旧 commit 因 trailer 不匹配不再被反查认领，重跑由幂等核验兜住）
-const genRunId = (): string => `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 6)}`;
+const genRunId = async (): Promise<string> => {
+  // workflow 沙箱禁 Date.now/Math.random（重放一致性——每次执行值不同会对不上账），
+  // 随机量须经 world.run 在沙箱外的 node 子进程产生，结果作为值拿回
+  const r = await world.run("node", ["-e", "process.stdout.write(Date.now().toString(16) + Math.random().toString(16).slice(2, 6))"]);
+  const id = r.stdout.trim();
+  if (id === "") throw new Error(`Run-Id 生成失败（node 子进程无输出，exit ${r.exitCode}）`);
+  return id;
+};
 let activeRunId: string;
 if (existingStatus === null) {
   // baseline 固化：优先 exec-plan 的 baseline（编译时点 HEAD，早于本 run 全部 commit——
@@ -1584,7 +1591,7 @@ if (existingStatus === null) {
     const h = await world.run("git", ["-C", plan.projectRoot, "rev-parse", "HEAD"]);
     if (h.exitCode === 0 && h.stdout.trim() !== "") baselineVal = h.stdout.trim();
   }
-  activeRunId = genRunId();
+  activeRunId = await genRunId();
   const initialNodes: Record<string, StatusEntry> = {};
   for (const n of plan.nodes) initialNodes[n.id] = { status: "pending", attempts: 0 };
   try {
@@ -1632,7 +1639,7 @@ if (existingStatus === null) {
   // runId 恢复：沿用磁盘值保证跨重启 trailer 锚一致；旧格式无 runId → 换新值（本 run
   // 新 commit 带新 trailer，旧 commit 不被认领，兼容路径不再适用——重跑由幂等核验兜住）
   const prevRunId = existingStatus.extra["runId"];
-  activeRunId = typeof prevRunId === "string" && prevRunId !== "" ? prevRunId : genRunId();
+  activeRunId = typeof prevRunId === "string" && prevRunId !== "" ? prevRunId : await genRunId();
   if (allDevIds.length > 0) {
     const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, ...allDevIds]);
     if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
