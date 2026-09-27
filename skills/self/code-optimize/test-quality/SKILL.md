@@ -47,7 +47,7 @@ read references/assertion-strength.md
 read references/junk-patterns.md
 ```
 
-五组垃圾模式（无证明 / 假证明 / 重复证明 / 错误对象 / 保活负担）与保留线。
+五组垃圾模式（无证明 / 假证明 / 重复证明 / 错误对象 / 保活负担）与豁免清单。
 
 ### 场景 D：审计存量测试（多审查员编排、删除流程）
 
@@ -82,7 +82,7 @@ read references/anti-padding.md
 2. **层归属自检**：这个测试有副作用吗（DB/HTTP/文件系统）？没有 → 它是层 1（纯函数层，见 test-layering.md），不该起 server。有 → 它验证的是协作还是纯逻辑？纯逻辑 → 下沉到层 1。
 3. **断言强度自检**：用了 `toBeDefined` / `toBeTruthy` / `toBeFalsy` / `toBe(true)` / `length > 0` 等吗（全表见 references/assertion-strength.md 弱断言黑名单）？用了 → 能否换成具体值断言（`toBe(expected)` / `toMatchObject` / `toEqual`）？
 4. **红过验证（bug 回归测试专用）**：回归测试必须在修复前的代码上运行过、并因预期原因失败——从未失败过的回归测试证明的是 mock 不是修复。一个 bug 只在归属边界写一个回归，不在它穿过的每一层重复测一遍。
-5. **垃圾模式自查**：对照 references/junk-patterns.md 五组模式逐条检查；命中且不属于保留线任何一条的，重写。
+5. **垃圾模式自查**：对照 references/junk-patterns.md 五组模式逐条检查；命中且不属于豁免清单任何一条的，重写。
 
 ---
 
