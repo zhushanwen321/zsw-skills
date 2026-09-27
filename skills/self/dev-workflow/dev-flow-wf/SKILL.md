@@ -62,12 +62,18 @@ description: >-
 
 执行体按宿主环境选择：**zcode**（会话可见 CreateWorkflow 工具 / saved workflows）→ 上表 saved workflow 经 `CreateWorkflow saved` 发起；**pi**（subagent-workflow extension、workflow 工具可用）→ 本 skill 安装位置上级的 `../workflows/pi/<name>.js`（四件：wave-executor / dev-consistency-loop / design-code-sync-loop）复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run <name> --args k=v`——两版脚本业务逻辑逐行一致，仅 agent 调用层与文件头不同；--args 值全字符串，数字参数脚本内自动归一，数组型不支持。两版均未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：zcode workflow 用 ResumeWorkflowRun/AmendWorkflow，pi 重新 run（attempt 递增防产物覆盖），手工路径以 status.json + git log 对账，冲突以 git 为准）。
 
+## 双平台脚本维护约定（改 workflows/src/ 时）
+
+1. 改完必须先 `node scripts/build-workflows.mjs` 再提交——pre-commit 自动核对构建一致性 / 双平台对等 / 类型三道门，产物过期即拦。
+2. **结构化返回接口两侧同 commit 同步**：改 zcode 壳（`.zcode.tpl.ts`）的 interface 顶层字段或 required 时，同步四个 pi 壳（`.pi.tpl.js`）对应 `SCHEMA_*` 的 properties 键与 required 数组；`check-workflow-parity.mjs` 按字段名机器核对，红灯 = 漏同步（描述文本两侧允许不同，不比对）。
+3. 跨拷贝契约分层归宿判据（同一条规则在多处存在拷贝时按此选层）：拷贝是过渡态（已有收敛方向裁决）→ 不建共享基建，用不变量检查器守住过渡期，检查器随收敛自然退役；稳态且语义全同 → 物理收敛或构建期派生单一来源；稳态且存在合法变异 → 检查器断言共同不变量，变异留在各拷贝局部；纯文字范围 → 义务句 + 消费方按可观察特征分支（承认是愿望式约定，不是被强制执行的契约）。「机制要有已发生证据支撑」只约束机制复杂度（生成器 / 推导器 / 抽象层），不约束简单确定性断言——断言只需合理的失败路径。
+
 ## 关键约束
 
 - [MANDATORY] 并发 ≤5（全局 subagent 约束）；模型按全局路由表、thinking max；task 三段式；环境中看不到指定模型时列出实际可见项请用户选择
 - [MANDATORY] 手工路径的 subagent 派发一律后台异步、靠完成通知推进（zcode 即 run_in_background=true），禁止前台同步阻塞等待返回——同步等待长任务有超时丢失结果风险，且阻塞主 agent 无法流水化核验；workflow 通道不受此条约束
 - [MANDATORY] 数字阈值：单元 dev→fix 超 2 轮 = blocked 升级用户；一致性审查累计 ≥3 轮不收敛或活跃数不减反增 = stuck 呈报（顽固条目 ≥2 轮修复未清随 escalated 清单标注，优先人工裁决）；终态同步 must-fix 连续 4 轮不降或单条 must-fix 存活超 2 轮 = 呈报
-- [MANDATORY] e2e 只在开发阶段按改动面跑（清单继承 T3 验收计划表），空载串行；PR/merge/CI 门禁只跑单测（SSOT = 项目 AGENTS.md 测试节）；自动化回归的长期方向 = e2e 逐步单测化——能以 mock/fixture 重放等价覆盖的圈定项，随所属单元沉淀为 L1/L2 单测
+- [MANDATORY] e2e 只在开发阶段按改动范围跑（清单继承 T3 验收计划表），空载串行；PR/merge/CI 门禁只跑单测（SSOT = 项目 AGENTS.md 测试节）；自动化回归的长期方向 = e2e 逐步单测化——能以 mock/fixture 重放等价覆盖的圈定项，随所属单元沉淀为 L1/L2 单测
 - [MANDATORY] 偏差三分类：合理 → 登记表固化；不合理 → 打回修；doc_errors → 主 agent 改设计文档并记录
 - [MANDATORY] D3 全绿 + D4 最终 commit 后自动进 D5（仅用户明示跳过可免，跳过须记录）；D5 收敛 = 整体交付
 - [OPTIONAL] 高风险大单元可开 worktree 隔离（判据见 references/dag-authoring.md；exec-plan 节点 cwd 字段承载）

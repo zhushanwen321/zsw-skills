@@ -7,15 +7,17 @@
 //
 // 对账域 = 两侧「正文段」的字符串字面量静态文本（词法扫描提取；模板串 ${} 表达式
 // 归一为占位——两侧表达式形态有合法差异（TS 标注 vs 纯 JS），对账目标是静态文本）。
-// 结构性差异段整段跳过，不进对比域（两版唯一允许差异区）：
+// 结构性差异段整段跳过，不进字符串比对域（差异段各自有专属核对维度）：
 //   - zcode frontmatter（/* zcode-workflow … */）
 //   - pi @pi-meta 头（/* @pi-meta … */）
 //   - pi shim prologue（@pi-meta 之后到 zcAgent adapter 定义结束——pi 专属运行环境适配）
 //   - pi SCHEMA_* 常量段（结构化返回机制不同源：zcode 靠 TS 泛型标注编译期合成，
-//     pi 靠显式 JSON Schema 常量——字段描述串机制性不成对，不构成漂移信号）
+//     pi 靠显式 JSON Schema 常量——描述串机制性不成对，不构成漂移信号；但契约粒度
+//     = 顶层字段名 + required 集，由维度 4 按字段名核对，豁免段不是盲区）
 // 强信号单列（零容忍，无白名单）：
 //   - phase 名集合必须两侧相等
 //   - agent 名模板静态文本序列（按出现顺序）必须两侧相等
+//   - SCHEMA_* ↔ interface 顶层字段名 + required 集必须相等（维度 4）
 
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -80,24 +82,13 @@ const WHITELIST = new Set([
   // —— B shim（pi 专属运行环境） ——
   "node:child_process",
   "utf8",
-  // —— 拼接壳 W3（HINT 常量两侧措辞 + SCHEMA_BY_KEY 键；W3 已迁移） ——
+  // —— 拼接壳 W3（HINT 常量两侧措辞；W3 已迁移。原 SCHEMA_BY_KEY 键串条目已清：
+  //    .ask("TypeKey" 归一进 piBody 后不再进字符串比对域，typeKey 契约改由维度 4
+  //    按字段名核对——2026-09-27） ——
   "恢复动作：经 CreateWorkflow 重新发起并传 execPlan。注意 AmendWorkflow 不透传 args——修订脚本时 args 恒空，请把 execPlan 路径直接写进脚本 const 后再发起。",
   "恢复动作：重新 workflow run 发起并传 execPlan（--args execPlan=<路径>）；runs 一次性无续跑通道，修订脚本后重跑即可。",
   "读 run 日志定位失败分区，AmendWorkflow 修订后重发",
   "读 run 日志定位失败分区，修订脚本后重发",
-  "ReviewResult",
-  "FixReport",
-  "NodeResult",
-  // —— E/D 拼接壳（pi wfAgent 的 SCHEMA_BY_KEY 键串，zcode 侧为泛型参数不生成串） ——
-  "FixOutcome",
-  "ReviewerVerdict",
-  "ValueVerdict",
-  "PlannerResult",
-  // —— 验收自愈（§8.7，2026-09-26）：pi SCHEMA_BY_KEY 新登记两键，zcode 侧为 interface 声明 ——
-  "HealVerdict",
-  "HealFixReport",
-  "ModuleReview",
-  "RetirementVerdict",
   // —— 拼接壳 W4 G 常量（planner/退役恢复指引两侧措辞；W4 已迁移） ——
   "AmendWorkflow 修订 prompt 后重跑",
   "AmendWorkflow 修订退役 prompt 后重跑",
@@ -121,6 +112,8 @@ function zcodeBody(src) {
 }
 
 // pi 正文 = 剥 @pi-meta 头 → 剥 shim prologue（到 zcAgent 定义结束的顶格 }）→ 剥 SCHEMA 常量段
+// → 归一 .ask("TypeKey", 调用（与 zcode 侧 .ask<T>( 泛型同为非字符串表达——typeKey 串是
+//   构建管线的机制产物，其契约由「结构化返回契约核对」维度按字段名核对，不进字符串比对域）
 function piBody(src) {
   let s = sliceOut(src, "/* @pi-meta", "*/");
   // 拼接产物适配名为 wfAgent；迁移期旧手写产物为 zcAgent——兼容双形态
@@ -130,6 +123,7 @@ function piBody(src) {
   if (afterAdapter < 0) throw new Error("找不到 adapter 结束锚");
   s = s.slice(0, Math.min(...adapterStart)) + s.slice(afterAdapter + 2);
   s = s.replace(/^const SCHEMA_\w+ = [\s\S]*?^\};$/gm, "");
+  s = s.replace(/\.ask\("[A-Za-z_$][\w$]*",\s*/g, ".ask(");
   return s;
 }
 
@@ -206,6 +200,94 @@ function extractPhases(src) {
   return [...src.matchAll(/\bphase\(\s*"([^"]+)"\s*\)/g)].map((m) => m[1]);
 }
 
+// ── 结构化返回契约核对（粒度 = 顶层字段名 + required 集）──
+// SCHEMA 段从字符串比对域整段豁免的原因是描述串机制性不成对（两侧合法分叉，不比）；
+// 但字段名层是真正的契约粒度——加字段忘同步 pi 壳的漂移由此维度拦截，豁免段不再盲区
+
+/** zcode 产物 interface 提取：name → { keys, required }（required = 无 ? 的顶层键） */
+function extractInterfaces(tsSrc) {
+  const out = new Map();
+  const re = /^interface ([A-Za-z_$][\w$]*) \{$/gm;
+  let m;
+  while ((m = re.exec(tsSrc))) {
+    const start = m.index + m[0].length;
+    const end = tsSrc.indexOf("\n}", start);
+    if (end < 0) continue;
+    const keys = new Set();
+    const required = new Set();
+    for (const line of tsSrc.slice(start, end).split("\n")) {
+      const km = line.match(/^  ([A-Za-z_$][\w$]*)(\?)?\s*:/);
+      if (km) {
+        keys.add(km[1]);
+        if (!km[2]) required.add(km[1]);
+      }
+    }
+    out.set(m[1], { keys, required });
+  }
+  return out;
+}
+
+/** pi 产物 SCHEMA_* 提取：name → { keys, required }（顶层 properties 键 = 4 空格缩进） */
+function extractSchemas(jsSrc) {
+  const out = new Map();
+  // 负向前瞻排除 SCHEMA_BY_KEY 注册表（它是键→常量的映射，不是 schema 本体）
+  const re = /^const SCHEMA_(?!BY_KEY\b)([A-Za-z_$][\w$]*) = \{$/gm;
+  let m;
+  while ((m = re.exec(jsSrc))) {
+    const start = m.index + m[0].length;
+    const end = jsSrc.indexOf("\n};", start);
+    if (end < 0) continue;
+    const body = jsSrc.slice(start, end);
+    const keys = new Set();
+    for (const line of body.split("\n")) {
+      const km = line.match(/^    ([A-Za-z_$][\w$]*):/);
+      if (km) keys.add(km[1]);
+    }
+    const req = body.match(/^  required: \[([^\]]*)\]/m);
+    const required = new Set(
+      req ? req[1].split(",").map((s) => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean) : [],
+    );
+    out.set(m[1], { keys, required });
+  }
+  return out;
+}
+
+/** pi 产物 .ask("TypeKey", 调用的 typeKey 集（构建管线由 .ask<T>( 转换而来） */
+function extractAskKeys(jsSrc) {
+  return new Set([...jsSrc.matchAll(/\.ask\("([A-Za-z_$][\w$]*)",/g)].map((m) => m[1]));
+}
+
+function schemaContractProblems(zcFull, piFull) {
+  const problems = [];
+  const ifaces = extractInterfaces(zcFull);
+  const schemas = extractSchemas(piFull);
+  for (const [name, schema] of schemas) {
+    const iface = ifaces.get(name);
+    if (!iface) {
+      problems.push(`  SCHEMA_${name} 无对应 interface ${name}（pi 壳独有形态 = 契约漂移）`);
+      continue;
+    }
+    const missKeys = [...schema.keys].filter((k) => !iface.keys.has(k));
+    const extraKeys = [...iface.keys].filter((k) => !schema.keys.has(k));
+    if (missKeys.length || extraKeys.length) {
+      if (missKeys.length) problems.push(`  ${name}: 字段仅 pi SCHEMA 有：${JSON.stringify(missKeys)}`);
+      if (extraKeys.length) problems.push(`  ${name}: 字段仅 zcode interface 有（加字段漏同步 pi 壳）：${JSON.stringify(extraKeys)}`);
+    }
+    const missReq = [...schema.required].filter((k) => !iface.required.has(k));
+    const extraReq = [...iface.required].filter((k) => !schema.required.has(k));
+    if (missReq.length || extraReq.length) {
+      if (missReq.length) problems.push(`  ${name}: required 仅 pi 有：${JSON.stringify(missReq)}`);
+      if (extraReq.length) problems.push(`  ${name}: required 仅 zcode 有（interface 必填但 SCHEMA 未列）：${JSON.stringify(extraReq)}`);
+    }
+  }
+  // .ask 消费的 typeKey 必须有登记的 SCHEMA（pi 侧运行时按 SCHEMA_BY_KEY 查表，
+  // 缺登记 = 运行时「未知 ask 类型键」——此处静态前置拦截）
+  for (const key of extractAskKeys(piFull)) {
+    if (!schemas.has(key)) problems.push(`  ask 类型键 ${key} 无 SCHEMA_${key} 常量（pi 运行时将报未知键）`);
+  }
+  return problems;
+}
+
 function extractAgentNames(src, isPi) {
   const call = isPi ? /(?<![\w.$])(?:wf|zc)Agent\(\s*(`[^`]*`|"[^"]*")/g : /(?<![\w.$])agent\(\s*(`[^`]*`|"[^"]*")/g;
   return [...src.matchAll(call)]
@@ -218,8 +300,10 @@ let failed = false;
 const updateDump = [];
 
 for (const name of PAIRS) {
-  const zcBody = zcodeBody(readFileSync(join(ROOT, DIR, `${name}.dwf.ts`), "utf8"));
-  const piText = piBody(readFileSync(join(ROOT, DIR, "pi", `${name}.js`), "utf8"));
+  const zcFull = readFileSync(join(ROOT, DIR, `${name}.dwf.ts`), "utf8");
+  const piFull = readFileSync(join(ROOT, DIR, "pi", `${name}.js`), "utf8");
+  const zcBody = zcodeBody(zcFull);
+  const piText = piBody(piFull);
   const problems = [];
 
   // 1. phase 名集合（零容忍）
@@ -252,6 +336,13 @@ for (const name of PAIRS) {
     if (onlyPi.length) problems.push(`  串仅 pi 有（${onlyPi.length}）：\n${onlyPi.map((s) => `    - ${JSON.stringify(s.slice(0, 140))}`).join("\n")}`);
   }
   for (const s of [...onlyZc, ...onlyPi]) updateDump.push(s);
+
+  // 4. 结构化返回契约：SCHEMA_* ↔ interface 顶层字段名 + required 集（零容忍）
+  const schemaProblems = schemaContractProblems(zcFull, piFull);
+  if (schemaProblems.length) {
+    failed = true;
+    problems.push(...schemaProblems);
+  }
 
   if (problems.length) {
     console.log(`✗ ${name}`);
