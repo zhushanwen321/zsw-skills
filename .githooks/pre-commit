@@ -6,7 +6,7 @@
 # workflows/src/ 是单源（壳×2 + 公共体），产物由 scripts/build-workflows.mjs 生成；
 # 改源忘 build、或绕过源直接改产物 → 这里拦截
 
-STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- 'skills/self/dev-workflow/workflows/' 'scripts/build-workflows.mjs' 'scripts/check-workflow-types.mjs' 'scripts/wf-facade.d.ts')
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- 'skills/self/dev-workflow/workflows/' 'scripts/build-workflows.mjs' 'scripts/check-workflow-types.mjs' 'scripts/check-commit-contract.mjs' 'scripts/wf-facade.d.ts')
 if [ -n "$STAGED" ]; then
   echo "pre-commit[workflow-build]: staged 变更含 workflow 源/产物，跑构建一致性检查…"
   node scripts/build-workflows.mjs --check || {
@@ -26,6 +26,16 @@ if [ -n "$STAGED" ]; then
     echo "  恢复动作：修 src/ 单源至类型绿后重新 build 再提交"
     exit 1
   }
+  # 提交契约往返测试（渲染 ↔ 反查两份实现钉同一条真实往返）：仅 wave-executor 相关时触发
+  WAVE_STAGED=$(echo "$STAGED" | grep 'wave-executor' || true)
+  if [ -n "$WAVE_STAGED" ]; then
+    node scripts/check-commit-contract.mjs || {
+      echo ""
+      echo "[commit-contract] 提交说明结构契约往返测试失败。"
+      echo "  恢复动作：同步修改 wave-executor.shared.ts 的 buildCommitMessage 与 RECONCILE_STATUS 后重新 build"
+      exit 1
+    }
+  fi
 fi
 
 exit 0

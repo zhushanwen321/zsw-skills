@@ -333,8 +333,13 @@ const NODE_VERIFY = [
     "console.log(JSON.stringify({ changed: changed, foreign: foreign }));",
 ].join("\n");
 // 组级 commit（引擎统一执行，fixer 不碰 git）：逐文件 existsSync 预过滤 + git add --
-// 终止符 + git commit -m。git index.lock 竞争（并行组 commit）做退避重试自愈——
-// 不在脚本层建 promise 链串行（容器路由对依赖分析不友好）。
+// 终止符 + git commit --only -m -- <本组文件清单>（对齐 W2 GIT_ADD_COMMIT / W4
+// commitGroupFiles 契约：--only + pathspec 把提交面钉死在本组文件——共享工作区下
+// 暂存区可能有前序流程遗留（如 W2「commit 被拒转待办」的 staged 内容），裸 commit
+// 会连带卷入错误提交说明）。零改动幂等分支：组文件无实际差异（porcelain 空）直接
+// 返回成功不提交（空提交面 git 报 nothing to commit，曾会被误判 commit 失败）。
+// index.lock 竞争做退避重试自愈——不在脚本层建 promise 链串行（容器路由对依赖
+// 分析不友好）。
 const NODE_COMMIT = [
     "var fs = require('fs'), path = require('path'), cp = require('child_process');",
     "var projectRoot = process.argv[1], files = JSON.parse(process.argv[2]), msg = process.argv[3];",
@@ -359,7 +364,9 @@ const NODE_COMMIT = [
     "  try { gitRetry(['add', '--', p]); staged.push(p); } catch (e) { skipped.push(p); }",
     "}",
     "if (staged.length === 0) { console.error('无可 staged 文件（全部 add 失败或不存在）: ' + skipped.join(', ')); process.exit(1); }",
-    "try { gitRetry(['commit', '-m', msg]); } catch (e) { console.error('commit 失败: ' + ((e.stderr || '') + (e.message || e))); process.exit(2); }",
+    "var st = String(git(['status', '--porcelain', '--'].concat(staged)));",
+    "if (st.trim() === '') { console.log(JSON.stringify({ staged: staged, skipped: skipped, noChanges: true })); process.exit(0); }",
+    "try { gitRetry(['commit', '--only', '-m', msg, '--'].concat(staged)); } catch (e) { console.error('commit 失败: ' + ((e.stderr || '') + (e.message || e))); process.exit(2); }",
     "console.log(JSON.stringify({ staged: staged, skipped: skipped }));",
 ].join("\n");
 // 通用命令执行器（增量测试 / Gate A 全量测试）：cwd=projectRoot；输出（含 stderr）
@@ -386,19 +393,23 @@ const NODE_RUN_CMD = [
     "function head(s) { s = s || ''; return s.length > 8000 ? s.slice(0, 8000) + '\\n…(输出截断，全文见日志文件)…' : s; }",
     "console.log(JSON.stringify({ code: code, stdoutHead: head(out), stderrHead: head(err) }));",
 ].join("\n");
-// Gate A / 产物命令输出的零容忍绕过扫描（设计 §6.1 条目 1）：读日志尾部，命中
+// Gate A / 产物命令输出的零容忍绕过扫描（设计 §6.1 条目 1）：全文扫描落盘日志，命中
 // 「N skipped」汇总（测试跳过计数 > 0 的确定信号——比源码 grep 误伤低：用例名回显
-// 不含此形态）或 eslint-disable（lint 输出几乎不会合法出现）即失败项。
+// 不含此形态）或 eslint-disable（lint 输出几乎不会合法出现）即失败项。全文的正确性
+// 前提 = 日志文件是单命令单次覆盖写（NODE_RUN_CMD 用 writeFileSync 全量覆盖，一份
+// 日志只含本次命令输出）——若改成追加写复用多轮，历史轮次的证据行会被误报，改动
+// 写入方式时必须连带复核本扫描。曾只读尾 150 行：多包聚合命令逐包各出一段汇总，
+// 只有最后一包落在窗口内，中间包的跳过证据全部漏扫。
 // SKIP_* 环境变量形态不做输出扫描：环境侧已被结构性隔离（node 执行器只透传 argv），
 // 输出扫描用例名含 SKIP_ 字样的合法测试会误伤（权衡注释见 §6.1 对齐条目）。
 const NODE_SKIP_SCAN = [
     "var fs = require('fs');",
     "try {",
     "  var t = String(fs.readFileSync(process.argv[1], 'utf8'));",
-    "  var tail = t.split('\\n').slice(-150);",
+    "  var lines = t.split('\\n');",
     "  var hits = [];",
-    "  for (var i = 0; i < tail.length; i++) {",
-    "    var l = tail[i];",
+    "  for (var i = 0; i < lines.length; i++) {",
+    "    var l = lines[i];",
     "    if (/\\b\\d+\\s+skipped\\b/i.test(l) || l.indexOf('eslint-disable') >= 0) hits.push(l.trim());",
     "  }",
     "  console.log(JSON.stringify(hits.slice(0, 10)));",
@@ -1056,8 +1067,20 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
         const commitMsg = `fix(consistency): ${g.name} ${g.items.length} unreasonable`;
         const c = await world.run("node", ["-e", NODE_COMMIT, info.projectRoot, JSON.stringify(g.changedFiles), commitMsg]);
         if (c.exitCode === 0) {
-            g.committed = true;
-            g.commitNote = commitMsg;
+            let noChanges = false;
+            try {
+                noChanges = JSON.parse(c.stdout).noChanges === true;
+            }
+            catch {
+                noChanges = false; // 非法输出按已提交处理（历史形态无标记）
+            }
+            if (noChanges) {
+                g.commitNote = "组文件零改动（提交幂等跳过）";
+            }
+            else {
+                g.committed = true;
+                g.commitNote = commitMsg;
+            }
         }
         else {
             g.commitNote = `commit 失败（exit ${c.exitCode}）：${c.stderr.trim() || c.stdout.trim()}——改动留工作区`;

@@ -335,9 +335,12 @@ const HINT_RETIRE_INVALID = "修订脚本退役 prompt 后重跑";
 //    fixer 遇删码类修复无论等级（含 must-fix）可申报 defer 不执行——两者都随终态
 //    overdesignCandidates 呈报，用户裁决前不产生删码动作
 //  - 修复全等级当轮修完不留尾巴（must-fix/suggestion/info）；组核验（改动 ⊆ 组文件并集
-//    ∪ 如实申报的 affectedFiles）→ 引擎组级一笔 commit（gitignore 产物留盘不提交）
-//  - converged 时伴生产物退役判定：agent 只产清单（零候选也显式返回），引擎按清单执行
-//    git mv / 文件移动 + 完整文件名全仓引用验证（任一命中不退役）+ 移动后反向复验
+//    ∪ 如实申报的 affectedFiles，批改动检测 = 内容指纹差分——批前已改文件被 fixer 再改
+//    后状态码不变，指纹直读内容无盲区）→ 引擎组级一笔 commit（gitignore 产物留盘不提交）
+//  - 退役闭环（收敛点，2026-09-27 裁决：决定权 = 判定 agent 的内容判断，机器引用扫描
+//    不否决）：agent 判定清单（零候选也显式返回）→ 引擎词干全仓扫描（含未跟踪文件）→
+//    有命中转清理条目（owner=retire-cleanup）回修复循环先修引用，清零后执行 git mv /
+//    文件移动 + 反向复验；fixer 裁决引用须原样保留 → deferred 呈报，候选照常移动
 //  - 一切失败 failed-as-return（沿 W1 T8 收紧：throw 的 errored run 不可 resume）——
 //    含未知参数键白名单 fail-fast
 // 数据传递 = 结构化返回总线（无聚合层故不落重型报告文件）：matrixRows / findings /
@@ -419,6 +422,35 @@ const NODE_CHECK_EXISTS = "const fs=require('fs');const missing=process.argv.sli
 const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
 const NODE_RENAME_FILE = "require('fs').mkdirSync(require('path').dirname(process.argv[2]),{recursive:true});require('fs').renameSync(process.argv[1],process.argv[2])";
 const NODE_PROBE_HOME = "process.stdout.write(require('os').homedir())";
+// argv: [...绝对路径] → stdout JSON 同序数组 [{f, h}]（h = sha256(工作区内容)，文件不
+// 存在 = null）。批改动检测的内容指纹快照用：porcelain 状态码是「工作区相对 index/HEAD
+// 的状态分类」，不是内容身份——批前已改文件（如用户未提交的修改）被 fixer 再改后分类
+// 不变（M→M），状态码差分永远看不见；指纹差分直读内容本身，一套判据覆盖全部文件
+const NODE_FILE_FINGERPRINTS = "var fs=require('fs'),crypto=require('crypto');var out=[];for(var i=1;i<process.argv.length;i++){var f=process.argv[i];var h=null;try{h=crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex')}catch(e){}out.push({f:f,h:h})}process.stdout.write(JSON.stringify(out))";
+/** 文件集 → 内容指纹 Map（一次 node -e 批量算）；文件不存在 = null 哨兵（删除也是改动） */
+async function fingerprintFiles(absFiles) {
+    const m = new Map();
+    if (absFiles.length === 0)
+        return m;
+    const r = await world.run("node", ["-e", NODE_FILE_FINGERPRINTS, ...absFiles]);
+    if (r.exitCode !== 0)
+        throw new Error(`内容指纹计算失败（exit ${r.exitCode}）：${r.stderr.trim()}`);
+    try {
+        const arr = JSON.parse(r.stdout);
+        if (!Array.isArray(arr))
+            throw new Error("输出非数组");
+        for (const it of arr) {
+            if (it !== null && typeof it === "object" && typeof it.f === "string") {
+                const o = it;
+                m.set(o.f, typeof o.h === "string" ? o.h : null);
+            }
+        }
+    }
+    catch (e) {
+        throw new Error(`内容指纹输出解析失败：${String(e)}`);
+    }
+    return m;
+}
 // ── 参数窄化（纯函数，便于片段级验证） ──
 function deriveInputs(raw) {
     const problems = [];
@@ -941,6 +973,17 @@ function buildCandidateGroups(active) {
             note: "机械信号（反引号悬空引用）——修复面 = 文档侧引用清理",
         });
     }
+    // 退役引用清理条目（引擎在收敛点生成，owner=retire-cleanup）：修复面 = location 锚点
+    // （引用方文件）；锚点缺失（命中行无路径形态）→ 领地空集，按 fix-hint 定位 +
+    // affectedFiles 申报核验——与漏实现条目同款降级路径
+    const retireIds = active.filter((f) => f.owner === "retire-cleanup");
+    if (retireIds.length > 0) {
+        const files = [...new Set(retireIds.flatMap((f) => {
+                const a = anchorPath(f.location);
+                return a !== "" ? [pathUnderRoot(a)] : [];
+            }))];
+        raw.push({ id: "M-retire", issueIds: retireIds.map((f) => f.id), files, note: "退役引用清理——先修引用后执行退役移动（决定权在判定 agent，扫描命中只产清理素材）" });
+    }
     // planner 域拆两组（§7.1 回写）：文档侧条目（code-right：架构漂移/②③/登记面/越权回写）
     // 单组串行；漏实现与 contested-suggestion（doc-right 修复面，代码锚点未知）单独成组
     // 且领地 = 空集（按 fix-hint 定位，affectedFiles 申报核验）
@@ -1225,7 +1268,7 @@ function fixerPrompt(g, byId) {
     L.push(`3. 领地互斥：优先只改本组文件（${g.files.map((p) => rel(p)).join("、")}）；确需触碰组外文件或新增文件（如增量测试文件），必须列入 affectedFiles 如实申报——未申报的改动不会被提交（留盘随终态呈报主 agent 处置，本组条目可能因修复未落盘而复检重派）。`);
     L.push("4. git 禁令：禁止一切 git 写操作（add/commit/push 等）——改动留工作区，引擎统一核验后按组 commit。");
     L.push("5. 每条修复给 selfCheck：一条可复跑命令 + 预期结果（改文档类可用 grep 断言；聚焦复审会复核它）。");
-    L.push("6. 越权候选防线：若某条的修复动作将是「删除/移除一段现有实现」而其指控仅是「设计文档没写」（无行为矛盾/悬空引用等实质缺陷证据），**无论等级（含 must-fix）**都不要执行删除——放入 deferred（reason 写候选卡论证：小取舍/大简化/核心价值不变），它将随终态呈报用户裁决后才动；「文档没写」更可能是文档侧漏登记而非代码越权，宁可多呈报一张候选卡，不可直接删码。");
+    L.push("6. 越权候选防线：若某条的修复动作将是「删除/移除一段现有实现」而其指控仅是「设计文档没写」（无行为矛盾/悬空引用等实质缺陷证据），**无论等级（含 must-fix）**都不要执行删除——放入 deferred（reason 写候选卡论证：小取舍/大简化/核心价值不变），它将随终态呈报用户裁决后才动；「文档没写」更可能是文档侧漏登记而非代码越权，宁可多呈报一张候选卡，不可直接删码。deferred 的另一合法场景 = 退役引用清理条目核实为必须原样指向的合法存证（条目指引会标明）。");
     L.push("7. 符号豁免申报（仅机械信号条目可用）：若某条指控「词表符号 X 在代码库零命中」，而你核实 X 本就不该被扫描（典型 = 外部/上游包符号、且文档已就地解释其来源）——不要为消信号去删改文档（会丢失对外部依赖行为的关键描述），放入 exempt（reason 写核实证据：如在依赖包中的命中位置 / 文档解释所在位置），它将转豁免终态、落豁免登记并随终态呈报主 agent 终审。真悬空引用（本项目符号被删/改名）不属于豁免，照常修复。");
     L.push("");
     L.push("完成后返回 JSON：fixes（元素 {issueId, description, selfCheck}，issueId 与上面条目一致原样引用，本组全部条目必须被 fixes / deferred / exempt 之一覆盖）+ deferred（元素 {issueId, reason}——仅越权候选防线场景）+ exempt（元素 {issueId, reason}——仅机械条目的符号豁免场景，无申报时显式 []）+ affectedFiles（实际改动文件路径数组，含新增文件）。");
@@ -1235,11 +1278,230 @@ const retirePromptText = [
     "终态同步已收敛，做伴生产物退役判定——只产判定清单，不执行任何移动/修改/删除。",
     "判定规则：",
     "1. 盘点本设计相关产物（设计文档 / impl-plan / 各轮审查留档）：已在 .tmp/ 工作流产物目录下的属合规放置，逐项列 kept（理由 = 合规放置无需处理）。",
-    "2. 残留在源码树（docs/ 等）的伴生产物——旧惯例 .review* 报告、probe 产物等——列 candidates（引擎会做完整文件名全仓引用验证，任一命中不会退役）。",
-    "3. 被本次设计整体取代的旧设计文档，若你认为已无外部引用 → 列 candidates（引擎复验）。",
+    "2. 残留在源码树（docs/ 等）的伴生产物——旧惯例 .review* 报告、probe 产物等——若内容判断已无存留价值，列 candidates。",
+    "3. 被本次设计整体取代的旧设计文档——由你独立做内容判断（新版是否完全覆盖其价值），不受「是否还有引用」影响：引用的存在不是保留的理由，引擎会把全仓引用扫描结果转为清理条目先修引用、清零后才执行移动。",
     `输入：仓库 ${projectRoot}；设计文档 ${designDoc}；同步矩阵 ${matrixFile}（可 Read 了解本次改动面与涉及文件）。`,
     "完成后返回 JSON：candidates（元素 {path, reason}，path 为 projectRoot 相对或绝对路径）+ kept（元素 {path, reason}）。零候选时 candidates 返回空数组（显式）——不要为了非空而虚构候选。",
 ].join("\n");
+// ── 退役闭环（2026-09-27 裁决：退役决定权 = 判定 agent 的内容判断，机器引用扫描不
+//    否决——「grep 命中即不退役」的旧门禁整体删除；命中只产清理素材，先修引用后移动，
+//    引用迁移工作由修复循环承载而非冻结为永久保留）──
+/** 退役引用扫描：文件名去扩展名词干的字面搜索（词干是完整名的超串，一发覆盖完整名
+ *  与省扩展名链接两种形态）+ --untracked-files（未跟踪新文件的引用可见；gitignore 的
+ *  .tmp 产物天然排除）。词干误命中方向 = 保守多生成清理条目（fixer 处置时判伪），比
+ *  链接形态正则枚举（变体不全 = 新盲区）安全；动态拼接路径是机械搜索固有边界，由
+ *  「退役 = 移动可找回 + README 索引 + 反向告警」兜住后果。返回命中行（file:line:内容），
+ *  null = git grep 异常（≠ 无引用，调用方按保守处理） */
+async function scanRetireRefs(base) {
+    const stem = base.replace(/\.[^.]+$/, "");
+    const pat = stem !== "" ? stem : base;
+    // 参数序：选项在 -e pattern 之前（pattern 后的 token 会被当 pathspec）；git grep 的
+    // 未跟踪选项是 --untracked（不是 git status 的 --untracked-files，实测探针校正）
+    const g = await world.run("git", ["-C", projectRoot, "grep", "-n", "-F", "--untracked", "-e", pat]);
+    if (g.exitCode !== 0 && g.exitCode !== 1)
+        return null;
+    if (g.exitCode === 1)
+        return [];
+    return g.stdout.split("\n").filter((s) => s.trim() !== "");
+}
+/** 清理条目 → 退役候选的登记（修复轮后机器对账锚：该候选词干全仓零命中 = 条目 fixed） */
+const retireCleanupTargets = new Map();
+/** 收敛点退役闭环：判定 agent 独立判定（唯一决定权）→ 全候选引用扫描 → 有命中转清理
+ *  条目回修复循环（下轮收敛再进入本闭环保留移动）；零命中（或命中已被 deferred 裁决
+ *  保留）执行移动 + 退役 commit + README 索引，并构造 converged 终态。 */
+async function retireClosure(round, seqStart) {
+    phase("伴生产物退役判定");
+    const retireAgent = wfAgent("伴生产物判定", RETIRE_PERSONA);
+    let verdict = null;
+    let rErr = "";
+    try {
+        const cand = await askValidated((v) => {
+            if (typeof v !== "object" || v === null)
+                return { ok: false, errors: ["返回须为对象"] };
+            return { ok: true, value: normRetirement(v) };
+        }, (q) => retireAgent.ask("RetirementVerdict", q), retirePromptText);
+        if (cand === null)
+            throw new Error("结构化返回不合规（3 次回喂重试后仍失败）");
+        verdict = cand;
+    }
+    catch (e) {
+        rErr = String(e);
+    }
+    if (verdict === null) {
+        finalResult = finish("retire-failure", round, `退役判定 agent 返回无效（${rErr}）。恢复动作：同步修复成果已在工作区/commit 中，${HINT_RETIRE_INVALID}`);
+        return { kind: "failure" };
+    }
+    const retired = [];
+    const kept = [...verdict.kept];
+    let movedTracked = false;
+    const cleanups = [];
+    const candSrcs = new Set(verdict.candidates.map((c) => pathUnderRoot(c.path)));
+    for (const c of verdict.candidates) {
+        const src = pathUnderRoot(c.path);
+        // 活跃产物护栏：设计文档 / impl-plan / 本同步 runDir 不在退役范围（即便被误判为候选）
+        if (src === designDoc || src === implPlan || src.startsWith(`${runDir}/`) || src.startsWith(`${retirementDestDir}/`)) {
+            kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：活跃产物（设计文档/impl-plan/同步产物目录）不退役` });
+            continue;
+        }
+        if (!(await pathExists(src))) {
+            kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：候选路径不存在` });
+            continue;
+        }
+        const base = src.split("/").pop() ?? "";
+        if (base === "") {
+            kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：候选路径无文件名` });
+            continue;
+        }
+        const dest = `${retirementDestDir}/${base}`;
+        if (await pathExists(dest)) {
+            kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：目标已存在同名文件（${rel(dest)}）` });
+            continue;
+        }
+        // 历史清理条目已 deferred = fixer 裁决「该引用须原样保留」（合法存证）——引用存在
+        // 不阻断移动（决定权在内容判断），该引用随移动悬空、随终态 deferred 呈报，从退役
+        // 目录 README 可找回。否则每轮重扫都会再命中，deferred 裁决被空转绕过
+        const priorDeferred = [...retireCleanupTargets.entries()].some(([fid, t]) => t.src === src && ledgerById(fid)?.status === "deferred");
+        let hits = [];
+        if (!priorDeferred) {
+            const hitsRaw = await scanRetireRefs(base);
+            if (hitsRaw === null) {
+                // 扫描异常 ≠ 无引用：不是保留（那是否决）、不是清理（证据缺失）——保守保留本轮
+                // + 人工复核（基础设施故障不进修复循环空转）
+                kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：引用扫描 git grep 异常——保守保留待人工复核` });
+                continue;
+            }
+            hits = hitsRaw.filter((h) => {
+                const f = h.split(":")[0] ?? "";
+                return !candSrcs.has(pathUnderRoot(f));
+            });
+        }
+        if (hits.length > 0) {
+            cleanups.push({ src, base, dest, hits, reason: c.reason });
+            continue;
+        }
+        // 执行移动：tracked → git mv（失败降级 rm --cached + rename）；untracked → rename
+        const tracked = await world.run("git", ["-C", projectRoot, "ls-files", "--error-unmatch", "--", rel(src)]);
+        if (tracked.exitCode === 0) {
+            const mv = await world.run("git", ["-C", projectRoot, "mv", "--", rel(src), rel(dest)]);
+            if (mv.exitCode === 0) {
+                movedTracked = true;
+            }
+            else {
+                const rm = await world.run("git", ["-C", projectRoot, "rm", "--cached", "--", rel(src)]);
+                const rn = await world.run("node", ["-e", NODE_RENAME_FILE, src, dest]);
+                if (rm.exitCode === 0 && rn.exitCode === 0) {
+                    movedTracked = true;
+                }
+                else {
+                    kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：移动失败（git mv exit ${mv.exitCode}，降级 rm=${rm.exitCode}/rename=${rn.exitCode}）` });
+                    continue;
+                }
+            }
+        }
+        else {
+            const rn = await world.run("node", ["-e", NODE_RENAME_FILE, src, dest]);
+            if (rn.exitCode !== 0) {
+                kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：文件移动失败（exit ${rn.exitCode}）` });
+                continue;
+            }
+        }
+        retired.push({ from: rel(src), to: rel(dest) });
+        log(`退役：${rel(src)} → ${rel(dest)}`);
+        // 反向复验：移动后残留引用告警（引用先清理后移动的正常路径应为零；命中 = 清理对账
+        // 与事实矛盾或新引用，人工复核）
+        const post = await scanRetireRefs(base);
+        if (post !== null) {
+            const postHits = post.filter((h) => {
+                const f = h.split(":")[0] ?? "";
+                return !pathUnderRoot(f).startsWith(`${retirementDestDir}/`);
+            }).length;
+            if (postHits > 0)
+                log(`WARN: 退役 ${base} 后仍有 ${postHits} 处文件名词干引用（清理对账与事实矛盾或移动后新增，复核：${post.slice(0, 3).join("、")}）`);
+        }
+        else {
+            log(`WARN: 退役 ${base} 后反向复验 git grep 异常——无法确认无残留引用，人工复核`);
+        }
+    }
+    if (cleanups.length > 0) {
+        // 清理条目（复用 FindingRecord 结构走既有修复循环：分组派发 fixer → 领地核验 → 组
+        // 提交 → 下轮机器对账「词干零命中 = fixed」）；fixer 裁决引用须原样保留 → deferred
+        // 终态呈报，下轮收敛时该候选跳过重扫直接移动
+        const findings = [];
+        let seq = seqStart;
+        for (const cu of cleanups) {
+            const id = `F${round}-${seq}`;
+            const firstHit = cu.hits[0] ?? "";
+            const locParts = firstHit.split(":");
+            findings.push({
+                id,
+                owner: "retire-cleanup",
+                location: locParts.length >= 2 ? `${locParts[0]}:${locParts[1]}` : cu.base,
+                gap: `退役候选 ${rel(cu.src)} 全仓仍有 ${cu.hits.length} 处引用（${cu.hits.slice(0, 5).map((h) => h.split(":").slice(0, 2).join(":")).join("、")}${cu.hits.length > 5 ? " 等" : ""}）——逐处改指取代它的新文档（判定依据：${cu.reason}）或删除过时引用；若核实为必须原样指向的合法存证，放入 deferred 并说明`,
+                direction: "doc-right",
+                severity: "must-fix",
+                impact: "退役移动的前置清理——未清即移动会产生悬空引用",
+                rationale: cu.reason,
+                fixHint: `更新或删除对 ${cu.base} 的全部引用（改指新版文档，或改指退役目录 ${rel(cu.dest)}）；修后全仓不应再命中该词干`,
+                firstSeen: round,
+                status: "open",
+            });
+            retireCleanupTargets.set(id, { src: cu.src, base: cu.base });
+            seq += 1;
+        }
+        log(`第 ${round} 轮收敛，但 ${cleanups.length} 个退役候选仍有引用——转清理条目（${findings.map((f) => f.id).join("、")}）进下轮修复，清零后执行移动`);
+        return { kind: "cleanup", findings, next: seq };
+    }
+    if (movedTracked) {
+        // --only + pathspec：只提交退役移动的文件，不卷入 index 预存 staged 内容
+        const retireRels = retired.map((r) => r.from);
+        const cm = await world.run("git", ["-C", projectRoot, "commit", "--only", "-m", "chore: retire superseded design artifacts (design-code-sync)", "--", ...retireRels]);
+        if (cm.exitCode !== 0) {
+            finalResult = finish("retire-failure", round, `退役移动已执行但收尾 commit 失败（exit ${cm.exitCode}）：${(cm.stderr !== "" ? cm.stderr : cm.stdout).trim()}。恢复动作：人工检查 git index（退役删除已 staged）后重试 commit`);
+            return { kind: "failure" };
+        }
+    }
+    // 退役目录 README 索引（老 skill [MANDATORY]：文件名/日期/依据/找回方式——找回不只靠 final.json）
+    if (retired.length > 0 || kept.length > 0) {
+        try {
+            const readmeLines = [
+                "# 退役设计文档索引",
+                "",
+                `基线 HEAD：${headHash.slice(0, 12)}（日期见 git log）；来源：design-code-sync-loop（终态同步退役判定）`,
+                "",
+                "| 原路径 | 退役后路径 | 依据 |",
+                "|--------|-----------|------|",
+                ...retired.map((r) => `| ${r.from} | ${r.to} | 见 final.json retirement 字段与 runDir 留档 |`),
+                ...(kept.length > 0 ? ["", "## 保留项（未退役）", "", ...kept.map((k) => `- ${k.path}：${k.reason}`)] : []),
+            ];
+            const wr = await world.run("node", [
+                "-e",
+                "require('fs').mkdirSync(process.argv[1],{recursive:true});require('fs').writeFileSync(process.argv[2],process.argv[3])",
+                retirementDestDir,
+                `${retirementDestDir}/README.md`,
+                readmeLines.join("\n"),
+            ]);
+            if (wr.exitCode !== 0)
+                log(`WARN: 退役 README 索引写盘失败（exit ${wr.exitCode}）——找回信息仍完整保留在 final.json retirement 字段`);
+        }
+        catch (e) {
+            log(`WARN: 退役 README 索引写盘异常（${String(e)}）——找回信息仍完整保留在 final.json retirement 字段`);
+        }
+    }
+    const ds = {
+        docRight: ledger.filter((f) => f.direction === "doc-right").length,
+        codeRight: ledger.filter((f) => f.direction === "code-right").length,
+        contested: ledger.filter((f) => f.direction === "contested").length,
+    };
+    const sugContested = ledger.filter((f) => f.direction === "contested" && f.severity !== "must-fix");
+    finalNote = `converged（R${round} 确认 0 活跃条目）`;
+    const msg = [
+        `终态同步收敛（第 ${round} 轮确认 0 活跃条目）；矩阵与收敛轨迹：${matrixFile}`,
+        `方向分布 doc-right ${ds.docRight} / code-right ${ds.codeRight} / contested ${ds.contested}`,
+        `退役 ${retired.length} / 保留 ${kept.length}${sugContested.length > 0 ? `；contested 非 must-fix 级 ${sugContested.length} 条已按 doc-right 默认修复并记录（见 contestedList）` : ""}`,
+    ].join("；");
+    finalResult = { ...finish("converged", round, msg), retirement: { retired, kept } };
+    return { kind: "done" };
+}
 async function commitGroupFiles(round, gid, count, files) {
     const staged = [];
     const skipped = [];
@@ -1288,7 +1550,6 @@ log(`design-code-sync-loop 启动：runDir=${runDir}（attempt=${attempt}），�
 // 循环外顶层声明保证跨轮引用）
 const plannerAgent = wfAgent("框架对照规划", PLANNER_PERSONA);
 let finalResult = null;
-let convergedRound = 0;
 let prevActiveMust = 0;
 let stallStreak = 0;
 for (let round = 1; round <= maxRounds && finalResult === null; round++) {
@@ -1493,9 +1754,37 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
                 log(`WARN: 机械步重跑失败/输出不可解析——${mechPrev.length} 条机械条目本轮不对账，全部保留 open 下轮再验`);
             }
         }
-        const owners = [...new Set(lastDispatchedIds.map((id) => ledgerById(id)?.owner ?? "").filter((o) => o !== "" && o !== "mechanical"))];
-        if (owners.length === 0 && mechPrev.length === 0 && lastDispatchedIds.length > 0) {
-            // 防御：lastDispatchedIds 中存在 LLM/mech 条目（非 deferred）但 owner 全部解析失败 = 状态
+        // 退役引用清理条目（owner=retire-cleanup）不走 LLM 复审——引擎机械对账（同 mechanical
+        // 模式）：重扫该候选词干，全仓零命中 = 修好（fixed）；仍命中 = 保留 open 下轮重派
+        const retirePrev = lastDispatchedIds
+            .map((id) => ledgerById(id))
+            .filter((f) => f !== undefined && f.owner === "retire-cleanup" && f.status === "open");
+        if (retirePrev.length > 0) {
+            for (const f of retirePrev) {
+                const t = retireCleanupTargets.get(f.id);
+                if (t === undefined) {
+                    log(`WARN: 清理条目 ${f.id} 无退役候选登记（状态不一致）——保留 open 人工复核`);
+                    continue;
+                }
+                const hits = await scanRetireRefs(t.base);
+                if (hits === null) {
+                    log(`WARN: 清理条目 ${f.id} 对账扫描异常——本轮不对账，保留 open 下轮再验`);
+                    continue;
+                }
+                const ext = hits.filter((h) => {
+                    const hf = h.split(":")[0] ?? "";
+                    return !pathUnderRoot(hf).startsWith(`${retirementDestDir}/`);
+                });
+                if (ext.length === 0) {
+                    f.status = "fixed";
+                    f.fixedRound = round;
+                }
+            }
+            log(`退役清理条目对账：${retirePrev.length} 条中 ${retirePrev.filter((f) => f.status === "fixed").length} 条已清（词干重扫零命中）`);
+        }
+        const owners = [...new Set(lastDispatchedIds.map((id) => ledgerById(id)?.owner ?? "").filter((o) => o !== "" && o !== "mechanical" && o !== "retire-cleanup"))];
+        if (owners.length === 0 && mechPrev.length === 0 && retirePrev.length === 0 && lastDispatchedIds.length > 0) {
+            // 防御：lastDispatchedIds 中存在 LLM/mech/清理条目（非 deferred）但 owner 全部解析失败 = 状态
             // 不一致，诚实终止（不假收敛）。全 defer 场景 lastDispatchedIds 已被过滤为空，不触发。
             finalResult = finish("fix-failure", round, "上轮有修复派发但条目归属丢失（状态不一致）。恢复动作：按 runDir 各轮留档对账后重新发起");
             break;
@@ -1627,7 +1916,15 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
             finalResult = finish("contested", round, `非争议条目已全部修复收敛；must-fix 级方向争议 ${frozenContested.length} 条冻结待用户裁决（doc-right/code-right 二选一或给出裁决理由），清单随终态 contestedList，矩阵与证据见 ${matrixFile}。恢复动作：用户逐条裁决后重新发起（重发起首轮为 planner 全量重审，已修部分在重审对账中确认）`);
             break;
         }
-        convergedRound = round;
+        // 退役闭环在收敛点执行：判定 agent 独立判定 → 有引用未清理 → 转清理条目回下轮
+        // 修复（continue，不 break）；清零（或命中已被 deferred 裁决保留）→ 执行移动并构造
+        // converged 终态。终态构造（含 retirement 结果）在 retireClosure 内完成
+        const rc = await retireClosure(round, seq);
+        if (rc.kind === "cleanup") {
+            seq = rc.next;
+            ledger.push(...rc.findings);
+            continue;
+        }
         break;
     }
     // ── 停机线（设计 §7）：must-fix 连续 N 轮不降 / 单条活跃超 N 轮 → stuck（清单随终态）──
@@ -1673,7 +1970,10 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
             if (snapRes.exitCode !== 0) {
                 throw new Error(`git status 快照失败（exit ${snapRes.exitCode}）：${snapRes.stderr.trim()}`);
             }
-            const snapshot = parsePorcelain(snapRes.stdout);
+            // 批前快照 = 脏文件集的内容指纹（不是状态码——批前已改文件被 fixer 再改后状态
+            // 分类不变（M→M），状态码差分对它全盲；指纹直读内容，无论申报与否都被看见）
+            const snapAbs = [...parsePorcelain(snapRes.stdout).keys()].map((f) => pathUnderRoot(f));
+            const snapshot = await fingerprintFiles(snapAbs);
             const outcomes = await Promise.all(batch.map((g) => askValidated(validateFixOutcome, (q) => wfAgent(`同步修复-R${round}-${g.id}`, FIXER_PERSONA).ask("FixOutcome", q), fixerPrompt(g, activeById)).then((o) => {
                 if (o === null)
                     throw new Error(`组 ${g.id} fixer 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
@@ -1722,13 +2022,17 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
             if (curRes.exitCode !== 0) {
                 throw new Error(`git status 复查失败（exit ${curRes.exitCode}）：${curRes.stderr.trim()}`);
             }
-            const current = parsePorcelain(curRes.stdout);
-            // 口径统一：porcelain 输出仓库相对路径，claims（组 files/affectedFiles）为绝对路径——
-            // changed 一律归一绝对再比对（曾因相对 vs 绝对恒不匹配，诚实修复必判「无组认领」）
+            // 批后指纹覆盖「批前 ∪ 批后」文件集：新增文件（批前无）与删除文件（批后无）经
+            // 集合差捕获，两侧都在但内容变（含批前已改文件被改回与 HEAD 一致的「归零」修复）
+            // 经指纹差捕获
+            const curAbs = [...parsePorcelain(curRes.stdout).keys()].map((f) => pathUnderRoot(f));
+            const union = [...new Set([...snapshot.keys(), ...curAbs])];
+            const current = await fingerprintFiles(union);
+            // 口径统一：指纹键为绝对路径，claims（组 files/affectedFiles）同为绝对路径直接比对
             const changed = new Set();
-            for (const [p, st] of current) {
-                if (snapshot.get(p) !== st)
-                    changed.add(pathUnderRoot(p));
+            for (const p of union) {
+                if (snapshot.get(p) !== current.get(p))
+                    changed.add(p);
             }
             for (const { o } of outcomes) {
                 for (const p of o.affectedFiles) {
@@ -1818,169 +2122,10 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         fixGroups: groups.length,
     });
 }
-// ── 轮次耗尽兜底（未收敛也未触发停机线）──
-if (finalResult === null && convergedRound === 0) {
+// ── 轮次耗尽兜底（未收敛也未触发停机线；含退役清理轮把轮次烧尽的形态）──
+if (finalResult === null) {
     finalNote = `stuck：轮次上限耗尽（${maxRounds} 轮）`;
     finalResult = finish("stuck", maxRounds, `轮次上限耗尽（${maxRounds} 轮）仍未收敛——残余差距矩阵见 ${matrixFile}，呈报用户裁决`);
-}
-// ── 伴生产物退役判定（仅 converged；agent 只判定清单，引擎执行移动 + 引用验证）──
-if (finalResult === null && convergedRound > 0) {
-    phase("伴生产物退役判定");
-    const retireAgent = wfAgent("伴生产物判定", RETIRE_PERSONA);
-    let verdict = null;
-    let rErr = "";
-    try {
-        const cand = await askValidated((v) => {
-            if (typeof v !== "object" || v === null)
-                return { ok: false, errors: ["返回须为对象"] };
-            return { ok: true, value: normRetirement(v) };
-        }, (q) => retireAgent.ask("RetirementVerdict", q), retirePromptText);
-        if (cand === null)
-            throw new Error("结构化返回不合规（3 次回喂重试后仍失败）");
-        verdict = cand;
-    }
-    catch (e) {
-        rErr = String(e);
-    }
-    if (verdict === null) {
-        finalResult = finish("retire-failure", convergedRound, `退役判定 agent 返回无效（${rErr}）。恢复动作：同步修复成果已在工作区/commit 中，${HINT_RETIRE_INVALID}`);
-    }
-    else {
-        const retired = [];
-        const kept = [...verdict.kept];
-        let movedTracked = false;
-        for (const c of verdict.candidates) {
-            const src = pathUnderRoot(c.path);
-            // 活跃产物护栏：设计文档 / impl-plan / 本同步 runDir 不在退役范围（即便被误判为候选）
-            if (src === designDoc || src === implPlan || src.startsWith(`${runDir}/`) || src.startsWith(`${retirementDestDir}/`)) {
-                kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：活跃产物（设计文档/impl-plan/同步产物目录）不退役` });
-                continue;
-            }
-            if (!(await pathExists(src))) {
-                kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：候选路径不存在` });
-                continue;
-            }
-            const base = src.split("/").pop() ?? "";
-            if (base === "") {
-                kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：候选路径无文件名` });
-                continue;
-            }
-            const dest = `${retirementDestDir}/${base}`;
-            if (await pathExists(dest)) {
-                kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：目标已存在同名文件（${rel(dest)}）` });
-                continue;
-            }
-            // 引用验证：完整文件名全仓 grep（git grep 只搜 tracked，天然排除 .tmp 产物），
-            // 任一命中（自身除外）不退役
-            const g = await world.run("git", ["-C", projectRoot, "grep", "-l", "-F", "-e", base]);
-            if (g.exitCode !== 0 && g.exitCode !== 1) {
-                // git grep 异常（非 0 命中 / 非 1 无命中）≠ 无引用——fail-open 会带着悬空引用退役，保守保留
-                kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：引用验证 git grep 异常（exit ${g.exitCode}）——保守保留待人工复核` });
-                continue;
-            }
-            const hits = g.exitCode === 0
-                ? g.stdout
-                    .split("\n")
-                    .map((s) => s.trim())
-                    .filter((s) => s !== "" && pathUnderRoot(s) !== src)
-                : [];
-            if (hits.length > 0) {
-                kept.push({
-                    path: c.path,
-                    reason: `${c.reason}；引擎未执行：引用验证命中 ${hits.length} 处（${hits.slice(0, 3).join("、")}${hits.length > 3 ? " 等" : ""}）`,
-                });
-                continue;
-            }
-            // 执行移动：tracked → git mv（失败降级 rm --cached + rename）；untracked → rename
-            const tracked = await world.run("git", ["-C", projectRoot, "ls-files", "--error-unmatch", "--", rel(src)]);
-            if (tracked.exitCode === 0) {
-                const mv = await world.run("git", ["-C", projectRoot, "mv", "--", rel(src), rel(dest)]);
-                if (mv.exitCode === 0) {
-                    movedTracked = true;
-                }
-                else {
-                    const rm = await world.run("git", ["-C", projectRoot, "rm", "--cached", "--", rel(src)]);
-                    const rn = await world.run("node", ["-e", NODE_RENAME_FILE, src, dest]);
-                    if (rm.exitCode === 0 && rn.exitCode === 0) {
-                        movedTracked = true;
-                    }
-                    else {
-                        kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：移动失败（git mv exit ${mv.exitCode}，降级 rm=${rm.exitCode}/rename=${rn.exitCode}）` });
-                        continue;
-                    }
-                }
-            }
-            else {
-                const rn = await world.run("node", ["-e", NODE_RENAME_FILE, src, dest]);
-                if (rn.exitCode !== 0) {
-                    kept.push({ path: c.path, reason: `${c.reason}；引擎未执行：文件移动失败（exit ${rn.exitCode}）` });
-                    continue;
-                }
-            }
-            retired.push({ from: rel(src), to: rel(dest) });
-            log(`退役：${rel(src)} → ${rel(dest)}`);
-            // 反向复验：移动后不应残留文件名引用（有 = 悬空链接，告警供人工复核）
-            const post = await world.run("git", ["-C", projectRoot, "grep", "-l", "-F", "-e", base]);
-            if (post.exitCode === 0) {
-                const postHits = post.stdout.split("\n").filter((s) => s.trim() !== "").length;
-                if (postHits > 0)
-                    log(`WARN: 退役 ${base} 后仍有 ${postHits} 处文件名引用（可能悬空，复核：${post.stdout.trim()}）`);
-            }
-            else if (post.exitCode !== 1) {
-                log(`WARN: 退役 ${base} 后反向复验 git grep 异常（exit ${post.exitCode}）——无法确认无残留引用，人工复核`);
-            }
-        }
-        if (movedTracked) {
-            // --only + pathspec：只提交退役移动的文件，不卷入 index 预存 staged 内容
-            const retireRels = retired.map((r) => r.from);
-            const cm = await world.run("git", ["-C", projectRoot, "commit", "--only", "-m", "chore: retire superseded design artifacts (design-code-sync)", "--", ...retireRels]);
-            if (cm.exitCode !== 0) {
-                finalResult = finish("retire-failure", convergedRound, `退役移动已执行但收尾 commit 失败（exit ${cm.exitCode}）：${(cm.stderr !== "" ? cm.stderr : cm.stdout).trim()}。恢复动作：人工检查 git index（退役删除已 staged）后重试 commit`);
-            }
-        }
-        // 退役目录 README 索引（老 skill [MANDATORY]：文件名/日期/依据/找回方式——找回不只靠 final.json）
-        if (retired.length > 0 || kept.length > 0) {
-            try {
-                const readmeLines = [
-                    "# 退役设计文档索引",
-                    "",
-                    `基线 HEAD：${headHash.slice(0, 12)}（日期见 git log）；来源：design-code-sync-loop（终态同步退役判定）`,
-                    "",
-                    "| 原路径 | 退役后路径 | 依据 |",
-                    "|--------|-----------|------|",
-                    ...retired.map((r) => `| ${r.from} | ${r.to} | 见 final.json retirement 字段与 runDir 留档 |`),
-                    ...(kept.length > 0 ? ["", "## 保留项（未退役）", "", ...kept.map((k) => `- ${k.path}：${k.reason}`)] : []),
-                ];
-                const wr = await world.run("node", [
-                    "-e",
-                    "require('fs').mkdirSync(process.argv[1],{recursive:true});require('fs').writeFileSync(process.argv[2],process.argv[3])",
-                    retirementDestDir,
-                    `${retirementDestDir}/README.md`,
-                    readmeLines.join("\n"),
-                ]);
-                if (wr.exitCode !== 0)
-                    log(`WARN: 退役 README 索引写盘失败（exit ${wr.exitCode}）——找回信息仍完整保留在 final.json retirement 字段`);
-            }
-            catch (e) {
-                log(`WARN: 退役 README 索引写盘异常（${String(e)}）——找回信息仍完整保留在 final.json retirement 字段`);
-            }
-        }
-        if (finalResult === null) {
-            const ds = {
-                docRight: ledger.filter((f) => f.direction === "doc-right").length,
-                codeRight: ledger.filter((f) => f.direction === "code-right").length,
-                contested: ledger.filter((f) => f.direction === "contested").length,
-            };
-            const sugContested = ledger.filter((f) => f.direction === "contested" && f.severity !== "must-fix");
-            finalNote = `converged（R${convergedRound} 确认 0 活跃条目）`;
-            const msg = [
-                `终态同步收敛（第 ${convergedRound} 轮确认 0 活跃条目）；矩阵与收敛轨迹：${matrixFile}`,
-                `方向分布 doc-right ${ds.docRight} / code-right ${ds.codeRight} / contested ${ds.contested}`,
-                `退役 ${retired.length} / 保留 ${kept.length}${sugContested.length > 0 ? `；contested 非 must-fix 级 ${sugContested.length} 条已按 doc-right 默认修复并记录（见 contestedList）` : ""}`,
-            ].join("；");
-            finalResult = { ...finish("converged", convergedRound, msg), retirement: { retired, kept } };
-        }
-    }
 }
 // ── 收尾：终态标注落盘 + final.json（attempt 检测锚点）──
 if (finalNote === "" && finalResult !== null) {

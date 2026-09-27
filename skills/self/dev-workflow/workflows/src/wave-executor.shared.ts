@@ -118,21 +118,30 @@ const RUN_IN_CWD =
 const GIT_DIFF_STAT =
   "try{const o=require('child_process').execFileSync('git',['diff','--stat'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});process.stdout.write(o)}catch(e){process.stdout.write('(diff 不可用)')}";
 
-// argv: [statusPath, projectRoot, commitTemplate, ...devIds] → 双向对账（§4.5 崩溃裁决，git 为准）：
+// argv: [statusPath, projectRoot, commitTemplate, runId, ...devIds] → 双向对账（§4.5 崩溃裁决，git 为准）：
 //   ①status=done 的节点：commit 不在 git 对象库 → 回 pending；
 //   ②status≠done 的 dev 节点：git log 反查补写 done（commit 哈希 + 证据）。反查命中条件
-//     双保险：a) 时间窗 = baseline..HEAD（status.baseline 缺失时回退 HEAD 起 500 条）；
-//     b) subject 前缀锚定 = commitTemplate 按 {unitId} 切出的静态前段 + <id>，且 <id> 后继
-//     字符非字母数字连字符（模板缺失时退化为 <id> 前缀 + 同一边界检查）。历史工作线的
-//     commit message 正文含同名词（如 W1 线的 u1-u6 编号）由此构造性排除——曾实测按
-//     「完整词含 <id>」匹配把 5 个历史 commit 误配成本次单元、节点被跳过未派发。
-//   stdout = 对账后的完整 status.json（保留 schema 外顶层字段）
+//     三重锚定：a) 时间窗 = baseline..HEAD——无 baseline 时反查禁用（不回退扫 HEAD 起
+//     500 条：跨 run 同模板同单元编号的历史 commit 会撞名误配，正是 431b898 修复的事故
+//     形态；禁用后未记录单元保持 pending 重跑，由引擎提交的幂等分支兜住，方向安全。
+//     baseline 固化（status.json 初建必写）后该分支只对旧格式 status.json 可达；
+//     b) Run-Id trailer 精确匹配 = commit trailer 的 Run-Id === 本 run 标识（构造性唯一：
+//     引擎渲染 message 时统一追加，AI 自由文本经单行化净化无法伪造 trailer 段）。本 run
+//     的 commit 恒带 trailer，无 trailer 且前缀匹配的历史 commit 在 runId 在场时不认；
+//     c) subject 前缀锚定 = commitTemplate 按 {unitId} 切出的静态前段 + <id>，且 <id> 后继
+//     字符非字母数字连字符（模板缺失时退化为 <id> 前缀 + 同一边界检查）——区分 run 内
+//     不同单元。status 无 runId（旧格式引擎写的）→ 兼容路径：只认无 trailer + 前缀 +
+//     词边界（旧引擎 commit 恰好无 trailer，自洽）。stdout = 对账后的完整 status.json
+//     （保留 schema 外顶层字段；runId 缺失时以 argv 传入值补写，保证输出恒含）
 const RECONCILE_STATUS =
-  "try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',ids=process.argv.slice(4);" +
+  "try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',ids=process.argv.slice(5);" +
   "const x=require('child_process').execFileSync;const st=JSON.parse(fs.readFileSync(sp,'utf8'));const nodes={};" +
   "for(const k of Object.keys(st.nodes||{}))nodes[k]=st.nodes[k];const events=(st.events||[]).slice();" +
   "const range=typeof st.baseline==='string'&&st.baseline?st.baseline+'..HEAD':null;" +
-  "let logLines='';try{logLines=String(x('git',['log','--format=%H%x1f%s','-n','500'].concat(range?[range]:[]),{cwd:root,encoding:'utf8',maxBuffer:33554432}))}catch(err){}" +
+  "if(!range)events.push({seq:events.length+1,node:'*',event:'reconcile-warn',detail:'status 无 baseline——反查禁用，未记录单元保持 pending 重跑（幂等核验兜底）。恢复动作：旧格式 status.json，重发起后引擎初建即固化 baseline'});" +
+  "let logLines='';" +
+  "if(range){try{logLines=String(x('git',['log','--format=%H%x1f%s%x1f%(trailers:key=Run-Id,valueonly)',range],{cwd:root,encoding:'utf8',maxBuffer:33554432}))}catch(err){}}" +
+  "const runId=typeof st.runId==='string'&&st.runId?st.runId:null;" +
   "const preOf=(id)=>(tpl.split('{unitId}')[0]||'')+id;" +
   "for(const id of ids){const e=nodes[id]||{status:'pending',attempts:0};" +
   "if(e.status==='done'){let ok=false;" +
@@ -140,11 +149,13 @@ const RECONCILE_STATUS =
   "if(ok)continue;nodes[id]={status:'pending',attempts:0};" +
   "events.push({seq:events.length+1,node:id,event:'reconcile-reset',detail:'status done 但 commit 不在 git 对象库，按 git 为准回 pending'})}" +
   "else{const pre=preOf(id);" +
-  "const hit=logLines.split('\\n').find((l)=>{const i=l.indexOf('\\x1f');if(i<=0)return false;const s=l.slice(i+1);" +
-  "return s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)))});" +
-  "if(hit){const h=hit.slice(0,hit.indexOf('\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 发现本单元 commit（status 未记，按 git 为准补写 done）'};" +
+  "const hit=logLines.split('\\n').find((l)=>{const seg=l.split('\\x1f');if(seg.length<2)return false;const s=seg[1]||'';const t=(seg[2]||'').trim();" +
+  "const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));" +
+  "if(!subj)return false;" +
+  "return runId!==null?(t===runId):(t==='')});" +
+  "if(hit){const h=hit.slice(0,hit.indexOf('\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（Run-Id '+(runId!==null?'精确匹配':'兼容路径：前缀+词边界（status 无 runId）')+'，status 未记，按 git 为准补写 done）'};" +
   "events.push({seq:events.length+1,node:id,event:'reconcile-done',detail:'status 未记但 git log 有本单元 commit，按 git 为准补写 done'})}}}" +
-  "const out={};for(const k of Object.keys(st))if(k!=='nodes'&&k!=='events')out[k]=st[k];out.baseline=st.baseline||null;out.nodes=nodes;out.events=events;" +
+  "const out={};for(const k of Object.keys(st))if(k!=='nodes'&&k!=='events')out[k]=st[k];out.baseline=st.baseline||null;out.runId=st.runId||runIdArg||null;out.nodes=nodes;out.events=events;" +
   "process.stdout.write(JSON.stringify(out))}" +
   "catch(e){process.stderr.write(String((e&&e.message)||'reconcile failed'));process.exit(1)}";
 
@@ -201,6 +212,27 @@ function pathInTerritory(file: string, territories: string[]): boolean {
   return false;
 }
 
+/**
+ * 领地条目形态契约（启动校验与运行中扩范围通道同一入口——两入口曾各持一份校验，
+ * 扩范围通道漏校验致写错的授权被静默吸收、恒判越界烧完打回轮次）：
+ * 条目 = 相对该节点 cwd 所在 git 仓库根的纯路径。绝对路径与空格/括号注释混合形态
+ * （如「src/**（含测试）」）在 pathInTerritory 匹配上恒失败（口径契约：territory 与
+ * files_changed/porcelain 同基准）——错误就地暴露，不做归一化宽容吸收（引擎猜作者
+ * 意图比静默失效更危险）。返回错误清单，空数组 = 全部合法。
+ */
+function territoryFormatErrors(id: string, entries: readonly string[]): string[] {
+  const errs: string[] = [];
+  const abs = entries.filter((t) => t.startsWith("/"));
+  if (abs.length > 0) {
+    errs.push(`dev 节点 ${id} 的 territory 含绝对路径（${abs.join("、")}）——须为相对该节点 cwd 所在 git 仓库根的相对路径`);
+  }
+  const mixed = entries.filter((t) => /\s/.test(t) || /[()（）]/.test(t));
+  if (mixed.length > 0) {
+    errs.push(`dev 节点 ${id} 的 territory 含混合形态条目（空格/括号注释）：${mixed.join("、")}——领地是核验的机器输入，条目须为纯路径`);
+  }
+  return errs;
+}
+
 /** porcelain 输出 → 文件路径列表（R 行取新路径；与 pr-lifecycle 同构） */
 function parsePorcelain(out: string): string[] {
   return out
@@ -222,6 +254,22 @@ const isTmpArtifact = (f: string): boolean => /^(\.\.\/)*\.tmp\//.test(f);
 /** commitTemplate 渲染：{unitId}/{summary} 全量替换（split/join 防 replace 只换首个） */
 function renderCommit(template: string, unitId: string, summary: string): string {
   return template.split("{unitId}").join(unitId).split("{summary}").join(summary);
+}
+
+/** summary 单行化（AI 自由文本进 message 的边界净化）：subject 锚定要求第一行 =
+ * 静态前缀 + 单元 id 完整词，换行会把 message 撕成多段破坏锚定，且多行文本可构造
+ * 伪 trailer 段伪造 Run-Id——单行化后 trailer 段只能由引擎追加，机器区构造性唯一 */
+function sanitizeSummary(summary: string): string {
+  return summary.replace(/[\r\n]+/g, " ").trim();
+}
+
+/** 完整 commit message = subject（模板渲染，summary 单行化）+ 空行 + Run-Id trailer。
+ *  Run-Id = 引擎初建 status.json 时生成的运行唯一标识，同模板同单元编号的历史 commit
+ *  没有本 run 的 Run-Id，反查（RECONCILE_STATUS）按 trailer 精确匹配构造性排除撞名。
+ *  trailer 是 git 标准惯例（同 Signed-off-by 的单独成行形态），git 原生
+ *  %(trailers:key=Run-Id) 可解析，读侧不依赖手写字符串匹配 */
+function buildCommitMessage(template: string, unitId: string, summary: string, runId: string): string {
+  return `${renderCommit(template, unitId, sanitizeSummary(summary))}\n\nRun-Id: ${runId}`;
 }
 
 /** 依赖环检测：DFS 三色标记，命中回边返回环上节点 id，无环返回 null */
@@ -342,18 +390,10 @@ function validatePlan(raw: unknown): ValidateResult {
     if (kind === "dev") {
       if (!isStrArr(rn.territory) || rn.territory.length === 0) {
         errors.push(`dev 节点 ${id} 的 territory 必须是非空字符串数组（领地）`);
-      } else if (rn.territory.some((t) => t.startsWith("/"))) {
-        // 口径契约：territory 与 files_changed/porcelain 同基准 = 相对该节点 cwd 所在 git
-        // 仓库根的相对路径——绝对路径永不匹配相对路径核验，恒判越界，启动即拦
-        errors.push(`dev 节点 ${id} 的 territory 含绝对路径（${rn.territory.filter((t) => t.startsWith("/")).join("、")}）——须为相对该节点 cwd 所在 git 仓库根的相对路径`);
-      } else if (rn.territory.some((t) => /\s/.test(t) || /[()（）]/.test(t))) {
-        // 混合形态（目录+括号注释，如「src/**（含测试）」）在 pathInTerritory 匹配上
-        // 100% 失败——机器门拦截，注释性说明须拆出，条目 = 纯路径（compile.md 同款义务）
-        errors.push(
-          `dev 节点 ${id} 的 territory 含混合形态条目（空格/括号注释）：${rn.territory.filter((t) => /\s/.test(t) || /[()（）]/.test(t)).join("、")}——领地是核验的机器输入，条目须为纯路径`,
-        );
       } else {
-        node.territory = rn.territory;
+        const terrErrs = territoryFormatErrors(id, rn.territory);
+        if (terrErrs.length === 0) node.territory = rn.territory;
+        else errors.push(...terrErrs);
       }
       if (!isStr(rn.promptFile)) {
         errors.push(`dev 节点 ${id} 缺少 promptFile`);
@@ -411,6 +451,44 @@ function validatePlan(raw: unknown): ValidateResult {
   const depsOf = new Map<string, string[]>(nodes.map((n) => [n.id, n.deps]));
   const cycleHit = detectCycle(nodes.map((n) => n.id), depsOf);
   if (cycleHit !== null) errors.push(`依赖图存在环，环上节点：${cycleHit}`);
+
+  // 领地互斥启动断言（T3 DAG 自检「任意两单元领地交集为空」的机器下限）：重叠条目
+  // 必须有依赖路径（任一方向可达）——无边重叠对会同时就绪并行派发，同文件写冲突 +
+  // 级二复核按活跃领地并集粗判会互相污染归属；写计划纪律仍取全互斥，依赖串行是逃生通道
+  const terrOwners = new Map<string, string[]>();
+  for (const n of nodes) {
+    if (n.kind !== "dev" || n.territory.length === 0) continue;
+    for (const t of n.territory) {
+      const owners = terrOwners.get(t) ?? [];
+      owners.push(n.id);
+      terrOwners.set(t, owners);
+    }
+  }
+  if (terrOwners.size > 0) {
+    const reaches = (from: string, to: string): boolean => {
+      const stack = [...(depsOf.get(from) ?? [])];
+      const visited = new Set<string>();
+      while (stack.length > 0) {
+        const cur = stack.pop()!;
+        if (cur === to) return true;
+        if (visited.has(cur)) continue;
+        visited.add(cur);
+        stack.push(...(depsOf.get(cur) ?? []));
+      }
+      return false;
+    };
+    for (const [t, owners] of terrOwners) {
+      for (let i = 0; i < owners.length; i += 1) {
+        for (let j = i + 1; j < owners.length; j += 1) {
+          const a = owners[i];
+          const b = owners[j];
+          if (!reaches(a, b) && !reaches(b, a)) {
+            errors.push(`节点 ${a} 与 ${b} 领地重叠（${t}）且两方向均无依赖路径——两者会同时就绪并行派发（同文件写冲突、领地核验互污）。共同文件改动须合并为同一单元或以依赖边串行后重发 exec-plan`);
+          }
+        }
+      }
+    }
+  }
 
   // acceptance 分组：groups.core / haltOnCoreFail 已退役（2026-09-26 用户裁决——依赖可达性
   // 熔断统一判据后核心场景标注不再承载语义）。字段保留宽容解析（旧 exec-plan 不报错、直接忽略）
@@ -921,7 +999,7 @@ async function executeDevNode(node: PlanNode): Promise<void> {
     const summary = result.summary ?? "dev 单元交付";
     const summaryWithRef =
       node.designRef !== "" && !summary.includes(node.designRef) ? `${node.designRef} ${summary}` : summary;
-    const message = renderCommit(plan.commitTemplate, node.id, summaryWithRef);
+    const message = buildCommitMessage(plan.commitTemplate, node.id, summaryWithRef, activeRunId);
     const cr = await gitAddCommitViaNode(node.cwd, message, result.files_changed);
     for (const f of result.files_changed) declaredFiles.add(f);
     if (!cr.ok) {
@@ -1140,6 +1218,37 @@ async function runSchedulingLoop(): Promise<void> {
           if (!node || node.kind !== "dev") continue;
           const added = rn.territory.filter((t) => !node.territory.includes(t));
           if (added.length === 0) continue;
+          // 扩范围条目与启动入口同一形态契约（territoryFormatErrors）：非法条目拒绝
+          // 吸收 + 留痕——静默吸收会让该授权在 pathInTerritory 上恒不匹配，单元反复
+          // 判越界烧完打回轮次；主 agent 改对后下轮重读天然重试
+          const bad = territoryFormatErrors(node.id, added);
+          if (bad.length > 0) {
+            log(`WARN: 扩范围条目形态非法，拒绝吸收：${bad.join("；")}`);
+            await statusUpdate(
+              node.id,
+              { status: nodeState(node.id), attempts: state.get(node.id)?.attempts ?? 0 },
+              "territory-extended",
+              `扩范围条目形态非法被拒（未生效）：+${added.join("、")}——条目须为相对仓库根的纯路径`,
+            );
+            continue;
+          }
+          // 与启动领地互斥断言同族：扩范围条目与其他正在运行节点的领地重叠 = 并行
+          // 写冲突（同文件双写、核验归属互污），拒绝吸收；该节点 settle 后下轮重读
+          // 天然重试（整批拒绝，干净条目随之延后一轮生效）
+          const busyOverlap = plan.nodes.filter(
+            (n) => n.id !== node.id && n.kind === "dev" && state.get(n.id)?.status === "in-progress" && n.territory.some((t) => added.includes(t)),
+          );
+          if (busyOverlap.length > 0) {
+            const busyIds = busyOverlap.map((n) => n.id).join("、");
+            log(`WARN: 扩范围条目与运行中节点（${busyIds}）领地重叠，拒绝吸收：+${added.join("、")}`);
+            await statusUpdate(
+              node.id,
+              { status: nodeState(node.id), attempts: state.get(node.id)?.attempts ?? 0 },
+              "territory-extended",
+              `扩范围条目与运行中节点（${busyIds}）领地重叠被拒（未生效）：+${added.join("、")}`,
+            );
+            continue;
+          }
           node.territory = [...new Set([...node.territory, ...added])];
           log(`INFO: 节点 ${node.id} 领地运行中扩大（exec-plan 修订生效）：+${added.join("、")}`);
           await statusUpdate(
@@ -1292,24 +1401,44 @@ for (const c of allCwds) {
 // status.json：不存在 → 创建初始态（全 pending）；存在 → 只保留 done（dev done 须 commit 在 git，
 // 不在则回 pending——§4.5 崩溃裁决以 git 为准），其余一律回 pending 重执行
 const existingStatus = await readStatusFile();
+// 运行唯一标识（commit trailer Run-Id 的反查锚）：初建时生成；恢复时沿用磁盘值（旧格式
+// 无 runId → 生成新值，旧 commit 因 trailer 不匹配不再被反查认领，重跑由幂等核验兜住）
+const genRunId = (): string => `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 6)}`;
+let activeRunId: string;
 if (existingStatus === null) {
+  // baseline 固化：优先 exec-plan 的 baseline（编译时点 HEAD，早于本 run 全部 commit——
+  // status 被删但本 run commit 已在 git 的恢复场景，窗口完整覆盖），但 AI 抄写的值不可
+  // 全信，git 对象库验证（rev-parse --verify）失败/缺失时弃用、当场取 HEAD 固化（此时
+  // 历史 commit 无法归账，单元重跑由幂等核验兜住）。「无 baseline」态构造性消灭，
+  // RECONCILE 的无窗口分支随之只对旧格式 status.json 可达
+  let baselineVal: string | null = null;
+  if (typeof plan.baseline === "string" && plan.baseline.trim() !== "") {
+    const v = await world.run("git", ["-C", plan.projectRoot, "rev-parse", "--verify", `${plan.baseline}^{commit}`]);
+    if (v.exitCode === 0 && v.stdout.trim() !== "") baselineVal = v.stdout.trim();
+    else log(`WARN: exec-plan baseline「${plan.baseline}」不是仓库中的真实提交（rev-parse --verify exit ${v.exitCode}）——弃用，当场取 HEAD 固化`);
+  }
+  if (baselineVal === null) {
+    const h = await world.run("git", ["-C", plan.projectRoot, "rev-parse", "HEAD"]);
+    if (h.exitCode === 0 && h.stdout.trim() !== "") baselineVal = h.stdout.trim();
+  }
+  activeRunId = genRunId();
   const initialNodes: Record<string, StatusEntry> = {};
   for (const n of plan.nodes) initialNodes[n.id] = { status: "pending", attempts: 0 };
   try {
     await writeTextViaNode(
       plan.statusPath,
-      JSON.stringify({ baseline: plan.baseline, nodes: initialNodes, events: [] }, null, 2),
+      JSON.stringify({ baseline: baselineVal, runId: activeRunId, nodes: initialNodes, events: [] }, null, 2),
     );
   } catch (e) {
     return invalidRet(`status.json 初始态创建失败（${plan.statusPath}）：${errText(e)}`, plan.statusPath);
   }
-  log(`status.json 不存在，已创建初始态（${plan.nodes.length} 个节点全 pending）：${plan.statusPath}`);
+  log(`status.json 不存在，已创建初始态（${plan.nodes.length} 个节点全 pending，baseline 固化 ${baselineVal ?? "(HEAD 获取失败——反查将被禁用)"}，runId ${activeRunId}）：${plan.statusPath}`);
   for (const n of plan.nodes) state.set(n.id, { status: "pending", attempts: 0 });
   // 初始态同样走双向对账（§4.5 崩溃裁决不留人工方向）：status.json 曾被删但 commit 在 git——
   // 非 done 的 dev 节点按 git log 反查补写 done，避免重跑已交付单元
   const freshDevIds = plan.nodes.filter((n) => n.kind === "dev").map((n) => n.id);
   if (freshDevIds.length > 0) {
-    const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, ...freshDevIds]);
+    const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, ...freshDevIds]);
     if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
       try {
         const parsed = JSON.parse(rec.stdout) as unknown;
@@ -1337,8 +1466,12 @@ if (existingStatus === null) {
   const allDevIds = plan.nodes.filter((n) => n.kind === "dev").map((n) => n.id);
   let aligned: Record<string, StatusEntry> = {};
   for (const n of plan.nodes) aligned[n.id] = existingStatus.nodes[n.id] ?? { status: "pending", attempts: 0 };
+  // runId 恢复：沿用磁盘值保证跨重启 trailer 锚一致；旧格式无 runId → 换新值（本 run
+  // 新 commit 带新 trailer，旧 commit 不被认领，兼容路径不再适用——重跑由幂等核验兜住）
+  const prevRunId = existingStatus.extra["runId"];
+  activeRunId = typeof prevRunId === "string" && prevRunId !== "" ? prevRunId : genRunId();
   if (allDevIds.length > 0) {
-    const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, ...allDevIds]);
+    const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, ...allDevIds]);
     if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
       try {
         const parsed = JSON.parse(rec.stdout) as unknown;
