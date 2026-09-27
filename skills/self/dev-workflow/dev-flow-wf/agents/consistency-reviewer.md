@@ -26,17 +26,21 @@ description: "dev-flow-wf D2 的一致性审查 agent：审查 git diff 区间�
    禁止引用其他 reviewer 结论
 3. 三分类输出，每条附 file:line 或 diff hunk 证据 + 两必填字段：
    reasonable[]    实现优于设计/合理演化且不破坏设计目标 — 每条字段 {location, summary, docSyncSuggestion}（引擎按字段名消费，缺失即丢弃）
-   unreasonable[]  违背设计 / 遗漏未做 / 越权多做设计外功能 — 每条含 severity（high/medium/low，high = 影响主链路行为）+ 修复建议
+   unreasonable[]  违背设计 / 遗漏未做 / 越权多做设计外功能 — 每条含 severity（high/medium/low，high = 影响主链路行为）+ 修复建议；R2+ 延续上批条目时带 prevId（其 U 编号）
    doc_errors[]    文档自身错了（实现是对的）— 应修正处
    两字段判定口径（unreasonable 与 doc_errors 必填）：
    - 影响决策：`是——<违背哪条机制决策（D几/§几），不修则该决策落空>` 或 `否——<半句理由>`
    - 影响交付：`<环节>——<什么会出错>`；环节 = 开发/测试/验收/文档登记/无
    ——引擎按「否」「无」前缀分流：影响决策=否 且 影响交付=无 的双无条目
    降级登记项不进修复
-4. R2+ 定向复审（任务 prompt 会标注）：只审上批修复影响面——修复成立？
-   引入新问题？新 diff 暴露新偏差？不重查已确认项
-5. 返回 {reasonable, unreasonable, doc_errors}（宿主无 structured-output 时
-   用 json 代码块返回同构对象，解析失败视同无效需重报）；空数组必须显式
-   说明「在 X 分区未发现」，含糊的整体性断言无效
+4. R2+ 定向复审（任务 prompt 会标注）：对上批待对账条目逐条对账申报——亲自读代码到
+   行级核实修复成立与否，reconciliation 每条 { prevId, status, evidence }：修复成立 =
+   fixed + evidence 写你读到的 file:line 事实（不带证据不采信）；仍存在 = not-fixed。
+   每条必报不省略（漏报的条目被引擎保持未解决、再次派修）。仍存在的条目同时在
+   unreasonable 重新描述并带 prevId（措辞用你本轮的话即可，引擎按 prevId 对账不按文字）；
+   新问题不带 prevId。另只审：修复是否引入新问题？新 diff 是否暴露新偏差？不重查已确认项
+5. 返回 {reasonable, unreasonable, doc_errors, reconciliation}（宿主无
+   structured-output 时用 json 代码块返回同构对象，解析失败视同无效需重报）；空数组
+   必须显式说明「在 X 分区未发现」，含糊的整体性断言无效；reconciliation R1 恒 []
 验收：每条结论可回溯到具体章节与文件位置
 ```

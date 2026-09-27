@@ -18,7 +18,7 @@ args: { execPlan: "<path>.exec-plan.json" }
 - **脚本聚合**：分类计数 / 修复分组（= 分区边界）/ doc_errors·reasonable 收集回流——不派 LLM 聚合；跨区双报的 finding 文件锚点唯一归属一个分区，去重放弃（双修无害）
 - **必填字段分流**（引擎）：影响决策=否 且 影响交付=无 的 unreasonable 降级为登记项不进修复批次，随终态 deferredLedger 回流主 agent 登记残留风险
 - **修复组并行**：组间领地互斥（≤5），每组 fixer；组内核验过即 commit（组级一笔）
-- **R2+**：定向复审（只审上批修复影响面：修复成立？/引入新问题？/新 diff 暴露新偏差？）→ 回修复或清零
+- **R2+**：定向复审（只审上批修复影响面）——对上批待对账条目逐条 reconciliation 申报裁决（{prevId, status: fixed|not-fixed, evidence}，fixed 必须带 file:line 证据；仍存在的条目同时在 unreasonable 带 prevId 重新描述；新问题不带 prevId）；**清零判定唯一采信 reconciliation 的 fixed+证据申报，漏报/not-fixed 保持活跃下轮再核**（fail-closed，条目身份按引擎 U 编号对账，不按文本匹配）；另审修复引入新问题/新 diff 新偏差；复审目标 = 有改动/测试挂的组 ∪ 仍有活跃条目的组（防漏报条目零改动后失去再核机会）
 - **停止线**：审查轮累计 3 轮仍未收敛，或 unreasonable 活跃数不减反增（高于前轮）→ stuck（终态随 remaining 呈报残留清单 + escalated 呈报顽固清单——≥2 轮修复未清的活跃条目在 stuck 消息逐条标注，优先人工裁决）
 - **Gate A**（清零后）：world.run 全量测试（fullSuite = D0 从项目配置真实读取合成的全量命令（含 lint/typecheck），引擎单命令执行；产物类条目 = testPlan.artifacts，引擎自动执行（compile.md §5），无需人工排布——Gate A 前第一波并行预备），输出落 `<name>.gate-a.log`
 - **终态回写 status.json events**：consistency 终态一笔 + gate-a pass/fail 一笔——D3 入口门「Gate A 绿证据可查」即查 gate-a-pass 事件

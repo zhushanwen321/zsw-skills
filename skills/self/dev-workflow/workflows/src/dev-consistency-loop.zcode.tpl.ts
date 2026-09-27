@@ -2,10 +2,11 @@
 description: dev-flow-wf W3 一致性审查循环（D2）：R1 分区全面审（分区互斥契约，
   git diff 基线..HEAD 文件清单按顶层段不相交划分）→ 脚本聚合（无 LLM 聚合层——分区
   互斥契约下聚合退化为脚本操作）→ 修复组并行（组 = 分区边界，组级一笔 commit）→
-  R2+ 每组定向复审（只审三条，不全面重审）→ Gate A 全量测试（零容忍绕过：无任何
+  R2+ 每组定向复审（只审三条 + reconciliation 逐条对账申报——清零判定唯一证据通道，
+  条目身份按引擎分配的 U 编号，不按文本匹配）→ Gate A 全量测试（零容忍绕过：无任何
   SKIP 逻辑，脚本不传环境变量）→ 终态回流 doc_errors/reasonable 给主 agent。
   停止线（合并语义）：审查轮累计 3 轮不收敛（或 unreasonable 活跃数不减反增）→
-  stuck；顽固条目（连续 ≥2 轮修复未清，按 location+gap 文本身份键追踪）随 stuck
+  stuck；顽固条目（连续 ≥2 轮修复未清，按 reconciliation not-fixed 申报追踪）随 stuck
   终态 escalated 清单呈报——单条独立停机线与时序互斥（到点必晚于计数线），已并入
 whenToUse: dev-flow-wf 主流程 D2 阶段——W2 开发循环终态（blocked 已升级处理）后由
   主 agent 发起；输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/
@@ -55,15 +56,29 @@ interface GapEntry {
   severity: "high" | "medium" | "low";
   /** 一句可执行修复建议 */
   fixHint: string;
+  /** R2+ 复审专属：延续上批条目时原样填其 U 编号（引擎按它刷新条目描述，不按文字匹配）；新问题不填 */
+  prevId?: string;
+}
+
+/** R2+ 定向复审的对账申报（清零判定唯一证据通道——学 W1 reconciliation：fail-closed，漏报不视为已修） */
+interface ReconEntry {
+  /** 上批条目 id（原样引用注入清单中的 U 编号） */
+  prevId: string;
+  /** fixed = 亲自读代码到行级核实修复成立；not-fixed = 仍存在（条目保持活跃并计数） */
+  status: "fixed" | "not-fixed";
+  /** 读了哪里、确认了什么（file:line 事实）；fixed 申报不带证据不采信 */
+  evidence: string;
 }
 
 interface ReviewResult {
   /** 实现优于设计 / 合理演化且不破坏设计目标——不进修复循环，随终态回流 */
   reasonable: ReasonableEntry[];
-  /** 违背设计 / 遗漏未做 / 越权多做——进修复循环（按 location 归属分区成组） */
+  /** 违背设计 / 遗漏未做 / 越权多做——进修复循环（按 location 归属分区成组）；延续上批条目时带 prevId */
   unreasonable: GapEntry[];
   /** 文档自身错了（实现是对的）——不进修复循环，随终态回流主 agent */
   docErrors: GapEntry[];
+  /** R1 恒 []；R2+ 对上批本组逐条申报裁决（fixed+证据才清零，not-fixed/漏报保持活跃） */
+  reconciliation: ReconEntry[];
 }
 
 interface FixRecord {
@@ -84,7 +99,8 @@ interface FixReport {
 
 interface ItemRecord {
   id: string;
-  /** 身份键 = location + 归一 gap（只折叠空白不剥标点——归一越激进误合并越高）；跨轮对账按它匹配 */
+  /** 建档去重键 = location + 归一 gap（仅用于同轮跨区双报与无 prevId 新报的建档去重——
+   *  误合并低害：条目保持活跃不丢；跨轮清零判定按 id 走 reconciliation 申报，不经此键） */
   key: string;
   location: string;
   gap: string;
@@ -115,7 +131,7 @@ interface GroupRun {
   testTail: string;
   committed: boolean;
   commitNote: string;
-  /** 定向复审结果；未派复审（无改动组）= null——该组条目全部保留活跃 */
+  /** 定向复审结果；未派复审（无改动且无活跃条目的组）= null——该组条目保持原状（fail-closed） */
   review: ReviewResult | null;
 }
 

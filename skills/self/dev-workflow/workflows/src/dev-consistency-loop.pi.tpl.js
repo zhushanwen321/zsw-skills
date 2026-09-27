@@ -62,8 +62,23 @@ const SCHEMA_GapEntry = {
     affectsDelivery: { type: "string", description: "影响交付（模板两必填字段之二）：「<环节>——<什么会出错>」，环节 = 开发/测试/验收/文档登记/无" },
     severity: { type: "string", enum: ["high", "medium", "low"], description: "严重度：high 预留给破坏数据/崩溃级" },
     fixHint: { type: "string", description: "一句可执行修复建议" },
+    prevId: { type: "string", description: "R2+ 复审专属：延续上批条目时原样填其 U 编号（引擎按它刷新条目描述，不按文字匹配）；新问题不填" },
   },
   required: ["location", "gap", "affectsDecision", "affectsDelivery", "severity", "fixHint"],
+};
+
+const SCHEMA_ReconEntry = {
+  type: "object",
+  properties: {
+    prevId: { type: "string", description: "上批条目 id（原样引用注入清单中的 U 编号）" },
+    status: {
+      type: "string",
+      enum: ["fixed", "not-fixed"],
+      description: "fixed = 亲自读代码到行级核实修复成立；not-fixed = 仍存在（条目保持活跃并计数）",
+    },
+    evidence: { type: "string", description: "读了哪里、确认了什么（file:line 事实）；fixed 申报不带证据不采信" },
+  },
+  required: ["prevId", "status", "evidence"],
 };
 
 const SCHEMA_ReviewResult = {
@@ -76,7 +91,7 @@ const SCHEMA_ReviewResult = {
     },
     unreasonable: {
       type: "array",
-      description: "违背设计 / 遗漏未做 / 越权多做——进修复循环（按 location 归属分区成组）",
+      description: "违背设计 / 遗漏未做 / 越权多做——进修复循环（按 location 归属分区成组）；延续上批条目时带 prevId",
       items: SCHEMA_GapEntry,
     },
     docErrors: {
@@ -84,8 +99,13 @@ const SCHEMA_ReviewResult = {
       description: "文档自身错了（实现是对的）——不进修复循环，随终态回流主 agent",
       items: SCHEMA_GapEntry,
     },
+    reconciliation: {
+      type: "array",
+      description: "R1 恒 []；R2+ 对上批本组逐条申报裁决（fixed+证据才清零，not-fixed/漏报保持活跃）",
+      items: SCHEMA_ReconEntry,
+    },
   },
-  required: ["reasonable", "unreasonable", "docErrors"],
+  required: ["reasonable", "unreasonable", "docErrors", "reconciliation"],
 };
 
 const SCHEMA_FixRecord = {

@@ -2,10 +2,11 @@
 description: dev-flow-wf W3 一致性审查循环（D2）：R1 分区全面审（分区互斥契约，
   git diff 基线..HEAD 文件清单按顶层段不相交划分）→ 脚本聚合（无 LLM 聚合层——分区
   互斥契约下聚合退化为脚本操作）→ 修复组并行（组 = 分区边界，组级一笔 commit）→
-  R2+ 每组定向复审（只审三条，不全面重审）→ Gate A 全量测试（零容忍绕过：无任何
+  R2+ 每组定向复审（只审三条 + reconciliation 逐条对账申报——清零判定唯一证据通道，
+  条目身份按引擎分配的 U 编号，不按文本匹配）→ Gate A 全量测试（零容忍绕过：无任何
   SKIP 逻辑，脚本不传环境变量）→ 终态回流 doc_errors/reasonable 给主 agent。
   停止线（合并语义）：审查轮累计 3 轮不收敛（或 unreasonable 活跃数不减反增）→
-  stuck；顽固条目（连续 ≥2 轮修复未清，按 location+gap 文本身份键追踪）随 stuck
+  stuck；顽固条目（连续 ≥2 轮修复未清，按 reconciliation not-fixed 申报追踪）随 stuck
   终态 escalated 清单呈报——单条独立停机线与时序互斥（到点必晚于计数线），已并入
 whenToUse: dev-flow-wf 主流程 D2 阶段——W2 开发循环终态（blocked 已升级处理）后由
   主 agent 发起；输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/
@@ -55,15 +56,29 @@ interface GapEntry {
   severity: "high" | "medium" | "low";
   /** 一句可执行修复建议 */
   fixHint: string;
+  /** R2+ 复审专属：延续上批条目时原样填其 U 编号（引擎按它刷新条目描述，不按文字匹配）；新问题不填 */
+  prevId?: string;
+}
+
+/** R2+ 定向复审的对账申报（清零判定唯一证据通道——学 W1 reconciliation：fail-closed，漏报不视为已修） */
+interface ReconEntry {
+  /** 上批条目 id（原样引用注入清单中的 U 编号） */
+  prevId: string;
+  /** fixed = 亲自读代码到行级核实修复成立；not-fixed = 仍存在（条目保持活跃并计数） */
+  status: "fixed" | "not-fixed";
+  /** 读了哪里、确认了什么（file:line 事实）；fixed 申报不带证据不采信 */
+  evidence: string;
 }
 
 interface ReviewResult {
   /** 实现优于设计 / 合理演化且不破坏设计目标——不进修复循环，随终态回流 */
   reasonable: ReasonableEntry[];
-  /** 违背设计 / 遗漏未做 / 越权多做——进修复循环（按 location 归属分区成组） */
+  /** 违背设计 / 遗漏未做 / 越权多做——进修复循环（按 location 归属分区成组）；延续上批条目时带 prevId */
   unreasonable: GapEntry[];
   /** 文档自身错了（实现是对的）——不进修复循环，随终态回流主 agent */
   docErrors: GapEntry[];
+  /** R1 恒 []；R2+ 对上批本组逐条申报裁决（fixed+证据才清零，not-fixed/漏报保持活跃） */
+  reconciliation: ReconEntry[];
 }
 
 interface FixRecord {
@@ -84,7 +99,8 @@ interface FixReport {
 
 interface ItemRecord {
   id: string;
-  /** 身份键 = location + 归一 gap（只折叠空白不剥标点——归一越激进误合并越高）；跨轮对账按它匹配 */
+  /** 建档去重键 = location + 归一 gap（仅用于同轮跨区双报与无 prevId 新报的建档去重——
+   *  误合并低害：条目保持活跃不丢；跨轮清零判定按 id 走 reconciliation 申报，不经此键） */
   key: string;
   location: string;
   gap: string;
@@ -115,7 +131,7 @@ interface GroupRun {
   testTail: string;
   committed: boolean;
   commitNote: string;
-  /** 定向复审结果；未派复审（无改动组）= null——该组条目全部保留活跃 */
+  /** 定向复审结果；未派复审（无改动且无活跃条目的组）= null——该组条目保持原状（fail-closed） */
   review: ReviewResult | null;
 }
 
@@ -461,8 +477,10 @@ const normStr = (s: unknown): string => (typeof s === "string" ? s : "");
 const normSeverity = (s: unknown): "high" | "medium" | "low" =>
   s === "high" || s === "medium" || s === "low" ? s : "medium";
 
-// 条目身份键：location + 归一 gap（只折叠空白，不剥标点、不转小写——跨轮 reviewer
-// 表述漂移越小误合并越低；等价于对 location+gap 文本做哈希，字符串键可读且同构）。
+// 建档去重键：location + 归一 gap（只折叠空白，不剥标点、不转小写）。仅用于同轮跨区
+// 双报与无 prevId 新报的建档去重（误合并低害——条目保持活跃不丢）；跨轮清零判定按
+// 引擎分配的条目 id 走 reconciliation 申报，不经此键（文本匹配对账已退役：复审换措辞
+// 不再影响判定）。
 const itemKey = (e: { location: string; gap: string }): string =>
   `${e.location.trim()}||${e.gap.trim().split(/\s+/).join(" ")}`;
 
@@ -492,6 +510,10 @@ function normalizeReview(raw: unknown, source: string): ReviewResult {
   if (!Array.isArray(o.reasonable) || !Array.isArray(o.unreasonable) || !Array.isArray(o.docErrors)) {
     throw new Error(`${source} 返回无效：reasonable / unreasonable / docErrors 三数组必须齐全`);
   }
+  if (!Array.isArray(o.reconciliation)) {
+    // reconciliation 缺失 = 对账申报通道缺失（R2+ 清零判定唯一证据来源），fail-closed
+    throw new Error(`${source} 返回无效：reconciliation 数组必须齐全（R1 显式返回 []）`);
+  }
   let dropped = 0;
   const reasonable = (o.reasonable as unknown[]).flatMap((e): ReasonableEntry[] => {
     if (e === null || typeof e !== "object") {
@@ -520,6 +542,7 @@ function normalizeReview(raw: unknown, source: string): ReviewResult {
         dropped += 1;
         return [];
       }
+      const prevId = normStr(g.prevId).trim();
       return [
         {
           location,
@@ -528,13 +551,29 @@ function normalizeReview(raw: unknown, source: string): ReviewResult {
           affectsDelivery: normStr(g.affectsDelivery),
           severity: normSeverity(g.severity),
           fixHint: normStr(g.fixHint),
+          ...(prevId !== "" ? { prevId } : {}),
         },
       ];
     });
   const unreasonable = mkGaps(o.unreasonable);
   const docErrors = mkGaps(o.docErrors);
-  if (dropped > 0) log(`WARN ${source}：${dropped} 条缺关键字段（location/gap/summary）被丢弃`);
-  return { reasonable, unreasonable, docErrors };
+  // reconciliation 畸形条目丢弃（fail-closed：丢弃 = 该条目漏报，引擎保持活跃下轮再核）
+  const reconciliation = (o.reconciliation as unknown[]).flatMap((r): ReconEntry[] => {
+    if (r === null || typeof r !== "object") {
+      dropped += 1;
+      return [];
+    }
+    const x = r as Record<string, unknown>;
+    const prevId = normStr(x.prevId).trim();
+    const status = x.status === "fixed" || x.status === "not-fixed" ? x.status : null;
+    if (prevId === "" || status === null) {
+      dropped += 1;
+      return [];
+    }
+    return [{ prevId, status, evidence: normStr(x.evidence) }];
+  });
+  if (dropped > 0) log(`WARN ${source}：${dropped} 条缺关键字段（location/gap/summary/prevId/status）被丢弃`);
+  return { reasonable, unreasonable, docErrors, reconciliation };
 }
 
 function normalizeFix(raw: unknown, source: string): FixReport {
@@ -757,13 +796,22 @@ function isObjArr(v: unknown): v is Record<string, unknown>[] {
   return Array.isArray(v) && v.every((x) => typeof x === "object" && x !== null && !Array.isArray(x));
 }
 
-/** 审查返回浅层结构校验（三分类数组；字段级归一仍由 normalizeReview 承接） */
+/** 审查返回浅层结构校验（三分类数组 + reconciliation 数组；字段级归一仍由 normalizeReview 承接） */
 function validateReviewResult(v: unknown): Validated<ReviewResult> {
   const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
   const errors: string[] = [];
   if (!isObjArr(o["reasonable"])) errors.push("reasonable 须为对象数组（无发现时显式 []）");
   if (!isObjArr(o["unreasonable"])) errors.push("unreasonable 须为对象数组（无发现时显式 []）");
   if (!isObjArr(o["docErrors"])) errors.push("docErrors 须为对象数组（无发现时显式 []）");
+  if (!isObjArr(o["reconciliation"])) errors.push("reconciliation 须为对象数组（每条 { prevId, status, evidence }；R1 无对账义务时显式 []）");
+  else {
+    const bad: string[] = [];
+    o["reconciliation"].forEach((r, i) => {
+      if (typeof r["prevId"] !== "string" || (r["status"] !== "fixed" && r["status"] !== "not-fixed") || typeof r["evidence"] !== "string")
+        bad.push(String(i + 1));
+    });
+    if (bad.length > 0) errors.push(`reconciliation 第 ${bad.join("、")} 条畸形（prevId 须字符串、status 须 fixed|not-fixed、evidence 须字符串）`);
+  }
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as ReviewResult };
 }
 
@@ -805,7 +853,7 @@ function r1Prompt(p: { name: string; files: string[] }): string {
     "",
     "若 impl-plan 章节映射失效（映射指向的节不存在或与节名对不上）：docErrors 放一条映射失效说明（location = impl-plan 的章节映射节，gap = 失效详情），其余两分类返回空数组，禁止按猜的节继续审。",
     "",
-    "返回 JSON：{ reasonable, unreasonable, docErrors }——unreasonable / docErrors 每条 { location, gap, affectsDecision, affectsDelivery, severity, fixHint }（两必填字段按模板口径填写），reasonable 每条 { location, summary, docSyncSuggestion }；空数组必须显式返回 []（表示「在本分区未发现」，含糊的整体性断言无效）。",
+    "返回 JSON：{ reasonable, unreasonable, docErrors, reconciliation }——unreasonable / docErrors 每条 { location, gap, affectsDecision, affectsDelivery, severity, fixHint }（两必填字段按模板口径填写），reasonable 每条 { location, summary, docSyncSuggestion }；reconciliation 本轮（R1）固定返回 []（无对账义务）；空数组必须显式返回 []（表示「在本分区未发现」，含糊的整体性断言无效）。",
   ].join("\n");
 }
 
@@ -1107,9 +1155,11 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     }
   }
 
-  // ── 阶段 C：定向复审（每组修完即审该组影响面；无改动组不派——无新信息可审）──
+  // ── 阶段 C：定向复审（每组修完即审该组影响面；复审目标 = 有改动/测试挂的组 ∪ 仍有
+  //    活跃条目待裁决的组——后者防 fail-closed 死循环：漏报条目保持活跃后若修复零改动，
+  //    「无改动不派复审」会让它永远没有下一次被裁决的机会）──
   {
-    const reviewTargets = groupStates.filter((g) => g.changedFiles.length > 0 || g.testFailed);
+    const reviewTargets = groupStates.filter((g) => g.changedFiles.length > 0 || g.testFailed || g.items.some((i) => i.active));
     let reviews: { name: string; review: ReviewResult }[];
     try {
       reviews = await mapBatch(
@@ -1121,10 +1171,14 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
               ...(g.fix ? g.fix.fixes.flatMap((f) => f.affectedFiles.map(toRel)) : []),
             ]),
           ].filter(Boolean);
+          // 对账义务只覆盖仍活跃条目；已转 doc_errors 的条目（fixer 申报 skipped）附带
+          // 展示供复审不同意时重报复活，但不强制申报
+          const pendingItems = g.items.filter((i) => i.active);
+          const skippedItems = g.items.filter((i) => !i.active);
           const prompt = [
             `第 ${reviewRound} 轮定向复审（分区：${g.name}；只审上批修复的影响面，不全面重审）。`,
             "",
-            `第一步：Read 审查契约模板 ${info.reviewerTemplate}——其中是你的完整任务契约与 R2+ 定向复审规则（只审三条，不重查已确认项）。`,
+            `第一步：Read 审查契约模板 ${info.reviewerTemplate}——其中是你的完整任务契约与 R2+ 定向复审规则（逐条对账申报义务 + 只审三条，不重查已确认项）。`,
             "",
             "背景参数：",
             ctxBlock,
@@ -1133,8 +1187,15 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             "本分区复审文件集（上批条目指向文件 + 修复申报文件）：",
             files.join("\n"),
             "",
-            "上批本分区 unreasonable 条目（逐条核实修复成立与否）：",
-            wrapUntrusted(JSON.stringify(g.items.map((i) => ({ id: i.id, location: i.location, gap: i.gap, severity: i.severity, fixHint: i.fixHint })))),
+            "上批本分区待对账条目（对每条都要在 reconciliation 申报裁决——漏报会被引擎保持未解决并再次派修）：",
+            wrapUntrusted(JSON.stringify(pendingItems.map((i) => ({ id: i.id, location: i.location, gap: i.gap, severity: i.severity, fixHint: i.fixHint })))),
+            ...(skippedItems.length > 0
+              ? [
+                  "",
+                  "上批已转 doc_errors 的条目（fixer 申报设计文档自身错误，无需对账申报；你核实后不同意该转报——实现确有问题——在 unreasonable 带 prevId 重报即复活）：",
+                  wrapUntrusted(JSON.stringify(skippedItems.map((i) => ({ id: i.id, location: i.location, gap: i.gap })))),
+                ]
+              : []),
             "",
             "上批修复声称（不算证据，必须亲自核实到行级）：",
             wrapUntrusted(JSON.stringify(g.fix)),
@@ -1142,13 +1203,13 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             !g.committed && !g.testFailed ? ["", "上批组级 commit 未成功（改动留工作区）。"].join("\n") : "",
             "",
             "只审三条：",
-            "① 每条上批条目修复成立？（亲自读代码到行级；成立则不要再报它）",
+            "① 上批条目逐条对账：亲自读代码到行级核实修复成立与否——reconciliation 对每条待对账条目申报 { prevId: <其 id>, status, evidence }：修复成立 = fixed + evidence 写你读到的 file:line 事实；仍存在 = not-fixed。每条必报，不要静默省略。",
             "② 修复是否引入新问题？",
             "③ 本分区新 diff 是否暴露新偏差？",
-            "仍存在 / 新问题 / 新偏差 → unreasonable（location 与 gap 表述尽量与上批条目一致，便于脚本按文本身份对账）。doc_errors / reasonable 照常返回。",
+            "仍存在的上批条目除 reconciliation 申报 not-fixed 外，同时在 unreasonable 重新描述该条并带 prevId（描述用你本轮的措辞即可，无需与上批一致——引擎按 prevId 对账条目身份，不按文字匹配）；新问题 / 新偏差 → unreasonable 不带 prevId。doc_errors / reasonable 照常返回。",
             "若 impl-plan 章节映射失效：docErrors 放一条映射失效说明（location = impl-plan 的章节映射节），其余返回空数组。",
             "",
-            "返回 JSON：{ reasonable, unreasonable, docErrors }（字段结构与第 1 轮相同；空数组显式返回 []）。",
+            "返回 JSON：{ reasonable, unreasonable, docErrors, reconciliation }（unreasonable 每条含可选 prevId；reconciliation 每条 { prevId, status: fixed|not-fixed, evidence }；空数组显式返回 []）。",
           ]
             .filter(Boolean)
             .join("\n");
@@ -1170,29 +1231,95 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
       if (g) g.review = r.review;
     }
 
-    // ── 脚本聚合（无 LLM）：台账按键对账 ──
-    const countedKeys = new Set<string>();
-    const reportedKeys = new Set<string>();
+    // ── 脚本聚合（无 LLM）：清零判定按 reconciliation 编号对账（学 W1）──
+    // 清零唯一采信通道 = reconciliation 的 fixed 申报（带证据）且组态可信（复审已跑 +
+    // 组级 commit 成功 + 增量测试绿）；not-fixed 保持活跃计数；完全漏报同样保持活跃
+    //（fail-closed：缺失证据不推动状态前进——条目身份按引擎分配的 id 申报，复审换措辞
+    // 不再影响判定；漏报只可能是复审未按契约逐条申报，引擎保持条目下轮再核）。
+    // unreasonable 的 prevId 只做描述刷新与回归重开，不参与清零判定；无 prevId 新报经
+    // 文本键建档去重（误合并低害——条目保持活跃不丢，防重复建档虚增活跃数误触停机线）。
+    const countedIds = new Set<string>();
+    const clearedThisRound = new Set<string>();
     const newReports: GapEntry[] = [];
+    // (1) 收集全部对账申报（跨组汇总后统一裁决——同一条目矛盾裁决时 not-fixed 优先，
+    //     结果不受组处理顺序影响）
+    const verdicts = new Map<string, { notFixed: boolean; fixedOk: boolean; evidence: string; fixDesc: string }>();
+    for (const g of groupStates) {
+      if (!g.review) continue;
+      const trustworthy = g.committed && !g.testFailed;
+      for (const r of g.review.reconciliation) {
+        if (!items.some((i) => i.id === r.prevId)) {
+          log(`WARN 复审-${g.name} reconciliation 申报未知条目 id ${JSON.stringify(r.prevId)}——忽略（幻觉 id）`);
+          continue;
+        }
+        const v = verdicts.get(r.prevId) ?? { notFixed: false, fixedOk: false, evidence: "", fixDesc: "" };
+        const fixDesc = g.fix ? (g.fix.fixes.find((f) => f.id === r.prevId)?.description ?? "(未见申报)") : "(未见申报)";
+        if (r.status === "not-fixed") {
+          v.notFixed = true;
+          if (v.evidence === "") v.evidence = r.evidence;
+          v.fixDesc = fixDesc;
+        } else if (r.evidence.trim() === "") {
+          log(`WARN 条目 ${r.prevId} 复审申报 fixed 但 evidence 为空——不采信该申报（fixed 必须带亲自读到的证据）`);
+        } else if (trustworthy) {
+          v.fixedOk = true;
+          if (v.evidence === "") v.evidence = r.evidence;
+          v.fixDesc = fixDesc;
+        }
+        verdicts.set(r.prevId, v);
+      }
+    }
+    // (2) 统一裁决：not-fixed（坏消息）优先于 fixed；fixed 只在无 not-fixed 申报且组态
+    //     可信时清零；两者皆无（漏报）= 无操作，条目保持原状（活跃者下轮再核）
+    for (const [id, v] of verdicts) {
+      const it = items.find((i) => i.id === id);
+      if (it === undefined) continue;
+      if (v.notFixed) {
+        if (!it.active) {
+          // 已清/已转条目被申报仍存在（复审不同意 skipped 转报 / 矛盾裁决）——重开并重置计数
+          it.active = true;
+          it.uncleanRounds = 0;
+          it.fixHistory.push(`第${reviewRound}轮复审申报仍存在（此前已退出修复队列，重开）：${v.evidence}`);
+        }
+        if (it.active && !countedIds.has(it.id)) {
+          countedIds.add(it.id);
+          it.uncleanRounds += 1;
+          it.fixHistory.push(`第${fixRound}轮修复：${v.fixDesc}；复审申报仍存在`);
+        }
+      } else if (v.fixedOk && it.active) {
+        it.active = false;
+        it.uncleanRounds = 0;
+        clearedThisRound.add(it.id);
+        it.fixHistory.push(`第${reviewRound}轮复审确认修复：${v.evidence}`);
+      }
+    }
+    // (3) unreasonable 建档与描述刷新（prevId = 延续锚点；文本键仅做无 prevId 时的建档去重）
     for (const g of groupStates) {
       if (!g.review) continue;
       for (const u of g.review.unreasonable) {
-        const key = itemKey(u);
-        reportedKeys.add(key);
-        const existing = items.find((i) => i.key === key);
-        if (existing) {
+        const prevId = typeof u.prevId === "string" ? u.prevId.trim() : "";
+        let existing: ItemRecord | undefined;
+        if (prevId !== "") {
+          existing = items.find((i) => i.id === prevId);
+          if (existing === undefined) log(`WARN 复审-${g.name} unreasonable 挂 prevId=${prevId} 无对应条目——按新条目建档`);
+        } else {
+          existing = items.find((i) => i.key === itemKey(u));
+        }
+        if (existing !== undefined) {
           if (!existing.active) {
-            // 已清条目被再报 = 修复引入回归 / 新 diff 暴露——重开并重置计数周期
+            // 已清/已转条目被再报 = 修复引入回归 / 新 diff 暴露 / 复审不同意转报——重开并重置计数周期
+            if (clearedThisRound.has(existing.id)) {
+              log(`WARN 条目 ${existing.id} 本轮 reconciliation 申报 fixed 又被 unreasonable 重报——矛盾，以重报为准（fail-closed）`);
+            }
             existing.active = true;
             existing.uncleanRounds = 0;
             existing.fixHistory.push(`第${reviewRound}轮复审重报（曾判已清，重开）`);
-          } else if (!countedKeys.has(key)) {
-            // 跨组双报只计一次（设计：去重放弃、双修无害——但未清计数不双计）
-            countedKeys.add(key);
+          } else if (!countedIds.has(existing.id)) {
+            // 复审重报但 reconciliation 未申报该条（契约要求两处一致）——计数照记，条目不丢
+            countedIds.add(existing.id);
             existing.uncleanRounds += 1;
-            const lastFix = g.fix ? (g.fix.fixes.find((f) => f.id === existing.id)?.description ?? "(未见申报)") : "(未见申报)";
-            existing.fixHistory.push(`第${fixRound}轮修复：${lastFix}；复审仍报`);
+            existing.fixHistory.push(`第${reviewRound}轮复审重报（reconciliation 未申报，按仍存在计）`);
           }
+          // 描述刷新（复审本轮措辞优先——修复者下轮直接读最新描述）
           existing.location = u.location;
           existing.gap = u.gap;
           existing.severity = u.severity;
@@ -1221,18 +1348,6 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
         active: true,
         fixHistory: [],
       });
-    }
-    // 清零判定：仅「复审已跑且组级 commit 成功且测试绿」的组，其条目本轮未被报 → 已清
-    //（测试挂 / commit 挂 / 无改动未复审的组条目全部保留——核验未过不算清）
-    for (const g of groupStates) {
-      const trustworthy = g.review !== null && g.committed && !g.testFailed;
-      if (!trustworthy) continue;
-      for (const it of g.items) {
-        if (it.active && !reportedKeys.has(it.key)) {
-          it.active = false;
-          it.uncleanRounds = 0;
-        }
-      }
     }
     const activeAfter = activeItems();
     const clearedCount = roundActive.filter((i) => !i.active).length;
