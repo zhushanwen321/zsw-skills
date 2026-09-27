@@ -143,6 +143,10 @@ interface PrepInfo {
   planMdPath: string | null;
   /** statusPath 绝对路径（终态 events 回写目标——§4.5 W3 回写义务） */
   statusPath: string;
+  /** agent 过程记录目录（statusPath 同目录 <name>.runlog/——任务 prompt 注入的防丢失记录落点） */
+  runlogDir: string;
+  /** 未决事项与裁决处置档案（statusPath 同目录 <name>.ledger.md——终态未决清单写入 + 主 agent 处置记录） */
+  ledgerPath: string;
   gateALog: string;
   reviewerTemplate: string;
   partitions: { name: string; files: string[] }[];

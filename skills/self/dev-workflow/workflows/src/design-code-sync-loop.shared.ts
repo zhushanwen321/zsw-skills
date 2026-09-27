@@ -541,6 +541,10 @@ const matrixFile = `${runDir}/matrix.md`;
 const trajectoryFile = `${runDir}/trajectory.md`;
 const finalJsonPath = `${runDir}/final.json`;
 const retirementDestDir = `${projectRoot}/${RETIREMENT_DIR}`;
+// 过程记录目录与未决/裁决档案（与 <name>.sync/ 平铺同基准——SKILL「运行记录」节；
+// 不按 attempt 分目录，重发起的过程记录靠文件内条目时间线自然累积）
+const runlogDir = `${projectRoot}/.tmp/dev-flow/${docName !== "" ? docName : "design"}.runlog`;
+const ledgerPath = `${projectRoot}/.tmp/dev-flow/${docName !== "" ? docName : "design"}.ledger.md`;
 
 // 重发起检测（沿 W1 惯例）：扫描 runDir 内已有 attempt 后缀最大序号，未显式传 → max+1
 //（固定取 2 会覆盖第三次及以后重发起的 attempt2 产物）；无 attempt 后缀时，runDir 已有
@@ -555,6 +559,14 @@ const prevAttemptMax =
   attemptProbe.exitCode === 0 && /^\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;
 const attempt = inputs.attempt !== null ? inputs.attempt : prevAttemptMax > 0 ? prevAttemptMax + 1 : 1;
 const roundDirName = (n: number): string => (attempt > 1 ? `round-${n}.attempt${attempt}` : `round-${n}`);
+
+// runlog 目录确保（幂等；prompt 注入的过程记录落点——手工路径 D0 已建，此处覆盖引擎直发形态）
+const NODE_ENSURE_DIR =
+  "try{require('fs').mkdirSync(process.argv[1],{recursive:true})}catch(e){process.stderr.write(String(e.message||e));process.exit(1)}";
+{
+  const mk = await world.run("node", ["-e", NODE_ENSURE_DIR, runlogDir]);
+  if (mk.exitCode !== 0) log(`WARN: runlog 目录创建失败（exit ${mk.exitCode}）——agent 过程记录将自行建目录`);
+}
 
 // 基线 HEAD 锁定（审查对象 = HEAD 终态全量；记录进矩阵供事后核对）
 const headRes = await world.run("git", ["-C", projectRoot, "rev-parse", "HEAD"]);
@@ -603,6 +615,24 @@ async function auditJson(path: string, content: string): Promise<void> {
     if (!(await writeArtifact(path, content))) log(`WARN: 审计留档写盘失败（${path}）——不影响本轮，矩阵/轨迹仍权威落盘`);
   } catch (e) {
     log(`WARN: 审计留档写盘异常（${path}）：${String(e)}`);
+  }
+}
+
+// ledger 追加（未决事项与裁决处置档案——SKILL「运行记录」节；与 W2/W3 同语义：
+// best-effort，失败只告警不改变终态）
+const NODE_APPEND_TEXT = [
+  "var fs = require('fs'), path = require('path');",
+  "var file = process.argv[1], title = process.argv[2], body = process.argv[3];",
+  "try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, '## ' + title + '\\n' + body + '\\n\\n'); }",
+  "catch (e) { process.stderr.write(String(e.message || e)); process.exit(1); }",
+].join("\n");
+
+async function appendLedger(title: string, body: string): Promise<void> {
+  try {
+    const r = await world.run("node", ["-e", NODE_APPEND_TEXT, ledgerPath, title, body]);
+    if (r.exitCode !== 0) log(`WARN: ledger 追加失败（${title}，exit ${r.exitCode}）——终态数据以 final.json 为准`);
+  } catch (e) {
+    log(`WARN: ledger 追加异常（${title}）：${String(e)}`);
   }
 }
 
@@ -900,9 +930,19 @@ function validateFixOutcome(v: unknown): Validated<FixOutcome> {
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as FixOutcome };
 }
 
+// 文件名安全化（模块/组名可含路径分隔符与空白——runlog 文件名不能展开成子目录）
+const fileSafe = (s: string): string => s.replace(/[^a-zA-Z0-9._\-\u4e00-\u9fa5]+/g, "-");
+
+// 过程记录义务行（SKILL「运行记录」节）：注入每个 agent prompt——临时待办/需裁决/
+// 复盘观察的防丢失落点；模板侧只写义务内容，路径由本行注入（模板静态无路径）
+function runlogDutyLine(who: string): string {
+  return `过程记录（防丢失，不替代 JSON 返回契约）：执行中的临时待办、需主 agent/用户裁决的事项、对复盘有价值的观察（踩坑根因/方案取舍/环境异常），随时用一行 append 到 ${runlogDir}/${who}.md（目录已存在，文件不存在则新建），格式 [HH:MM] 类型: 一句话事实（类型 ∈ 待办/裁决/观察）。不影响正常执行与返回。`;
+}
+
 const plannerPromptText = [
   "终态同步 framework-scan（两级拓扑第一级，首轮全量）。",
   `第一步：Read planner 模板 ${plannerTplAbs}——按其中任务契约执行全部职责（框架级对照 / impl-plan 现实性与内部一致性 / 关联登记面核对 / 模块分解）。`,
+  runlogDutyLine("sync-planner"),
   `仓库 ${projectRoot}；设计文档 ${designDoc}；impl-plan ${implPlan}；审查基线 = 当前 HEAD（${headHash}）——审查对象是 HEAD 终态全量，不是 diff 区间。`,
   statusPathArg !== ""
     ? `职责②「现实↔impl-plan 进度核对」的数据源 = status.json（${statusPathArg}，D1/D2 各节点终态事实）——进度核对以它为准，impl-plan.json 只有单元面/依赖/领地。`
@@ -915,6 +955,7 @@ function reviewPrompt(m: ModulePlanRec): string {
   return [
     "终态同步模块审查（两级拓扑第二级）。",
     `第一步：Read 审查模板 ${reviewerTplAbs}——按其中任务契约执行全部职责（三向矩阵行填充 + 越权三问三档初评 + 注释口径核对 + 反引号机械信号 + findings 八字段）。`,
+    runlogDutyLine(`sync-${fileSafe(m.id)}`),
     `仓库 ${projectRoot}；设计文档 ${designDoc}。`,
     `本模块计划（planner 原文）：module=${m.module}；files=${m.files.map((p) => rel(p)).join("、")}；focus=${m.focus}。`,
     "只报告，绝不改代码改文档；只审本模块，禁止引用其他模块结论。",
@@ -936,6 +977,8 @@ function reReviewPrompt(round: number, scopeFindings: FindingRecord[]): string {
   }));
   return [
     `终态同步聚焦复审（第 ${round} 轮）：只审上轮修复影响面，不重查已确认项。`,
+    "",
+    runlogDutyLine(`sync-re-r${round}`),
     "",
     "上轮你范围内条目及其修复记录（修复方声称，不算证据，必须亲自读文件核实到行级）：",
     wrapUntrusted(JSON.stringify(payload)),
@@ -984,6 +1027,7 @@ function fixerPrompt(g: FixGroup, byId: Map<string, FindingRecord>): string {
   L.push("6. 越权候选防线：若某条的修复动作将是「删除/移除一段现有实现」而其指控仅是「设计文档没写」（无行为矛盾/悬空引用等实质缺陷证据），**无论等级（含 must-fix）**都不要执行删除——放入 deferred（reason 写候选卡论证：小取舍/大简化/核心价值不变），它将随终态呈报用户裁决后才动；「文档没写」更可能是文档侧漏登记而非代码越权，宁可多呈报一张候选卡，不可直接删码。deferred 的另一合法场景 = 退役引用清理条目核实为必须原样指向的合法存证（条目指引会标明）。");
   L.push("7. 符号豁免申报（仅机械信号条目可用）：若某条指控「词表符号 X 在代码库零命中」，而你核实 X 本就不该被扫描（典型 = 外部/上游包符号、且文档已就地解释其来源）——不要为消信号去删改文档（会丢失对外部依赖行为的关键描述），放入 exempt（reason 写核实证据：如在依赖包中的命中位置 / 文档解释所在位置），它将转豁免终态、落豁免登记并随终态呈报主 agent 终审。真悬空引用（本项目符号被删/改名）不属于豁免，照常修复。");
   L.push("");
+  L.push(runlogDutyLine(`sync-fix-${fileSafe(g.id)}`));
   L.push("完成后返回 JSON：fixes（元素 {issueId, description, selfCheck}，issueId 与上面条目一致原样引用，本组全部条目必须被 fixes / deferred / exempt 之一覆盖）+ deferred（元素 {issueId, reason}——仅越权候选防线场景）+ exempt（元素 {issueId, reason}——仅机械条目的符号豁免场景，无申报时显式 []）+ affectedFiles（实际改动文件路径数组，含新增文件）。");
   return L.join("\n");
 }
@@ -1891,6 +1935,32 @@ if (finalResult !== null) {
   // 扫描（attemptM 后缀 max+1；存在无后缀 round-* 或 final.json → 至少 attempt2 防覆盖
   // 首轮）；syncRoot 存在性兜底语义不受影响，round 目录后缀仍可由显式 args.attempt 可控
   await auditJson(finalJsonPath, JSON.stringify(finalResult, null, 2));
+  // 终态写入 ledger（W4 终态全量已在 final.json——此处只记终态行 + 未决清单 + 指针，
+  // 供主会话中断后从 .tmp/dev-flow/ 平铺档案直接恢复「哪些事待处置」）
+  {
+    const one = (s: string): string => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
+    const lgLines: string[] = [
+      `终态 ${finalResult.terminated}（R${finalResult.rounds}，attempt ${attempt}）：${finalResult.message}`,
+    ];
+    if (finalResult.contestedList.length > 0)
+      lgLines.push(
+        `- [裁决] contested ${finalResult.contestedList.length} 项（must-fix 级方向争议，停回用户裁决）：${finalResult.contestedList.map((c) => `${c.id} ${c.location}——${one(c.gap)}`).join("；")}`,
+      );
+    if (finalResult.overdesignCandidates.length > 0)
+      lgLines.push(
+        `- [裁决] overdesignCandidates ${finalResult.overdesignCandidates.length} 项（用户裁决前不删码）：${finalResult.overdesignCandidates.map((c) => `${c.id} ${c.location}`).join("；")}`,
+      );
+    if (finalResult.exemptList.length > 0)
+      lgLines.push(`- [待办] exemptList ${finalResult.exemptList.length} 项（主 agent 终审符号豁免申报）：${finalResult.exemptList.map((c) => `${c.id}「${c.word}」`).join("、")}`);
+    if (finalResult.remaining.length > 0)
+      lgLines.push(
+        `- [待办] remaining 活跃条目 ${finalResult.remaining.length} 项（stuck/*-failure 在场，呈报用户）：${finalResult.remaining.map((c) => `${c.id} ${c.location}`).join("；")}`,
+      );
+    if (finalResult.residualFiles.length > 0)
+      lgLines.push(`- [待办] 工作区残留改动 ${finalResult.residualFiles.length} 项（判归属后处置，禁静默丢弃）：${finalResult.residualFiles.join("、")}`);
+    lgLines.push(`终态全量指针：${finalJsonPath}（final.json）/ 矩阵 ${matrixFile}`);
+    await appendLedger(`W4 design-code-sync 终态 ${finalResult.terminated}（attempt ${attempt}）`, lgLines.join("\n"));
+  }
 }
 if (finalResult === null) {
   // 不可达分支防御：所有路径都应已设置终态——保持「return 结构化对象」契约密闭

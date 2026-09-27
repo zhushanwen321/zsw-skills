@@ -52,6 +52,20 @@ description: >-
 5. **git 单点**：subagent 禁止一切 git 写；workflow 形态下 commit 由引擎 world.run 执行（精确路径 add，禁 -A），手工形态下由主 agent 执行；文档类同步改动禁止单独成笔——随触发它的单元同笔提交（files_changed 含文档路径即同笔）；确因验收结论后置的攒批成一笔，禁止一文档一笔
 6. **基线先行**：exec-plan.json 落盘即基线（`.tmp/` 不入 git）；执行态事实源 = `<name>.status.json`
 
+## 运行记录（防丢失）[MANDATORY]
+
+任务执行期信息统一平铺落 `.tmp/dev-flow/`（`<name>.` 前缀隔离，与既有产物族同基准），两类载体、三条写入通道：
+
+| 载体 | 写入者 | 内容 |
+|------|--------|------|
+| `<name>.runlog/<记录者>.md` | 每个执行 agent（任务书 / W3·W4 prompt 注入义务行，路径由注入方给出） | 过程性发现：临时待办、需裁决事项、复盘观察（踩坑根因 / 方案取舍 / 环境异常）。一行一条 `[HH:MM] 类型: 一句话事实`，append 式即时写盘——agent 中途退出也留痕；每记录者独占一文件，无并发冲突 |
+| `<name>.ledger.md` | ① W2/W3/W4 引擎终态各一笔（attempt 标识）② 主 agent 处置时追加 | ① 未决事项清单：blocked / deferredCommits / deferredLedger / escalated / contested / overdesignCandidates / 工作区残留等 ② 熔断处置与用户裁决记录（时间 + 终态 + 动作 + 理由 + 结果） |
+
+- 引擎侧已核实互不干扰：porcelain 核验把 `.tmp/` 过滤在清单外（wave-executor `isTmpArtifact`），agent 写 runlog 不触发核验红灯
+- **ledger 是中转不是归宿**：合理偏差 / 残留风险 / ADR 的最终登记处仍是 impl-plan §5、impl-plan 残留风险节、docs/adr——D4 收尾把未清项分流过去（处置完成标记 / 登记到既有归宿 / 显式记录丢弃理由），禁止双登记并存
+- 主 agent 处置熔断终态（各 flow 终态处置表任一行）与用户裁决落地时，append 处置记录到 ledger
+- 档案交付后默认保留（`.tmp/` 不入 git），仅用户指示时清理（D4 第 7 条）
+
 ## Workflow 契约（执行体按宿主环境选择）
 
 | workflow | 段 | args | 终态 |

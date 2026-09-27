@@ -77,6 +77,8 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 | stuck | must-fix ≥3 轮不收敛或单条 must-fix 超 2 轮 → 呈报残余差距矩阵（2026-09-26 用户裁决三 loop 统一 3 轮） |
 | `*-failure`（setup/planner/review/fix/retire/io） | 按 message 恢复动作：ResumeWorkflowRun 或 attempt 递增重发 |
 
+**处置记录义务**：终态处置表任一行的处置动作与结果（含用户对 contested / overdesignCandidates 的裁决），append 一笔到 `<name>.ledger.md`——引擎终态已写入未决清单（contested 待裁决 / overdesignCandidates 待裁决 / exemptList 待终审 / remaining 待呈报，含 final.json 指针），主 agent 处置一项即追加记录一项；W4 终态全量另在 `runDir/final.json`（attempt 不覆盖）。
+
 **衔接**：W4 修复触及验收场景表覆盖行为时，主 agent 重跑受影响场景（局部重验，不重开整门）。
 
 ## 伴生产物退役判定（converged 时）

@@ -1,6 +1,6 @@
 # D0 编译 — 设计包 → 执行数据结构
 
-> 一次性判断性工作（主 agent 亲为），替代此后每单元的重复手工编排。产物：`<name>.exec-plan.json` + `<name>.prompts/*.md` + 初始 `<name>.status.json`，全部落 `<项目根>/.tmp/dev-flow/`（不入 git）。完成后进 D1。
+> 一次性判断性工作（主 agent 亲为），替代此后每单元的重复手工编排。产物：`<name>.exec-plan.json` + `<name>.prompts/*.md` + 初始 `<name>.status.json` + `<name>.runlog/` 目录 + `<name>.ledger.md` 头部初始化，全部落 `<项目根>/.tmp/dev-flow/`（不入 git）。完成后进 D1。
 
 ## 编译清单（按序执行）
 
@@ -48,15 +48,17 @@
 
 ### 3. 逐节点 promptFile 构造
 
-每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·领地·验收条款/设计文档对应节摘录/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：增量测试按 testCommand；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组；宿主无 structured-output 工具时在回复中用 json 代码块返回同构对象，解析失败视同本次汇报无效打回重报）/ 约束（领地白名单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报）。
+每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·领地·验收条款/设计文档对应节摘录/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：增量测试按 testCommand；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组；宿主无 structured-output 工具时在回复中用 json 代码块返回同构对象，解析失败视同本次汇报无效打回重报）/ 约束（领地白名单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报/过程记录义务：临时待办·需裁决事项·复盘观察随时 append 到 `<name>.runlog/<unitId>.md`（任务书内写绝对路径；一行一条 `[HH:MM] 类型: 一句话事实`，不替代 JSON 返回契约——SKILL「运行记录」节））。
 
-### 4. 初始 status.json
+### 4. 初始 status.json + 运行档案初始化
 
 ```jsonc
 { "name": "<name>", "baseline": "<HEAD>", "updated": "<ISO>",
   "nodes": { "u-foundation": { "status": "pending", "attempts": 0 } },
   "events": [] }
 ```
+
+运行档案两件（SKILL「运行记录」节——引擎启动幂等重建，D0 初始化覆盖手工路径）：`<name>.runlog/` 空目录（agent 过程记录落点，任务书引用其下 `<unitId>.md`）；`<name>.ledger.md` 写入文件头一行说明（`# <name> 未决事项与裁决处置档案——引擎终态与主 agent 处置记录追加于此`）。
 
 节点字段 = `status` / `attempts`（终态回写附 `commit?` / `evidence?`）；status 合法值 = `pending / in-progress / done / blocked / failed`，终局另写 `suspended`（从未派发的挂起节点——人读恢复时按 pending 对待重跑）。引擎回写保留 name/updated 顶层字段；恢复对账双向：标 done 无 commit → 回 pending（其已 done 的直接/传递后继一并回 pending——后继的验证结论基于已消失的 commit，属陈旧验证）；有 commit 未记 → 引擎按 git log 匹配单元 id 补写 done（status.json 缺失时初始重建后同样反查 git log，不重跑已交付单元）。终局另写一条汇总事件 {node:"-", event:"run-terminal", detail:"terminated=…; done/blocked/skipped 计数"}（人读恢复入口）。
 

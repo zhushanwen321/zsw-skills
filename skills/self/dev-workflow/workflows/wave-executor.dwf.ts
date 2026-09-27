@@ -246,6 +246,16 @@ const WRITE_FILE =
 const READ_FILE_QUIET = "try{process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8'))}catch{}";
 const EXISTS = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
 
+// argv: [statusPath] → 派生平铺产物族路径并确保 runlog 目录存在（<name>.runlog/ 与
+// status 同目录同前缀——SKILL「运行记录」节：任务书引用的 agent 过程记录落点）
+const ENSURE_RUNLOG =
+  "const p=require('path'),fs=require('fs');const d=p.dirname(process.argv[1]);const b=p.basename(process.argv[1]).replace(/\\.status\\.json$/,'');fs.mkdirSync(p.join(d,b+'.runlog'),{recursive:true})";
+
+// argv: [statusPath, title, body] → <name>.ledger.md 追加（未决事项与裁决处置档案；
+// best-effort 语义由调用方承载——失败告警不改变终态）
+const APPEND_LEDGER =
+  "const p=require('path'),fs=require('fs');const d=p.dirname(process.argv[1]);const b=p.basename(process.argv[1]).replace(/\\.status\\.json$/,'');const f=p.join(d,b+'.ledger.md');fs.mkdirSync(d,{recursive:true});fs.appendFileSync(f,'## '+process.argv[2]+'\\n'+process.argv[3]+'\\n\\n')";
+
 // argv: [cwd] → stdout = porcelain 原文；非 git 仓库/工具错误 exit 1
 const GIT_PORCELAIN =
   "try{const o=require('child_process').execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});process.stdout.write(o)}catch(e){process.stderr.write(String((e&&e.stderr)||e.message));process.exit(1)}";
@@ -738,6 +748,11 @@ async function gitAddCommitViaNode(
 const state = new Map<string, NodeRt>();
 let plan: ParsedPlan; // 赋值点在「校验执行计划」段；其后所有函数才可能被调用
 let coreFail: { id: string; detail: string } | null = null;
+// 顶层读取 coreFail 须过函数边界：赋值点在调度循环闭包内，顶层控制流分析会把
+// 直接读取过度窄化为 null（if 收窄后成 never）——函数体内读取返回声明类型
+function readCoreFail(): { id: string; detail: string } | null {
+  return coreFail;
+}
 /** 当前 in-flight 节点的领地并集（按 cwd 分组）——级二粗粒度复核的基线，逐节点 settle 后重建 */
 let activeTerrByCwd = new Map<string, string[]>();
 /** 全部 dev 节点核验通过时自报的 files_changed 并集（终态残留对账的豁免集——静态领地
@@ -1722,6 +1737,11 @@ log(
   `执行计划校验通过：${plan.nodes.length} 个节点（mode=${plan.mode}），依赖边 ${depEdgeCount} 条无环` +
     (resumedDone > 0 ? `，${resumedDone} 个节点按 status.json 增量跳过` : ""),
 );
+// runlog 目录确保（幂等；任务书引用的过程记录落点——手工路径 D0 已建，此处覆盖引擎直发形态）
+{
+  const rl = await world.run("node", ["-e", ENSURE_RUNLOG, plan.statusPath]);
+  if (rl.exitCode !== 0) log(`WARN: runlog 目录创建失败（exit ${rl.exitCode}）——agent 过程记录将自行建目录`);
+}
 for (const n of plan.nodes) {
   report({ id: n.id, state: nodeState(n.id) === "done" ? "done" : "pending", detail: "" }, "nodes");
 }
@@ -1818,6 +1838,24 @@ await serializedStatus(async () => {
 log(
   `调度终态：${terminated}（done ${doneIds.length} / 未竟 ${blockedOut.length} / 挂起 ${skippedIds.length}${deferredCommits.length > 0 ? ` / commit 待办 ${deferredCommits.length}` : ""}${residualFiles.length > 0 ? ` / 清单外残留 ${residualFiles.length}` : ""}）——状态文件 ${plan.statusPath}`,
 );
+
+// 终态写入 ledger（未决事项与裁决处置档案——SKILL「运行记录」节）：主会话中断后
+// 未决事项与终局计数仍可从盘上恢复；converged 形态同样入账（复盘轨迹）。best-effort。
+try {
+  const lgLines: string[] = [
+    `终态 ${terminated}（runId ${activeRunId}）：done ${doneIds.length} / blocked ${blockedOut.length} / skipped ${skippedIds.length}`,
+  ];
+  const coreFailureInfo = readCoreFail();
+  if (coreFailureInfo) lgLines.push(`- [裁决] coreFailure：${coreFailureInfo.id}——${coreFailureInfo.detail.replace(/\n+/g, " ")}`);
+  for (const b of blockedOut) lgLines.push(`- [裁决] ${b.id}（${b.reason}，attempts ${b.attempts}）——升级用户：采纳修复方案 / 放弃该单元`);
+  for (const dc of deferredCommits) lgLines.push(`- [待办] 代提交 ${dc.id}：${dc.message}`);
+  if (residualFiles.length > 0) lgLines.push(`- [待办] 清单外残留 ${residualFiles.length} 项（判归属后处置，禁静默丢弃）：${residualFiles.join("、")}`);
+  lgLines.push(`状态指针：${plan.statusPath}（nodes/events 全量）`);
+  const lgw = await world.run("node", ["-e", APPEND_LEDGER, plan.statusPath, `W2 wave-executor 终态 ${terminated}（mode=${plan.mode}）`, lgLines.join("\n")]);
+  if (lgw.exitCode !== 0) log(`WARN: ledger 终态追加失败（exit ${lgw.exitCode}）——终态数据以 status.json 与本次返回值为准`);
+} catch (e) {
+  log(`WARN: ledger 终态追加异常：${errText(e)}`);
+}
 
 return {
   terminated,

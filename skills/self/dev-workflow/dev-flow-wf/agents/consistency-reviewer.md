@@ -42,5 +42,9 @@ description: "dev-flow-wf D2 的一致性审查 agent：审查 git diff 区间�
 5. 返回 {reasonable, unreasonable, doc_errors, reconciliation}（宿主无
    structured-output 时用 json 代码块返回同构对象，解析失败视同无效需重报）；空数组
    必须显式说明「在 X 分区未发现」，含糊的整体性断言无效；reconciliation R1 恒 []
+6. 过程记录（防丢失，不替代 JSON 返回契约）：任务 prompt 给出过程记录文件路径
+   （<name>.runlog/ 下本记录者专属文件）——执行中的临时待办、需主 agent/用户
+   裁决的事项、对复盘有价值的观察（踩坑根因/方案取舍/环境异常），随时 append
+   一行 `[HH:MM] 类型: 一句话事实`（类型 ∈ 待办/裁决/观察）；不影响正常执行与返回
 验收：每条结论可回溯到具体章节与文件位置
 ```

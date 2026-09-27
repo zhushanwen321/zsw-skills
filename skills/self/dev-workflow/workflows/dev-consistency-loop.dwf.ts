@@ -143,6 +143,10 @@ interface PrepInfo {
   planMdPath: string | null;
   /** statusPath 绝对路径（终态 events 回写目标——§4.5 W3 回写义务） */
   statusPath: string;
+  /** agent 过程记录目录（statusPath 同目录 <name>.runlog/——任务 prompt 注入的防丢失记录落点） */
+  runlogDir: string;
+  /** 未决事项与裁决处置档案（statusPath 同目录 <name>.ledger.md——终态未决清单写入 + 主 agent 处置记录） */
+  ledgerPath: string;
   gateALog: string;
   reviewerTemplate: string;
   partitions: { name: string; files: string[] }[];
@@ -334,9 +338,15 @@ const NODE_PREP = [
   "var baseName = path.basename(statusAbs).replace(/\\.status\\.json$/, '');",
   "var attemptNo = parseInt(process.argv[3] || '1', 10) || 1;",
   "var gateALog = path.join(statusDir, baseName + '.gate-a' + (attemptNo > 1 ? '.attempt' + attemptNo : '') + '.log');",
+  // 过程记录目录（agent prompt 注入的防丢失落点）+ 未决/裁决档案——平铺在 .tmp/dev-flow/
+  // 与既有 <name>.* 产物族同基准（SKILL「运行记录」节）；mkdir 幂等，手工路径 D0 已建则空操作
+  "var runlogDir = path.join(statusDir, baseName + '.runlog');",
+  "var ledgerPath = path.join(statusDir, baseName + '.ledger.md');",
+  "try { fs.mkdirSync(runlogDir, { recursive: true }); } catch (e) { die('runlog 目录创建失败: ' + e.message); }",
   "console.log(JSON.stringify({",
   "  projectRoot: projectRoot, baseline: bl, designDocPath: designAbs, planPath: planAbs, planMdPath: planMd,",
-  "  statusPath: statusAbs, gateALog: gateALog, reviewerTemplate: tplAbs, partitions: partitions,",
+  "  statusPath: statusAbs, runlogDir: runlogDir, ledgerPath: ledgerPath,",
+  "  gateALog: gateALog, reviewerTemplate: tplAbs, partitions: partitions,",
   "  diffChurn: churn, diffFileCount: files.length, unitCount: unitCount,",
   "  incremental: incr, fullSuite: { program: fsuite.program, args: fsuite.args }, artifacts: artifacts,",
   "}));",
@@ -665,6 +675,24 @@ async function appendStatusEvent(node: string, event: string, detail: string): P
   }
 }
 
+// ledger 追加（未决事项与裁决处置档案——SKILL「运行记录」节：终态未决清单 + 主 agent
+// 处置记录的防丢失落点；与 appendStatusEvent 同为 best-effort，失败只告警不改变终态）
+const NODE_APPEND_LEDGER = [
+  "var fs = require('fs'), path = require('path');",
+  "var file = process.argv[1], title = process.argv[2], body = process.argv[3];",
+  "try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, '## ' + title + '\\n' + body + '\\n\\n'); }",
+  "catch (e) { console.error(String(e.message || e)); process.exit(1); }",
+].join("\n");
+
+async function appendLedger(title: string, body: string): Promise<void> {
+  try {
+    const r = await world.run("node", ["-e", NODE_APPEND_LEDGER, info.ledgerPath, title, body]);
+    if (r.exitCode !== 0) log(`WARN: ledger 追加失败（${title}，exit ${r.exitCode}）——终态数据以本次返回值为准`);
+  } catch (e) {
+    log(`WARN: ledger 追加异常（${title}）：${String(e)}`);
+  }
+}
+
 async function finish(terminated: FinalResult["terminated"], roundsDone: number, message: string): Promise<FinalResult> {
   // 终态残留对账（2026-09-26 用户裁决承接面）：历轮留盘待认领、终态仍未被任何组申报的
   // 改动——主 agent 判归属后处置（补提交/清理/呈报），引擎不提交不回滚
@@ -711,6 +739,35 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
     await appendStatusEvent("gate-a", "gate-a-pass", `全量测试通过，日志：${gateALogPath ?? info.gateALog}`);
   } else if (terminated === "gate-a-failed") {
     await appendStatusEvent("gate-a", "gate-a-fail", message.slice(0, 200));
+  }
+  // 终态未决清单写入 ledger——主会话中断后未决事项仍可从盘上恢复（SKILL「运行记录」节；
+  // converged 时 docErrors/reasonable 仍是主 agent 待办，同样入账）
+  {
+    const one = (s: string): string => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
+    const lg: string[] = [`终态 ${terminated}（R${roundsDone}，attempt ${attempt}）：${message}`];
+    if (result.docErrors.length > 0)
+      lg.push(
+        `- [待办] docErrors ${result.docErrors.length} 项（主 agent 修设计文档）：${result.docErrors.map((d) => `${d.location}——${one(d.gap)}`).join("；")}`,
+      );
+    if (result.reasonable.length > 0)
+      lg.push(
+        `- [待办] reasonable ${result.reasonable.length} 项（写 impl-plan §5 合理偏差登记表）：${result.reasonable.map((r) => `${r.location}——${one(r.summary)}`).join("；")}`,
+      );
+    if (result.deferredLedger.length > 0)
+      lg.push(
+        `- [待办] deferredLedger ${result.deferredLedger.length} 项（登记残留风险）：${result.deferredLedger.map((d) => `${d.id} ${d.location}`).join("；")}`,
+      );
+    if (result.escalated.length > 0)
+      lg.push(
+        `- [裁决] escalated ${result.escalated.length} 项（≥2 轮修复未清，优先人工裁决）：${result.escalated.map((d) => `${d.id} ${d.location}——${one(d.gap)}`).join("；")}`,
+      );
+    if (result.remaining.length > 0)
+      lg.push(
+        `- [待办] remaining 活跃条目 ${result.remaining.length} 项（stuck/fix-failure 在场，呈报用户）：${result.remaining.map((d) => `${d.id} ${d.location}`).join("；")}`,
+      );
+    if (result.residualFiles.length > 0)
+      lg.push(`- [待办] 工作区残留改动 ${result.residualFiles.length} 项（判归属后处置，禁静默丢弃）：${result.residualFiles.join("、")}`);
+    await appendLedger(`W3 一致性审查终态 ${terminated}（attempt ${attempt}）`, lg.join("\n"));
   }
   return result;
 }
@@ -848,11 +905,22 @@ function validateFixReport(v: unknown): Validated<FixReport> {
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as FixReport };
 }
 
+// 文件名安全化（分区/组名可含路径分隔符与空白——runlog 文件名不能展开成子目录）
+const fileSafe = (s: string): string => s.replace(/[^a-zA-Z0-9._\-\u4e00-\u9fa5]+/g, "-");
+
+// 过程记录义务行（SKILL「运行记录」节）：注入每个 agent prompt——临时待办/需裁决/
+// 复盘观察的防丢失落点；模板侧只写义务内容，路径由本行注入（模板静态无路径）
+function runlogDutyLine(who: string): string {
+  return `过程记录（防丢失，不替代 JSON 返回契约）：执行中的临时待办、需主 agent/用户裁决的事项、对复盘有价值的观察（踩坑根因/方案取舍/环境异常），随时用一行 append 到 ${info.runlogDir}/${who}.md（目录已存在，文件不存在则新建），格式 [HH:MM] 类型: 一句话事实（类型 ∈ 待办/裁决/观察）。不影响正常执行与返回。`;
+}
+
 function r1Prompt(p: { name: string; files: string[] }): string {
   return [
     `第 1 轮全面一致性审查（分区：${p.name}）。`,
     "",
     `第一步：Read 审查契约模板 ${info.reviewerTemplate}——其中是你的完整任务契约（三分类定义、file:line 证据标准、错误处理契约判定口径、两必填字段口径、R2+ 定向复审规则），严格按它执行。`,
+    "",
+    runlogDutyLine(`consistency-r1-${fileSafe(p.name)}`),
     "",
     "背景参数：",
     ctxBlock,
@@ -1023,6 +1091,8 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           foreignNote
             ? ["", "工作区说明（存在无人申报的改动，引擎不处置不阻塞，留盘待认领；在现状基础上继续修复）：", foreignNote].join("\n")
             : "",
+          "",
+          runlogDutyLine(`fix-${fileSafe(name)}-r${fixRound}`),
           "",
           "返回 JSON：{ fixes: [{ id, description, affectedFiles: [] }], skipped: [{ id, reason }] }（id 原样引用清单中的 U 编号）。",
         ]
@@ -1199,6 +1269,8 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             `第 ${reviewRound} 轮定向复审（分区：${g.name}；只审上批修复的影响面，不全面重审）。`,
             "",
             `第一步：Read 审查契约模板 ${info.reviewerTemplate}——其中是你的完整任务契约与 R2+ 定向复审规则（逐条对账申报义务 + 只审三条，不重查已确认项）。`,
+            "",
+            runlogDutyLine(`consistency-re-r${reviewRound}-${fileSafe(g.name)}`),
             "",
             "背景参数：",
             ctxBlock,

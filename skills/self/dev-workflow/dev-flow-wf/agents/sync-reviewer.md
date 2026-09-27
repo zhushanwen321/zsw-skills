@@ -39,6 +39,10 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第二级（模块
    reviewer 结论；发现差距另涉其他模块时，在本模块 findings 立项并在 gap
    标注「跨模块：另涉 <模块>」——不越区审；R2+ 聚焦复审（任务 prompt 会
    标注）：只审上轮修复影响面
+6. 过程记录（防丢失，不替代 JSON 返回契约）：任务 prompt 给出过程记录文件路径
+   （<name>.runlog/ 下本记录者专属文件）——执行中的临时待办、需主 agent/用户
+   裁决的事项、对复盘有价值的观察（踩坑根因/方案取舍/环境异常），随时 append
+   一行 `[HH:MM] 类型: 一句话事实`（类型 ∈ 待办/裁决/观察）；不影响正常执行与返回
 输出（json 代码块）：{ "matrixRows": [{claim, impl, verdict, note, overdesign?}],
   "findings": [八字段…], "moduleNoFinding": "在 X 未发现"（无发现时显式声明），
   "reconciliation": [{prevId, status: fixed|not-fixed|regressed, evidence}]

@@ -50,4 +50,6 @@ worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 workt
 - `deferredCommits`：节点核验已过、编码成果有效，仅 commit 被仓库钩子拒（多为钩子全仓检查看到并行兄弟单元的半成品，节点内无解）——主 agent 收尾逐条代提交：`git commit <message> -- <files>`（message/files 在 result 里给全，钩子照常执行；钩子红则当场修复后重试）。处置完重发 run，启动对账按 git log 补 done 自动续跑
 - `residualFiles`：全工作区清单外残留（并行单元运行中新建的文件 + 未申报改动）——主 agent 判归属：属某单元成果 → 补提交（commit subject 埋单元 id，供下次对账反查）；无主/临时 → 清理；判不了 → 呈报用户，禁静默丢弃
 
+**处置记录义务**：终态处置表任一行的处置动作与结果（含用户裁决），append 一笔到 `<name>.ledger.md`（时间 + 终态 + 动作 + 理由 + 结果）——引擎终态已写入未决清单一笔，主 agent 在其下追加处置记录形成完整时间线；主会话中断后接手者按 ledger 恢复「裁决到哪一步」。手工路径全程同理（派发时任务书已含 runlog 义务句，主 agent 自身的调度判断与打回理由也记 ledger）。
+
 **主 agent 降级边界**：恢复调度时主 agent 只做三类事——代提交 deferredCommits、处置 residualFiles、重发 run；不替 agent 修半成品代码（那是 W2 修复节点形态 / 重派单元的职责——曾发生主 agent 从恢复调度滑到亲手修测试，边界失守）。
