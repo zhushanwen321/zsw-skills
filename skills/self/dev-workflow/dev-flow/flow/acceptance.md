@@ -44,7 +44,7 @@
 
 | 判定 | 落点 | 登记 |
 |------|------|------|
-| 功能面会反复回归（核心 UI / 主链路 / 长期维护面）→ 可复用 | 项目 e2e 目录（如 `e2e/*.spec.ts`） | 同 commit 登记对应测试静态文档（如 `docs/testing/11-real-e2e-specs.md` spec 清单）——验收产出沉淀为回归资产 |
+| 功能面会反复回归（核心 UI / 主链路 / 长期维护面）→ 可复用 | 项目 e2e 目录（如 `e2e/*.spec.ts`） | 同 commit 登记对应测试静态文档（如 `docs/testing/11-real-e2e-specs.md` spec 清单）——验收产出沉淀为回归资产；项目维护 e2e 资产登记表（如 `docs/testing/e2e-map.json`）时，新增/变更用例同 commit 更新登记表并跑其校验脚本（以项目登记纪律为准） |
 | 一次性场景（迁移 / 特殊环境 / 本设计特有） | `<项目根>/.tmp/dev-flow/<plan-name>.acceptance/`（与 impl-plan 同目录） | impl-plan「变更历史」记一笔 |
 
 **多实例并行**：互斥场景组各绑独立 dev 实例（项目有装配器时用其端口段派生 + 独立数据目录 + `--print` 取 CDP 端口；无装配器的项目手动分配端口 + 临时数据目录，`mkdtemp` 自建自删），脚本并行执行；全部产物集中给**一个汇总 subagent**：判 pass/fail + 扫全页截图与 console 兜底（脚本的断言盲区由这一步补偿）+ fail 归因定位到场景与日志行。
