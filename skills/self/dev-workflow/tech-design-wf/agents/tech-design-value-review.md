@@ -73,10 +73,12 @@ description: "技术设计文档价值评审（先于三 reviewer 的第一道�
 
 ## Findings
 
-| 优先级 | 位置 | 维度 | 描述 | 影响决策 | 影响交付 | 修复方向 |
-|--------|------|------|------|---------|---------|----------|
-| MUST_FIX | §2.2 | P0-V1 复述 | ... | 是——方向级（问题定义错） | 规划——整份文档解决错的问题 | ... |
-| MUST_FIX | §3.3 | P0-V2 伪需求 | ... | 是——方案主干服务伪需求 | 开发——实现无人需要的机制 | ... |
+| 锚点 | 优先级 | 位置 | 维度 | 描述 | 影响决策 | 影响交付 | 修复方向 |
+|------|--------|------|------|------|---------|---------|----------|
+| review-value#1 | MUST_FIX | §2.2 | P0-V1 复述 | ... | 是——方向级（问题定义错） | 规划——整份文档解决错的问题 | ... |
+| review-value#2 | MUST_FIX | §3.3 | P0-V2 伪需求 | ... | 是——方案主干服务伪需求 | 开发——实现无人需要的机制 | ... |
+
+锚点编号 = 行序（review-value#1、#2…），problems[].ref 原样引用它。
 ```
 
 优先级：MUST_FIX（P0-V 违反，方向级——打回重写问题定义或方案主干）/ SUGGESTION / INFO
@@ -88,8 +90,18 @@ description: "技术设计文档价值评审（先于三 reviewer 的第一道�
 ## Schema 输出
 
 ```json
-{ "report_file": "<output 路径>", "must_fix": <数字>, "suggestion": <数字>, "oneliner": "<一句话复述>" }
+{
+  "reportFile": "<output 路径>",
+  "mustFix": <数字>,
+  "suggestion": <数字>,
+  "problems": [
+    { "ref": "review-value#1", "level": "must-fix", "title": "<一句话问题标题>" }
+  ],
+  "oneliner": "<一句话复述>"
+}
 ```
+
+字段名用 camelCase（与任务 prompt 的返回 JSON 句一致）。problems 是逐条问题清单（ref 即 Findings 行锚点、level 与报告分级一致）；mustFix/suggestion 计数必须与 problems 清单条数一致——消费方以清单派生计数为准，自报数字只做交叉校验。
 
 ## 约束
 

@@ -40,10 +40,12 @@ args:
 interface ValueVerdict {
   /** 价值审报告文件路径（脚本按确定性位置校验，不以自报为准） */
   reportFile: string;
-  /** must-fix 条数（与报告一致） */
+  /** must-fix 条数（与报告一致；脚本以 problems 清单派生计数为准，此字段做交叉校验） */
   mustFix: number;
-  /** suggestion 条数 */
+  /** suggestion 条数（与报告一致；同上做交叉校验） */
   suggestion: number;
+  /** 逐条问题清单（否决判定与计数派生的唯一事实源；条数合计须等于 mustFix+suggestion） */
+  problems: ProblemRef[];
   /** 一句话价值判定（终态档案 valueOneliner/oneliner 字段来源） */
   oneliner: string;
 }
@@ -377,7 +379,7 @@ async function askValidated<T>(
   return fin.ok ? fin.value : null;
 }
 
-/** 价值审返回校验：计数非负整数 + 文本字段为字符串 */
+/** 价值审返回校验：计数非负整数 + 文本字段为字符串 + problems 清单逐条形态合法（ref/level/title） */
 function validateValueVerdict(v: unknown): Validated<ValueVerdict> {
   const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
   const errors: string[] = [];
@@ -385,6 +387,21 @@ function validateValueVerdict(v: unknown): Validated<ValueVerdict> {
   if (sanitizeCount(o["suggestion"]) === null) errors.push("suggestion 须为非负整数（与报告一致）");
   if (typeof o["oneliner"] !== "string") errors.push("oneliner 须为字符串");
   if (typeof o["reportFile"] !== "string") errors.push("reportFile 须为字符串");
+  const rawProblems = o["problems"];
+  if (!Array.isArray(rawProblems)) errors.push("problems 须为数组（逐条 {ref, level, title}）");
+  else {
+    const badIdx: string[] = [];
+    rawProblems.forEach((item, i) => {
+      if (item === null || typeof item !== "object") {
+        badIdx.push(String(i + 1));
+        return;
+      }
+      const p = item as Partial<{ ref: string; level: string }>;
+      if (typeof p.ref !== "string" || p.ref.trim() === "" || (p.level !== "must-fix" && p.level !== "suggestion"))
+        badIdx.push(String(i + 1));
+    });
+    if (badIdx.length > 0) errors.push(`problems 第 ${badIdx.join("、")} 条畸形（ref 须非空字符串，level 须 must-fix|suggestion）`);
+  }
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as ValueVerdict };
 }
 
@@ -697,8 +714,8 @@ try {
       `项目上下文（存在则读，作产品与规范基准）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
       "只读评审：禁止修改设计文档与项目内任何文件。",
       "",
-      `报告落盘：${valueReportAbs}（绝对路径；需要时先创建目录）。内容：价值判定结论 + 依据（你读到的原文事实）+ 问题清单（每条标 [must-fix|suggestion]、所在章节、原文依据、修复方向）+ 一句话判定。这份报告是价值否决时的唯一证据。`,
-      "完成后返回 JSON：reportFile、mustFix（must-fix 条数，与报告一致）、suggestion（suggestion 条数）、oneliner（一句话价值判定）。",
+      `报告落盘：${valueReportAbs}（绝对路径；需要时先创建目录）。内容：价值判定结论 + 依据（你读到的原文事实）+ 问题清单（Findings 表每行一条，行首带锚点编号 review-value#<序>，含 [must-fix|suggestion] 分级、位置、原文依据、修复方向）+ 一句话判定。这份报告是价值否决时的唯一证据。`,
+      "完成后返回 JSON：reportFile、mustFix（must-fix 条数，与报告一致）、suggestion（suggestion 条数，与报告一致）、problems（逐条问题清单，每条 {ref, level, title}——ref 即报告 Findings 行锚点（review-value#<序>，行序即序号）、level 与报告分级一致、title 一句话；条数合计须等于 mustFix+suggestion）、oneliner（一句话价值判定）。",
     ].join("\n"),
   );
 } catch (e) {
@@ -711,8 +728,23 @@ if (valueVerdict === null) {
     `价值审结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规。恢复动作：报告若已写好，读 ${valueReportAbs} 人工核对后重新发起`,
   );
 }
-const vMust = valueVerdict.mustFix;
-const vSugg = valueVerdict.suggestion;
+// 计数从 problems 清单派生（单一事实源）；自报计数只做交叉校验——自报非零但清单
+// 缺失/全畸形时派生归零会假放行，fail-fast（与三审 668 行防线同构）
+const vProblems = sanitizeProblems(valueVerdict.problems);
+const vSelfMf = sanitizeCount(valueVerdict.mustFix) ?? 0;
+const vSelfSf = sanitizeCount(valueVerdict.suggestion) ?? 0;
+if (vSelfMf + vSelfSf > 0 && vProblems.length === 0) {
+  return await finish(
+    "review-failure",
+    0,
+    `价值审自报计数（must-fix ${vSelfMf}/suggestion ${vSelfSf}）非零但 problems 清单缺失或全畸形——否决判定无对账锚点，报告可读 ${valueReportAbs} 人工核对。恢复动作：args.attempt 递增重新发起`,
+  );
+}
+const vMust = vProblems.filter((p) => p.level === "must-fix").length;
+const vSugg = vProblems.filter((p) => p.level === "suggestion").length;
+if (vMust !== vSelfMf || vSugg !== vSelfSf) {
+  log(`价值审自报计数（${vSelfMf}/${vSelfSf}）与 problems 清单派生（${vMust}/${vSugg}）不一致，以清单为准`);
+}
 valueOneliner = valueVerdict.oneliner;
 if (valueVerdict.reportFile !== valueReportAbs) {
   log(`价值审自报 reportFile（${JSON.stringify(valueVerdict.reportFile)}）与确定性位置不一致，回退采用 ${valueReportAbs}`);

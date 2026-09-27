@@ -53,11 +53,13 @@ args: { designDoc: <绝对路径>, projectRoot: <项目根绝对路径>, maxRoun
      影响面/过度设计留给三 reviewer（标 INFO 交接）
   6. 报告写到 <runDir>/review-value.md
 验收：
-  - 返回 structured-output { report_file, must_fix, suggestion, oneliner }
-  - 报告含 Summary + 一句话复述 + Findings 表；每个 MUST_FIX 引用 P0-V-N + 文档位置
+  - 返回 structured-output { reportFile, mustFix, suggestion, problems[], oneliner }——
+    problems = 逐条问题清单，每条 { ref, level, title }（ref 即报告 Findings 行锚点
+    review-value#<序>；条数合计须等于 mustFix+suggestion）
+  - 报告含 Summary + 一句话复述 + Findings 表（每行带锚点编号）；每个 MUST_FIX 引用 P0-V-N + 文档位置
 ```
 
-价值审 must_fix > 0 → 停（按终态表 value-rejected 处理）。0 must_fix → Step 3。
+价值审判定按 problems 清单来：清单含 must-fix 级条目（计数以清单为准，自报数字只做交叉校验）→ 停（按终态表 value-rejected 处理）。清单无 must-fix → Step 3。
 
 **全托管模式附加声明**：task 末尾追加「全托管模式：禁止 AskUserQuestion / ask-user / 任何等待用户输入的操作；遇到决策点自行裁决，决策清单写入报告 INFO 节。」
 

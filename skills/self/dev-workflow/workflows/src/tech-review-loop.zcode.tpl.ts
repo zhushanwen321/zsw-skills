@@ -40,10 +40,12 @@ args:
 interface ValueVerdict {
   /** 价值审报告文件路径（脚本按确定性位置校验，不以自报为准） */
   reportFile: string;
-  /** must-fix 条数（与报告一致） */
+  /** must-fix 条数（与报告一致；脚本以 problems 清单派生计数为准，此字段做交叉校验） */
   mustFix: number;
-  /** suggestion 条数 */
+  /** suggestion 条数（与报告一致；同上做交叉校验） */
   suggestion: number;
+  /** 逐条问题清单（否决判定与计数派生的唯一事实源；条数合计须等于 mustFix+suggestion） */
+  problems: ProblemRef[];
   /** 一句话价值判定（终态档案 valueOneliner/oneliner 字段来源） */
   oneliner: string;
 }

@@ -71,25 +71,30 @@ const SCHEMA_ReconEntry = {
   required: ["prevId", "status", "evidence"],
 };
 
-const SCHEMA_ValueVerdict = {
-  type: "object",
-  properties: {
-    reportFile: { type: "string", description: "价值审报告文件路径（脚本按确定性位置校验，不以自报为准）" },
-    mustFix: { type: "number", description: "must-fix 条数（与报告一致）" },
-    suggestion: { type: "number", description: "suggestion 条数" },
-    oneliner: { type: "string", description: "一句话价值判定（终态档案 valueOneliner/oneliner 字段来源）" },
-  },
-  required: ["reportFile", "mustFix", "suggestion", "oneliner"],
-};
-
 const SCHEMA_ProblemRef = {
   type: "object",
   properties: {
-    ref: { type: "string", description: "报告内问题锚点，格式 review-<维度>#<序>（如 review-main#2），与报告小节标题一致" },
+    ref: { type: "string", description: "报告内问题锚点，格式 review-<维度>#<序>（如 review-main#2 / 价值审 review-value#<序>），与报告小节标题/表格行一致" },
     level: { type: "string", enum: ["must-fix", "suggestion"], description: "must-fix 级或 suggestion 级（与报告小节分级一致）" },
     title: { type: "string", description: "一句话问题标题" },
   },
   required: ["ref", "level", "title"],
+};
+
+const SCHEMA_ValueVerdict = {
+  type: "object",
+  properties: {
+    reportFile: { type: "string", description: "价值审报告文件路径（脚本按确定性位置校验，不以自报为准）" },
+    mustFix: { type: "number", description: "must-fix 条数（与报告一致；脚本以 problems 清单派生计数为准，此字段做交叉校验）" },
+    suggestion: { type: "number", description: "suggestion 条数（与报告一致；同上做交叉校验）" },
+    problems: {
+      type: "array",
+      items: SCHEMA_ProblemRef,
+      description: "逐条问题清单（否决判定与计数派生的唯一事实源；条数合计须等于 mustFix+suggestion）",
+    },
+    oneliner: { type: "string", description: "一句话价值判定（终态档案 valueOneliner/oneliner 字段来源）" },
+  },
+  required: ["reportFile", "mustFix", "suggestion", "problems", "oneliner"],
 };
 
 const SCHEMA_ReviewerVerdict = {
@@ -143,7 +148,7 @@ const SCHEMA_FixOutcome = {
       description: "方案性意见修不动（需用户裁决的方向变化）时非空；为空表示无卡点",
     },
   },
-  required: ["dispositions", "revisionSummary"],
+  required: ["dispositions", "revisionSummary", "blocked"],
 };
 
 // wfAgent：公共体的 agent(name, persona).ask<T>(prompt) 的 pi 等价。构建管线把公共体
