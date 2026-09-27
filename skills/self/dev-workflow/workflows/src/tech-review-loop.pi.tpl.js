@@ -45,10 +45,12 @@ const world = {
     return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   },
 };
-// args：pi 的 $ARGS（--args k=v）；数字参数字符串归一
-const args = {};
+// args：pi 的 $ARGS（--args k=v）由宿主以 `const args = $ARGS` 注入——产物重声明
+// args 会炸 SyntaxError（曾因此 pi 侧首跑即崩），故就地归一化 $ARGS（宿主别名同指此对象）
 for (const [k, v] of Object.entries(typeof $ARGS === "object" && $ARGS !== null ? $ARGS : {})) {
-  args[k] = typeof v === "string" && v !== "" && !Number.isNaN(Number(v)) && /^-?\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : v;
+  if (typeof v === "string" && v !== "" && !Number.isNaN(Number(v)) && /^-?\d+(\.\d+)?$/.test(v.trim())) {
+    $ARGS[k] = Number(v);
+  }
 }
 // report / artifact：zcode 专有通道，pi 无对应面，降级为 no-op（结果仍经 return 交付）
 const report = () => {};
