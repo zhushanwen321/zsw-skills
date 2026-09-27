@@ -1,6 +1,6 @@
 # 定量诊断工具箱
 
-> 配合 SKILL.md 场景 C / D 使用。判据（什么算垃圾测试）见 junk-patterns.md；本文件是扫描与测量的工具：弱断言密度、变异测试体检、慢测试帕累托。
+> 配合 SKILL.md 场景 C / D 使用。判据（什么算垃圾测试）见 junk-patterns.md；本文件是扫描与测量的工具：弱断言密度、变异测试体检、慢测试帕累托（80% 耗时集中在 20% 文件）。
 
 ## 弱断言密度扫描
 
@@ -8,7 +8,7 @@
 grep -rc "toBeDefined\|toBeTruthy\|toBeFalsy" <测试目录>/ | sort -t: -k2 -rn
 ```
 
-`toBeDefined` 数量是套件腐败的头号指标。某文件出现 20+ 个，几乎可以确定是"写了测试但没测任何东西"——覆盖率好看，但 mutation 100% 存活，删掉被测逻辑照样绿。
+`toBeDefined` 数量是套件腐化的头号指标。某文件出现 20+ 个，几乎可以确定是"写了测试但没测任何东西"——覆盖率好看，但 mutation 100% 存活，删掉被测逻辑照样绿。
 
 **治理**：逐个问"改成错的实现它会红吗？"不会红的按判据处理（改强断言或删除，见 junk-patterns.md）。
 
@@ -25,7 +25,7 @@ grep -rc "toBeDefined\|toBeTruthy\|toBeFalsy" <测试目录>/ | sort -t: -k2 -rn
 
 **mutation score = 杀死 / 总变异**。低于 60% 的文件就是凑数重灾区。
 
-**何时跑**：一次性诊断，不改代码。报告会精确指出"哪些测试存活了 mutant"——比凭感觉清理准得多。日常不跑（慢），作为体检或战役档（test-audit-workflow.md）开始前的基线测量。
+**何时跑**：一次性诊断，不改代码。报告会精确指出"哪些测试存活了 mutant"——比凭感觉清理准得多。日常不跑（慢），作为体检或战役模式（test-audit-workflow.md）开始前的基线测量。
 
 ```bash
 # Node/TS 项目示例（Stryker；其他栈用等价变异测试工具）
@@ -41,18 +41,19 @@ npx stryker run --mutate "src/core/**/*.ts"
 80% 耗时集中在 20% 文件。定位它们：
 
 ```bash
-# vitest 输出每个文件的 endTime-startTime
+# vitest：解析 json.testResults，按 endTime-startTime 计算每个文件的耗时并降序
+# （vitest 4 的 json 报告文件级 duration 恒为 null，勿直接用；也可改用 junit 报告的 time 属性）
+# 高亮标注 >1s 的文件
 npx vitest run --reporter=json --outputFile=/tmp/vitest.json
-# 解析 json.testResults，按 duration 降序，标红 >1s 的
 ```
 
 **优化优先级**（按 ROI）：
 
-1. **纯逻辑误放层 2** → 下沉层 1（收益最大：秒级→毫秒级）
-2. **每用例重建 setup** → 改 `beforeAll` + 清表（收益大：5-10x）
+1. **纯逻辑误放层 2** → 下沉到层 1（收益最大：秒级→毫秒级）
+2. **每用例重建 setup** → 改 `beforeAll` + 清空数据表（收益大：5-10x）
 3. **不必要的外部依赖**（真起端口、真连网络）→ mock 或 app.inject（收益中）
 4. **超时/重试默认值过大** → 测试专用调小（收益中）
-5. **串行可并行** → 拆文件并行跑（收益取决于核数）
+5. **当前串行、可改并行** → 拆文件并行跑（收益取决于核数）
 
 **不要做的"优化"**：
 
