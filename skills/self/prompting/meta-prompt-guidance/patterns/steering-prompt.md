@@ -19,7 +19,7 @@ read {skill_dir}/references/prompt-architecture.md
 
 Steering prompt 设计最大的陷阱：**只声明状态，不给行为约束。** "目标已完成"是状态声明，"逐项验证每个需求，不允许用意图替代证据"是行为约束——后者才是 steering prompt 的核心价值。
 
-第二个陷阱：**steering prompt 中包含用户输入时忘记防注入。** steering prompt 是系统注入的指令，但它的参数（objective 文本、任务描述）来自用户。用户可控的内容嵌入系统级指令 = 注入攻击面。
+第二个陷阱：**steering prompt 中包含用户输入时忘记防注入。** steering prompt 是系统注入的指令，但它的参数（objective 文本、任务描述）来自用户。用户可控的内容嵌入系统级指令 = 注入攻击点。
 
 ## 设计维度
 

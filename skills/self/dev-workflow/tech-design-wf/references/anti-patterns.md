@@ -135,7 +135,7 @@
 
 **后果**：v5 反而比 v4 短 1/3，且断言全站住（砍掉了未验证的，剩下的 by construction 正确）。
 
-**修正**：准则 8——**减法优先于加法**。遇到子问题先问「能不能砍/简化」，而非「加个 clever 机制」。clever 机制 = 新断言 = 新失败面。正确性优先靠 by construction，不靠 by clever mechanism。
+**修正**：准则 8——**减法优先于加法**。遇到子问题先问「能不能砍/简化」，而非「加个 clever 机制」。clever 机制 = 新断言 = 新失败点。正确性优先靠 by construction，不靠 by clever mechanism。
 
 ---
 

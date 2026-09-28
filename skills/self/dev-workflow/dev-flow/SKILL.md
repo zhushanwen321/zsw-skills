@@ -54,7 +54,7 @@ description: >-
 - [MANDATORY] 所有 subagent 一律后台异步派发、靠完成通知推进（zcode 即 run_in_background=true；xyz-agent 原生仅异步），禁止前台同步阻塞等待返回——同步等待长任务有超时丢失结果风险，且阻塞主 agent 无法流水化核验
 - [MANDATORY] 数字阈值：同一单元 dev→fix 超 2 轮未绿即冻结升级用户；一致性审查累计 ≥3 轮未收敛即暂停升级。两种情况都禁止自行突破或无声放弃
 - [MANDATORY] 收尾阶段跑全量测试套件（项目收尾场景）；单元开发期内增量测试即可
-- [MANDATORY] e2e 执行准则：e2e / 真实进程 / 真实 LLM 用例只在开发阶段按改动面跑——清单从设计文档「e2e 影响面评估」（tech-design 验收章节）继承，由阶段 1 验收计划表圈定为 L3/L4 项，空载串行执行，禁止全量扫跑；PR/merge/CI 门禁只跑单测（与项目 pre-merge-check 的 unit 轨同口径，SSOT = 项目 AGENTS.md 测试节）；自动化回归的长期方向 = e2e 逐步单测化
+- [MANDATORY] e2e 执行准则：e2e / 真实进程 / 真实 LLM 用例只在开发阶段按改动范围跑——清单从设计文档「e2e 影响面评估」（tech-design 验收章节）继承，由阶段 1 验收计划表圈定为 L3/L4 项，空载串行执行，禁止全量扫跑；PR/merge/CI 门禁只跑单测（与项目 pre-merge-check 的 unit 轨同口径，SSOT = 项目 AGENTS.md 测试节）；自动化回归的长期方向 = e2e 逐步单测化
 - [MANDATORY] 偏差三分类处理：合理不一致 → 计划登记表固化（必要时同步设计文档措辞）；不合理偏差 → 打回 dev 修；doc_errors → 主 agent 改设计文档并记变更历史
 - [MANDATORY] 阶段 5 验收全绿、最终 commit 落地后**自动衔接 design-code-sync 终态同步**（阶段 6）：read `../design-code-sync/SKILL.md` 按其流程执行，输入直接给出本流水线的设计文档与 impl-plan 路径。仅用户明示跳过可免，跳过须在计划「变更历史」记录——终态同步是交付的组成部分，不是可选附加
 - [OPTIONAL] 高风险大单元可开 worktree 隔离（判据见 dag-authoring），建/并优先项目既有工具；subagent 零 git 不变量不变

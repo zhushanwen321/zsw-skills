@@ -125,13 +125,13 @@ exit 0
 
 > 待验证检查点（U7 场景 4 实测适配）：date 解析的 BSD/GNU 兼容写法；monorepo 下 workspace 依赖/跨包 re-export 间接链的计数口径（注意与已进口径的 barrel 单行排除区分）。
 
-## 安装（写入面穷举，每面有安装/卸载路径）
+## 安装（写入点穷举，每点有安装/卸载路径）
 
 **步骤 0：`git config core.hooksPath` 三分支检测**
 
 - **(a) 未设置**（hooks 在 `.git/hooks/`）→ 下述 append 模式。
 - **(b) 重定向型框架**（husky `.husky/_`、lefthook、python pre-commit——husky v9 安装即 `git config core.hooksPath .husky/_`，`.git/hooks/` 内一切不被执行，真实链 `.husky/_/pre-commit` shim → `sh -e .husky/pre-commit`）→ **显式二选一，禁止静默装到死目录**：
-  - 向框架用户 hook 文件（如 `.husky/pre-commit`）append 带 marker 行 + 部署脚本到 `.git/hooks/oe-assert.sh`，并显式登记「写入面进工作区、一行 diff 随版本库」代价，征得用户同意（挂起模式同构：给代价说明 + 默认推荐后结束回合等选择）。**默认推荐：登记代价并安装**（一行可见债务优于断言缺失）；仓库明确禁工作区写入时推荐放弃。
+  - 向框架用户 hook 文件（如 `.husky/pre-commit`）append 带 marker 行 + 部署脚本到 `.git/hooks/oe-assert.sh`，并显式登记「写入点进工作区、一行 diff 随版本库」代价，征得用户同意（挂起模式同构：给代价说明 + 默认推荐后结束回合等选择）。**默认推荐：登记代价并安装**（一行可见债务优于断言缺失）；仓库明确禁工作区写入时推荐放弃。
   - 或打印 skipped + 手动接入指引后放弃（指引：把下方调用行手动加进框架 hook）。
 - **(c) 目标 hook 文件不存在** → 创建仅含本调用的最小 hook。
 
@@ -141,7 +141,7 @@ exit 0
 bash "$(git rev-parse --git-dir)/hooks/oe-assert.sh" # oe-audit-assert
 ```
 
-**写入面清单**：
+**写入点清单**：
 
 | 面 | 安装 | 卸载 |
 |----|------|------|

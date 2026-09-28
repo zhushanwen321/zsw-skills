@@ -13,7 +13,7 @@
 
 ## 根因
 
-CDP 是 Chrome 原生协议，覆盖面远窄于 Playwright 自有协议。连接已有浏览器无法创建隔离 context。
+CDP 是 Chrome 原生协议，覆盖范围远窄于 Playwright 自有协议。连接已有浏览器无法创建隔离 context。
 
 ## 中频能力参考
 
