@@ -9,15 +9,16 @@
 ```
 skills/
   self/            原创 skill，按功能域分类
-    dev-workflow/    常规开发流程
+    dev-workflow/    常规开发流程（含双平台 workflow 脚本，见「workflow 双平台构建」）
     code-optimize/   代码优化
     thinking/        复杂问题
-    prompting/       提示词优化
+    prompting/       提示词与用语
     tools/           其他工具
   external/        收录的外部 skill
 agents/
-  self/            自用 agent
+  self/            自用 agent（symlink 登记）
   external/        预留
+scripts/           workflow 双平台构建与校验脚本
 ```
 
 ## Skills
@@ -26,8 +27,10 @@ agents/
 
 | Skill | 说明 |
 |-------|------|
-| tech-design | 技术设计文档的写作与对抗式审查，内嵌 3 个 review agent |
+| tech-design | 技术设计文档的写作与对抗式审查，内嵌 4 个 review agent |
+| tech-design-wf | tech-design 的 workflow 版：三阶段产出完整设计包（设计文档 + 实施计划） |
 | dev-flow | 将已通过审查的技术设计文档落地为可运行代码 |
+| dev-flow-wf | dev-flow 的 workflow 版：将完整设计包落地为已验收代码 |
 | design-code-sync | 校准代码实现与设计文档的一致性 |
 
 ### code-optimize/ — 代码优化
@@ -37,6 +40,8 @@ agents/
 | code-simplify | 简化代码：清理重复、死代码与本次改动 |
 | code-harden | 代码生产就绪加固：异常分级、重试策略、失败语义、错误处理策略裁决 |
 | code-overdesign-audit | 审计过度设计与投机抽象，产出可裁决的简化候选 |
+| architecture-decay-audit | 审计架构腐化：补偿机制堆积、绕弯设计等，产出可裁决的腐化清单与修复方向 |
+| architecture-improve-loop | 架构改进循环：审查、修复、复审，直接落地改进候选而不止出报告 |
 | test-quality | 测试设计与分层，最大化单位时间抓 bug 价值 |
 
 ### thinking/ — 复杂问题
@@ -45,11 +50,12 @@ agents/
 |-------|------|
 | rethink | 跳出局部修补循环、从全局重新审视问题的思维框架 |
 
-### prompting/ — 提示词优化
+### prompting/ — 提示词与用语
 
 | Skill | 说明 |
 |-------|------|
 | meta-prompt-guidance | AI agent 提示词的设计、编写与审查方法论 |
+| meta-words-guidance | 用语审查：清理黑话与难懂词，附裁决词表与扫描脚本 |
 
 ### tools/ — 其他工具
 
@@ -72,6 +78,22 @@ agents/
 | improve-codebase-architecture | 收录 | 架构改进与重构机会识别 |
 | teach | 收录 | 交互式教学 |
 | visual-explainer | 收录 | 自包含 HTML 可视化产物：图表、diff 审查、项目回顾 |
+
+## workflow 双平台构建
+
+dev-workflow 系 skill 的 workflow 脚本同时维护 zcode 与 pi 两个平台的版本，以单源方式管理：
+
+- 源：`skills/self/dev-workflow/workflows/src/`，每对脚本一个 `*.shared.ts` 单源公共体加双平台壳模板
+- 产物：zcode 侧 `workflows/*.dwf.ts`，pi 侧 `workflows/pi/*.js`
+
+`scripts/` 下的校验脚本，staged 变更涉及 workflow 源或产物时由 pre-commit（`core.hooksPath` 指向 `.githooks/`）执行：
+
+| 脚本 | 说明 |
+|------|------|
+| build-workflows.mjs | 从 `workflows/src/` 构建双平台产物 |
+| check-workflow-parity.mjs | zcode/pi 双平台产物对账校验 |
+| check-workflow-types.mjs | 用平台 facade 声明（`wf-facade.d.ts`）对 zcode 产物跑 tsc strict |
+| check-commit-contract.mjs | 提交说明结构契约校验：渲染侧与反查侧同源往返（仅 wave-executor 相关变更时触发） |
 
 ## Agents
 
