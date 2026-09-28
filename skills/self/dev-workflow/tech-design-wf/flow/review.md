@@ -76,7 +76,7 @@ task:
     2. read <文档绝对路径>
     3. 目标项目根：<绝对路径>——read 其 AGENTS.md / ARCHITECTURE.md（若存在）提取
        项目约定；read 源码核实声称时以此为锚
-    4. <R1：逐项对抗式审查，找反例和攻击面，声称事实错误前必须 read 源码核实；先审
+    4. <R1：逐项对抗式审查，找反例和攻击点，声称事实错误前必须 read 源码核实；先审
        问题定义，只报影响决策的事实错误。
        R2+（聚焦复审）：只审三件事——上轮 must-fix 修复是否成立（fixed 须实证：读了
        什么确认了什么）；修复是否引入新问题（只扫修复触及章节）；上轮处置表的登记
@@ -98,7 +98,7 @@ task:
 ## 手工路径 Step 4：修复轮（主 agent 亲为）
 
 1. 读三份结构化返回，合并去重（同根因跨维度表述合并）；三审 problems 清单合并落 `<runDir>/round-N/problems.json`（`{ round, problems: [...] }`）
-2. 按 `flow/write.md` Step 7.1/7.2 修复全部 must-fix + suggestion 三选一处置
+2. 按 `flow/write.md` Step 8.1/8.2 修复全部 must-fix + suggestion 三选一处置
 3. 产出当轮处置表 `<runDir>/round-N/dispositions.md`（每条：id（D-<轮>-<序>）/ 来源 ref（source 数组，逐条引用 problems.json 的 ref）/ 处置（修复|登记不修|归档）/ 修订位置 / 反例重演 / 攻击点建议 / 影响决策 / 影响交付），并同步落 `<runDir>/round-N/dispositions.json`（结构：`{ dispositions: [...] }`，字段同 workflow 路径）
 4. 处置表机器校验（与 workflow 路径同一校验器——双轨语义等价由此保证）：`node ~/.agents/skills/tech-design-wf/scripts/check-dispositions.mjs <runDir>/round-N/dispositions.json --problems <runDir>/round-N/problems.json`；exit 1 时按 stdout 校验报告（缺失 ref 清单）补正处置表后重跑，至 exit 0
 5. 终态判定（机械）：三报告 must-fix==0 且上轮处置表无未处置条目即终止（converged，写 final.json）——不要求当轮 suggestion 清零（suggestion 逐条处置完即终止，不为 suggestion 单独驱动确认轮，老实测教训）；R1 全 0 且零 suggestion 直接收敛不派修复者。否则 → 下一轮聚焦复审（Step 3 的 R2+ 形态），轮次 +1

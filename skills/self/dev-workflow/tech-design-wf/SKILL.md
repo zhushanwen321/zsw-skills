@@ -15,7 +15,7 @@ description: >-
 **三阶段产出完整设计包**，每阶段结束默认停下向用户确认产出是否合理，确认后进下一阶段：
 
 ```
-T1 写设计文档（Step 0-6）──确认──▶ T2 审查循环（价值审 → 三审 → 修复收敛）
+T1 写设计文档 + 用例走查（Step 0-7）──确认──▶ T2 审查循环（价值审 → 三审 → 修复收敛）
                                               │确认
                                               ▼
                                    T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
@@ -26,7 +26,7 @@ T1 写设计文档（Step 0-6）──确认──▶ T2 审查循环（价值�
 
 - **跳过确认的唯一通道 = 前期授权**：用户宣布全托管/夜间托管，或显式说「一路执行」时三阶段连续推进，阶段产出仍完整呈现（陈述性展示，不构成等待点）
 - **用语规范 [MANDATORY]**：T1 动笔写设计文档前必须加载 meta-words-guidance skill（zcode 用 Skill 工具；pi / 无 Skill 工具环境直接 Read `~/.agents/skills/meta-words-guidance/SKILL.md` 及其词表），写出的文档必须遵守其中的用语规范（四张词表逐条适用 + 该 skill 的扫描自查），细则见 `flow/write.md` 头部
-- 确认的裁决维度：T1 = 问题定义与方案方向；T2 = 审查是否真收敛（含价值审复述的理解校验）；T3 = 拆分粒度与验收计划。打回 = 回该阶段或上一阶段修订
+- 确认的裁决维度：T1 = 问题定义、方案方向与用例走查缺口处置；T2 = 审查是否真收敛（含价值审复述的理解校验）；T3 = 拆分粒度与验收计划。打回 = 回该阶段或上一阶段修订
 - **与老 tech-design 的关系（灰度并行）**：本技能是流程重构版（impl-plan 创建从 dev-flow 上移至 T3；审查循环 workflow 化），老 tech-design 原样保留——判据面（红线/准则/rubric/reviewer）与老版一致，变量只锁流程形态；任一时点可切回老版
 
 ## 设计包（dev-flow-wf 的唯一入口输入）
@@ -44,9 +44,10 @@ T1 写设计文档（Step 0-6）──确认──▶ T2 审查循环（价值�
 | 用户意图 | read |
 |---|---|
 | 开始三阶段（拿到问题/需求） | `flow/write.md`（T1 全程，含 Step 0 问题定义） |
+| T1 用例走查（方向确定性检查 / 生成用例 / 派走查 / 缺口反哺） | `flow/write.md` Step 7 |
 | T2 审查循环（发起/复审/手工降级） | `flow/review.md` |
 | T3 实施计划（审查收敛后） | `flow/plan.md` |
-| 审查后修复 / 多轮循环协议 | `flow/write.md` Step 7（循环由 must-fix 驱动 + suggestion 处置制） |
+| 审查后修复 / 多轮循环协议 | `flow/write.md` Step 8（循环由 must-fix 驱动 + suggestion 处置制） |
 | 问结构/原则/反模式/验收最佳实践 | `references/`（doc-structure / design-principles / anti-patterns / acceptance-practices） |
 | 要文档骨架模板 | `resources/templates/design-doc-template.md` |
 | 优化表达 / 换个说法 / agent 说得太绕 | `flow/express.md`（一次性表达优化，不写文档不派 review） |
@@ -84,7 +85,7 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 
 ## 审查：价值评审先行 + 三 reviewer 并行
 
-两阶段审查（T2）：`tech-design-value-review` 先行（一句话复述测试/问题值不值得这么解/最小形态检查）——must-fix > 0 打回重写**不派三审**；通过后三 reviewer 并行（`tech-design-review` 主审 / `tech-design-impact-review` 影响面审 / `tech-design-simplicity-review` 简洁审，agent 定义在 `agents/`，分工判据在 `review/rubric-design-doc.md`）。审查与修复分离：agent 只报告不代改；修复按 `flow/write.md` Step 7 循环协议。**轮次唯一形态：每轮 = 聚焦审 + 修复（R1 全面、R2+ 只审上轮处置表 + 攻击点），不存在全面审+聚焦审双重派发**。
+两阶段审查（T2）：`tech-design-value-review` 先行（一句话复述测试/问题值不值得这么解/最小形态检查）——must-fix > 0 打回重写**不派三审**；通过后三 reviewer 并行（`tech-design-review` 主审 / `tech-design-impact-review` 影响面审 / `tech-design-simplicity-review` 简洁审，agent 定义在 `agents/`，分工判据在 `review/rubric-design-doc.md`）。审查与修复分离：agent 只报告不代改；修复按 `flow/write.md` Step 8 循环协议。**轮次唯一形态：每轮 = 聚焦审 + 修复（R1 全面、R2+ 只审上轮处置表 + 攻击点），不存在全面审+聚焦审双重派发**。
 
 ## 标记说明
 
