@@ -44,7 +44,7 @@ description: >-
 项目存在领域模型登记（`docs/domain-model.md` 与 `CONTEXT.md`，由 architecture-clean-domain-design 产出）时**必须消费**：
 
 - **聚合不变量**：登记中每条不变量逐条核对——diff 是否新增了绕过不变量的路径（绕过聚合根直改成员、事务外变更聚合状态）= MUST_FIX（类别 `domain-invariant`）
-- **统一语言**：diff 引入的命名与登记词条对照——同一概念出现登记外同义词（词表已收敛却另造新词）= SUGGESTION（类别 `language-drift`），并提示补登记或改用词条
+- **统一语言**：diff 引入的命名与登记词条对照——同一概念出现登记外同义词（词条表已收敛却另造新词）= SUGGESTION（类别 `language-drift`），并提示补登记或改用词条
 - **跨上下文越界**：diff 出现跨上下文直接引用对方内部实体（应经端口）= MUST_FIX（类别 `context-boundary`），同时通报架构审查
 
 登记缺失时**降级为纯骨架运行**（第 1-3 步 + 第 5 步），在报告头部披露「无领域登记，未做不变量核对」，不阻塞、不假装核对过。
@@ -59,9 +59,9 @@ description: >-
 
 | 优先级 | 含义 |
 |--------|------|
-| MUST_FIX | 破坏行为：会导致 bug、违反聚合不变量、治标不治本、吞错假成功 |
-| SUGGESTION | 不阻塞但影响正确性保障：用词漂移、消费链未追尽的存疑项 |
-| INFO | 可选改进 |
+| MUST_FIX（必修） | 破坏行为：会导致 bug、违反聚合不变量、治标不治本、吞错假成功 |
+| SUGGESTION（建议） | 不阻塞但影响正确性保障：用词漂移、消费链未追尽的存疑项 |
+| INFO（可选） | 可选改进 |
 
 类别词表：root-cause / boundary / regression / error-state-reset / concurrency / idempotency / silent-degradation / domain-invariant / language-drift / context-boundary
 

@@ -32,6 +32,7 @@ scripts/           workflow 双平台构建与校验脚本
 | dev-flow | 将已通过审查的技术设计文档落地为可运行代码 |
 | dev-flow-wf | dev-flow 的 workflow 版：将完整设计包落地为已验收代码 |
 | design-code-sync | 校准代码实现与设计文档的一致性 |
+| architecture-clean-domain-design | 以 DDD 与六边形架构为分析视角的领域建模与架构分析：统一语言、限界上下文、聚合不变量、圈层性质判定；只做映射与登记，不输出结构改造设计 |
 
 ### code-optimize/ — 代码优化
 
@@ -39,6 +40,8 @@ scripts/           workflow 双平台构建与校验脚本
 |-------|------|
 | code-simplify | 简化代码：清理重复、死代码与本次改动 |
 | code-harden | 代码生产就绪加固：异常分级、重试策略、失败语义、错误处理策略裁决 |
+| code-domain-review | diff 业务逻辑正确性审查：对抗式验证意图达成、边界条件、错误路径、副作用与聚合不变量核对，内嵌 review-fix-loop 兼容 reviewer |
+| code-arch-review | 单次架构走查（improve-codebase-architecture 方法论本体）：模块深浅、接缝、可测试性、依赖健康双视角，产出候选卡只审不改 |
 | code-overdesign-audit | 审计过度设计与投机抽象，产出可裁决的简化候选 |
 | architecture-decay-audit | 审计架构腐化：补偿机制堆积、绕弯设计等，产出可裁决的腐化清单与修复方向 |
 | architecture-improve-loop | 架构改进循环：审查、修复、复审，直接落地改进候选而不止出报告 |

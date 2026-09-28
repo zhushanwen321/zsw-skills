@@ -32,6 +32,7 @@ scripts/           Dual-platform workflow build and validation scripts
 | dev-flow | Turn an approved design document into runnable code |
 | dev-flow-wf | Workflow variant of dev-flow: turn a complete design package into accepted code |
 | design-code-sync | Keep code implementation and design documents in sync |
+| architecture-clean-domain-design | Domain modeling and architecture analysis with DDD and hexagonal architecture as analysis lenses: ubiquitous language, bounded contexts, aggregate invariants, ring-nature mapping; records and maps only — never outputs structural transformation designs |
 
 ### code-optimize/ — Code Optimization
 
@@ -39,6 +40,8 @@ scripts/           Dual-platform workflow build and validation scripts
 |-------|-------------|
 | code-simplify | Simplify code: remove duplication, dead code, and cleanup of recent changes |
 | code-harden | Production readiness hardening: exception tiers, retry policy, failure semantics, error-handling policy adjudication |
+| code-domain-review | Diff behavior-correctness review: adversarial verification of intent, boundary conditions, error paths, side effects, and aggregate-invariant checks; embeds a review-fix-loop compatible reviewer |
+| code-arch-review | Single-pass architecture walkthrough (methodology body of improve-codebase-architecture): module depth, seams, testability, and dependency-health dual views; produces candidate cards, review only |
 | code-overdesign-audit | Audit over-engineering and speculative abstractions; produce actionable simplification candidates |
 | architecture-decay-audit | Audit architecture decay (compensation-mechanism buildup, convoluted designs); produce an actionable decay list and repair directions |
 | architecture-improve-loop | Architecture improvement loop: review, fix, re-review; land improvement candidates directly instead of only reporting |
