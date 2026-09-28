@@ -65,6 +65,8 @@ description: >-
 
 类别词表：root-cause / boundary / regression / error-state-reset / concurrency / idempotency / silent-degradation / domain-invariant / language-drift / context-boundary
 
+**报告文风**：禁含糊开场与对冲话——每条发现要么给判定（附 file:line 证据与触发条件），要么显式标「存疑（消费链未追尽等理由）」，不写「可能或许大概」类不判定语句；句子能短则短，条目能删则删；面向用户的文本遵守 meta-words-guidance 用语纪律（`~/.agents/skills/meta-words-guidance/SKILL.md`）。
+
 ## 执行形态
 
 - **小 diff（≤3 文件）**：主 agent 直接按本协议审查

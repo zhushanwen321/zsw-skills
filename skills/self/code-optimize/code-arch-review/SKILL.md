@@ -6,6 +6,8 @@ description: >-
   走查方法论本体 = improve-codebase-architecture（经 architecture-improve-loop
   内化提炼出的独立单次审查形态）。触发词：架构走查、审查架构、模块设计审查、深模块、
   接缝、架构摩擦、这段代码架构好不好、模块怎么组织、浅模块。
+  [触发抑制] 全库走查是重活：仅在用户显式点名、或被流程挂载
+  （architecture-improve-loop / 设计流程）时执行，禁止 agent 自发发起。
   Not for 设计期领域建模与圈层归属设计（用 architecture-clean-domain-design）、
   自动循环修复（用 architecture-improve-loop，它挂载走查 reviewer 跑循环）、
   腐化堆积深查（用 architecture-decay-audit）、过度设计深查（用 code-overdesign-audit）、
@@ -41,6 +43,8 @@ description: >-
 - **可测试性三原则**：接受依赖而不创建依赖；返回结果而非产生副作用；小表面
 - **按变化原因拆分**：一个文件承载多个正交变化原因 = 混合信号
 
+**词汇纪律**：报告输出必须用上表词汇，不漂移到「组件 / 服务 / 单元」（指 module 时）、「API / 签名」（指 interface 时）、「边界」（指 seam 时）、「层 / 包装」（指 module 时）等泛称——泛称会让判定依据失焦。收益表述用词表词落到具体（写「locality：bug 集中在一个模块」，不写「更容易维护」）。
+
 **通用摩擦五问**（每个审查范围过一遍）：① 理解一个概念要在多个小模块间跳转吗？② 哪里有浅模块（deletion test 判定）？③ 哪里纯函数为测试抽出，但真 bug 藏在调用方式里？④ 哪里紧耦合模块互相泄漏内部细节？⑤ 哪些部分难以经现有 interface 测试？
 
 ## 结构合规视角：依赖健康核对
@@ -69,6 +73,30 @@ description: >-
 
 档位纪律：Speculative 不进问题清单（报告末尾备忘留痕即可）；无现实击中证据不出卡。
 
+## 审完停回与下游路径
+
+报告呈交用户时**停回**（不走自冲），附带 Top 推荐：先解决哪个候选、为什么。用户挑定候选后走两条路径之一：
+
+- **人裁决路径（单卡深究）**：挂 grilling skill（zcode 用 Skill 工具；pi / 无 Skill 工具环境 Read `~/.agents/skills/grilling/SKILL.md`）走质询决策树——约束是什么 / 依赖谁 / 深化后模块的形态 / 接缝后面放什么 / 哪些测试存活。质询中达成的决定触发模型回写（见下节）
+- **自动路径（批量修复）**：architecture-improve-loop 挂载走查 reviewer 跑 review-fix-loop 循环（参数与终态处置见该技能）
+
+## 产出侧模型回写
+
+走查与质询中产生的模型增量，由发起方在裁决后统一落盘（本技能只审不改，登记不写文件）：
+
+- **领域词表待登记**：质询中命名了 `CONTEXT.md` 没有的概念、或澄清了模糊词条 → 报告末尾「领域词表待登记」节列词条建议（术语 + 1-2 句定义 + Avoid 别名）
+- **建议 ADR**：用户以分量级理由拒绝某个候选（未来审查不应重提），或质询敲定了分量级方案裁决 → 报告末尾「建议 ADR」节登记。仅满足三条件才登记（难逆 / 无上下文会惊讶 / 真实权衡），临时性理由（「现在不值得」）与自明理由不登
+
+## 可视化呈阅（可选）
+
+用户要求可视化呈阅时挂 visual-explainer（自包含 HTML：候选卡 + before/after 对照图——浅模块到深模块的前后形态对比）；复杂架构图委托 drawio-skill 嵌入。默认 markdown 报告，不强制升级。
+
+## 报告文风纪律
+
+- 禁含糊开场与对冲话（「值得注意的是」「或许可以考虑」类）——句子能变条目就变条目，条目能删就删
+- 每条候选的 Problem / Solution 各一句话：Problem 说清什么在痛，Solution 说清什么改变
+- 面向用户的文本遵守 meta-words-guidance 用语纪律（`~/.agents/skills/meta-words-guidance/SKILL.md`）
+
 ## 严重度与消费
 
 - Strong 对应必修级（进循环时映射 major / mustFix，清零才收敛）；Worth 随批修；Speculative 不报
@@ -78,7 +106,7 @@ description: >-
 
 - **主 agent 单次走查**：直接按本 SKILL 执行（本文件自含方法论）
 - **大范围 / 进循环**：派域 reviewer subagent——域 reviewer 模板（service-core / shell-ui / contract-host 三域：长驻服务层、多壳与 UI、跨进程契约与宿主）当前位于 `~/.agents/skills/architecture-improve-loop/agents/`（词汇表与本文件同源、含循环对账协议；灰度期共用不复制，architecture-improve-loop 退役时整体迁入本技能 `agents/`）
-- **自动循环修复**：经 architecture-improve-loop（zcode saved workflow `review-fix-loop` 挂载上述域 reviewer；参数与终态处置见该技能）
+- **自动循环修复**：经「审完停回与下游路径」节的自动路径（architecture-improve-loop）
 
 ## 与 architecture-improve-loop 的灰度关系
 
