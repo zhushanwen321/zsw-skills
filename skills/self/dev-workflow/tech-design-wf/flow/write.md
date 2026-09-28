@@ -56,7 +56,7 @@ SCQA 开篇 + 系统是什么 + 设计目标（从使用者体验倒推）+ in/o
 
 使用者视角现状（真实例子，**取自代码不编造**）+ **端到端大流程图**（§2 开头，全文坐标系）+ 真实失败模式 + 根因分析 + **前提清单节**（「本设计默认为真」的假设逐条列：来源标注 ✅ 已核实 / ⏳ 需用户裁决 + 若不成立的影响）。问题点条目以「**环节**：<大流程> → <环节名>」开头锚定。禁止上来讲"哪个文件哪个函数怎么改"。
 
-**领域与架构现状加载 [MANDATORY]**：本 Step 动笔前加载 architecture-clean-domain-design（zcode 用 Skill 工具；pi / 无 Skill 工具环境直接 Read `~/.agents/skills/architecture-clean-domain-design/SKILL.md` 及其 references）——按其领域建模协议梳理现状的领域模型（统一语言、上下文边界、聚合不变量），按六边形分层判定产出圈层归属表；梳理结果作为 §2 现状素材与 §3 方案的领域/分层依据。项目已有 `docs/domain-model.md` 与 `CONTEXT.md` 登记时先消费再增补（登记优先于现场重建）；本次改动不触及领域模型与模块归属时（纯流程/配置类改动）可跳过并在 Step 6 自检记一句跳过理由。
+**领域与架构现状加载 [MANDATORY]**：本 Step 动笔前加载 architecture-clean-domain-design（zcode 用 Skill 工具；pi / 无 Skill 工具环境直接 Read `~/.agents/skills/architecture-clean-domain-design/SKILL.md` 及其 references）——该技能以 DDD 与六边形为**分析视角**（不改项目结构）：按其领域建模协议梳理现状的领域模型（统一语言、上下文边界、聚合不变量），按六边形性质判定产出圈层性质映射（现状逻辑的性质与依赖方向，映射到项目现有分层）；梳理结果作为 §2 现状素材与 §3 方案的领域/分层依据，**不得据此输出改名、目录重组等结构改造建议**（确需整体改造属 §3 方案设计，须用户裁决）。项目已有 `docs/domain-model.md` 与 `CONTEXT.md` 登记时先消费再增补（登记优先于现场重建）；本次改动不触及领域模型与模块归属时（纯流程/配置类改动）可跳过并在 Step 6 自检记一句跳过理由。
 
 ## Step 3：解决方案
 
