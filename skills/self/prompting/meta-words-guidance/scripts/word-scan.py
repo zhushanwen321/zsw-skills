@@ -20,7 +20,8 @@
 
 匹配规则: 词表单元格按 / 、拆分变体；尾部括号注（如「盘面（作业）」）不参与匹配，
 括号内含 / 时视为变体列表（如「gate 族（Gate/门禁/…）」）；「…」视为通配（≤30 字）；
-纯 ASCII 词要求两侧不是字母数字下划线（避免命中标识符，如 oracledb 不误报 oracle）；
+纯 ASCII 词要求两侧不是字母数字、下划线或连字符（避免命中标识符与 CSS 属性名，
+如 oracledb 不误报 oracle、justify-content 不误报 justify）；
 大小写敏感。同一位置多个变体重叠时只报最长匹配。
 """
 import argparse
@@ -67,8 +68,8 @@ def split_variants(cell):
 
 def to_regex(term):
     pat = re.escape(term).replace("…", r".{0,30}?")
-    if re.fullmatch(r"[A-Za-z0-9_]+", term):
-        pat = rf"(?<![A-Za-z0-9_]){pat}(?![A-Za-z0-9_])"
+    if re.fullmatch(r"[A-Za-z0-9_-]+", term):
+        pat = rf"(?<![A-Za-z0-9_-]){pat}(?![A-Za-z0-9_-])"
     return re.compile(pat)
 
 
