@@ -6,7 +6,7 @@
 
 ```
 read {skill_dir}/references/design-principles.md
-  # 重点：P7(防注入分层)、P12(交接framing)
+  # 重点：P7(防注入分层)、P12(交接说明)
 read {skill_dir}/references/failure-mode-taxonomy.md
   # 重点：F1(规则被忽略 — 反工具调用围栏)、F2(目标降级)
 read {skill_dir}/references/interaction-patterns.md
@@ -106,7 +106,7 @@ Compact prompt 设计最大的陷阱：**模型在压缩 session 中调用工具
 ## 与其他载体的协作
 
 - **System Prompt**：compact prompt 在独立 session 中运行，不继承主 agent 的 system prompt。compact prompt 自己定义一个极简的行为边界（只做压缩，不做任何其他事）
-- **Steering Prompt**：compact 后的恢复机制引用 [P12 交接framing]。恢复方需要 steering prompt 注入"你正在接手一个压缩后的对话"的状态声明
+- **Steering Prompt**：compact 后的恢复机制引用 [P12 交接说明]。恢复方需要 steering prompt 注入"你正在接手一个压缩后的对话"的状态声明
 - **Agent Prompt**：compact 后的摘要可能被注入到新 agent 的上下文中作为前置知识——需要和 agent prompt 的环境信息注入配合
 
 ## 设计走查
@@ -121,6 +121,6 @@ Compact prompt 设计最大的陷阱：**模型在压缩 session 中调用工具
 
 ## 快速参考
 
-- 核心原则：[P7 防注入分层]、[P12 交接framing]
+- 核心原则：[P7 防注入分层]、[P12 交接说明]
 - 失败模式：[F1 规则被忽略]、[F2 目标降级]
 - 交互模式：Compaction 交互模式（interaction-patterns.md）

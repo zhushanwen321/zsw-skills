@@ -73,7 +73,7 @@ description: "emilkowalski/skills 的 9 个子 skill 路由入口（Emil Kowalsk
 
 1. **三个子 skill 不会自动触发**（其 frontmatter 设了 `disable-model-invocation: true`）：`review-animations`、`pick-ui-library`、`prototype`。用户表达对应意图时，**主动 `read` 指向它们**，别等它们自己加载。
 
-2. **`animate` 与 `find-animation-opportunities` 可能合法地「零输出」**：`animate` 第一步是频率闸门，可能判定「不该动画」而零行输出；`find-animation-opportunities` 基于 *You Don't Need Animations* 会拒绝大多数候选并给出拒绝清单。**什么都不做可能是正确结果**，别当成失败。
+2. **`animate` 与 `find-animation-opportunities` 可能合法地「零输出」**：`animate` 第一步是频率门禁，可能判定「不该动画」而零行输出；`find-animation-opportunities` 基于 *You Don't Need Animations* 会拒绝大多数候选并给出拒绝清单。**什么都不做可能是正确结果**，别当成失败。
 
 3. **`improve-animations` 不只是规划**：还有 `execute <plan>`（编排执行 + 用 review-animations 标准复审）、`reconcile`（同步计划与当前代码）、`plan <desc>`（跳过审计直接出单个计划）、`quick`/`deep` 工作量档位。需要「落地修复」时走它的 execute 变体，而非手动改。
 

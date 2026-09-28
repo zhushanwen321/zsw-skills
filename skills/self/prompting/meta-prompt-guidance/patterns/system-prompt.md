@@ -175,7 +175,7 @@ System prompt 设计最大的陷阱：**一切往里塞，最终什么都留不�
 - **Tool Description**：单个工具的边界和反模式放在 tool description 中。System Prompt 只放全局规则——如果一个规则只对 1 个工具有效，它不应该在 system prompt 中
 - **Steering Prompt**：运行时动态引导。System Prompt 放静态规则，Steering Prompt 覆盖动态行为。两者可能对同一行为有不同约束——Steering Prompt 在注入时序上靠后，优先级更高
 - **Personality**：通过占位符 `{{ personality }}` 注入短版。System Prompt 的身份声明只说"是什么"的基调，Personality 说"怎么说话"的风格
-- **Compact Prompt**：在独立 session 中运行，不继承 system prompt。但 [P12 交接framing] compact 后的恢复机制需要接收方的 system prompt 中有交接 framing——告诉恢复方"这是另一个模型的输出，不是你的原始记忆"
+- **Compact Prompt**：在独立 session 中运行，不继承 system prompt。但 [P12 交接说明] compact 后的恢复机制需要接收方的 system prompt 中有交接说明——告诉恢复方"这是另一个模型的输出，不是你的原始记忆"
 
 ## 设计走查
 

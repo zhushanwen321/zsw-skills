@@ -78,7 +78,7 @@ Error message 设计最大的陷阱：**只告知错误事实，不引导下一�
 2. `"Identify remaining work — what is NOT DONE and WHY."` — 和原始需求逐项对比
 3. `"Leave the user with a clear, actionable next step."` — 用户应该能读了下一步描述后直接行动
 
-- 如果错误后有跨模型交接（如 compact 后另一个 agent 接手），收尾指令升级为 [P12 交接framing]
+- 如果错误后有跨模型交接（如 compact 后另一个 agent 接手），收尾指令升级为 [P12 交接说明]
 - 收尾指令应放在防偷懒禁令之后——逻辑上：先告诉模型"不要标记完成"（禁令），再告诉它"那应该做什么"（收尾）
 
 ## 风险驱动的分级

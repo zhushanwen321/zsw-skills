@@ -7,7 +7,7 @@
 ```
 read {skill_dir}/references/design-principles.md
   # 重点：P3(数字阈值)、P7(防注入分层)、P8(证据驱动)、
-  #       P12(交接framing)
+  #       P12(交接说明)
 read {skill_dir}/references/failure-mode-taxonomy.md
   # 重点：F2(目标降级)、F3(偷懒完成)、F6(假完成)、
   #       F7(注入突破)、F9(过早放弃)
@@ -36,7 +36,7 @@ Steering prompt 设计最大的陷阱：**只声明状态，不给行为约束�
   - goal turn 完成 → 引导 completion audit
   - 预算耗尽 → 引导有序收尾
   - 目标被用户更新 → 引导对比新旧差异
-  - 交接给新 agent → 引导 [P12 交接framing]
+  - 交接给新 agent → 引导 [P12 交接说明]
 - 状态声明和行为约束是配对的——每个状态类型对应一组特定的行为约束。声明了状态不给约束 = 模型不知道"然后呢"
 
 ### 维度 2：防注入围栏 — 三层防御
@@ -137,7 +137,7 @@ Steering prompt 设计最大的陷阱：**只声明状态，不给行为约束�
   2. `"Identify remaining work — what is NOT DONE and WHY."`
   3. `"Leave the user with a clear, actionable next step."`
 - 收尾不是放弃——是"归档当前状态以便下一个 turn 或另一个 agent 继续"
-- 如果有跨模型交接（如 compact 后另一个 agent 接手），收尾指令中必须包含 [P12 交接framing]：`"The next agent will see only this summary — ensure it contains everything needed to continue without repeating work."`
+- 如果有跨模型交接（如 compact 后另一个 agent 接手），收尾指令中必须包含 [P12 交接说明]：`"The next agent will see only this summary — ensure it contains everything needed to continue without repeating work."`
 
 ## 最致命的 3 个失败案例
 
@@ -150,7 +150,7 @@ Steering prompt 设计最大的陷阱：**只声明状态，不给行为约束�
 - **System Prompt**：全局行为规范是静态基座，steering prompt 是运行时动态覆盖。在注入时序上 steering prompt 靠后，优先级更高。两者对同一行为的约束可能不同——steering prompt 的约束是"当前状态下"的临时约束，覆盖 system prompt 的通用约束
 - **Tool Description**：steering prompt 不解释工具用法——那是 tool description 的职责。但 steering prompt 可以声明"在这个状态下，优先用 X 而非 Y"
 - **Error Message**：工具失败后的行为引导走 Error Message，不走 steering prompt。如果 steering prompt 中包含"遇到错误怎么办"，把它移到 error message 或 tool description 中
-- **Compact Prompt**：[P12 交接framing] compact 后的恢复机制引用交接 framing——这就是 steering prompt 和 compact prompt 的交集
+- **Compact Prompt**：[P12 交接说明] compact 后的恢复机制引用交接说明——这就是 steering prompt 和 compact prompt 的交集
 
 ## 设计走查
 
@@ -161,10 +161,10 @@ Steering prompt 设计最大的陷阱：**只声明状态，不给行为约束�
 3. **Completion audit 比重**：Completion audit 占全文 30% 以上吗？包含了逐项验证 + 证据标准 + 显式禁令吗？
 4. **Fidelity 三句检查**：三句 Fidelity 约束是否完整且每句含义独立不重复？
 5. **Blocked 阈值检查**：blocked 的三个条件是否都有精确数字？"what is NOT blocked"是否列出来了？
-6. **预算耗尽行为检查**：收尾三步骤是否明确？跨模型交接是否需要 framing？
+6. **预算耗尽行为检查**：收尾三步骤是否明确？跨模型交接是否需要交接说明？
 
 ## 快速参考
 
-- 核心原则：[P3 数字阈值]、[P7 防注入分层]、[P8 证据驱动]、[P12 交接framing]
+- 核心原则：[P3 数字阈值]、[P7 防注入分层]、[P8 证据驱动]、[P12 交接说明]
 - 失败模式：[F2 目标降级]、[F3 偷懒完成]、[F6 假完成]、[F7 注入突破]、[F9 过早放弃]
 - 工程管理：模板引擎 + 变量替换（prompt-architecture.md 第四节）

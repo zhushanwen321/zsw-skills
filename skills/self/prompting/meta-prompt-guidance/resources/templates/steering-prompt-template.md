@@ -14,7 +14,7 @@
 #   - goal turn 完成 → 引导 completion audit
 #   - 预算耗尽 → 引导有序收尾
 #   - 目标被用户更新 → 引导对比新旧差异
-#   - 交接给新 agent → 引导 P12 交接framing
+#   - 交接给新 agent → 引导 P12 交接说明
 
 ## 防注入围栏
 
@@ -119,5 +119,5 @@ Blocked 判定条件：
 
 [跨模型交接]: The next agent will see only this summary — ensure it contains
 everything needed to continue without repeating work.
-# ↑ P12 交接framing：跨模型交接时升级收尾指令
+# ↑ P12 交接说明：跨模型交接时升级收尾指令
 ```

@@ -2,7 +2,7 @@
 // 处置表校验器（tech-review-loop W1 的业务级结构化校验，单一实现双轨复用）：
 //   - workflow 脚本：覆盖校验失败回喂重试前调用，stdout JSON 即回喂原料
 //   - 手工路径（flow/review.md Step 4）：主会话对 subagent 产出的处置表跑同一校验
-// 与 schema 级校验（zcode agent() 合成 schema / pi structured-output 闸门）分层：
+// 与 schema 级校验（zcode agent() 合成 schema / pi structured-output 门禁）分层：
 // 本脚本管 schema 表达不了的业务约束——覆盖完整性与条目内部一致性。
 //
 // 用法：

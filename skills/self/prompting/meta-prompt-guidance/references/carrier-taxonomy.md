@@ -79,7 +79,7 @@
 | 防注入设计 | P7（防注入分层） |
 | Completion audit | P8（证据驱动） |
 | 状态转换阈值 | P3（数字阈值） |
-| 跨模型交接 | P12（交接 framing） |
+| 跨模型交接 | P12（交接说明） |
 | 约束总量控制 | P2（风险∝密度） |
 
 ## 载体到失败模式的映射
@@ -107,5 +107,5 @@
 | Tool Description | 优先级网络、前置依赖、约束冗余 |
 | System Prompt | static/dynamic 分层边界 |
 | Steering Prompt | 注入防御分层、约束冗余（与 tool description 配合作业） |
-| Compact Prompt | Compaction 交互模式（framing + 反工具调用围栏） |
+| Compact Prompt | Compaction 交互模式（交接说明 + 反工具调用围栏） |
 | Agent Prompt | 优先级网络（继承 vs 覆盖主 prompt） |

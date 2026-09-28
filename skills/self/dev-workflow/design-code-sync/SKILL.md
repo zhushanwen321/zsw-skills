@@ -82,7 +82,7 @@ description: >-
    - impl-plan 在 `.tmp/dev-flow/`（dev-flow 阶段 1 约定）、审查报告在 `.tmp/tech-design/`（tech-design 约定）→ 已合规，无需处理
    - 残留在 docs/ 里的伴生产物（旧版惯例：`<name>.review*.md` / `.impl-plan.md` / probe 等）→ 移入 `<项目根>/.tmp/design-doc-retirement/`（gitignored 物理缓冲）
    - 旧设计文档被本交付整体取代且**零外部引用** → 移入同一退役目录；仍被引用或仍是现行机制依据 → 原位保留（可加 [HISTORICAL] 取代头注指向新权威）
-3. **引用验证 [MANDATORY]**：移动前按**完整文件名**全仓 grep（AGENTS.md / docs/constraints.json / 守卫脚本 .githooks+scripts / 源码注释 / 活文档 / skills），任一引用命中即不退役；移动后反向复验，修复保留文档中的悬空链接（markdown 链接改退役标注 + 找回 commit 号；backtick 纯提及可不动）
+3. **引用验证 [MANDATORY]**：移动前按**完整文件名**全仓 grep（AGENTS.md / docs/constraints.json / 检查脚本 .githooks+scripts / 源码注释 / 活文档 / skills），任一引用命中即不退役；移动后反向复验，修复保留文档中的悬空链接（markdown 链接改退役标注 + 找回 commit 号；backtick 纯提及可不动）
 4. **退役目录索引**：更新 `<项目根>/.tmp/design-doc-retirement/README.md`（文件名 + 退役日期 + 依据 + 找回方式 `git show <退役前commit>:<path>`）
 5. 判定结果进交付汇报：退役 N 个 / 保留 N 个（含保留依据）/ 无可退役也要显式说
 

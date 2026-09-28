@@ -3,7 +3,7 @@ name: dev-flow
 description: >-
   Use when 一份已通过对抗式审查的技术设计文档（tech-design 产出）需要落地为可运行代码。
   触发短语：「按设计文档开发」「实施这个设计」「按设计实现」「设计已经好了，开始开发」「根据 design doc 写代码」。
-  Not for 编写或审查设计文档本身（用 tech-design）；结构化 topic/unit 台账式开发（用 cw-cli / coding-workflow）；
+  Not for 编写或审查设计文档本身（用 tech-design）；结构化 topic/unit 条目清单式开发（用 cw-cli / coding-workflow）；
   已产出 execution-plan/plan.md 待 Wave 式执行（用 coding-execute）；
   无设计文档的 bug 修复、小改动（直接编码）；只出计划不写代码（用 lite-plan）。
 ---
@@ -18,7 +18,7 @@ description: >-
 
 1. **编排者零编码**：主 agent 只做规划、派发、验证、commit、状态记录；一切 src/tests 编写修改走 subagent
 2. **门只认证据**：阶段推进只承认命令输出、diff、逐行签收清单；无证据的「已完成」一律退回
-3. **验证方式分级，低成本高收益前置 [MANDATORY]**：L0 静态规则（lint/typecheck/守卫脚本/grep 机械信号，主 agent 直跑）→ L1 增量单测（dev 自跑）→ L2 全量套件（阶段 3 尾并入）→ L3 脚本化端到端（预编译剧本，多实例并行）→ L4 agent 端到端（最贵，仅需判断力的场景）。铁律：低级未清不进高级；机器可判定的修复不许留到 L4 才发现。各级定义与执行者见 `flow/acceptance.md`
+3. **验证方式分级，低成本高收益前置 [MANDATORY]**：L0 静态规则（lint/typecheck/检查脚本/grep 机械信号，主 agent 直跑）→ L1 增量单测（dev 自跑）→ L2 全量套件（阶段 3 尾并入）→ L3 脚本化端到端（预编译剧本，多实例并行）→ L4 agent 端到端（最贵，仅需判断力的场景）。铁律：低级未清不进高级；机器可判定的修复不许留到 L4 才发现。各级定义与执行者见 `flow/acceptance.md`
 4. **范围锁定**：subagent 只允许改计划中白名单内的文件；发现范围外必改时停下上报，禁止顺手改
 5. **git 单点**：subagent 禁止一切 git 写操作；只有主 agent 在核验通过后按精确路径 `git add`，禁 `-A`/`.`。commit 粒度纪律：单元/批次级 commit 是流水线结构，保留；流程自动生成的小改动/文档类改动（纯文档同步、文案修订、清单登记）**禁止单独成笔**——能折进触发它的单元/功能 commit 的同笔提交，确因验收结论后置的攒批成一笔，禁止一文档一笔
 6. **基线先行**：计划文档基线落盘（`.tmp/dev-flow/` 落盘即基线，不入 git）后才可派发；流转前主 agent 核对计划白名单内文件的 diff 干净

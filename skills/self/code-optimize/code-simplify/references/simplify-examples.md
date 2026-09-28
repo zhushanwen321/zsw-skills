@@ -49,7 +49,7 @@ class TextUtils {
 # for item in items: result[item.id] = item.name
 result = {item.id: item.name for item in items}
 
-# 嵌套条件 → 守卫从句
+# 嵌套条件 → 卫语句（提前返回 / 提前抛错）
 def process(data):
     if data is None:
         raise TypeError("Data is None")

@@ -20,7 +20,7 @@ model: inherit
 tools: "Read, Bash, Write, Edit"
 # ↑ 列出全部可用工具，用逗号分隔。不给工具 agent 什么也做不了
 ---
-# ↑ 闭合 `---` 必须独占一行
+# ↑ 收尾 `---` 必须独占一行
 
 # [Agent 名称]
 

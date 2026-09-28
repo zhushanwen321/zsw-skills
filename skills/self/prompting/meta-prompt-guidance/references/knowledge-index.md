@@ -40,7 +40,7 @@ read references/prompt-architecture.md    # static/dynamic 分层
 
 ### 场景 C：我要设计一个 Steering Prompt
 
-**必读原则**：P3（数字阈值）、P7（防注入分层）、P8（证据驱动）、P12（交接 framing）
+**必读原则**：P3（数字阈值）、P7（防注入分层）、P8（证据驱动）、P12（交接说明）
 **必读失败模式**：F2（目标降级）、F3（偷懒完成）、F6（假完成）、F7（注入突破）、F9（过早放弃）
 **可选知识**：`interaction-patterns.md`（注入防御分层、约束冗余）、`prompt-architecture.md`（模板引擎选择）
 
