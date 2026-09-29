@@ -658,7 +658,14 @@ function normalizeFix(raw: unknown, source: string): FixReport {
       return [{ id, reason: normStr(d.reason) }];
     },
   );
-  return { fixes, skipped, delegated };
+  // selfCheck 透传（自检硬门声明）——复审 prompt 注入 g.fix 全量 JSON，此处丢弃即
+  // 自检证据对复审不可见（复审可核对声明与实际改动是否相符）
+  const scRaw = typeof o.selfCheck === "object" && o.selfCheck !== null ? (o.selfCheck as Record<string, unknown>) : null;
+  const selfCheck =
+    scRaw !== null && normStr(scRaw.typecheck) !== ""
+      ? { typecheck: normStr(scRaw.typecheck), tests: normStr(scRaw.tests) }
+      : undefined;
+  return { fixes, skipped, delegated, selfCheck };
 }
 
 // ── 状态 ──
@@ -1319,7 +1326,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
       async (name) => {
         const gItems = groupMap.get(name) ?? [];
         const prompt = [
-          `第 ${fixRound} 轮一致性修复（分区：${name}；${gItems.length} 条 unreasonable，修复方向 = 让实现符合设计文档）。`,
+          `第 ${fixRound} 轮一致性修复（修复组：${name}；${gItems.length} 条 unreasonable，修复方向 = 让实现符合设计文档）。`,
           "",
           `第一步：Read 设计文档 ${info.designDocPath} 对应章节（章节定位见 impl-plan ${info.planPath} 的「0 章节映射」），核实条目属实后再动手。`,
           "",
@@ -1334,7 +1341,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             : "2b. 本组无增量测试命令——自检硬门：修完必跑「改动触及的测试文件 + 所在包 typecheck」并全绿后才可返回（调试期只重跑失败的单个测试文件，禁止全套复跑）。返回 JSON 的 selfCheck 字段承载自检结果。",
           "3. git 禁令：禁止 git add / commit / push / stash——提交由工作流引擎统一执行（组级一笔）。",
           "4. 每条修复申报 affectedFiles（含波及文件，相对仓库根路径）；修不动 / 需上游裁决的条目放 skipped 带具体 reason，不静默跳过。",
-          "5. 其他分区修复组并行工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属；未申报的改动引擎不处置不阻塞，留盘随终态呈报主 agent 判归属）。",
+          "5. 其他并行修复组工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属；未申报的改动引擎不处置不阻塞，留盘随终态呈报主 agent 判归属）。",
           "6. 职责外申报：条目属实、但修复动作属其他职责域（典型 = e2e/测试资产修复落在生产代码分区）——放入 delegated（reason 写修复动作属什么域），它将转升级呈报由主 agent 重派；职责内该修的照常修。",
           foreignNote
             ? ["", "工作区说明（存在无人申报的改动，引擎不处置不阻塞，留盘待认领；在现状基础上继续修复）：", foreignNote].join("\n")
@@ -1533,7 +1540,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           const pendingItems = g.items.filter((i) => i.active);
           const skippedItems = g.items.filter((i) => !i.active);
           const prompt = [
-            `第 ${reviewRound} 轮定向复审（分区：${g.name}；只审上批修复的影响面，不全面重审）。`,
+            `第 ${reviewRound} 轮定向复审（修复组：${g.name}；只审上批修复的影响面，不全面重审）。`,
             "",
             `第一步：Read 审查契约模板 ${info.reviewerTemplate}——其中是你的完整任务契约与 R2+ 定向复审规则（逐条对账申报义务 + 只审三条，不重查已确认项）。`,
             "",
