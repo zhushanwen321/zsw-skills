@@ -134,6 +134,18 @@ const SCHEMA_FixReport = {
         required: ["id", "reason"],
       },
     },
+    delegated: {
+      type: "array",
+      description: "职责外申报——条目属实但修复动作属其他职责域，转升级呈报，不算漏修（无申报可省略）",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["id", "reason"],
+      },
+    },
     selfCheck: {
       type: "object",
       description: "自检硬门声明（fixes 非空时必填且 typecheck 须 \"pass\"——带红返回不入账）",

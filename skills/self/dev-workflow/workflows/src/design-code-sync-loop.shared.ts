@@ -779,9 +779,20 @@ function renderMatrix(): string {
     L.push("");
     L.push("（无 findings）");
   }
+  // 台账状态显示（终态各档带去向说明，防止终态条目误显示为 open：delegated = 职责外申报
+  // 随终态呈报主 agent 重派；exempt = 符号豁免待主 agent 终审；frozen = 方向争议冻结待用户裁决）
+  const statusLabel: Record<FindingRecord["status"], string> = {
+    open: "open",
+    fixed: "fixed",
+    deferred: "deferred（越权候选，待用户裁决）",
+    frozen: "frozen（方向争议冻结，待用户裁决）",
+    exempt: "exempt（符号豁免，待主 agent 终审）",
+    delegated: "delegated（职责外，待主 agent 重派）",
+  };
   for (const f of ledger) {
     L.push("");
-    L.push(`### ${f.id} [${f.severity}] [${f.direction}] — ${f.status === "fixed" ? `fixed@R${f.fixedRound ?? "?"}` : f.status === "deferred" ? "deferred（越权候选，待用户裁决）" : "open"}（R${f.firstSeen} 立项，owner=${f.owner}）`);
+    const st = f.status === "fixed" ? `fixed@R${f.fixedRound ?? "?"}` : statusLabel[f.status];
+    L.push(`### ${f.id} [${f.severity}] [${f.direction}] — ${st}（R${f.firstSeen} 立项，owner=${f.owner}）`);
     L.push(`- location: ${f.location}`);
     L.push(`- gap: ${f.gap}`);
     L.push(`- impact: ${f.impact}`);
@@ -1794,16 +1805,18 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
           }),
         ),
       );
-      // ES 硬校验：本组全部条目必须被 fixes ∪ deferred ∪ exempt 覆盖（全等级当轮修完不留
-      // 尾巴；deferred = 越权候选防线申报、exempt = 符号豁免申报，引擎放行并转终态呈报，
-      // 都不算漏修）；未知 id 引用违规；三桶两两互斥（同 id 多桶 = 矛盾输出）
+      // ES 硬校验：本组全部条目必须被 fixes ∪ deferred ∪ exempt ∪ delegated 覆盖（全等级
+      // 当轮修完不留尾巴；deferred = 越权候选防线申报、exempt = 符号豁免申报、delegated =
+      // 职责外申报，引擎放行并转终态呈报，都不算漏修）；未知 id 引用违规；四桶两两互斥
+      // （同 id 多桶 = 矛盾输出——fixes+delegated 并报 = 修复已执行却绕过复审对账，修复无验证）
       const es: string[] = [];
       for (const { g, o } of outcomes) {
         const ids = new Set(o.fixes.map((fx) => fx.issueId));
         const defIds = new Set(o.deferred.map((d) => d.issueId));
         const exemptIds = new Set(o.exempt.map((d) => d.issueId));
+        const dlgIds = new Set(o.delegated.map((d) => d.issueId));
         for (const fid of g.issueIds) {
-          if (!ids.has(fid) && !defIds.has(fid) && !exemptIds.has(fid)) es.push(`${g.id} 漏修 ${fid}`);
+          if (!ids.has(fid) && !defIds.has(fid) && !exemptIds.has(fid) && !dlgIds.has(fid)) es.push(`${g.id} 漏修 ${fid}`);
         }
         for (const fx of o.fixes) {
           if (!g.issueIds.includes(fx.issueId)) es.push(`${g.id} fixes 引用未知条目 ${fx.issueId}`);
@@ -1819,6 +1832,12 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
           if (!g.issueIds.includes(d.issueId)) es.push(`${g.id} exempt 引用未知条目 ${d.issueId}`);
           if (ids.has(d.issueId)) es.push(`${g.id} 条目 ${d.issueId} 同时出现在 fixes 与 exempt（矛盾输出）`);
           if (d.reason.trim() === "") es.push(`${g.id} exempt 条目 ${d.issueId} 缺豁免理由`);
+        }
+        for (const d of o.delegated) {
+          if (!g.issueIds.includes(d.issueId)) es.push(`${g.id} delegated 引用未知条目 ${d.issueId}`);
+          if (ids.has(d.issueId)) es.push(`${g.id} 条目 ${d.issueId} 同时出现在 fixes 与 delegated（矛盾输出）`);
+          if (defIds.has(d.issueId)) es.push(`${g.id} 条目 ${d.issueId} 同时出现在 deferred 与 delegated（矛盾输出）`);
+          if (exemptIds.has(d.issueId)) es.push(`${g.id} 条目 ${d.issueId} 同时出现在 exempt 与 delegated（矛盾输出）`);
         }
       }
       if (es.length > 0) {
@@ -1924,7 +1943,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     .flatMap((g) => g.issueIds)
     .filter((id) => {
       const st = ledgerById(id)?.status;
-      return st !== "deferred" && st !== "exempt"; // deferred/exempt 条目已转终态呈报，不进复审对账
+      return st !== "deferred" && st !== "exempt" && st !== "delegated"; // deferred/exempt/delegated 条目已转终态呈报，不进复审对账
     });
   lastFixRecords = roundFixes;
   roundsHist.push({
@@ -1980,6 +1999,8 @@ if (finalResult !== null) {
       );
     if (finalResult.exemptList.length > 0)
       lgLines.push(`- [待办] exemptList ${finalResult.exemptList.length} 项（主 agent 终审符号豁免申报）：${finalResult.exemptList.map((c) => `${c.id}「${c.word}」`).join("、")}`);
+    if (finalResult.delegatedList.length > 0)
+      lgLines.push(`- [待办] delegatedList ${finalResult.delegatedList.length} 项（职责外，主 agent 重派或立项）：${finalResult.delegatedList.map((c) => `${c.id} ${c.location}`).join("；")}`);
     if (finalResult.remaining.length > 0)
       lgLines.push(
         `- [待办] remaining 活跃条目 ${finalResult.remaining.length} 项（stuck/*-failure 在场，呈报用户）：${finalResult.remaining.map((c) => `${c.id} ${c.location}`).join("；")}`,

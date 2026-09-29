@@ -1,6 +1,6 @@
 # D1 开发循环 — W2 wave-executor 契约与手工降级路径
 
-> 输入：D0 编译产物齐备（exec-plan + prompts + 初始 status.json）。不变量：subagent 零 git；每单元双锁——领地 diff 干净 + 测试真实跑绿；**调度只看依赖边（wave 仅展示标签，不是边界）——并发 ≤5，逐节点完成即重算（单节点 settle 立即解锁后继补派，不等批内其他节点）**；**每单元核验通过瞬间独立 commit**（不等批、不等 wave、不等尾）。
+> 输入：D0 编译产物齐备（exec-plan + prompts + 初始 status.json）。不变量：subagent 零 git；每单元双锁——改动对账一致（自报 files_changed 与工作区 diff 相符，超声明范围的登记对账呈报、不打回）+ 测试真实跑绿；**调度只看依赖边（wave 仅展示标签，不是边界）——并发 ≤5，逐节点完成即重算（单节点 settle 立即解锁后继补派，不等批内其他节点）**；**每单元核验通过瞬间独立 commit**（不等批、不等 wave、不等尾）。
 
 ## W2 workflow 契约（zcode 环境默认动作）
 
@@ -13,7 +13,7 @@ args: { execPlan: "<项目根>/.tmp/dev-flow/<name>.exec-plan.json" }
 
 1. 就绪集 = deps 全 done 的节点，批内并行（≤5），完成即重算（谁先提交谁的后继先开跑）
 2. `agent(node-<unitId>)` 读 promptFile 全文执行（prompt 编译期已构造，引擎零拼接）
-3. world.run 核验：`git status --porcelain` + diff 归属核对（files_changed ⊆ territory + 重跑 testCommand 断言退出码；全工作区清单外残留只登记不拦截——并行单元运行中新建的文件天然不在静态领地里，别人的改动与本节点无关，收尾统一呈报处置）
+3. world.run 核验：`git status --porcelain` + 改动对账（自报 files_changed 与工作区 diff 相符，超出 territory 声明范围的路径登记对账事件不打回 + 重跑 testCommand 断言退出码；全工作区清单外残留只登记不拦截——并行单元运行中新建的文件天然不在静态声明里，别人的改动与本节点无关，收尾统一呈报处置）
 4. 核验过 → world.run commit（`git add -- <files_changed>` + commitTemplate 渲染；空改动幂等通过，commit 被仓库钩子拒不 blocked 转待办）→ status.json 回写 → 解锁下游
 
 打回（核验不过）：原节点 agent 会话续聊定向修（贴 diff/失败输出/违反条款），≤2 轮；agent 不可用 → 接替程序（新 agent + 前任证据包：状态表该单元最后一轮 files_changed/test_evidence/deviations + 当前 `git diff --stat`，令其先核验现状再续作）；接替者亦异常 → 节点 blocked（引擎层，其他节点照常推进）。超 2 轮 → 节点 blocked，后继自动挂起（deps 不满足），无依赖节点照常推进 → 全场无可调度且存在 blocked → 终态 `blocked`（+清单+已试方案）→ 主 agent 升级用户。全节点 done → 终态 `completed` → 进 D2。
@@ -25,9 +25,9 @@ worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 workt
 八步循环：
 
 1. **算就绪集**：read status.json，前驱全 done 的节点为就绪
-2. **分批派发**：就绪节点并发 ≤5 全部后台异步派发（领地互斥由 T3 DAG 自检保证）；worktree 单元单独派发（cwd = worktree 目录）
+2. **分批派发**：就绪节点并发 ≤5 全部后台异步派发（声明互斥由 T3 DAG 自检保证）；worktree 单元单独派发（cwd = worktree 目录）
 3. **派发**：task = 该节点 promptFile 全文（三段式，模型按全局路由表编码档、thinking max）
-4. **完成通知到达即硬核验**（每节点，防假完成唯一闸口；先到先验不等同批）：`git status --short` + `git diff --stat` 核对改动集合 == files_changed 且 ⊆ 领地；重跑核心测试比对输出；有疑点打回重验
+4. **完成通知到达即硬核验**（每节点，防假完成唯一闸口；先到先验不等同批）：`git status --short` + `git diff --stat` 与自报 files_changed 逐路径对账（超声明范围的路径列出判断合理性、登记呈报不打回；工作区内其他并行单元的改动不算本节点疑点）；重跑核心测试比对输出；测试不绿或有真实疑点才打回重验
 5. **流转 commit**：核验过 → 按 files_changed 精确 add → commit（英文 message 含 unit id、对应设计章节、测试结论一行）→ status.json 回写（state=done + 证据指针）
 6. **失败打回**：续聊定向修或接替程序；轮次 +1；超 2 轮冻结该单元升级用户（附已尝试方案）；打回前后都重算就绪集——修单元不阻塞其他就绪节点
 7. **流式推进**：任一 done 即重算就绪集，解锁后继在并发余量内立即补派

@@ -95,6 +95,8 @@ interface FixReport {
   fixes: FixRecord[];
   /** 未修条目如实申报（id + 具体原因）；确信设计文档自身有错的条目走这里（转 doc_errors 流回） */
   skipped: { id: string; reason: string }[];
+  /** 职责外申报——条目属实但修复动作属其他职责域，转升级呈报，不算漏修 */
+  delegated?: { id: string; reason: string }[];
   /** 自检硬门声明（fixes 非空时必填且 typecheck 须 "pass"——带红返回不入账） */
   selfCheck?: { typecheck: string; tests?: string };
 }
@@ -193,7 +195,7 @@ interface FinalResult {
   gateALog: string | null;
   /** 单条停机线升级清单（1+2 次 fixer 后复审仍报，设计 §8.6 ③） */
   escalated: { id: string; location: string; gap: string; uncleanRounds: number }[];
-  /** 必填字段分流降级条目（影响决策=否 且 影响交付=无——不进修复批次，随终态回流主 agent 登记残留风险） */
+  /** 必填字段分流降级条目（影响决策=否 且 影响交付=无——不进修复批次，随终态回流主 agent 登记残留风险；含聚合升级/职责外申报条目——ledger 中单列升级呈报行） */
   deferredLedger: { id: string; location: string; gap: string; affectsDecision: string; affectsDelivery: string }[];
   /** 终态仍活跃条目（stuck / fix-failure 在场） */
   remaining: { id: string; location: string; gap: string; severity: string; group: string }[];

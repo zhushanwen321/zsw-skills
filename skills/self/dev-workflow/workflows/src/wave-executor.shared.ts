@@ -10,10 +10,11 @@
 // 边界声明（设计 §8.2，2026-09-29 裁决领地降级）：并行单元共享工作区时，单单元改动
 //   归属无法由 git status 精确切分，核验采用对账语义——dev 自报 files_changed 超出
 //   territory 声明范围不打回，登记对账事件随终态呈报；引擎收尾对全工作区清单外残留做
-//   对账（residualFiles）；启动前工作区必须干净（对账成立前提）。territory 声明仅剩
-//   两职责：启动互斥断言（并行单元防写冲突的最小机制——声明重叠且无依赖边拒绝启动）
-//   与 DAG 编排参考；运行时逐文件核验与扩展通道已删（实测零命中真越权、反致扩展死锁），
-//   多开发/少开发的一致性由 D2 一致性审查承接。
+//   对账（residualFiles），启动前既有改动登记豁免集不拒启动（2026-09-26 裁决），终态
+//   残留对账只对本次 run 产生的改动。territory 声明仅剩两职责：启动互斥断言（并行单元
+//   防写冲突的最小机制——声明重叠且无依赖边拒绝启动）与 DAG 编排参考；运行时逐文件
+//   核验与扩展通道已删（实测零命中真越权、反致扩展死锁），多开发/少开发的一致性由
+//   D2 一致性审查承接。
 // 边界声明（设计 §8.5）：worktree 单元的「合并回主分支才就绪」不做引擎侧自动检测——
 //   由 D0 编译负责排布合并（合并节点或手工段）。
 
@@ -53,13 +54,15 @@ const NO_ASK_RULE =
   "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
 
 const DEV_PERSONA =
-  "你是开发单元执行者：严格按任务书改码，只改任务书领地内的文件；" +
+  "你是开发单元执行者：严格按任务书改码，优先改任务书声明范围内的文件；" +
+  "确需改范围外的文件时直接做，并在 files_changed 如实申报、deviations 写明原因（引擎对账呈报不打回）；" +
+  "禁止触碰其他并行单元声明范围内的文件（并行写冲突会互相覆盖丢改动）；" +
   "测试范围 = 任务书 testCommand 指定的命令及其触及的测试文件，跑通后再交付——禁止跑包级全量套件或跨包扫描" +
   "（全量回归由后续全量测试门统一承担，单元级全量是重复劳动）；testCommand 覆盖不了你的改动行为时在 " +
   "deviations 申报，不要自行扩跑；" +
   "不要自行 git add / git commit——引擎核验通过后统一提交，自行提交会破坏状态对账与并行调度；" +
-  "引擎会确定性核验领地与测试，伪造 files_changed 或测试证据必被抓住；任务书与现实冲突、环境缺失时如实填报 " +
-  "blockers/deviations，不要硬编绕过。" +
+  "引擎会确定性重跑测试并对改动做对账登记（范围外改动如实申报即可），伪造 files_changed 或测试证据必被抓住；" +
+  "任务书与现实冲突、环境缺失时如实填报 blockers/deviations，不要硬编绕过。" +
   NO_ASK_RULE;
 
 const INSPECT_PERSONA =
@@ -230,9 +233,8 @@ function pathInTerritory(file: string, territories: string[]): boolean {
 }
 
 /**
- * 领地条目形态契约（启动校验与运行中扩范围通道同一入口——两入口曾各持一份校验，
- * 扩范围通道漏校验致写错的授权被静默吸收、恒判越界烧完打回轮次）：
- * 条目 = 相对该节点 cwd 所在 git 仓库根的纯路径。绝对路径与空格/括号注释混合形态
+ * territory 条目形态契约（启动校验唯一入口）：条目 = 相对该节点 cwd 所在 git 仓库根的
+ * 纯路径（文件或目录前缀）——启动互斥断言的机器输入。绝对路径与空格/括号注释混合形态
  * （如「src/**（含测试）」）在 pathInTerritory 匹配上恒失败（口径契约：territory 与
  * files_changed/porcelain 同基准）——错误就地暴露，不做归一化宽容吸收（引擎猜作者
  * 意图比静默失效更危险）。返回错误清单，空数组 = 全部合法。
@@ -245,7 +247,7 @@ function territoryFormatErrors(id: string, entries: readonly string[]): string[]
   }
   const mixed = entries.filter((t) => /\s/.test(t) || /[()（）]/.test(t));
   if (mixed.length > 0) {
-    errs.push(`dev 节点 ${id} 的 territory 含混合形态条目（空格/括号注释）：${mixed.join("、")}——领地是核验的机器输入，条目须为纯路径`);
+    errs.push(`dev 节点 ${id} 的 territory 含混合形态条目（空格/括号注释）：${mixed.join("、")}——territory 是启动互斥断言的机器输入，条目须为纯路径`);
   }
   return errs;
 }
@@ -868,7 +870,7 @@ async function runTestCommand(cmd: TestCommand, cwd: string): Promise<RunOutcome
 
 // ── dev 节点确定性核验（三查） ──
 
-async function verifyDevNode(node: PlanNode, result: NodeResult): Promise<VerifyVerdict> {
+async function verifyDevNode(node: PlanNode, result: NodeResult, attempts: number): Promise<VerifyVerdict> {
   // 查三：blockers 自报非空 → blocked（环境/任务书问题，定向修不可解，不进打回）
   if (result.blockers.length > 0) {
     return { outcome: "blocked", reason: "任务书自报 blockers", detail: result.blockers.join("；") };
@@ -887,9 +889,9 @@ async function verifyDevNode(node: PlanNode, result: NodeResult): Promise<Verify
     );
     await statusUpdate(
       node.id,
-      { status: "in-progress", attempts: state.get(node.id)?.attempts ?? 0 },
+      { status: "in-progress", attempts },
       "territory-outside",
-      `声明范围外改动（对账呈报，不打回）：${outside.join("、")}`,
+      `第 ${attempts} 轮自报声明范围外改动（对账呈报，不打回；多轮重验按轮各登记一笔）：${outside.join("、")}`,
     );
   }
   // 查二级（粗粒度）：引擎另跑全量 status，观察清单外残留——只登记不拦截（2026-09-26
@@ -995,7 +997,7 @@ async function executeDevNode(node: PlanNode): Promise<void> {
     return;
   }
   let attempts = 1;
-  let verdict = await verifyDevNode(node, result);
+  let verdict = await verifyDevNode(node, result, attempts);
   while (verdict.outcome === "retry" && attempts <= MAX_REJECT_ROUNDS) {
     log(`节点 ${node.id} 核验未过（${verdict.reason}），打回定向修`);
     result = await askWithSuccession(
@@ -1021,7 +1023,7 @@ async function executeDevNode(node: PlanNode): Promise<void> {
     }
     attempts += 1;
     await statusUpdate(node.id, { status: "in-progress", attempts }, "reject-round", verdict.reason);
-    verdict = await verifyDevNode(node, result);
+    verdict = await verifyDevNode(node, result, attempts);
   }
   if (verdict.outcome === "pass") {
     // commit 三要素保真（§8.3）：unitId（模板）+ designRef（章节锚前置，summary 已含则不重复

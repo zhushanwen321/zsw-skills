@@ -134,6 +134,18 @@ const SCHEMA_FixReport = {
         required: ["id", "reason"],
       },
     },
+    delegated: {
+      type: "array",
+      description: "职责外申报——条目属实但修复动作属其他职责域，转升级呈报，不算漏修（无申报可省略）",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["id", "reason"],
+      },
+    },
     selfCheck: {
       type: "object",
       description: "自检硬门声明（fixes 非空时必填且 typecheck 须 \"pass\"——带红返回不入账）",
@@ -612,7 +624,17 @@ function normalizeFix(raw, source) {
             return [];
         return [{ id, reason: normStr(s.reason) }];
     });
-    return { fixes, skipped };
+    // delegated（职责外申报）与 skipped 同法归一；缺省空数组（旧 fixer 返回无此字段仍合法）
+    const delegated = (Array.isArray(o.delegated) ? o.delegated : []).flatMap((e) => {
+        if (e === null || typeof e !== "object")
+            return [];
+        const d = e;
+        const id = normStr(d.id).trim();
+        if (!id)
+            return [];
+        return [{ id, reason: normStr(d.reason) }];
+    });
+    return { fixes, skipped, delegated };
 }
 // ── 状态 ──
 let info;
@@ -729,8 +751,17 @@ async function finish(terminated, roundsDone, message) {
             lg.push(`- [待办] docErrors ${result.docErrors.length} 项（主 agent 修设计文档）：${result.docErrors.map((d) => `${d.location}——${one(d.gap)}`).join("；")}`);
         if (result.reasonable.length > 0)
             lg.push(`- [待办] reasonable ${result.reasonable.length} 项（写 impl-plan §5 合理偏差登记表）：${result.reasonable.map((r) => `${r.location}——${one(r.summary)}`).join("；")}`);
-        if (result.deferredLedger.length > 0)
-            lg.push(`- [待办] deferredLedger ${result.deferredLedger.length} 项（登记残留风险）：${result.deferredLedger.map((d) => `${d.id} ${d.location}`).join("；")}`);
+        if (result.deferredLedger.length > 0) {
+            // 升级呈报条目（聚合判定无组承接 / fixer 职责外申报，gap 带对应前缀）从普通待办
+            // 拆出单列——混在「登记残留风险」一行会把优先人工裁决的升级语义降格成普通待办
+            const isEscalated = (d) => d.gap.startsWith("[聚合升级/无组承接]") || d.gap.startsWith("[职责外申报]");
+            const escalatedLedger = result.deferredLedger.filter(isEscalated);
+            const plainDeferred = result.deferredLedger.filter((d) => !isEscalated(d));
+            if (escalatedLedger.length > 0)
+                lg.push(`- [升级呈报] ${escalatedLedger.length} 项（聚合判定无组承接 / fixer 职责外申报，优先人工裁决）：${escalatedLedger.map((d) => `${d.id} ${d.location}——${one(d.gap)}`).join("；")}`);
+            if (plainDeferred.length > 0)
+                lg.push(`- [待办] deferredLedger ${plainDeferred.length} 项（登记残留风险）：${plainDeferred.map((d) => `${d.id} ${d.location}`).join("；")}`);
+        }
         if (result.escalated.length > 0)
             lg.push(`- [裁决] escalated ${result.escalated.length} 项（≥2 轮修复未清，优先人工裁决）：${result.escalated.map((d) => `${d.id} ${d.location}——${one(d.gap)}`).join("；")}`);
         if (result.remaining.length > 0)
@@ -874,6 +905,22 @@ function validateFixReport(v) {
         });
         if (bad.length > 0)
             errors.push(`skipped 第 ${bad.join("、")} 条畸形（id / reason 须字符串）`);
+    }
+    // delegated（职责外申报）浅校验：不强制存在（无申报时缺省合法——向后兼容，与 W4 不同）；
+    // 出现时须为对象数组且每条 id + reason 为字符串
+    if (o["delegated"] !== undefined) {
+        if (!isObjArr(o["delegated"])) {
+            errors.push("delegated 须为对象数组（每条 { id, reason }）");
+        }
+        else {
+            const bad = [];
+            o["delegated"].forEach((d, i) => {
+                if (typeof d["id"] !== "string" || typeof d["reason"] !== "string")
+                    bad.push(String(i + 1));
+            });
+            if (bad.length > 0)
+                errors.push(`delegated 第 ${bad.join("、")} 条畸形（id / reason 须字符串）`);
+        }
     }
     // 自检硬门只约束有实际修复的返回——全 skipped 组未改代码，无自检对象
     if (isObjArr(o["fixes"]) && o["fixes"].length > 0) {
@@ -1099,10 +1146,22 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             const a = byId.get(it.id);
             if (a === undefined)
                 continue; // 漏报兜底：保持原状原分区
-            if (a.action === "merge-into" && typeof a.mergeInto === "string" && roundActive.some((x) => x.id === a.mergeInto && x.id !== it.id)) {
-                it.active = false;
-                it.fixHistory.push(`第${fixRound}轮聚合定性：并入 ${a.mergeInto}（${a.reason ?? ""}）`);
-                log(`条目 ${it.id} 聚合并入 ${a.mergeInto}`);
+            if (a.action === "merge-into" && typeof a.mergeInto === "string") {
+                // 目标判定须查 active：链式（A→B、B→C）/环形（A→B、B→A）并入若只查成员资格，
+                // 根因条目会静默离场且不进任何终态清单（违背 fail-closed）——目标已离场按漏报
+                // 兜底：发起条目保持 active 原状原分区，WARN 留痕
+                const target = roundActive.find((x) => x.id === a.mergeInto && x.id !== it.id && x.active);
+                if (target === undefined) {
+                    log(`WARN 条目 ${it.id} 聚合并入目标 ${a.mergeInto} 不在本轮活跃条目中（环形并入/幻觉 id）——按漏报兜底保持原状原分区`);
+                }
+                else {
+                    // 位置证据保留：被并入条目离场后不再被 renderItem 渲染，location 追加进主条目
+                    // gap 尾部——修复与复审时主条目仍能看到全部同根因位置（设计「保留全部 location 证据」）
+                    target.gap = `${target.gap}；另见同根因：${it.id} ${it.location}`;
+                    it.active = false;
+                    it.fixHistory.push(`第${fixRound}轮聚合定性：并入 ${a.mergeInto}（${a.reason ?? ""}）`);
+                    log(`条目 ${it.id} 聚合并入 ${a.mergeInto}`);
+                }
             }
             else if (a.action === "reclassify-doc-error") {
                 it.active = false;
@@ -1148,8 +1207,18 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             const s = new Set();
             for (const it of groupMap.get(name) ?? []) {
                 const a = aggItems.find((x) => x.id === it.id);
-                for (const f of a?.expectedFiles ?? [])
-                    s.add(toRel(f) ?? f);
+                const declared = a?.expectedFiles ?? [];
+                if (declared.length === 0) {
+                    // 聚合输出缺失（漏报兜底条目）或 expectedFiles 为空的 keep 条目：回退条目指向
+                    // 文件纳入判交——否则这类条目所在组与聚合组并行时可能改同一文件（判交盲区）
+                    const f = toRel(fileOf(it.location));
+                    if (f)
+                        s.add(f);
+                }
+                else {
+                    for (const f of declared)
+                        s.add(toRel(f) ?? f);
+                }
             }
             return s;
         };
@@ -1195,13 +1264,14 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
                 "3. git 禁令：禁止 git add / commit / push / stash——提交由工作流引擎统一执行（组级一笔）。",
                 "4. 每条修复申报 affectedFiles（含波及文件，相对仓库根路径）；修不动 / 需上游裁决的条目放 skipped 带具体 reason，不静默跳过。",
                 "5. 其他分区修复组并行工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属；未申报的改动引擎不处置不阻塞，留盘随终态呈报主 agent 判归属）。",
+                "6. 职责外申报：条目属实、但修复动作属其他职责域（典型 = e2e/测试资产修复落在生产代码分区）——放入 delegated（reason 写修复动作属什么域），它将转升级呈报由主 agent 重派；职责内该修的照常修。",
                 foreignNote
                     ? ["", "工作区说明（存在无人申报的改动，引擎不处置不阻塞，留盘待认领；在现状基础上继续修复）：", foreignNote].join("\n")
                     : "",
                 "",
                 runlogDutyLine(`fix-${fileSafe(name)}-r${fixRound}`),
                 "",
-                "返回 JSON：{ fixes: [{ id, description, affectedFiles: [] }], skipped: [{ id, reason }], selfCheck: { typecheck: \"pass\", tests: \"<命令: 结果>\" } }（id 原样引用清单中的 U 编号；fixes 非空时 selfCheck 必填且 typecheck 须为 \"pass\"）。",
+                "返回 JSON：{ fixes: [{ id, description, affectedFiles: [] }], skipped: [{ id, reason }], delegated?: [{ id, reason }], selfCheck: { typecheck: \"pass\", tests: \"<命令: 结果>\" } }（id 原样引用清单中的 U 编号；fixes 非空时 selfCheck 必填且 typecheck 须为 \"pass\"；delegated 仅职责外申报时使用，无申报可省略）。",
             ]
                 .filter(Boolean)
                 .join("\n");
@@ -1234,6 +1304,26 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
                 fixHint: it.fixHint,
             });
             log(`条目 ${it.id} 被 fixer 申报 skipped（文档自身错误）——转 doc_errors 回流，不进修复循环`);
+        }
+    }
+    // delegated 消费（对齐 W4 delegated 机制）：fixer 申报职责外的条目（属实但修复动作属
+    // 其他职责域）→ 置不活跃 + 进 deferredLedger 转升级呈报（主 agent 重派到匹配职责域），
+    // 不算漏修不进修复循环——硬修会越域改文件，走 skipped 又会被误转 doc_errors
+    for (const f of fixesByGroup) {
+        for (const d of f.fix.delegated ?? []) {
+            const it = items.find((i) => i.id === d.id && i.active);
+            if (it === undefined)
+                continue;
+            it.active = false;
+            it.fixHistory.push(`第${fixRound}轮 fixer 申报职责外：${d.reason}——转升级呈报`);
+            deferredLedger.push({
+                id: it.id,
+                location: it.location,
+                gap: `[职责外申报] ${d.reason}：${it.gap}`,
+                affectsDecision: it.affectsDecision,
+                affectsDelivery: it.affectsDelivery,
+            });
+            log(`条目 ${it.id} 被 fixer 申报职责外（${d.reason}）——转升级呈报由主 agent 重派`);
         }
     }
     const groupStates = groupNames.map((name) => {

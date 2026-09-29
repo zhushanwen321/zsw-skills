@@ -6,7 +6,7 @@
 
 ### 1. 双格式一致性校验（fail-fast）
 
-读 `.impl-plan.json`，逐项与 `.impl-plan.md` 核对：单元数 / 单元 id 集 / 依赖边数 / 验收项 id 集 / **每个单元的领地文件清单**（md 版以「及测试/配套测试族」等归纳语收尾的，json 版必须展开为逐文件条目——归纳语直接丢弃会让配套测试文件游离在领地外，实测曾致核验必挂）。不一致 → 停，回 tech-design-wf T3 修双格式（不猜测哪边是对的）。
+读 `.impl-plan.json`，逐项与 `.impl-plan.md` 核对：单元数 / 单元 id 集 / 依赖边数 / 验收项 id 集 / **每个单元的范围声明（territory）清单**（粒度到目录或文件族即可，与 §2 territory 声明条款同口径）。不一致 → 停，回 tech-design-wf T3 修双格式（不猜测哪边是对的）。
 
 ### 2. exec-plan.json 生成
 
@@ -48,7 +48,7 @@
 
 ### 3. 逐节点 promptFile 构造
 
-每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·领地·验收条款/设计文档对应节摘录/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：测试 = 仅跑 testCommand 及其触及的测试文件，明写禁止包级全量套件与跨包扫描——全量回归由 D2 Gate A 统一承担；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组；宿主无 structured-output 工具时在回复中用 json 代码块返回同构对象，解析失败视同本次汇报无效打回重报）/ 约束（领地白名单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报/过程记录义务：临时待办·需裁决事项·复盘观察随时 append 到 `<name>.runlog/<unitId>.md`（任务书内写绝对路径；一行一条 `[HH:MM] 类型: 一句话事实`，不替代 JSON 返回契约——SKILL「运行记录」节））。
+每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·范围声明·验收条款/设计文档对应节摘录/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：测试 = 仅跑 testCommand 及其触及的测试文件，明写禁止包级全量套件与跨包扫描——全量回归由 D2 Gate A 统一承担，testCommand 覆盖不了改动行为时在 deviations 申报、不自行扩跑；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组；宿主无 structured-output 工具时在回复中用 json 代码块返回同构对象，解析失败视同本次汇报无效打回重报）/ 约束（范围声明清单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报/过程记录义务：临时待办·需裁决事项·复盘观察随时 append 到 `<name>.runlog/<unitId>.md`（任务书内写绝对路径；一行一条 `[HH:MM] 类型: 一句话事实`，不替代 JSON 返回契约——SKILL「运行记录」节））。
 
 ### 4. 初始 status.json + 运行档案初始化
 
@@ -66,7 +66,7 @@
 
 - L0 静态检查基线：lint / typecheck / 项目检查脚本在 baseline 上全绿记录（命令从项目 AGENTS.md / package.json scripts 真实读取，禁凭记忆编）
 - 产物类条目编入 testPlan.artifacts（引擎 Gate A 第一波并行预备，见 §2 testPlan 注释；禁只标注不落位）
-- 覆盖矩阵骨架：从 impl-plan 领地表 × 验收计划表生成「单元领地 × 计划用例」骨架表落 `.tmp/dev-flow/<name>.coverage.md`（D4 收尾时回填实际覆盖并处置 uncovered 区——补测试或登记理由）
+- 覆盖矩阵骨架：从 impl-plan 范围声明表 × 验收计划表生成「单元声明范围 × 计划用例」骨架表落 `.tmp/dev-flow/<name>.coverage.md`（D4 收尾时回填实际覆盖并处置 uncovered 区——补测试或登记理由）
 - 章节映射锚点核对：逐条 read 设计文档核对 §N 实际存在，对不上停回 tech-design-wf T3（不猜测）
 - （进 D3 前）环境 smoke：场景依赖的每个环境面跑无 LLM 探针验证可用；剧本 dry-run：机械断言先对样本数据跑通；bash 语义歧义点（管道子 shell 的 cwd 隔离、`$()` 剥尾换行、引号嵌套、**管道退出码陷阱**）逐行过一遍——`cmd | tail; echo $?` 取的是管道末段（tail）的退出码，主命令失败会被判绿，验收/测试命令一律无管道形态 `cmd > log 2>&1; echo "EXIT=$?"`，判定读 EXIT 行 + grep 日志，禁止 `| tail`/`| head` 后跟 `$?`/`&&` 判定退出；采样管道复用检查：read 项目采样管道文档，已有脚本直接复用，新做法记录回写（进管道文档），禁现场重写管道；多实例分配：互斥场景组绑独立 dev 实例（装配器端口段派生 + 独立数据目录）
 - **verify 剧本每步汇总落盘 [MANDATORY]**：剧本骨架的 step 函数每步结束时向 `<artifactsDir>/summary.jsonl` 追加一行 JSON：`{"step":"<步骤名>","command":"<命令>","exitCode":<n>,"stats":"<vitest/断言统计行，可空>"}`——供 L4 inspect 以汇总文件为准核对（只读 summary、仅异常步骤读全文日志；实测 inspect 逐个全文读 19 份日志耗 259 万 token 占 D3 时长 85.7%，2026-09-29）。step 函数自身拿不到 artifactsDir 时由剧本头部变量注入
