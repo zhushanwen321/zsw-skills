@@ -530,7 +530,9 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
     residualFiles,
     message,
   };
-  // §4.5：W3 终态回写 status.json events——consistency 终态一笔 + Gate A 结果一笔（converged/gate-a-failed）
+  // §4.5：W3 终态回写 status.json events——consistency 终态一笔 + Gate A 结果一笔
+  // （converged/gate-a-failed 恒写；stuck 在 stuckPending 收尾路径已跑过 Gate A，按
+  // gateOutcome 补写——全量门结果随 stuck 呈报主 agent）
   await appendStatusEvent(
     "consistency",
     "consistency-terminal",
@@ -547,6 +549,14 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
     await appendStatusEvent("gate-a", "gate-a-pass", `全量测试通过，日志：${gateALogPath ?? info.gateALog}`);
   } else if (terminated === "gate-a-failed") {
     await appendStatusEvent("gate-a", "gate-a-fail", message.slice(0, 200));
+  } else if (terminated === "stuck" && gateOutcome !== null) {
+    await appendStatusEvent(
+      "gate-a",
+      gateOutcome === "pass" ? "gate-a-pass" : "gate-a-fail",
+      gateOutcome === "pass"
+        ? `stuck 终态 Gate A 通过，日志：${gateALogPath ?? info.gateALog}`
+        : message.slice(0, 200),
+    );
   }
   // 终态未决清单写入 ledger——主会话中断后未决事项仍可从盘上恢复（SKILL「运行记录」节；
   // converged 时 docErrors/reasonable 仍是主 agent 待办，同样入账）
@@ -624,12 +634,23 @@ const NO_ASK_RULE =
 
 const R1_PERSONA =
   "你是对抗式一致性审查者：只报告、绝不修改任何文件；每个发现都要有你亲自读到的 file:line 证据，禁止凭目录名想象；只审本分区文件，不引用其他审查者的结论。" +
+  "审查取证以读码到行级为主；测试实跑仅按契约模板「测试核实口径」的三种情形，禁止跑包级全量套件。" +
   NO_ASK_RULE;
 const FIX_PERSONA =
-  "你是资深修复工程师：先读设计文档对应节核实条目属实再动手、小步修改、如实申报改动文件与未修项（不静默跳过）；确信设计文档自身有错时改走 skipped 申报而不盲改代码；绝不自行执行任何 git 提交类操作。" +
+  "你是资深修复工程师：先读设计文档对应节核实条目属实再动手、小步修改、如实申报改动文件与未修项（不静默跳过）；确信设计文档自身有错时改走 skipped 申报而不盲改代码；" +
+  "修完自检硬门：改动触及的测试文件 + 所在包 typecheck 必须跑过且全绿才可返回，带红返回 = 无效交付会被原样打回；绝不自行执行任何 git 提交类操作。" +
   NO_ASK_RULE;
 const RE_PERSONA =
-  "你是对抗式一致性复审者：只报告、绝不修改任何文件；逐条亲自核实修复声称（读到行级才算数，修复方声称不算证据）；只审指定影响面，不全面重审。" +
+  "你是对抗式一致性复审者：只报告、绝不修改任何文件；逐条亲自核实修复声称（读到行级才算数，修复方声称不算证据）；只审指定影响面，不全面重审；" +
+  "不重跑与本轮条目无关的测试套件（核实以读码为准，实跑按契约模板「测试核实口径」）。" +
+  NO_ASK_RULE;
+const AGGREGATE_PERSONA =
+  "你是审查发现聚合定性员：只读分析、绝不修改任何文件；对审查发现的条目清单做四步裁决——" +
+  "①去重：同一根因的多条合并为一条（保留全部 location 证据）；" +
+  "②定性：逐条按三分类定义复核归类，错误定性当场改判（实现未履行登记/同步义务 = unreasonable；文档/注释内容与已提交实现冲突 = doc_errors）；" +
+  "③分组：按「预期改动文件无交集」构造修复组，预期文件相交的条目必须同组；" +
+  "④路由：条目修复动作与分区职责域不匹配时重派到匹配职责域的组，无任何组可承接时升级呈报。" +
+  "清单中每个条目都必须出现在输出中（含 keep），漏报的条目由引擎按原分区机械分组兜底。" +
   NO_ASK_RULE;
 
 // ── 结构化返回校验回喂（用户裁决 2026-09-26：全部 agent 结构化返回必备，回喂重试上限 3 次）──
@@ -690,7 +711,9 @@ function validateReviewResult(v: unknown): Validated<ReviewResult> {
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as ReviewResult };
 }
 
-/** 修复返回浅层结构校验：fixes 元素 {id, description, affectedFiles[]} / skipped 元素 {id, reason} */
+/** 修复返回浅层结构校验：fixes 元素 {id, description, affectedFiles[]} / skipped 元素 {id, reason}；
+ *  fixes 非空时还须 selfCheck.typecheck === "pass"（自检硬门——带 typecheck 红的修复不允许入账，
+ *  实测曾因修复方交付带 3 个编译错误致下轮复审活跃数反增直接 stuck，2026-09-29） */
 function validateFixReport(v: unknown): Validated<FixReport> {
   const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
   const errors: string[] = [];
@@ -710,7 +733,43 @@ function validateFixReport(v: unknown): Validated<FixReport> {
     });
     if (bad.length > 0) errors.push(`skipped 第 ${bad.join("、")} 条畸形（id / reason 须字符串）`);
   }
+  // 自检硬门只约束有实际修复的返回——全 skipped 组未改代码，无自检对象
+  if (isObjArr(o["fixes"]) && o["fixes"].length > 0) {
+    const sc = typeof o["selfCheck"] === "object" && o["selfCheck"] !== null ? (o["selfCheck"] as Record<string, unknown>) : null;
+    if (sc === null || sc["typecheck"] !== "pass") {
+      errors.push("缺 selfCheck 或 typecheck 非 \"pass\"（自检硬门：修完必跑所在包 typecheck + 改动触及测试，全绿才能返回；红了继续修，勿带红交付）");
+    }
+  }
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as FixReport };
+}
+
+/** 聚合定性返回浅层结构校验：items 元素 {id, action, …}——按 action 校验配套字段
+ *  （keep 须 group+expectedFiles；merge-into 须 mergeInto；其余须 reason） */
+function validateAggregateReport(v: unknown): Validated<AggregateReport> {
+  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const errors: string[] = [];
+  if (!isObjArr(o["items"])) {
+    errors.push("items 须为对象数组（每条 { id, action, … }）");
+  } else {
+    const bad: string[] = [];
+    o["items"].forEach((it, i) => {
+      const n = String(i + 1);
+      if (typeof it["id"] !== "string") { bad.push(n); return; }
+      const action = it["action"];
+      if (action === "keep") {
+        if (typeof it["group"] !== "string" || !isStrArr(it["expectedFiles"])) bad.push(n);
+      } else if (action === "merge-into") {
+        if (typeof it["mergeInto"] !== "string" || typeof it["reason"] !== "string") bad.push(n);
+      } else if (action === "reclassify-doc-error" || action === "escalate") {
+        if (typeof it["reason"] !== "string") bad.push(n);
+      } else {
+        bad.push(n);
+      }
+    });
+    if (bad.length > 0)
+      errors.push(`items 第 ${bad.join("、")} 条畸形（keep 须 group + expectedFiles 字符串数组；merge-into 须 mergeInto + reason；reclassify-doc-error/escalate 须 reason；action 限 keep/merge-into/reclassify-doc-error/escalate）`);
+  }
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as AggregateReport };
 }
 
 // 文件名安全化（分区/组名可含路径分隔符与空白——runlog 文件名不能展开成子目录）
@@ -830,6 +889,13 @@ let prevActiveCount = items.length;
 // 收敛停机线计数（轮轮有效——无人申报改动不再作废轮次，2026-09-26 裁决后无作废形态）
 // 历轮全部修复组的申报文件并集（终态残留对账的豁免集：终态工作区改动 − 此并集 = 残留）
 const declaredPool = new Set<string>();
+// stuck 终态也跑 Gate A（2026-09-29 裁决）：stuck 是合法高频终态，全量门不能只挂
+// converged——stuck 时 Gate A 结果是主 agent 处置的输入面（实测两线 D2 均以 stuck
+// 收场，Gate A 由主 agent 手动补跑，机制上漏门）。停机线触发时记理由不直接终态，
+// 落到 Phase 3 统一跑完 Gate A 后按 stuckPendingReason 收尾
+let stuckPendingReason: string | null = null;
+// Gate A 本轮结果（finish 的 events 回写判据：stuck 终态也按结果写 gate-a 一笔）
+let gateOutcome: "pass" | "fail" | null = null;
 
 for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRound++) {
   phase("并行修复与定向复审");
@@ -862,12 +928,116 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     continue;
   }
 
-  // 组划分 = 分区边界（脚本聚合，无 LLM）
+  // ── 聚合定性（2026-09-29 裁决：修复前插入判断型环节，四职责一次完成——
+  //    ①去重合并 ②定性复核 ③无交集分组 ④跨职责路由。实测三 stuck 同族根因：
+  //    D2 定性错误条目堆积空转、D5 单条跨职责条目无路由空转 6 轮、修复组互相
+  //    打架致活跃数反增。聚合返回不合规时回退分区机械分组，不阻塞主流程）──
+  let aggItems: AggregateItem[] | null = null;
+  {
+    const aggPrompt = [
+      `第 ${fixRound} 轮修复前的聚合定性（四职责一次完成；只读裁决，绝不修改任何文件）。`,
+      "",
+      `设计文档（定性复核对照）：${info.designDocPath}`,
+      "",
+      "审查发现条目清单（全部活跃，逐条裁决）：",
+      roundActive.map(renderItem).join("\n"),
+      "",
+      "分区职责域参考（组名可跨分区自由划，keep 条目须给 group）：",
+      ...info.partitions.map((p) => `- ${p.name}（${p.files.length} 文件）`),
+      "",
+      "四职责：",
+      "1. 去重：同一根因的多条合并——保留一条为主条目（action=keep），其余 action=merge-into（mergeInto=主条目 id，reason 写同根因判据）。",
+      "2. 定性复核：逐条按三分类定义复核——「实现未履行设计要求的登记/同步义务」= unreasonable（keep）；「文档/注释内容与已提交实现冲突、实现是对的」= reclassify-doc-error（reason 写冲突判据）。",
+      "3. 分组：keep 条目按「预期改动文件无交集」构造修复组——expectedFiles 相交的条目必须同组（并行修复组间禁止改同一文件）；组名语义化（如 packages-core / e2e-assets）。",
+      "4. 路由：条目修复动作与所在分区职责域不匹配时，keep 的 group 填匹配职责域的组名（如 e2e 测试资产修复条目归 e2e-assets 组而非生产代码分区）；整条无任何组可承接时 action=escalate（reason 写为什么无组承接）。",
+      "",
+      runlogDutyLine(`aggregate-r${fixRound}`),
+      "",
+      "返回 JSON：{ items: [{ id, action: \"keep\"|\"merge-into\"|\"reclassify-doc-error\"|\"escalate\", mergeInto?, reason?, group?, expectedFiles? }] }——清单中每个 id 都必须出现（含 keep）。",
+    ].join("\n");
+    const agg = await askValidated(
+      validateAggregateReport,
+      (q) => agent(`聚合定性-r${fixRound}`, AGGREGATE_PERSONA).ask<AggregateReport>(q),
+      aggPrompt,
+    );
+    if (agg !== null) aggItems = agg.items;
+    else log("聚合定性返回经回喂仍不合规——回退分区机械分组");
+  }
+
+  // 按聚合裁决执行：merge-into / reclassify-doc-error / escalate 置不活跃（离场三通道）；
+  // keep 条目覆盖组归属（it.group 供下方机械分组落组——路由职责的生效点）
+  if (aggItems !== null) {
+    const byId = new Map(aggItems.map((a) => [a.id, a]));
+    for (const it of roundActive) {
+      const a = byId.get(it.id);
+      if (a === undefined) continue; // 漏报兜底：保持原状原分区
+      if (a.action === "merge-into" && typeof a.mergeInto === "string" && roundActive.some((x) => x.id === a.mergeInto && x.id !== it.id)) {
+        it.active = false;
+        it.fixHistory.push(`第${fixRound}轮聚合定性：并入 ${a.mergeInto}（${a.reason ?? ""}）`);
+        log(`条目 ${it.id} 聚合并入 ${a.mergeInto}`);
+      } else if (a.action === "reclassify-doc-error") {
+        it.active = false;
+        docErrorPool.set(`${it.location}||${it.gap}`, {
+          location: it.location,
+          gap: `聚合定性改判 doc_error（${a.reason ?? ""}）：${it.gap}`,
+          affectsDecision: it.affectsDecision,
+          affectsDelivery: it.affectsDelivery,
+          severity: normSeverity(it.severity),
+          fixHint: it.fixHint,
+        });
+        log(`条目 ${it.id} 聚合定性改判 doc_errors（${a.reason ?? ""}）`);
+      } else if (a.action === "escalate") {
+        it.active = false;
+        deferredLedger.push({
+          id: it.id,
+          location: it.location,
+          gap: `[聚合升级/无组承接] ${a.reason ?? ""}：${it.gap}`,
+          affectsDecision: it.affectsDecision,
+          affectsDelivery: it.affectsDelivery,
+        });
+        log(`条目 ${it.id} 聚合升级呈报（无组承接）：${a.reason ?? ""}`);
+      } else if (a.action === "keep" && typeof a.group === "string" && a.group !== "") {
+        it.group = a.group;
+      }
+    }
+  }
+
+  // 组划分：聚合路由后的组归属（无聚合时 it.group 保持入池的分区边界——回退语义不变）
   const groupMap = new Map<string, ItemRecord[]>();
   for (const it of roundActive) {
+    if (!it.active) continue; // 聚合离场（并入/改判/升级）的条目不进修复批次
     const arr = groupMap.get(it.group) ?? [];
     arr.push(it);
     groupMap.set(it.group, arr);
+  }
+  // 组间无交集硬校验：聚合 expectedFiles 相交的组强制合并（并行修复组间禁改同一
+  // 文件的防线——LLM 算交集可能出错，脚本按 expectedFiles 并集复核）
+  if (aggItems !== null && groupMap.size > 1) {
+    const filesOf = (name: string): Set<string> => {
+      const s = new Set<string>();
+      for (const it of groupMap.get(name) ?? []) {
+        const a = aggItems!.find((x) => x.id === it.id);
+        for (const f of a?.expectedFiles ?? []) s.add(toRel(f) ?? f);
+      }
+      return s;
+    };
+    let mergedAgain = true;
+    while (mergedAgain) {
+      mergedAgain = false;
+      const names = [...groupMap.keys()];
+      outer: for (let i = 0; i < names.length; i++) {
+        for (let j = i + 1; j < names.length; j++) {
+          const inter = [...filesOf(names[i])].filter((f) => filesOf(names[j]).has(f));
+          if (inter.length > 0) {
+            log(`WARN 组「${names[i]}」与「${names[j]}」预期文件相交（${inter.slice(0, 3).join("、")}），合并为一组串行修`);
+            groupMap.set(names[i], [...(groupMap.get(names[i]) ?? []), ...(groupMap.get(names[j]) ?? [])]);
+            groupMap.delete(names[j]);
+            mergedAgain = true;
+            break outer;
+          }
+        }
+      }
+    }
   }
   const groupNames = [...groupMap.keys()];
   log(`第 ${fixRound} 轮修复：${groupNames.length} 组（${groupNames.map((n) => `${n}(${groupMap.get(n)!.length}条)`).join("、")}）`);
@@ -891,8 +1061,8 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           "1. 只改条目指向文件及波及扫描命中的文件；小步修改。",
           "2. 若你核实后确信某条是设计文档自身错误（实现是对的）：不要改代码，放 skipped 并在 reason 写明依据（file:line 证据 + 设计文档位置）——它会转 doc_errors 流回主 agent 裁决，不盲改。",
           info.incremental
-            ? "2b. 改完做与改动直接相关的最小自检（相关 typecheck / 单文件测试）即可；工作流会在你之后统一跑增量测试，不必重复跑全量。"
-            : "2b. 本组无增量测试命令——改完必须做与改动直接相关的最小自检（相关 typecheck / 单文件测试）。",
+            ? "2b. 自检硬门：修完必跑「改动触及的测试文件 + 所在包 typecheck」并全绿后才可返回（调试期只重跑失败的单个测试文件，禁止全套复跑；工作流会在你之后统一跑增量测试，不必重复跑全量）。返回 JSON 的 selfCheck 字段承载自检结果。"
+            : "2b. 本组无增量测试命令——自检硬门：修完必跑「改动触及的测试文件 + 所在包 typecheck」并全绿后才可返回（调试期只重跑失败的单个测试文件，禁止全套复跑）。返回 JSON 的 selfCheck 字段承载自检结果。",
           "3. git 禁令：禁止 git add / commit / push / stash——提交由工作流引擎统一执行（组级一笔）。",
           "4. 每条修复申报 affectedFiles（含波及文件，相对仓库根路径）；修不动 / 需上游裁决的条目放 skipped 带具体 reason，不静默跳过。",
           "5. 其他分区修复组并行工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属；未申报的改动引擎不处置不阻塞，留盘随终态呈报主 agent 判归属）。",
@@ -902,7 +1072,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           "",
           runlogDutyLine(`fix-${fileSafe(name)}-r${fixRound}`),
           "",
-          "返回 JSON：{ fixes: [{ id, description, affectedFiles: [] }], skipped: [{ id, reason }] }（id 原样引用清单中的 U 编号）。",
+          "返回 JSON：{ fixes: [{ id, description, affectedFiles: [] }], skipped: [{ id, reason }], selfCheck: { typecheck: \"pass\", tests: \"<命令: 结果>\" } }（id 原样引用清单中的 U 编号；fixes 非空时 selfCheck 必填且 typecheck 须为 \"pass\"）。",
         ]
           .filter(Boolean)
           .join("\n");
@@ -1274,25 +1444,27 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
         activeAfter.length > prevActiveCount
           ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${activeAfter.length}）`
           : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${activeAfter.length} 条）`;
-      return await finish(
-        "stuck",
-        reviewRound,
-        `计数停机线触发：${why}${stubborn.length > 0 ? `；顽固条目（≥2 轮修复未清，优先人工裁决）：${stubborn.map((i) => `${i.id}（${i.location}，${i.uncleanRounds} 轮）`).join("、")}` : ""}——残留清单见 remaining / 顽固清单见 escalated 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`,
-      );
+      stuckPendingReason = `计数停机线触发：${why}${stubborn.length > 0 ? `；顽固条目（≥2 轮修复未清，优先人工裁决）：${stubborn.map((i) => `${i.id}（${i.location}，${i.uncleanRounds} 轮）`).join("、")}` : ""}——残留清单见 remaining / 顽固清单见 escalated 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`;
+      break;
     }
     prevActiveCount = activeAfter.length;
   }
 }
 
-if (activeItems().length > 0) {
-  return await finish(
-    "stuck",
-    reviewRound,
-    `修复轮次上限 ${maxRounds} 耗尽仍有 ${activeItems().length} 条 unreasonable 活跃——残留清单见 remaining 字段；恢复动作：主 agent 人工裁决残留条目（定性争议转 doc_errors / 需重设计的走设计流程），不要盲目重跑本工作流`,
-  );
+if (activeItems().length > 0 && stuckPendingReason === null) {
+  stuckPendingReason = `修复轮次上限 ${maxRounds} 耗尽仍有 ${activeItems().length} 条 unreasonable 活跃——残留清单见 remaining 字段；恢复动作：主 agent 人工裁决残留条目（定性争议转 doc_errors / 需重设计的走设计流程），不要盲目重跑本工作流`;
 }
 
 // ══════════════ Phase 3：产物类第一波并行预备 + 全量测试 Gate A ══════════════
+
+// stuck 待收尾时 Gate A 结果并入 stuck 终态（终态 = stuck 非 gate-a-failed——残留条目的
+// 处置输入面完整），gateOutcome 记录结果供 finish 的 events 回写
+const finishGateA = (gateFailNote: string): Promise<Awaited<ReturnType<typeof finish>>> => {
+  gateOutcome = "fail";
+  return stuckPendingReason !== null
+    ? finish("stuck", reviewRound, `${stuckPendingReason}；Gate A 未能通过：${gateFailNote}`)
+    : finish("gate-a-failed", reviewRound, gateFailNote);
+};
 
 // 产物类并行预备（§6.1 条目 3）：Gate A 起始时并行启动全部产物类命令，禁止按清单顺序
 // 现用现建（2026-09-19 实测教训：real 轨首跑因磁盘产物过期被 launch 探针拒绝，重跑付一次全轮成本）
@@ -1321,10 +1493,8 @@ if (info.artifacts.length > 0) {
       ),
     }));
   } catch (e) {
-    return await finish(
-      "gate-a-failed",
-      reviewRound,
-      `产物类构建执行器失败：${String(e)}——后续验证类条目依赖产物，先归因构建环境（各产物日志 ${artifactLogOf("<id>")}）再重跑；本工作流不自动归因`,
+    return await finishGateA(
+      `产物类构建执行器失败：${String(e)}——后续验证类条目依赖产物，先归因构建环境（各产物日志 ${artifactLogOf("<id>")}）再重跑；本工作流不自动归因${stuckPendingReason !== null ? `。stuck 背景：${stuckPendingReason}` : ""}`,
     );
   }
   for (const { a, r } of artOuts) {
@@ -1336,17 +1506,13 @@ if (info.artifacts.length > 0) {
       artCode = -1;
     }
     if (r.exitCode !== 0 || artCode !== 0) {
-      return await finish(
-        "gate-a-failed",
-        reviewRound,
+      return await finishGateA(
         `产物类构建失败（${a.id}，exit ${r.exitCode}/code ${artCode}）——后续验证类条目依赖该产物，先归因产物构建（日志 ${artifactLogOf(a.id)}）再重跑；本工作流不自动归因`,
       );
     }
     const artSkipHits = await scanSkipEvidence(artifactLogOf(a.id), `产物 ${a.id}`);
     if (artSkipHits !== null && artSkipHits.length > 0) {
-      return await finish(
-        "gate-a-failed",
-        reviewRound,
+      return await finishGateA(
         `产物类命令输出命中零容忍绕过证据（${a.id}）：${artSkipHits.join("；")}——发现即失败项不自动归因（日志 ${artifactLogOf(a.id)}），由主 agent 归因处置后重跑`,
       );
     }
@@ -1384,9 +1550,7 @@ try {
 
 if (gateCode !== 0) {
   // 零容忍绕过：不自动归因、不降级、不重试——归因与补修是主 agent 的事
-  return await finish(
-    "gate-a-failed",
-    reviewRound,
+  return await finishGateA(
     `${gateNote || `全量测试退出码 ${gateCode}`}。日志：${gateALogPath}。归因指引：读日志定位失败用例（单测红 = 修复回归；编译/类型红 = 一致性残留漂移；超时 = 用例预算问题），由主 agent 派归因补修后重跑本工作流或全量测试——本工作流不自动归因`,
   );
 }
@@ -1394,10 +1558,16 @@ if (gateCode !== 0) {
 // eslint-disable 命中 = 有测试被跳过 / lint 被禁用——绿不豁免
 const gateSkipHits = await scanSkipEvidence(gateALogPath, "Gate A");
 if (gateSkipHits !== null && gateSkipHits.length > 0) {
-  return await finish(
-    "gate-a-failed",
-    reviewRound,
+  return await finishGateA(
     `Gate A 输出命中零容忍绕过证据：${gateSkipHits.join("；")}——测试被跳过或 lint 被禁用即失败项，不自动归因（日志 ${gateALogPath}），由主 agent 归因处置后重跑`,
+  );
+}
+gateOutcome = "pass";
+if (stuckPendingReason !== null) {
+  return await finish(
+    "stuck",
+    reviewRound,
+    `${stuckPendingReason}；Gate A 全量测试通过（日志：${gateALogPath}）——残留条目由主 agent 人工裁决，全量门绿可作为处置输入（未触及残留条目所在面的部分）`,
   );
 }
 return await finish("converged", reviewRound, `全部分区 unreasonable 清零，Gate A 全量测试通过（日志：${gateALogPath}）；doc_errors 与 reasonable 已随终态回流，由主 agent 转 D5 终态同步`);

@@ -134,8 +134,38 @@ const SCHEMA_FixReport = {
         required: ["id", "reason"],
       },
     },
+    selfCheck: {
+      type: "object",
+      description: "自检硬门声明（fixes 非空时必填且 typecheck 须 \"pass\"——带红返回不入账）",
+      properties: {
+        typecheck: { type: "string", description: "所在包 typecheck 结果，全绿填 pass" },
+        tests: { type: "string", description: "改动触及测试的运行结果（命令: 结果）" },
+      },
+      required: ["typecheck"],
+    },
   },
   required: ["fixes", "skipped"],
+};
+
+const SCHEMA_AggregateItem = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "条目 id（原样引用清单中的 U 编号）" },
+    action: { type: "string", enum: ["keep", "merge-into", "reclassify-doc-error", "escalate"], description: "裁决动作" },
+    mergeInto: { type: "string", description: "action=merge-into 时必填：并入的主条目 id" },
+    reason: { type: "string", description: "merge/reclassify/escalate 必填：裁决理由" },
+    group: { type: "string", description: "action=keep 时必填：修复组名（语义化、可跨分区）" },
+    expectedFiles: { type: "array", items: { type: "string" }, description: "action=keep 时必填：预期改动文件（相对仓库根）" },
+  },
+  required: ["id", "action"],
+};
+
+const SCHEMA_AggregateReport = {
+  type: "object",
+  properties: {
+    items: { type: "array", description: "逐条裁决（清单中每个 id 都必须出现）", items: SCHEMA_AggregateItem },
+  },
+  required: ["items"],
 };
 // wfAgent：公共体的 agent(name, persona).ask<T>(prompt) 的 pi 等价。构建管线把公共体
 // 调用点改写为 wfAgent(、泛型参数转为首个字符串参数（typeKey），这里查 SCHEMA_BY_KEY。
@@ -143,6 +173,7 @@ const SCHEMA_FixReport = {
 const SCHEMA_BY_KEY = {
   ReviewResult: SCHEMA_ReviewResult,
   FixReport: SCHEMA_FixReport,
+  AggregateReport: SCHEMA_AggregateReport,
 };
 function wfAgent(name, persona) {
   return {

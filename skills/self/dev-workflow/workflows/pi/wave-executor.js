@@ -120,9 +120,13 @@ function withPrevContext(initialPrompt, lastResult, retryPrompt) {
 //   设计 §6.2 F15 第一等路径）；接替者再异常才 blocked。
 // 一律 failed-as-return：throw 的 errored run 不可 resume 且丢结构化错误（参数校验除外
 //   ——args 非法属启动期快失败，errored 形态可接受）。
-// 边界声明（设计 §8.2）：并行单元共享工作区时，单单元改动归属无法由 git status 精确切分，
-//   核验采用两级判定——dev 自报 files_changed 为精确集（级一：⊆ 领地），引擎另跑全量
-//   status 对活跃单元领地并集做粗粒度复核（级二）；启动前工作区必须干净（级二成立前提）。
+// 边界声明（设计 §8.2，2026-09-29 裁决领地降级）：并行单元共享工作区时，单单元改动
+//   归属无法由 git status 精确切分，核验采用对账语义——dev 自报 files_changed 超出
+//   territory 声明范围不打回，登记对账事件随终态呈报；引擎收尾对全工作区清单外残留做
+//   对账（residualFiles）；启动前工作区必须干净（对账成立前提）。territory 声明仅剩
+//   两职责：启动互斥断言（并行单元防写冲突的最小机制——声明重叠且无依赖边拒绝启动）
+//   与 DAG 编排参考；运行时逐文件核验与扩展通道已删（实测零命中真越权、反致扩展死锁），
+//   多开发/少开发的一致性由 D2 一致性审查承接。
 // 边界声明（设计 §8.5）：worktree 单元的「合并回主分支才就绪」不做引擎侧自动检测——
 //   由 D0 编译负责排布合并（合并节点或手工段）。
 // ── args 窄化（未知键 fail-fast：拼错键静默忽略比报错危险） ──
@@ -153,7 +157,10 @@ const VALID_ENTRY_STATUS = new Set(["pending", "in-progress", "done", "blocked",
 // 按职责内默认规则处置 + 记录待裁决事项随终态呈报。随 persona 固化进全部 agent。
 const NO_ASK_RULE = "禁止向用户提问（无 AskUserQuestion / ask-user / 任何等待用户输入的操作）——workflow 内没有用户交互位；" +
     "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
-const DEV_PERSONA = "你是开发单元执行者：严格按任务书改码，只改任务书领地内的文件；自己跑通任务书定义的单元测试后再交付；" +
+const DEV_PERSONA = "你是开发单元执行者：严格按任务书改码，只改任务书领地内的文件；" +
+    "测试范围 = 任务书 testCommand 指定的命令及其触及的测试文件，跑通后再交付——禁止跑包级全量套件或跨包扫描" +
+    "（全量回归由后续全量测试门统一承担，单元级全量是重复劳动）；testCommand 覆盖不了你的改动行为时在 " +
+    "deviations 申报，不要自行扩跑；" +
     "不要自行 git add / git commit——引擎核验通过后统一提交，自行提交会破坏状态对账与并行调度；" +
     "引擎会确定性核验领地与测试，伪造 files_changed 或测试证据必被抓住；任务书与现实冲突、环境缺失时如实填报 " +
     "blockers/deviations，不要硬编绕过。" +
@@ -394,13 +401,16 @@ function validatePlan(raw) {
     const projectRoot = isStr(raw.projectRoot) ? raw.projectRoot : null;
     if (projectRoot === null) {
         errors.push("projectRoot 必须是非空字符串（git/测试/commit 的缺省 cwd——引擎不从进程 cwd 推导）");
-        return { ok: false, errors };
     }
     const statusPathRel = isStr(raw.statusPath) ? raw.statusPath : null;
     if (statusPathRel === null) {
         errors.push("statusPath 必须是非空字符串");
-        return { ok: false, errors };
     }
+    // projectRoot/statusPath 是节点构建的路径基准，缺失时节点级校验无从进行——
+    // 两者错误收集齐后即返回（不带病进节点校验）；两者齐备则继续收集后续错误，
+    // 一次报全（version/mode 因 schema 形态不可信保留单独 return）
+    if (projectRoot === null || statusPathRel === null)
+        return { ok: false, errors };
     // 节集：dev 模式=顶层 nodes；acceptance 模式=acceptance.nodes（两模式节点集分界）
     const rawNodes = [];
     let accRec = null;
@@ -912,19 +922,19 @@ async function verifyDevNode(node, result) {
     if (result.status !== "done") {
         return { outcome: "retry", reason: `自报 status=${result.status}`, detail: result.test_evidence || "（无自测证据）" };
     }
-    // 查一级（精确）：dev 自报 files_changed 为精确集，逐路径 ⊆ 本节点领地
+    // 查一级（对账语义，2026-09-29 裁决领地降级）：自报 files_changed 超出声明范围的
+    // 路径不再打回——运行时逐文件拦截实测零命中真越权、反造成扩展死锁等损耗（u3 领地
+    // 扩展死等 35.9min）；多开发/少开发的一致性由 D2 一致性审查与终态残留对账承接。
+    // commit 照常按自报精确路径执行（与声明范围无关），此处只登记对账事件
     const outside = result.files_changed.filter((f) => !pathInTerritory(f, node.territory));
     if (outside.length > 0) {
-        return {
-            outcome: "retry",
-            reason: "files_changed 超出领地",
-            detail: `超界路径：\n${outside.join("\n")}\n领地：\n${node.territory.join("\n")}`,
-        };
+        log(`WARN: 节点 ${node.id} 自报改动含声明范围外路径 ${outside.length} 项（${outside.slice(0, 5).join("、")}${outside.length > 5 ? " 等" : ""}）——不打回，登记对账随终态呈报`);
+        await statusUpdate(node.id, { status: "in-progress", attempts: state.get(node.id)?.attempts ?? 0 }, "territory-outside", `声明范围外改动（对账呈报，不打回）：${outside.join("、")}`);
     }
     // 查二级（粗粒度）：引擎另跑全量 status，观察清单外残留——只登记不拦截（2026-09-26
     // 用户裁决：并行单元运行中新建的文件天然不在启动时载入的静态领地里，把「别人的
     // 改动」判为当前单元越界是连坐——曾致 d3 被兄弟单元 7 个残留文件卡死、u5/u2a 互卡
-    // 成对 blocked。本节点只对自己的纪律负责（查一级自报 ⊆ 领地 + 查二测试绿）；全工作
+    // 成对 blocked。本节点只对自己的纪律负责（查一改动对账登记 + 查二测试绿）；全工作
     // 区残留统一由收尾对账呈报主 agent 处理，防漏报价值由终态呈报承接）
     const porcelain = await gitPorcelainViaNode(node.cwd);
     if (porcelain === null) {
@@ -1004,7 +1014,7 @@ async function executeDevNode(node) {
     let verdict = await verifyDevNode(node, result);
     while (verdict.outcome === "retry" && attempts <= MAX_REJECT_ROUNDS) {
         log(`节点 ${node.id} 核验未过（${verdict.reason}），打回定向修`);
-        result = await askWithSuccession(primaryAgent, succAgent, withPrevContext(initialPrompt, result, `引擎确定性核验未通过（原因：${verdict.reason}）。按以下失败输出定向修复，然后重新返回同一 JSON 契约：\n${verdict.detail}`), node, result);
+        result = await askWithSuccession(primaryAgent, succAgent, withPrevContext(initialPrompt, result, `引擎确定性核验未通过（原因：${verdict.reason}）。按以下失败输出定向修复；修复调试期只重跑失败的测试文件定位问题（禁止每轮全套复跑），全套复跑仅在最终交付前执行一次。完成并自证通过后重新返回同一 JSON 契约：\n${verdict.detail}`), node, result);
         if (result === null) {
             await markNodeBlockedOrFailed(node.id, "blocked", `打回轮结构化返回经接替仍不合规（${STRUCTURED_RETRY_MAX} 次回喂重试 × 主/接替两路径）`, `上一轮核验未过原因：${verdict.reason}`, attempts);
             return;
@@ -1179,56 +1189,10 @@ async function runSchedulingLoop() {
     while (true) {
         if (coreFail !== null)
             break;
-        // 执行期授权连带生效通道：主会话在 run 进行中修订 exec-plan 的 territory（如升级
-        // 裁决授权领地外文件）→ 每轮派发前重读一次，领地扩大即时生效（曾无此通道：授权后
-        // 引擎仍按启动时内存快照判越界，节点原样重交烧完 retry 进 blocked 再人工恢复）。
-        // 只跟随领地**扩大**（收缩不跟随——运行中变卦破坏核验基线）；deps/节点集等结构
-        // 变更不跟随（那是重发 run 的范畴）；变化记 status 事件留痕
-        await (async () => {
-            const text = await readTextViaNode(execPlanPath);
-            if (text === null)
-                return; // 读失败保持内存态（下轮再试）
-            try {
-                const parsed = JSON.parse(text);
-                if (!isRec(parsed) || !Array.isArray(parsed.nodes))
-                    return;
-                for (const rn of parsed.nodes) {
-                    if (!isRec(rn) || typeof rn.id !== "string" || !isStrArr(rn.territory))
-                        continue;
-                    const node = plan.nodes.find((n) => n.id === rn.id);
-                    if (!node || node.kind !== "dev")
-                        continue;
-                    const added = rn.territory.filter((t) => !node.territory.includes(t));
-                    if (added.length === 0)
-                        continue;
-                    // 扩范围条目与启动入口同一形态契约（territoryFormatErrors）：非法条目拒绝
-                    // 吸收 + 留痕——静默吸收会让该授权在 pathInTerritory 上恒不匹配，单元反复
-                    // 判越界烧完打回轮次；主 agent 改对后下轮重读天然重试
-                    const bad = territoryFormatErrors(node.id, added);
-                    if (bad.length > 0) {
-                        log(`WARN: 扩范围条目形态非法，拒绝吸收：${bad.join("；")}`);
-                        await statusUpdate(node.id, { status: nodeState(node.id), attempts: state.get(node.id)?.attempts ?? 0 }, "territory-extended", `扩范围条目形态非法被拒（未生效）：+${added.join("、")}——条目须为相对仓库根的纯路径`);
-                        continue;
-                    }
-                    // 与启动领地互斥断言同族：扩范围条目与其他正在运行节点的领地重叠 = 并行
-                    // 写冲突（同文件双写、核验归属互污），拒绝吸收；该节点 settle 后下轮重读
-                    // 天然重试（整批拒绝，干净条目随之延后一轮生效）
-                    const busyOverlap = plan.nodes.filter((n) => n.id !== node.id && n.kind === "dev" && state.get(n.id)?.status === "in-progress" && n.territory.some((t) => added.includes(t)));
-                    if (busyOverlap.length > 0) {
-                        const busyIds = busyOverlap.map((n) => n.id).join("、");
-                        log(`WARN: 扩范围条目与运行中节点（${busyIds}）领地重叠，拒绝吸收：+${added.join("、")}`);
-                        await statusUpdate(node.id, { status: nodeState(node.id), attempts: state.get(node.id)?.attempts ?? 0 }, "territory-extended", `扩范围条目与运行中节点（${busyIds}）领地重叠被拒（未生效）：+${added.join("、")}`);
-                        continue;
-                    }
-                    node.territory = [...new Set([...node.territory, ...added])];
-                    log(`INFO: 节点 ${node.id} 领地运行中扩大（exec-plan 修订生效）：+${added.join("、")}`);
-                    await statusUpdate(node.id, { status: nodeState(node.id), attempts: state.get(node.id)?.attempts ?? 0 }, "territory-extended", `授权连带生效：+${added.join("、")}`);
-                }
-            }
-            catch {
-                // exec-plan 解析失败（主会话写入中途）保持内存态，下轮再读
-            }
-        })();
+        // （执行期授权连带生效通道已删，2026-09-29 裁决领地降级：运行时不再逐文件核验，
+        // territory 无运行中扩容需求——原「每轮重读 exec-plan 吸收扩展」依赖节点落定触发，
+        // parked 等扩展 + 长跑单元在场时扩展永不可达（实测 u3 死等 35.9min 后被手动停）。
+        // 声明范围外的必要改动由 agent 直接做 + 自报 deviations，核验对账不打回）
         const ready = plan.nodes.filter((n) => nodeState(n.id) === "pending" &&
             n.deps.every((d) => nodeState(d) === "done"));
         // 游标防同轮重复派发（launch 后 state 同步变 in-progress，游标是双保险）

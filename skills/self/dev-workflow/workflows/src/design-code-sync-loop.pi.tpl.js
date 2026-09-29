@@ -230,8 +230,20 @@ const SCHEMA_FixOutcome = {
         required: ["issueId", "reason"],
       },
     },
+    delegated: {
+      type: "array",
+      description: "职责外申报（2026-09-29 裁决）：条目属实但修复动作属其他职责域（如 e2e 测试资产修复落在生产代码组）→ 申报转交；引擎置 delegated 终态不再计活跃，随终态 delegatedList 呈报主 agent 重派或立项。无申报时显式 []",
+      items: {
+        type: "object",
+        properties: {
+          issueId: { type: "string" },
+          reason: { type: "string", description: "职责外判据：修复动作属什么域、为什么不在本组职责内" },
+        },
+        required: ["issueId", "reason"],
+      },
+    },
   },
-  required: ["fixes", "affectedFiles", "deferred", "exempt"],
+  required: ["fixes", "affectedFiles", "deferred", "exempt", "delegated"],
 };
 
 // 退役判定 agent 结构化返回（只判定，不执行）

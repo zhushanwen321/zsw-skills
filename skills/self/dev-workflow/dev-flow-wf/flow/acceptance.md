@@ -19,7 +19,7 @@
 
 **W2 第二实例化（zcode 默认）**：`CreateWorkflow saved: wave-executor, args: { execPlan }`（mode=acceptance——节点 = verify/inspect，D0 已编译）。verify 节点 fail → **run 内自愈循环**（设计 §8.7，主 agent 零介入）：归因（spec-bug / product-bug / environment）→ spec-bug 由 fixer 修复验收资产后重跑该节点；product-bug **不修**，按依赖可达性判定——fail 节点的 DAG 后继闭包非空（卡住后续验收）→ 立即停止派发熔断上报，闭包为空（不卡）→ 记录跳过、其余节点跑完统一上报；environment 重试一次。自愈不收敛（maxRounds=10）同闭包判定。主 agent 只裁决与重发起；workflow 内任何 agent 禁止向用户提问（T9）。
 
-**手工路径**：场景按 DAG 派发——L3 脚本（预编译剧本：操作 + 断言 + 全页截图 + console 抓取，产物落 `<name>.acceptance/<场景id>/`）并行跑；L4 判断型（任务书附确定性产物指针）依赖其前驱；核心组先行（组内依赖拓扑 + 无共享状态并行 ≤5），核心全绿后非核心解锁；混合行已拆行（编译期）。
+**手工路径**：场景按 DAG 派发——L3 脚本（预编译剧本：操作 + 断言 + 全页截图 + console 抓取，产物落 `<name>.acceptance/<场景id>/`；剧本按 compile.md「每步汇总落盘」规范向 `<artifactsDir>/summary.jsonl` 追加逐步结果）并行跑；L4 判断型（任务书附确定性产物指针 + 逐节点 summary.jsonl 汇总路径——核对以汇总为准、仅异常步骤读全文日志）依赖其前驱；核心组先行（组内依赖拓扑 + 无共享状态并行 ≤5），核心全绿后非核心解锁；混合行已拆行（编译期）。
 
 - **失败处置（依赖可达性判据，2026-09-26 裁决）**：任一场景 fail 先进 run 内自愈循环（归因 → spec-bug 修复重验 / product-bug 不修 / environment 重试一次）；自愈不收敛或 product-bug 时计算 fail 场景的 DAG 后继闭包——非空（卡住后续验收）→ 立即停止派发、熔断上报；为空（不卡）→ 记录跳过、其余场景全部跑完统一上报。通用原则：处理不了的问题，不影响后续执行就先记录并跳过（记录落 `<name>.ledger.md`——手工路径主 agent 落笔，workflow 路径引擎终态笔已含）；影响后续执行则停止。主 agent 零编码，只裁决与重发起；重发起按 status.json 断点续跑
 - **修复独立性三态前置跑**：核心组缺陷出现时逐场景标三态（无已知缺陷=默认 / 独立于缺陷 N=修复窗口期旧实例前置跑，产物按旧实例标记 / 依赖缺陷 N=阻塞）——仅在「已出现核心缺陷 + 修复窗口时长 > 前置场景预估耗时」时启用

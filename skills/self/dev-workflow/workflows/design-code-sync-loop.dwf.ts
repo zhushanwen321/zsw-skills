@@ -153,6 +153,10 @@ interface FixOutcome {
    *  外部/上游包符号）→ 申报豁免；引擎转 exempt 终态、落豁免登记、随终态 exemptList 呈报
    *  主 agent 终审——豁免是 fixer 的语义判断，主 agent 可推翻 */
   exempt: { issueId: string; reason: string }[];
+  /** 职责外申报（2026-09-29 裁决，F8-1 类死锁防线）：条目属实但修复动作属其他职责域
+   *  （如 e2e 测试资产修复落在生产代码组）→ 申报转交；引擎置 delegated 终态不再计活跃，
+   *  随终态 delegatedList 呈报主 agent 重派或立项——禁止留在本组空转到 stuck */
+  delegated: { issueId: string; reason: string }[];
 }
 
 /** 修复分组（reconcileGroups 输出） */
@@ -188,8 +192,8 @@ interface FindingRecord {
   rationale: string;
   fixHint: string;
   firstSeen: number;
-  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报）/ exempt=符号豁免（fixer 核实不该扫的词，主 agent 终审，随终态 exemptList 呈报） */
-  status: "open" | "fixed" | "deferred" | "frozen" | "exempt";
+  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报）/ exempt=符号豁免（fixer 核实不该扫的词，主 agent 终审，随终态 exemptList 呈报）/ delegated=职责外（修复动作属其他职责域，不计活跃，随终态 delegatedList 呈报主 agent 重派） */
+  status: "open" | "fixed" | "deferred" | "frozen" | "exempt" | "delegated";
   fixedRound?: number;
 }
 
@@ -234,6 +238,9 @@ interface SyncResult {
   /** 越权候选卡清单（§7.3「过度/存疑只报告不删码，用户裁决后才动」的结构化呈报——
    *  矩阵 overdesign 行 + fixer defer 申报条目；用户裁决前不产生任何删码动作） */
   overdesignCandidates: { id: string; location: string; gap: string; reason: string }[];
+  /** 职责外申报条目（fixer delegated 申报累积；status=delegated 不计活跃，随终态呈报
+   *  主 agent 重派或立项——F8-1 类跨职责条目空转死锁的防线，2026-09-29） */
+  delegatedList: { id: string; location: string; reason: string }[];
   /** 残余活跃条目（stuck / *-failure 随终态呈报；设计 §7 停机线：清单随终态） */
   remaining: { id: string; severity: string; direction: string; location: string; gap: string }[];
   /** 工作区无人认领/多组冲突的残留改动（各组只对自己的改动负责，无人认领的不提交
@@ -305,6 +312,9 @@ function r2PrevContextBlock(
 //  - 越权候选防线（§7.3 三档机器落点）：框架行 overdesign 过度/存疑入账即转候选卡；
 //    fixer 遇删码类修复无论等级（含 must-fix）可申报 defer 不执行——两者都随终态
 //    overdesignCandidates 呈报，用户裁决前不产生删码动作
+//  - 职责外申报（2026-09-29 裁决）：fixer 判定条目修复动作属其他职责域（如 e2e 资产
+//    修复落在生产代码组）→ delegated 申报置终态不计活跃，随终态 delegatedList 呈报
+//    主 agent 重派——防跨职责条目在本组空转到 stuck（实测 F8-1 单条空转 6 轮）
 //  - 修复全等级当轮修完不留尾巴（must-fix/suggestion/info）；组核验（改动 ⊆ 组文件并集
 //    ∪ 如实申报的 affectedFiles，批改动检测 = 内容指纹差分——批前已改文件被 fixer 再改
 //    后状态码不变，指纹直读内容无盲区）→ 引擎组级一笔 commit（gitignore 产物留盘不提交）
@@ -619,6 +629,14 @@ function normFixOutcome(raw: FixOutcome, rootDir: string): FixOutcome {
     if (id === "") continue;
     exempt.push({ issueId: id, reason: asStr(o.reason) });
   }
+  const delegated: { issueId: string; reason: string }[] = [];
+  for (const d of Array.isArray(raw.delegated) ? raw.delegated : []) {
+    if (d === null || typeof d !== "object") continue;
+    const o = d as unknown as Record<string, unknown>;
+    const id = asStr(o.issueId).trim();
+    if (id === "") continue;
+    delegated.push({ issueId: id, reason: asStr(o.reason) });
+  }
   const affected: string[] = [];
   for (const p of Array.isArray(raw.affectedFiles) ? raw.affectedFiles : []) {
     if (typeof p !== "string") continue;
@@ -627,7 +645,7 @@ function normFixOutcome(raw: FixOutcome, rootDir: string): FixOutcome {
     const abs = tok.startsWith("/") ? tok : `${rootDir}/${tok}`;
     if (!affected.includes(abs)) affected.push(abs);
   }
-  return { fixes, deferred, exempt, affectedFiles: affected };
+  return { fixes, deferred, exempt, delegated, affectedFiles: affected };
 }
 
 /** 退役判定返回防御：数组/字段窄化 */
@@ -939,6 +957,10 @@ const overdesignCandidates: { id: string; location: string; gap: string; reason:
 /** 符号豁免清单（fixer exempt 申报累积；双落点 = runDir/exempted.json + finish.exemptList，
  *  交主 agent 终审——fixer 的豁免是语义判断，主 agent 可推翻：改词表后 attempt 递增重发） */
 const exemptList: { id: string; word: string; reason: string }[] = [];
+// 职责外申报清单（fixer delegated 申报累积）：条目属实但修复动作属其他职责域——
+// 置 delegated 终态不计活跃（防复审空转到 stuck，实测 F8-1 单条空转 6 轮），随终态
+// delegatedList 呈报主 agent 重派或立项（2026-09-29 裁决）
+const delegatedList: { id: string; location: string; reason: string }[] = [];
 // 工作区残留登记（无人认领 + 多组冲突的改动）：不提交不作废留盘，随终态 residualFiles
 // 呈报主 agent 判归属处置（2026-09-26 用户裁决——各组只对自己的改动负责）
 const residualFiles = new Set<string>();
@@ -1106,6 +1128,7 @@ function finish(terminated: SyncResult["terminated"], round: number, message: st
       .filter((f) => f.direction === "contested")
       .map((f) => ({ id: f.id, location: f.location, gap: f.gap, severity: f.severity, rationale: f.rationale })),
     exemptList,
+    delegatedList,
     overdesignCandidates,
     remaining: ledger
       .filter((f) => f.status === "open")
@@ -1205,7 +1228,7 @@ function validateModuleReview(v: unknown): Validated<ModuleReview> {
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as ModuleReview };
 }
 
-/** 修复组返回校验：fixes 对象数组 + affectedFiles 字符串数组 + deferred/exempt 对象数组 */
+/** 修复组返回校验：fixes 对象数组 + affectedFiles 字符串数组 + deferred/exempt/delegated 对象数组 */
 function validateFixOutcome(v: unknown): Validated<FixOutcome> {
   const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
   const errors: string[] = [];
@@ -1213,6 +1236,7 @@ function validateFixOutcome(v: unknown): Validated<FixOutcome> {
   if (!isStrArr(o["affectedFiles"])) errors.push("affectedFiles 须为字符串数组");
   if (!isObjArr(o["deferred"])) errors.push("deferred 须为对象数组（无申报时显式 []）");
   if (!isObjArr(o["exempt"])) errors.push("exempt 须为对象数组（无申报时显式 []）");
+  if (!isObjArr(o["delegated"])) errors.push("delegated 须为对象数组（职责外申报，无申报时显式 []）");
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as FixOutcome };
 }
 
@@ -1312,9 +1336,10 @@ function fixerPrompt(g: FixGroup, byId: Map<string, FindingRecord>): string {
   L.push("5. 每条修复给 selfCheck：一条可复跑命令 + 预期结果（改文档类可用 grep 断言；聚焦复审会复核它）。");
   L.push("6. 越权候选防线：若某条的修复动作将是「删除/移除一段现有实现」而其指控仅是「设计文档没写」（无行为矛盾/悬空引用等实质缺陷证据），**无论等级（含 must-fix）**都不要执行删除——放入 deferred（reason 写候选卡论证：小取舍/大简化/核心价值不变），它将随终态呈报用户裁决后才动；「文档没写」更可能是文档侧漏登记而非代码越权，宁可多呈报一张候选卡，不可直接删码。deferred 的另一合法场景 = 退役引用清理条目核实为必须原样指向的合法存证（条目指引会标明）。");
   L.push("7. 符号豁免申报（仅机械信号条目可用）：若某条指控「词表符号 X 在代码库零命中」，而你核实 X 本就不该被扫描（典型 = 外部/上游包符号、且文档已就地解释其来源）——不要为消信号去删改文档（会丢失对外部依赖行为的关键描述），放入 exempt（reason 写核实证据：如在依赖包中的命中位置 / 文档解释所在位置），它将转豁免终态、落豁免登记并随终态呈报主 agent 终审。真悬空引用（本项目符号被删/改名）不属于豁免，照常修复。");
+  L.push("8. 职责外申报：条目属实、但修复动作属其他职责域（典型 = e2e/测试资产修复、跨模块公共设施改动落在生产代码组）——不要硬修也不要留置不理（留置会让复审每轮重报直到 stuck，实测单条空转 6 轮），放入 delegated（reason 写修复动作属什么域、为什么不在本组职责内），它将转 delegated 终态随终态呈报主 agent 重派或立项。职责内该修的照常修。");
   L.push("");
   L.push(runlogDutyLine(`sync-fix-${fileSafe(g.id)}`));
-  L.push("完成后返回 JSON：fixes（元素 {issueId, description, selfCheck}，issueId 与上面条目一致原样引用，本组全部条目必须被 fixes / deferred / exempt 之一覆盖）+ deferred（元素 {issueId, reason}——仅越权候选防线场景）+ exempt（元素 {issueId, reason}——仅机械条目的符号豁免场景，无申报时显式 []）+ affectedFiles（实际改动文件路径数组，含新增文件）。");
+  L.push("完成后返回 JSON：fixes（元素 {issueId, description, selfCheck}，issueId 与上面条目一致原样引用，本组全部条目必须被 fixes / deferred / exempt / delegated 之一覆盖）+ deferred（元素 {issueId, reason}——仅越权候选防线场景）+ exempt（元素 {issueId, reason}——仅机械条目的符号豁免场景）+ delegated（元素 {issueId, reason}——仅职责外场景，无申报时显式 []）+ affectedFiles（实际改动文件路径数组，含新增文件）。");
   return L.join("\n");
 }
 
@@ -2166,6 +2191,16 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
             `${runDir}/exempted.json`,
             JSON.stringify({ note: "fixer 申报的符号豁免登记（主 agent 终审：认可则无动作，推翻则改词表后重发）", exempted: exemptList }, null, 2),
           );
+        }
+        // delegated 申报消费（2026-09-29 裁决）：条目属实但修复动作属其他职责域 → 置
+        // delegated 终态不计活跃（防复审每轮重报空转到 stuck），随终态 delegatedList 呈报
+        for (const d of o.delegated) {
+          const f = activeById.get(d.issueId);
+          if (f && f.status === "open") {
+            f.status = "delegated";
+            delegatedList.push({ id: f.id, location: f.location, reason: d.reason });
+            log(`条目 ${f.id} 被 fixer 申报职责外（${d.reason}）——转终态呈报主 agent 重派或立项`);
+          }
         }
         const files = [...attributed.entries()]
           .filter(([, gid]) => gid === g.id)

@@ -95,6 +95,27 @@ interface FixReport {
   fixes: FixRecord[];
   /** 未修条目如实申报（id + 具体原因）；确信设计文档自身有错的条目走这里（转 doc_errors 流回） */
   skipped: { id: string; reason: string }[];
+  /** 自检硬门声明（fixes 非空时必填且 typecheck 须 "pass"——带红返回不入账） */
+  selfCheck?: { typecheck: string; tests?: string };
+}
+
+/** 聚合定性条目裁决（2026-09-29 裁决：修复前判断型环节——去重/定性复核/无交集分组/跨职责路由） */
+interface AggregateItem {
+  /** 条目 id（原样引用清单中的 U 编号） */
+  id: string;
+  action: "keep" | "merge-into" | "reclassify-doc-error" | "escalate";
+  /** action=merge-into 时必填：并入的主条目 id */
+  mergeInto?: string;
+  /** merge-into / reclassify-doc-error / escalate 必填：裁决理由 */
+  reason?: string;
+  /** action=keep 时必填：修复组名（语义化、可跨分区——跨职责路由的载体） */
+  group?: string;
+  /** action=keep 时必填：预期改动文件（相对仓库根，供组间无交集硬校验） */
+  expectedFiles?: string[];
+}
+
+interface AggregateReport {
+  items: AggregateItem[];
 }
 
 interface ItemRecord {
@@ -108,7 +129,7 @@ interface ItemRecord {
   affectsDelivery: string;
   severity: string;
   fixHint: string;
-  /** 所属修复组（= 分区边界） */
+  /** 所属修复组（入池时 = 分区边界；聚合定性路由后可被覆盖为跨分区组名） */
   group: string;
   /** 首次出现的审查轮（R1 = 1） */
   firstRound: number;

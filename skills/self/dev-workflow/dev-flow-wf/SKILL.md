@@ -48,7 +48,7 @@ description: >-
 1. **编排者零编码**：主 agent 只编译、发起、裁决、commit（workflow 形态下 commit 也归引擎）；一切 src/tests 编写修改走 subagent/节点
 2. **门只认证据**：推进只承认命令输出、diff、结构化终态——无证据的「已完成」一律退回
 3. **验证方式分级 L0-L4**（低成本高收益前置）：L0 静态规则（主 agent/world.run 直跑）→ L1 增量单测（节点/dev 自跑）→ L2 全量套件（D2 Gate A）→ L3 脚本端到端（verify 节点）→ L4 agent 端到端（inspect 节点）。低级未清不进高级
-4. **范围锁定**：节点/dev 只改领地白名单内文件；范围外必改停下上报
+4. **范围对账**：节点/dev 优先改任务书声明范围内的文件；范围外的必要改动直接做 + 自报 deviations/自报清单如实登记——运行时不再逐文件打回（2026-09-29 裁决领地降级），改动对账由核验对账事件、终态残留核查与 D2 一致性审查承接；并行单元互不触碰对方声明内的文件（写冲突会互相覆盖丢改动，不可恢复）
 5. **git 单点**：subagent 禁止一切 git 写；workflow 形态下 commit 由引擎 world.run 执行（精确路径 add，禁 -A），手工形态下由主 agent 执行；文档类同步改动禁止单独成笔——随触发它的单元同笔提交（files_changed 含文档路径即同笔）；确因验收结论后置的攒批成一笔，禁止一文档一笔
 6. **基线先行**：exec-plan.json 落盘即基线（`.tmp/` 不入 git）；执行态事实源 = `<name>.status.json`
 
@@ -75,6 +75,8 @@ description: >-
 | W4 `design-code-sync-loop`（saved） | D5 | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath?, plannerTemplate?, reviewerTemplate?, attempt? }` | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（模板路径与 attempt 缺省自动处理，attempt>1 历史产物不覆盖；终态含 overdesignCandidates——越权候选卡呈报） |
 
 执行体按宿主环境选择：**zcode**（会话可见 CreateWorkflow 工具 / saved workflows）→ 上表 saved workflow 经 `CreateWorkflow saved` 发起；**pi**（subagent-workflow extension、workflow 工具可用）→ 本 skill 安装位置上级的 `../workflows/pi/<name>.js`（四件：wave-executor / dev-consistency-loop / design-code-sync-loop）复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run <name> --args k=v`——两版脚本业务逻辑逐行一致，仅 agent 调用层与文件头不同；--args 值全字符串，数字参数脚本内自动归一，数组型不支持。两版均未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：zcode workflow 用 ResumeWorkflowRun/AmendWorkflow，pi 重新 run（attempt 递增防产物覆盖），手工路径以 status.json + git log 对账，冲突以 git 为准）。
+
+**attempt 重发起纪律 [MANDATORY]**：对在途 run 重发起（AmendWorkflow / supersede）前尽量等在途节点落定（或先停派发让活跃节点收尾）——journal 缓存只认已完成节点，未完成的在途工作不入缓存，重发起即在途工作全部作废重做（实测单次损失 47.6 分钟 / 约 3700 万 token，2026-09-29）。
 
 ## 双平台脚本维护约定（改 workflows/src/ 时）
 

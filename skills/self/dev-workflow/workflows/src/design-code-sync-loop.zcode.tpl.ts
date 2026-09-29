@@ -153,6 +153,10 @@ interface FixOutcome {
    *  外部/上游包符号）→ 申报豁免；引擎转 exempt 终态、落豁免登记、随终态 exemptList 呈报
    *  主 agent 终审——豁免是 fixer 的语义判断，主 agent 可推翻 */
   exempt: { issueId: string; reason: string }[];
+  /** 职责外申报（2026-09-29 裁决，F8-1 类死锁防线）：条目属实但修复动作属其他职责域
+   *  （如 e2e 测试资产修复落在生产代码组）→ 申报转交；引擎置 delegated 终态不再计活跃，
+   *  随终态 delegatedList 呈报主 agent 重派或立项——禁止留在本组空转到 stuck */
+  delegated: { issueId: string; reason: string }[];
 }
 
 /** 修复分组（reconcileGroups 输出） */
@@ -188,8 +192,8 @@ interface FindingRecord {
   rationale: string;
   fixHint: string;
   firstSeen: number;
-  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报）/ exempt=符号豁免（fixer 核实不该扫的词，主 agent 终审，随终态 exemptList 呈报） */
-  status: "open" | "fixed" | "deferred" | "frozen" | "exempt";
+  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报）/ exempt=符号豁免（fixer 核实不该扫的词，主 agent 终审，随终态 exemptList 呈报）/ delegated=职责外（修复动作属其他职责域，不计活跃，随终态 delegatedList 呈报主 agent 重派） */
+  status: "open" | "fixed" | "deferred" | "frozen" | "exempt" | "delegated";
   fixedRound?: number;
 }
 
@@ -234,6 +238,9 @@ interface SyncResult {
   /** 越权候选卡清单（§7.3「过度/存疑只报告不删码，用户裁决后才动」的结构化呈报——
    *  矩阵 overdesign 行 + fixer defer 申报条目；用户裁决前不产生任何删码动作） */
   overdesignCandidates: { id: string; location: string; gap: string; reason: string }[];
+  /** 职责外申报条目（fixer delegated 申报累积；status=delegated 不计活跃，随终态呈报
+   *  主 agent 重派或立项——F8-1 类跨职责条目空转死锁的防线，2026-09-29） */
+  delegatedList: { id: string; location: string; reason: string }[];
   /** 残余活跃条目（stuck / *-failure 随终态呈报；设计 §7 停机线：清单随终态） */
   remaining: { id: string; severity: string; direction: string; location: string; gap: string }[];
   /** 工作区无人认领/多组冲突的残留改动（各组只对自己的改动负责，无人认领的不提交
