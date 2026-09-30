@@ -93,10 +93,12 @@ Bundled importers turn a codebase into a graph JSON ready for autolayout, so "vi
 | Language | Script | Node = | Edge = |
 |---|---|---|---|
 | Python | `scripts/pyimports.py <dir>` | module / package (`ast`) | intra-project `import` / `from` |
-| JS / TS | `scripts/jsimports.py <dir>` | source file (`.ts/.tsx/.js/.jsx/.mjs/.cjs`) | resolved relative `import`/`export from`/`require()`/`import()` |
-| Go | `scripts/goimports.py <dir>` | package (directory, via `go.mod`) | intra-module package import |
+| JS / TS | `scripts/jsimports.py <dir>` | source file (`.ts/.tsx/.js/.jsx/.mjs/.cjs`, excluding `.d.ts` declaration files) | resolved relative `import`/`export from`/`require()`/`import()` |
+| Go | `scripts/goimports.py <module_root>` | package (directory, via `go.mod`) | intra-module package import |
 | Rust | `scripts/rustimports.py <dir>` | module (`.rs` file / `mod`) | intra-crate `use crate::` / `super::` / `self::` |
 | Python (classes) | `scripts/pyclasses.py <dir>` | class (`ast`) | subclass → base (inheritance) |
+
+`<dir>` is the package/project directory to scan, resolved against the working directory of the call. The exception is `goimports.py`, whose positional argument must be the **module root** — the directory that contains `go.mod`, since the module path is read from there; pass a sub-directory of the module and it finds no `go.mod` and exits 1.
 
 ```bash
 python3 <this-skill-dir>/scripts/pyimports.py myproject -o graph.json
@@ -105,13 +107,17 @@ python3 <this-skill-dir>/scripts/autolayout.py graph.json -o diagram.drawio
 
 Each keeps only **intra-project** edges (third-party/stdlib imports are ignored), shortens node labels (drops the shared package/module/directory prefix; ids stay fully qualified), and shares the same flags: `--direction TB|LR` (default `TB`), `--group`, `--no-reduce`.
 
+**Output and exit-status convention (all importers):** the graph JSON goes to the path given with `-o`, or to stdout when `-o` is omitted; a one-line summary (node/edge count, and the reduction count unless `--no-reduce`) always goes to stderr. Exit status is 0 on success — including when `tred` is unavailable — 1 when no scannable modules/packages/classes are found under the argument, and 2 on a usage error (argparse). The graph JSON itself is never written to stderr.
+
 - **Python** (`pyimports.py`): if the directory is itself a package (`__init__.py` present), module names are package-qualified so the project's own absolute imports resolve; nested subpackages (`pkg.sub.mod`) are handled.
-- **JS/TS** (`jsimports.py`): resolution is path-based (tries the source extensions and directory `index` files); `node_modules` and bare specifiers are skipped. Scanning is regex-based, not a full parser.
-- **Go** (`goimports.py`): reads the `module` path from `go.mod`; each directory of `.go` files is one package; `*_test.go` and `vendor/` are skipped.
-- **Rust** (`rustimports.py`): each `.rs` file is a module (`mod.rs`/`main.rs`/`lib.rs` name the enclosing module); edges come from `use` paths rooted at `crate::`/`super::`/`self::` (brace groups expanded). `std`/external crates and `target/` are skipped. Regex-based — inline `mod { … }` blocks aren't split out, and 2015-edition bare intra-crate paths aren't resolved.
-- **Python classes** (`pyclasses.py`): a finer granularity — one node per class, edges from each subclass to the project base classes it extends, so the result is an auto-generated class hierarchy. Bases are matched by name (preferring the same module); external bases (`object`, third-party) are ignored. With `--group`, classes are boxed by their module, so a deep package tree nests naturally. Inheritance only — function-level call graphs are out of scope (static call resolution in Python is unreliable).
+- **JS/TS** (`jsimports.py`): resolution is path-based (tries the source extensions and directory `index` files); `node_modules` and bare specifiers are skipped. `.d.ts` declaration files are not nodes. Scanning is regex-based, not a full parser.
+- **Go** (`goimports.py`): the argument must be the **module root** — the directory containing `go.mod`, whose `module` line supplies the import-path prefix. Each directory of `.go` files is one package; `*_test.go` and `vendor/` are skipped.
+- **Rust** (`rustimports.py`): each `.rs` file is a module (`mod.rs`/`main.rs`/`lib.rs` name the enclosing module); edges come from `use` paths rooted at `crate::`/`super::`/`self::` (brace groups expanded). `std`/external crates and `target/` are skipped. Only `src/` is scanned — when the argument has no `src/`, the argument itself is used. The crate-root node's id is the first `name` from `Cargo.toml`, or `crate` when that file is missing or has no `name`. Regex-based — inline `mod { … }` blocks aren't split out, and 2015-edition bare intra-crate paths aren't resolved.
+- **Python classes** (`pyclasses.py`): a finer granularity — one node per class, edges from each subclass to the project base classes it extends, so the result is an auto-generated class hierarchy. Only **top-level classes** in each module are extracted (classes nested inside functions or other classes are ignored). Bases are matched by name (preferring the same module); when several classes share a base name and none is in the subclass's module, the base is ambiguous and that edge is dropped. External bases (`object`, third-party) are ignored. With `--group`, classes are boxed by their module, so a deep package tree nests naturally. Inheritance only — function-level call graphs are out of scope (static call resolution in Python is unreliable).
 
 **Density reduction is on by default** — this is the key to a readable result. Real import graphs are dense (asyncio: 33 modules / ~149 edges); without reduction they render as a hairball. Every importer applies **transitive reduction** (Graphviz `tred` — drops edges already implied by a longer path), which on asyncio cuts ~149 edges to ~46 and turns the hairball into a clean, traceable diagram. Pass `--no-reduce` to keep every edge.
+
+`tred` is an optional Graphviz tool. When it is missing, the importer degrades instead of failing: it keeps **all** edges (equivalent to `--no-reduce`), writes one warning line to stderr, and still exits 0 — so a dense diagram is a hint to install Graphviz (`tred`), not a bug in the importer.
 
 **`--group`** assigns each node a container by its sub-package / directory path, so autolayout boxes related modules together — nested when the path has depth (see **Containers / grouping**). The fastest way to turn a large code graph into a tiered architecture view.
 

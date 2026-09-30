@@ -41,7 +41,7 @@ description: >-
 | "这个词能不能用" | AGENTS.md「用语纪律」白名单 + 带条件保留表；都没命中按本文件「新词准入」判，拿不准登记白名单候选行 |
 | "为什么总出这种问题" / "给案例" | `references/patterns.md` |
 | "有哪些待裁决的新词/新模式" | AGENTS.md「用语纪律」观察名单 + 白名单「候选：」行 + `references/patterns.md` 候选模式 |
-| "扫某文档里命中词表的词" | 跑 `scripts/word-scan.py`（用法见文件头注释） |
+| "扫某文档里命中词表的词" | 跑本 skill 目录下 `scripts/word-scan.py`（本文件中 `<skill-dir>` 指本 skill 的安装目录，随宿主环境变，本机为 `~/.agents/skills/meta-words-guidance`；用法见文件头注释） |
 
 审查与修改都做时：先 review-checklist 定位问题，再 rewrite-guide 执行改写；查替换词看 AGENTS.md「用语纪律」的已裁决替换表。
 

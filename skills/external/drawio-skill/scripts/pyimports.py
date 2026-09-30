@@ -11,7 +11,9 @@ autolayout.py:
 
 Transitive reduction uses Graphviz `tred` (drops edges implied by a longer
 path); pass --no-reduce to keep every import edge. Only intra-project imports
-are kept — third-party and stdlib imports are ignored.
+are kept — third-party and stdlib imports are ignored. A file that fails to
+parse (SyntaxError) is skipped with a stderr warning, so its module and its
+edges are absent from the graph.
 
 Usage: python3 pyimports.py <project_dir> [-o graph.json] [--direction TB|LR] [--no-reduce]
 """
@@ -62,7 +64,8 @@ def edges_of(name, path, modules):
     found = set()
     try:
         tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
-    except SyntaxError:
+    except SyntaxError as exc:
+        sys.stderr.write(f"warning: syntax error in {path}, skipped: {exc}\n")
         return found
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):                     # import a.b.c

@@ -73,22 +73,45 @@ _call_api() {
     exit 1
   fi
 
-  local error_msg
-  error_msg=$(_json_value "$response" "message")
-  if [[ -n "$error_msg" && "$response" == *'"error"'* ]]; then
-    echo "API Error: $error_msg" >&2
+  # Only a top-level "error":{...} object marks a JSON-RPC failure. A successful
+  # result lives under "result", so a body that merely contains the word "error"
+  # in its search text, or an "error" key holding a non-object value (e.g.
+  # "error":"none"), must not be misread as a failure and dropped.
+  if [[ "$response" == *'"error":{'* || "$response" == *'"error": {'* ]]; then
+    local error_msg
+    error_msg=$(_json_value "$response" "message")
+    echo "API Error: ${error_msg:-$response}" >&2
     exit 1
   fi
 
   if [[ "$response" == *'"result"'*'"content"'* ]]; then
+    # Prefer a real JSON parse when python3 is available: the grep fallback below
+    # truncates a text value at its first escaped quote (\") and cannot decode it.
+    # python3 writes the already-decoded text, so it must not be re-run through
+    # the sed unescape that the grep path needs.
+    if command -v python3 >/dev/null 2>&1; then
+      if printf '%s' "$response" | python3 -c '
+import sys, json
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(3)
+content = (data.get("result") or {}).get("content") or []
+for item in content:
+    if isinstance(item, dict) and item.get("type") == "text":
+        sys.stdout.write(item.get("text", ""))
+        sys.exit(0)
+sys.exit(4)
+' 2>/dev/null; then
+        return 0
+      fi
+    fi
+    # No python3 (or parse failed / no text item found): best-effort extraction,
+    # dropping everything after the text value's first escaped quote.
     local text_block=""
-    set +e
     text_block=$(echo "$response" | grep -o '"text":"[^"]*"' | head -1 | sed 's/"text":"//;s/"$//' 2>/dev/null)
-    set -e
     if [[ -n "$text_block" ]]; then
-      set +e
       echo "$text_block" | sed 's/\\n/\n/g; s/\\"/"/g; s/\\\\/\\/g'
-      set -e
     else
       echo "$response"
     fi
@@ -117,6 +140,7 @@ _cmd_search() {
       --max_results|-m) max_results="$2"; shift 2 ;;
       --freshness|-f)  freshness="$2"; shift 2 ;;
       --api_key)       API_KEY="$2"; shift 2 ;;
+      -h|--help)       _usage; exit 0 ;;
       -*)              echo "Unknown flag: $1" >&2; _usage; exit 1 ;;
       *)               query="$1"; shift ;;
     esac
@@ -125,6 +149,11 @@ _cmd_search() {
   if [[ -z "$query" ]]; then
     echo "Error: query is required" >&2
     exit 1
+  fi
+
+  if [[ -n "$max_results" && ! "$max_results" =~ ^[0-9]+$ ]]; then
+    echo "Error: --max_results must be an integer" >&2
+    exit 2
   fi
 
   local escaped_query
@@ -141,6 +170,13 @@ _cmd_search() {
       args="${args%\}},\"sub_domain\":\"$escaped_sub\"}"
     fi
     if [[ -n "$sub_domain_params" ]]; then
+      if command -v python3 >/dev/null 2>&1; then
+        if ! printf '%s' "$sub_domain_params" | python3 -m json.tool >/dev/null 2>&1; then
+          echo "Error: --sub_domain_params must be valid JSON" >&2
+          exit 2
+        fi
+      fi
+      # Without python3 the value cannot be validated locally and is passed through as-is.
       args="${args%\}},\"sub_domain_params\":$sub_domain_params}"
     fi
   fi
@@ -190,6 +226,7 @@ _cmd_list_domains() {
       --domains)       domains="$2"; shift 2 ;;
       --domain)        domain="$2"; shift 2 ;;
       --api_key)       API_KEY="$2"; shift 2 ;;
+      -h|--help)       _usage; exit 0 ;;
       -*)              echo "Unknown flag: $1" >&2; exit 1 ;;
       *)               domain="$1"; shift ;;
     esac
@@ -232,6 +269,7 @@ _cmd_extract() {
     case "$1" in
       --url|-u)        url="$2"; shift 2 ;;
       --api_key)       API_KEY="$2"; shift 2 ;;
+      -h|--help)       _usage; exit 0 ;;
       -*)              echo "Unknown flag: $1" >&2; exit 1 ;;
       *)               url="$1"; shift ;;
     esac
@@ -257,6 +295,7 @@ _cmd_batch_search() {
       --queries|-q)    queries="$2"; shift 2 ;;
       --query)         query_items+=("$2"); shift 2 ;;
       --api_key)       API_KEY="$2"; shift 2 ;;
+      -h|--help)       _usage; exit 0 ;;
       -*)              echo "Unknown flag: $1" >&2; exit 1 ;;
       *)               queries="$1"; shift ;;
     esac
@@ -338,6 +377,8 @@ _cmd_doc() {
 
 ## CLI Invocation (Bash)
 
+`<skill_dir>` = the directory where this skill is installed (the directory containing SKILL.md).
+
 ```bash
 bash <skill_dir>/scripts/anysearch_cli.sh <command> [options]
 ```
@@ -395,17 +436,17 @@ Truncated at 50,000 chars. HTML pages only.
 User query
   |
   +-- Has structured identifiers? (Stock:/CVE:/DOI:/IATA:/patent etc.)
-  |     YES -> 1) bash scripts/anysearch_cli.sh list_domains --domain X
+  |     YES -> 1) bash <skill_dir>/scripts/anysearch_cli.sh list_domains --domain X
   |             2) read query_format from result -> construct query accordingly
-  |             3) bash scripts/anysearch_cli.sh search "<query>" --domain X --sub_domain Y --zone cn
+  |             3) bash <skill_dir>/scripts/anysearch_cli.sh search "<query>" --domain X --sub_domain Y --zone cn
   |
   +-- Multiple independent intents?
-  |     YES -> bash scripts/anysearch_cli.sh batch_search --query "..." --query "..."
+  |     YES -> bash <skill_dir>/scripts/anysearch_cli.sh batch_search --query "..." --query "..."
   |
   +-- Need deeper content than snippets?
-        YES -> bash scripts/anysearch_cli.sh extract "https://example.com/article"
+        YES -> bash <skill_dir>/scripts/anysearch_cli.sh extract "https://example.com/article"
 
-  Otherwise -> bash scripts/anysearch_cli.sh search "<general query>"
+  Otherwise -> bash <skill_dir>/scripts/anysearch_cli.sh search "<general query>"
 ```
 
 ---
@@ -434,21 +475,21 @@ and strictly obey the returned semantic constraints:
 ### Scenario 1: General web search — look up a factual question
 
 ```bash
-bash scripts/anysearch_cli.sh search "What is the capital of France"
+bash <skill_dir>/scripts/anysearch_cli.sh search "What is the capital of France"
 ```
 
 ```bash
-bash scripts/anysearch_cli.sh search "quantum computing breakthroughs 2025" --max_results 5 --freshness month
+bash <skill_dir>/scripts/anysearch_cli.sh search "quantum computing breakthroughs 2025" --max_results 5 --freshness month
 ```
 
 ### Scenario 2: Search with content type filter — find video or image results
 
 ```bash
-bash scripts/anysearch_cli.sh search "how to bake sourdough bread" --content_types video --max_results 3
+bash <skill_dir>/scripts/anysearch_cli.sh search "how to bake sourdough bread" --content_types video --max_results 3
 ```
 
 ```bash
-bash scripts/anysearch_cli.sh search "Mount Everest" --content_types image --max_results 5
+bash <skill_dir>/scripts/anysearch_cli.sh search "Mount Everest" --content_types image --max_results 5
 ```
 
 ### Scenario 3: Vertical search — stock market data (structured identifier)
@@ -456,93 +497,93 @@ bash scripts/anysearch_cli.sh search "Mount Everest" --content_types image --max
 Step 1: Discover available sub_domains for finance:
 
 ```bash
-bash scripts/anysearch_cli.sh list_domains --domain finance
+bash <skill_dir>/scripts/anysearch_cli.sh list_domains --domain finance
 ```
 
 Step 2: Search with the correct sub_domain and query format:
 
 ```bash
-bash scripts/anysearch_cli.sh search "AAPL" --domain finance --sub_domain finance.us_stock --zone cn --max_results 5
+bash <skill_dir>/scripts/anysearch_cli.sh search "AAPL" --domain finance --sub_domain finance.us_stock --zone cn --max_results 5
 ```
 
 ### Scenario 4: Vertical search — academic paper lookup
 
 ```bash
-bash scripts/anysearch_cli.sh list_domains --domain academic
+bash <skill_dir>/scripts/anysearch_cli.sh list_domains --domain academic
 ```
 
 ```bash
-bash scripts/anysearch_cli.sh search "10.1038/s41586-020-2649-2" --domain academic --sub_domain academic.doi --max_results 3
+bash <skill_dir>/scripts/anysearch_cli.sh search "10.1038/s41586-020-2649-2" --domain academic --sub_domain academic.doi --max_results 3
 ```
 
 ### Scenario 5: Vertical search — security vulnerability (CVE)
 
 ```bash
-bash scripts/anysearch_cli.sh list_domains --domain security
+bash <skill_dir>/scripts/anysearch_cli.sh list_domains --domain security
 ```
 
 ```bash
-bash scripts/anysearch_cli.sh search "CVE-2024-3094" --domain security --sub_domain security.cve --max_results 3
+bash <skill_dir>/scripts/anysearch_cli.sh search "CVE-2024-3094" --domain security --sub_domain security.cve --max_results 3
 ```
 
 ### Scenario 6: Vertical search — legal document or case
 
 ```bash
-bash scripts/anysearch_cli.sh list_domains --domain legal
+bash <skill_dir>/scripts/anysearch_cli.sh list_domains --domain legal
 ```
 
 ```bash
-bash scripts/anysearch_cli.sh search "contract dispute damages" --domain legal --sub_domain legal.case_law --max_results 5
+bash <skill_dir>/scripts/anysearch_cli.sh search "contract dispute damages" --domain legal --sub_domain legal.case_law --max_results 5
 ```
 
 ### Scenario 7: Batch search — multiple independent queries in one call
 
 ```bash
-bash scripts/anysearch_cli.sh batch_search --query "AAPL stock price" --query "TSLA earnings 2025" --query "GOOG market cap"
+bash <skill_dir>/scripts/anysearch_cli.sh batch_search --query "AAPL stock price" --query "TSLA earnings 2025" --query "GOOG market cap"
 ```
 
 With full query objects:
 
 ```bash
-bash scripts/anysearch_cli.sh batch_search --queries '[{"query":"AAPL","domain":"finance","sub_domain":"finance.us_stock"},{"query":"python async http","domain":"code","sub_domain":"code.general"}]'
+bash <skill_dir>/scripts/anysearch_cli.sh batch_search --queries '[{"query":"AAPL","domain":"finance","sub_domain":"finance.us_stock"},{"query":"python async http","domain":"code","sub_domain":"code.general"}]'
 ```
 
 From a JSON file:
 
 ```bash
-bash scripts/anysearch_cli.sh batch_search --queries @queries.json
+bash <skill_dir>/scripts/anysearch_cli.sh batch_search --queries @queries.json
 ```
 
 ### Scenario 8: Extract full page content
 
 ```bash
-bash scripts/anysearch_cli.sh extract "https://en.wikipedia.org/wiki/Quantum_computing"
+bash <skill_dir>/scripts/anysearch_cli.sh extract "https://en.wikipedia.org/wiki/Quantum_computing"
 ```
 
 ```bash
-bash scripts/anysearch_cli.sh extract --url "https://example.com/news/article-12345"
+bash <skill_dir>/scripts/anysearch_cli.sh extract --url "https://example.com/news/article-12345"
 ```
 
 ### Scenario 9: News search with time filter
 
 ```bash
-bash scripts/anysearch_cli.sh search "AI regulation" --content_types news --freshness day --max_results 5
+bash <skill_dir>/scripts/anysearch_cli.sh search "AI regulation" --content_types news --freshness day --max_results 5
 ```
 
 ### Scenario 10: Search with API key
 
 ```bash
-bash scripts/anysearch_cli.sh search "climate change policy 2025" --api_key <your_api_key> --max_results 3
+bash <skill_dir>/scripts/anysearch_cli.sh search "climate change policy 2025" --api_key <your_api_key> --max_results 3
 ```
 
 ### Scenario 11: China-specific vertical search (requires zone=cn)
 
 ```bash
-bash scripts/anysearch_cli.sh list_domains --domain finance
+bash <skill_dir>/scripts/anysearch_cli.sh list_domains --domain finance
 ```
 
 ```bash
-bash scripts/anysearch_cli.sh search "600519" --domain finance --sub_domain finance.cn_stock --zone cn --max_results 5
+bash <skill_dir>/scripts/anysearch_cli.sh search "600519" --domain finance --sub_domain finance.cn_stock --zone cn --max_results 5
 ```
 
 ---
@@ -566,7 +607,7 @@ Commands:
   batch_search           Execute 2-5 search queries in parallel
   doc                    Print AI-facing interface specification
 
-Global Options:
+Common Options (place --api_key after the subcommand):
   --api_key <key>        API key for authentication
 
 Search Options:
@@ -576,7 +617,7 @@ Search Options:
   --content_types, -t    Content filter (web,news,code,...)
   --zone, -z             Region: cn / intl
   --max_results, -m      Max results (default 10, max 100)
-  --freshness, -f        Time filter: day/week/month/yea
+  --freshness, -f        Time filter: day/week/month/year
 
 List-Domains Options:
   --domain               Single domain to query

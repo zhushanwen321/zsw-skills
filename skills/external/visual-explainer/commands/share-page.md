@@ -43,9 +43,17 @@ bash ~/.pi/agent/skills/visual-explainer/scripts/share.sh <file>
 
 If the skill is installed somewhere else, use that install path instead. Common locations include `~/.codex/skills/visual-explainer/scripts/share.sh`, `~/.config/opencode/skill/visual-explainer/scripts/share.sh`, or `./plugins/visual-explainer/scripts/share.sh` from a repository checkout.
 
-The script currently looks for the Pi-compatible `vercel-deploy` script in the standard Pi skill locations. Other harnesses can generate and open HTML normally, but sharing requires that dependency to be available in a compatible location.
+The script probes the following script directories for `vercel-deploy`'s `deploy.sh`, in order, and uses the first hit:
+
+1. `~/.agents/skills/vercel-deploy/scripts`
+2. `~/.pi/agent/skills/vercel-deploy/scripts`
+3. `/mnt/skills/user/vercel-deploy/scripts`
+
+Other locations are not probed: symlink or copy the skill into one of the directories above, or run its `deploy.sh` manually. Other harnesses can generate and open HTML normally, but sharing requires the `vercel-deploy` script in one of these locations.
 
 ## Output
+
+Human-readable lines are written to stderr; stdout is a single JSON line for programmatic parsing.
 
 ```
 Sharing my-diagram.html...

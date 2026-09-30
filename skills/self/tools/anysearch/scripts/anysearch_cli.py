@@ -6,7 +6,6 @@ import io
 import json
 import os
 import sys
-import requests
 
 if sys.stdout.encoding != "utf-8":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -68,6 +67,18 @@ def _build_headers(api_key: str) -> dict:
     return headers
 
 def _call_api(tool_name: str, arguments: dict, api_key: str) -> str:
+    # Imported lazily so local-only commands (doc, --help, argparse errors) keep
+    # working on machines without the requests package installed.
+    try:
+        import requests
+    except ModuleNotFoundError:
+        print(
+            "Error: the 'requests' package is required for network commands. "
+            "Install it with: pip install requests",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -128,7 +139,7 @@ def cmd_search(args):
                 arguments["sub_domain_params"] = json.loads(args.sub_domain_params)
             except json.JSONDecodeError:
                 print("Error: --sub_domain_params must be valid JSON", file=sys.stderr)
-                sys.exit(1)
+                sys.exit(2)
 
     if args.content_types:
         arguments["content_types"] = _parse_json_list(args.content_types)
@@ -151,7 +162,7 @@ def cmd_list_domains(args):
         arguments["domain"] = args.domain
     else:
         print("Error: provide --domain or --domains", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
 
     print(_call_api("list_domains", arguments, args.api_key))
 
@@ -161,7 +172,7 @@ def cmd_extract(args):
     url = args.url or getattr(args, "url_opt", None)
     if not url:
         print("Error: url is required", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     arguments = {"url": url}
     print(_call_api("extract", arguments, args.api_key))
 
@@ -257,7 +268,7 @@ def cmd_batch_search(args):
         queries = [{"query": q} for q in query_items]
         if len(queries) > 5:
             print("Error: batch_search supports a maximum of 5 queries", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(2)
     elif raw:
         if raw.startswith("@"):
             file_path = raw[1:]
@@ -266,7 +277,7 @@ def cmd_batch_search(args):
                     raw = f.read()
             except FileNotFoundError:
                 print(f"Error: file not found: {file_path}", file=sys.stderr)
-                sys.exit(1)
+                sys.exit(2)
         try:
             queries = json.loads(raw)
             if not isinstance(queries, list):
@@ -275,13 +286,13 @@ def cmd_batch_search(args):
             queries = _repair_json(raw)
         if len(queries) < 1:
             print("Error: queries must contain at least 1 item", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(2)
         if len(queries) > 5:
             print("Error: batch_search supports a maximum of 5 queries", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(2)
     else:
         print("Error: provide --queries or --query", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
 
     arguments = {"queries": queries}
     print(_call_api("batch_search", arguments, args.api_key))
@@ -296,6 +307,8 @@ DOC_SPEC = """\
 - Auth: Header "Authorization: Bearer <API_KEY>" (optional, anonymous has lower rate limits)
 
 ## CLI Invocation (Python)
+
+`<skill_dir>` = the directory where this skill is installed (the directory containing SKILL.md).
 
 ```
 python <skill_dir>/scripts/anysearch_cli.py <command> [options]
@@ -354,17 +367,17 @@ Truncated at 50,000 chars. HTML pages only.
 User query
   |
   +-- Has structured identifiers? (Stock:/CVE:/DOI:/IATA:/patent etc.)
-  |     YES -> 1) python scripts/anysearch_cli.py list_domains --domain X
+  |     YES -> 1) python <skill_dir>/scripts/anysearch_cli.py list_domains --domain X
   |             2) read query_format from result -> construct query accordingly
-  |             3) python scripts/anysearch_cli.py search "<query>" --domain X --sub_domain Y --zone cn
+  |             3) python <skill_dir>/scripts/anysearch_cli.py search "<query>" --domain X --sub_domain Y --zone cn
   |
   +-- Multiple independent intents?
-  |     YES -> python scripts/anysearch_cli.py batch_search --query "..." --query "..."
+  |     YES -> python <skill_dir>/scripts/anysearch_cli.py batch_search --query "..." --query "..."
   |
   +-- Need deeper content than snippets?
-        YES -> python scripts/anysearch_cli.py extract "https://example.com/article"
+        YES -> python <skill_dir>/scripts/anysearch_cli.py extract "https://example.com/article"
 
-  Otherwise -> python scripts/anysearch_cli.py search "<general query>"
+  Otherwise -> python <skill_dir>/scripts/anysearch_cli.py search "<general query>"
 ```
 
 ---
@@ -394,21 +407,21 @@ and strictly obey the returned semantic constraints:
 ### Scenario 1: General web search — look up a factual question
 
 ```bash
-python scripts/anysearch_cli.py search "What is the capital of France"
+python <skill_dir>/scripts/anysearch_cli.py search "What is the capital of France"
 ```
 
 ```bash
-python scripts/anysearch_cli.py search "quantum computing breakthroughs 2025" --max_results 5 --freshness month
+python <skill_dir>/scripts/anysearch_cli.py search "quantum computing breakthroughs 2025" --max_results 5 --freshness month
 ```
 
 ### Scenario 2: Search with content type filter — find video or image results
 
 ```bash
-python scripts/anysearch_cli.py search "how to bake sourdough bread" --content_types video --max_results 3
+python <skill_dir>/scripts/anysearch_cli.py search "how to bake sourdough bread" --content_types video --max_results 3
 ```
 
 ```bash
-python scripts/anysearch_cli.py search "Mount Everest" --content_types image --max_results 5
+python <skill_dir>/scripts/anysearch_cli.py search "Mount Everest" --content_types image --max_results 5
 ```
 
 ### Scenario 3: Vertical search — stock market data (structured identifier)
@@ -416,13 +429,13 @@ python scripts/anysearch_cli.py search "Mount Everest" --content_types image --m
 Step 1: Discover available sub_domains for finance:
 
 ```bash
-python scripts/anysearch_cli.py list_domains --domain finance
+python <skill_dir>/scripts/anysearch_cli.py list_domains --domain finance
 ```
 
 Step 2: Search with the correct sub_domain and query format (e.g. US stock):
 
 ```bash
-python scripts/anysearch_cli.py search "AAPL" --domain finance --sub_domain finance.us_stock --zone cn --max_results 5
+python <skill_dir>/scripts/anysearch_cli.py search "AAPL" --domain finance --sub_domain finance.us_stock --zone cn --max_results 5
 ```
 
 ### Scenario 4: Vertical search — academic paper lookup
@@ -430,89 +443,89 @@ python scripts/anysearch_cli.py search "AAPL" --domain finance --sub_domain fina
 Step 1: Discover sub_domains for academic:
 
 ```bash
-python scripts/anysearch_cli.py list_domains --domain academic
+python <skill_dir>/scripts/anysearch_cli.py list_domains --domain academic
 ```
 
 Step 2: Search by DOI:
 
 ```bash
-python scripts/anysearch_cli.py search "10.1038/s41586-020-2649-2" --domain academic --sub_domain academic.doi --max_results 3
+python <skill_dir>/scripts/anysearch_cli.py search "10.1038/s41586-020-2649-2" --domain academic --sub_domain academic.doi --max_results 3
 ```
 
 ### Scenario 5: Vertical search — security vulnerability (CVE)
 
 ```bash
-python scripts/anysearch_cli.py list_domains --domain security
+python <skill_dir>/scripts/anysearch_cli.py list_domains --domain security
 ```
 
 ```bash
-python scripts/anysearch_cli.py search "CVE-2024-3094" --domain security --sub_domain security.cve --max_results 3
+python <skill_dir>/scripts/anysearch_cli.py search "CVE-2024-3094" --domain security --sub_domain security.cve --max_results 3
 ```
 
 ### Scenario 6: Vertical search — legal document or case
 
 ```bash
-python scripts/anysearch_cli.py list_domains --domain legal
+python <skill_dir>/scripts/anysearch_cli.py list_domains --domain legal
 ```
 
 ```bash
-python scripts/anysearch_cli.py search "contract dispute damages" --domain legal --sub_domain legal.case_law --max_results 5
+python <skill_dir>/scripts/anysearch_cli.py search "contract dispute damages" --domain legal --sub_domain legal.case_law --max_results 5
 ```
 
 ### Scenario 7: Vertical search — code search
 
 ```bash
-python scripts/anysearch_cli.py search "python async http client" --domain code --sub_domain code.general --max_results 5
+python <skill_dir>/scripts/anysearch_cli.py search "python async http client" --domain code --sub_domain code.general --max_results 5
 ```
 
 ### Scenario 8: Batch search — multiple independent queries in one call
 
 ```bash
-python scripts/anysearch_cli.py batch_search --query "AAPL stock price" --query "TSLA earnings 2025" --query "GOOG market cap"
+python <skill_dir>/scripts/anysearch_cli.py batch_search --query "AAPL stock price" --query "TSLA earnings 2025" --query "GOOG market cap"
 ```
 
 With full query objects (vertical domain + parameters):
 
 ```bash
-python scripts/anysearch_cli.py batch_search --queries '[{"query":"AAPL","domain":"finance","sub_domain":"finance.us_stock","zone":"cn"},{"query":"python async http","domain":"code","sub_domain":"code.general"}]'
+python <skill_dir>/scripts/anysearch_cli.py batch_search --queries '[{"query":"AAPL","domain":"finance","sub_domain":"finance.us_stock","zone":"cn"},{"query":"python async http","domain":"code","sub_domain":"code.general"}]'
 ```
 
 From a JSON file:
 
 ```bash
-python scripts/anysearch_cli.py batch_search --queries @queries.json
+python <skill_dir>/scripts/anysearch_cli.py batch_search --queries @queries.json
 ```
 
 ### Scenario 9: Extract full page content — read beyond search snippets
 
 ```bash
-python scripts/anysearch_cli.py extract "https://en.wikipedia.org/wiki/Quantum_computing"
+python <skill_dir>/scripts/anysearch_cli.py extract "https://en.wikipedia.org/wiki/Quantum_computing"
 ```
 
 ```bash
-python scripts/anysearch_cli.py extract --url "https://example.com/news/article-12345"
+python <skill_dir>/scripts/anysearch_cli.py extract --url "https://example.com/news/article-12345"
 ```
 
 ### Scenario 10: News search with time filter
 
 ```bash
-python scripts/anysearch_cli.py search "AI regulation" --content_types news --freshness day --max_results 5
+python <skill_dir>/scripts/anysearch_cli.py search "AI regulation" --content_types news --freshness day --max_results 5
 ```
 
 ### Scenario 11: Search with API key
 
 ```bash
-python scripts/anysearch_cli.py search "climate change policy 2025" --api_key <your_api_key> --max_results 3
+python <skill_dir>/scripts/anysearch_cli.py search "climate change policy 2025" --api_key <your_api_key> --max_results 3
 ```
 
 ### Scenario 12: China-specific vertical search (requires zone=cn)
 
 ```bash
-python scripts/anysearch_cli.py list_domains --domain finance
+python <skill_dir>/scripts/anysearch_cli.py list_domains --domain finance
 ```
 
 ```bash
-python scripts/anysearch_cli.py search "600519" --domain finance --sub_domain finance.cn_stock --zone cn --max_results 5
+python <skill_dir>/scripts/anysearch_cli.py search "600519" --domain finance --sub_domain finance.cn_stock --zone cn --max_results 5
 ```
 
 ---
@@ -528,6 +541,17 @@ def cmd_doc(args):
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Registered on the top-level parser and on every subparser so --api_key is
+    # accepted both before and after the subcommand. The subparser-level default
+    # is SUPPRESS: omitting the flag after the subcommand must not clobber a value
+    # given before it or inherited from the environment.
+    common_parser = argparse.ArgumentParser(add_help=False)
+    common_parser.add_argument(
+        "--api_key",
+        default=argparse.SUPPRESS,
+        help="API key for authentication (accepted before or after the subcommand).",
+    )
+
     parser = argparse.ArgumentParser(
         prog="anysearch",
         description=(
@@ -550,7 +574,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--api_key",
         default=os.environ.get("ANYSEARCH_API_KEY", ""),
-        help="API key for authentication. Read from: --api_key > .env ANYSEARCH_API_KEY > env ANYSEARCH_API_KEY. "
+        help="API key for authentication, before or after the subcommand. Read from: --api_key > .env ANYSEARCH_API_KEY > env ANYSEARCH_API_KEY. "
         "Without a key, anonymous access is used with lower rate limits.",
     )
 
@@ -558,6 +582,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     search_p = subparsers.add_parser(
         "search",
+        parents=[common_parser],
         help="Search the web (general or vertical domain search)",
         description=(
             "Execute a search query.\n\n"
@@ -612,6 +637,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ld_p = subparsers.add_parser(
         "list_domains",
+        parents=[common_parser],
         help="Query domain directory for available sub_domains",
         description=(
             "List available sub_domains, query formats, and parameter schemas\n"
@@ -640,6 +666,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ext_p = subparsers.add_parser(
         "extract",
+        parents=[common_parser],
         help="Fetch full page content from a URL",
         description=(
             "Extract the full content of a web page and return it as Markdown.\n\n"
@@ -656,6 +683,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     batch_p = subparsers.add_parser(
         "batch_search",
+        parents=[common_parser],
         help="Execute 2-5 search queries in parallel",
         description=(
             "Run multiple independent search queries in a single API call.\n"
@@ -698,6 +726,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     doc_p = subparsers.add_parser(
         "doc",
+        parents=[common_parser],
         help="Print AI-facing interface specification",
     )
     doc_p.set_defaults(func=cmd_doc)

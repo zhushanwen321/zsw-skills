@@ -4,23 +4,15 @@
 # Example: create-worktree.sh feat/new-feature master
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# find_workspace_root 等共享函数从 skill 共享库 source 复用（与 remove-worktree.sh 同一实现，
+# 避免同 skill 内多份拷贝漂移）；本库无顶层副作用，source 安全
+source "$SCRIPT_DIR/../_lib/workspace.sh"
+
 BRANCH_NAME="${1:?Usage: create-worktree.sh <branch-name> [base-branch]}"
 BASE_BRANCH="${2:-main}"
 # 分支名转目录名: feature/xxx -> feature-xxx
 DIR_NAME="${BRANCH_NAME//\//-}"
-
-# 从当前目录向上查找 workspace 根（包含 .bare/ 的目录）
-find_workspace_root() {
-    local dir="$1"
-    while [[ "$dir" != "/" ]]; do
-        if [[ -d "$dir/.bare" ]]; then
-            echo "$dir"
-            return 0
-        fi
-        dir="$(cd "$dir/.." && pwd)"
-    done
-    return 1
-}
 
 WORKSPACE_ROOT=$(find_workspace_root "$(pwd)") || {
     echo "Error: 未找到 workspace。当前目录及其父目录中没有 .bare/。"
@@ -56,11 +48,19 @@ if [[ "$REAL_REMOTE" != 'origin' ]]; then
         git -C .bare update-ref "refs/remotes/origin/$short_name" "$target_sha"
         echo "  origin/$short_name -> ${target_sha:0:8}"
     done < <(git -C .bare for-each-ref --format="%(refname)" "refs/remotes/$REAL_REMOTE/")
-    # 同步本地 main 分支
-    local_main_sha=$(git --git-dir="$WORKSPACE_ROOT/.bare" rev-parse "refs/remotes/$REAL_REMOTE/main" 2>/dev/null || true)
-    if [[ -n "$local_main_sha" ]]; then
-        echo "$local_main_sha" > "$WORKSPACE_ROOT/.bare/refs/heads/main"
-        echo "  local main -> ${local_main_sha:0:8}"
+    # 同步本地 main 分支：仅 fast-forward 时用 update-ref 移动引用。
+    # 直接改写 refs/heads/main 会把本地领先提交移出分支（bare repo 默认不记 reflog，
+    # 移出即不可恢复）；本地 main 有远程没有的提交时跳过同步并告警
+    remote_main_sha=$(git --git-dir="$WORKSPACE_ROOT/.bare" rev-parse "refs/remotes/$REAL_REMOTE/main" 2>/dev/null || true)
+    if [[ -n "$remote_main_sha" ]]; then
+        local_main_sha=$(git --git-dir="$WORKSPACE_ROOT/.bare" rev-parse --verify --quiet refs/heads/main 2>/dev/null || true)
+        if [[ -z "$local_main_sha" ]] || \
+           git --git-dir="$WORKSPACE_ROOT/.bare" merge-base --is-ancestor "$local_main_sha" "$remote_main_sha" 2>/dev/null; then
+            git --git-dir="$WORKSPACE_ROOT/.bare" update-ref refs/heads/main "$remote_main_sha"
+            echo "  local main -> ${remote_main_sha:0:8}"
+        else
+            echo "  Warning: 本地 main 有远程没有的提交，跳过本地 main 同步（保留本地提交）"
+        fi
     fi
 fi
 

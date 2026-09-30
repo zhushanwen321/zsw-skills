@@ -24,9 +24,10 @@ if [ ! -f "$HTML_FILE" ]; then
     exit 1
 fi
 
-# Find vercel-deploy skill
+# Find vercel-deploy skill: probe the standard skill script directories in order,
+# first one containing deploy.sh wins
 VERCEL_SCRIPT=""
-for dir in ~/.pi/agent/skills/vercel-deploy/scripts /mnt/skills/user/vercel-deploy/scripts; do
+for dir in "$HOME/.agents/skills/vercel-deploy/scripts" ~/.pi/agent/skills/vercel-deploy/scripts /mnt/skills/user/vercel-deploy/scripts; do
     if [ -f "$dir/deploy.sh" ]; then
         VERCEL_SCRIPT="$dir/deploy.sh"
         break
@@ -35,7 +36,8 @@ done
 
 if [ -z "$VERCEL_SCRIPT" ]; then
     echo -e "${RED}Error: vercel-deploy skill not found${NC}" >&2
-    echo "Install it with: pi install npm:vercel-deploy" >&2
+    echo "Searched for deploy.sh in: '$HOME/.agents/skills/vercel-deploy/scripts', '~/.pi/agent/skills/vercel-deploy/scripts', '/mnt/skills/user/vercel-deploy/scripts'" >&2
+    echo "Install the skill into one of these locations, or install with: pi install npm:vercel-deploy" >&2
     exit 1
 fi
 

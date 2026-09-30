@@ -11,7 +11,11 @@ sub-package), so the result reads as an auto-generated class hierarchy.
 
 Only inheritance is resolved (statically reliable); base classes are matched
 by name, preferring a class in the same module. External bases (object,
-Exception, third-party) are ignored. This is a *class structure* view, not a
+Exception, third-party) are ignored. A base name shared by several classes
+with none in the subclass's module is ambiguous, and that edge is dropped.
+Only top-level classes are extracted. A module that fails to parse
+(SyntaxError) is skipped with a stderr warning, so its classes and their
+edges are absent from the graph. This is a *class structure* view, not a
 function-level call graph — static call resolution in Python is unreliable, so
 that is deliberately out of scope.
 
@@ -60,7 +64,8 @@ def classes_in(module, path):
     """Top-level classes of a module: list of (qualified_id, simple_name, [base names])."""
     try:
         tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
-    except SyntaxError:
+    except SyntaxError as exc:
+        sys.stderr.write(f"warning: syntax error in {path}, skipped: {exc}\n")
         return []
     out = []
     for node in tree.body:

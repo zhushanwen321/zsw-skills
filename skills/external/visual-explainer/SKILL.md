@@ -465,7 +465,8 @@ If the skill lives somewhere else, use that install path instead, such as `~/.co
 ```bash
 bash ~/.pi/agent/skills/visual-explainer/scripts/share.sh ~/.agent/diagrams/my-diagram.html
 
-# Output:
+# Output (human-readable lines are written to stderr; stdout is a single
+# JSON line for programmatic parsing):
 # ✓ Shared successfully!
 # Live URL:  https://skill-deploy-abc123.vercel.app
 # Claim URL: https://vercel.com/claim-deployment?code=...
@@ -478,7 +479,11 @@ bash ~/.pi/agent/skills/visual-explainer/scripts/share.sh ~/.agent/diagrams/my-d
 4. URL is live immediately — works in any browser
 
 **Requirements:**
-- vercel-deploy skill in a standard Pi-compatible skill location (in Pi: `pi install npm:vercel-deploy`)
+- `vercel-deploy` skill with a `deploy.sh` in one of the script directories the script probes (checked in this order; the first hit wins):
+  1. `~/.agents/skills/vercel-deploy/scripts`
+  2. `~/.pi/agent/skills/vercel-deploy/scripts`
+  3. `/mnt/skills/user/vercel-deploy/scripts`
+- Installed at any other location: the script does not probe it. Symlink or copy the skill into one of the directories above, or run its `deploy.sh` manually. In Pi you can also install it with `pi install npm:vercel-deploy`.
 
 **Notes:**
 - Deployments are public — anyone with the URL can view

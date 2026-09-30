@@ -91,13 +91,42 @@ python3 <skill_dir>/scripts/anysearch_cli.py doc
 python3 <skill_dir>/scripts/anysearch_cli.py <command> [options]
 ```
 
-运行 `<command> --help` 查看参数。其他 runtime：`node <skill_dir>/scripts/anysearch_cli.js`、`bash <skill_dir>/scripts/anysearch_cli.sh`。
+四个 runtime 覆盖同一套命令与参数，功能等价，按机器可用环境选用：
+
+| Runtime | 命令 |
+|---------|------|
+| Python | `python3 <skill_dir>/scripts/anysearch_cli.py <command> [options]` |
+| Bash | `bash <skill_dir>/scripts/anysearch_cli.sh <command> [options]` |
+| Node.js | `node <skill_dir>/scripts/anysearch_cli.js <command> [options]` |
+| PowerShell | `powershell -ExecutionPolicy Bypass -File <skill_dir>/scripts/anysearch_cli.ps1 <command> [options]` |
+
+### 查看参数（--help）
+
+- 子命令级 `<command> --help`（查看某个子命令的参数）：**Python 与 Bash 版支持**，返回 0；Node.js / PowerShell 版没有子命令级帮助，传入会被当成未知 flag（返回 1）。
+- 顶层 `--help` / `-h` / 无子命令：四个 runtime 均支持，打印总用法后返回 0。
 
 ## API Key
 
 匿名可用（低限额）。可选配置 `<skill_dir>/.env`：`ANYSEARCH_API_KEY=<key>`。
 
-Key 优先级：`--api_key` flag > `.env` > 环境变量 > 匿名。Key 耗尽时 API 可能返回新 key → 需用户确认后写入 `.env`。
+优先级：`--api_key` flag > `.env` > 环境变量 > 匿名。Key 耗尽时 API 可能返回新 key → 需用户确认后写入 `.env`。
+
+`--api_key` flag 的合法位置因 runtime 而异：
+
+| Runtime | 合法位置 |
+|---------|----------|
+| Python | 子命令前后均可 |
+| Bash / Node.js / PowerShell | 必须放子命令之后 |
+
+## 退出码
+
+| 码 | 含义 |
+|----|------|
+| 0 | 成功（`doc`、`--help` 等本地操作也返回 0） |
+| 1 | API / 网络错误；Bash 版的用法错误（未知命令 / 未知 flag / 缺必填参数）返回 1 |
+| 2 | 参数误用。Python 版所有参数问题均返回 2；Bash 版 `--max_results` 非数字返回 2，`--sub_domain_params` 非法 JSON 在有 python3 时返回 2 |
+
+Node.js / PowerShell 版把用法错误与参数错误都归为 1，未按 2 细分。
 
 ---
 

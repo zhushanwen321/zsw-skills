@@ -17,6 +17,8 @@
 
 输出: 每行一条命中「路径:行号: [表] 「命中词」→ 建议 ｜ 原文片段」，末尾汇总计数。
 退出码: 0 = 无命中，1 = 有命中，2 = 参数或读取错误、或白名单与其他表同词冲突。
+输入路径: 所有输入路径均不存在按参数错误处理——退出码 2 并提示检查路径；部分路径不存在
+只打警告，继续扫描存在的路径。
 
 匹配规则: 词表单元格按 / 、拆分变体；尾部括号注（如「盘面（作业）」）不参与匹配，
 括号内含 / 时视为变体列表（如「gate 族（Gate/门禁/…）」）；「…」视为通配（≤30 字）；
@@ -186,6 +188,11 @@ def main():
     ap.add_argument("--all", action="store_true", help="三张表全扫")
     ap.add_argument("--wordlist", type=Path, default=DEFAULT_WORDLIST, help="词表文件路径")
     args = ap.parse_args()
+
+    missing = [p for p in args.paths if not Path(p).exists()]
+    if missing and len(missing) == len(args.paths):
+        print(f"错误：输入路径均不存在：{'、'.join(missing)}——检查路径拼写后重试", file=sys.stderr)
+        return 2
 
     tables = {"已裁决替换表"}
     if args.watch or args.all:

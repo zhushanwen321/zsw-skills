@@ -21,7 +21,7 @@ create-worktree.sh <branch-name> [base-branch]
 | 参数 | 位置 | 必填 | 说明 |
 |------|------|------|------|
 | `branch-name` | $1 | 是 | 分支名，如 `feat/new-feature`。`/` 自动转为 `-` 作为目录名 |
-| `base-branch` | $2 | 否 | 基础分支。省略时自动检测远程 HEAD 分支（通常为 main） |
+| `base-branch` | $2 | 否 | 基础分支，省略时为 `main` |
 
 ### 用法示例
 
@@ -38,26 +38,32 @@ bash ~/.agents/skills/worktree-manipulate/create-worktree/create-worktree.sh 024
 
 ### 脚本行为
 
-1. 从当前目录向上查找 workspace 根（包含 `.bare/` 的目录）
-2. `git fetch origin --prune` 获取最新远程引用
-3. 如果分支已存在（本地或远程），直接检出；否则从 `base-branch` 创建新分支
-4. 从 main/master worktree 复制 `.claude/settings.local.json`
-5. 自动检测并安装依赖：
-   - `frontend/package.json` 存在 → `pnpm install`（回退 `npm install`）
-   - 根目录 `package.json` 且无 `frontend/` → `npm install`
-   - `backend/pyproject.toml` → `uv sync`
-6. 从 main/master worktree 复制已安装的 git hooks
+1. 从当前目录向上查找 workspace 根（包含 `.bare/` 的目录）——`find_workspace_root` 来自共享库 `_lib/workspace.sh`（本脚本 source 复用，不维护私有副本）
+2. 同步远程引用：取**第一个非 `origin` 的远端**（通常为 `github`/`upstream`）执行 `git fetch --prune`；没有非 `origin` 远端时回退 `fetch origin --prune`
+3. 存在非 `origin` 远端时，把各 `origin/*` 引用改写为该远端的对应 sha（`git update-ref`），使基于 `origin/main` 的创建能拿到最新代码
+4. 同步本地 `main`：仅当本地 `main` 可 fast-forward 到该远端的 `main` 时，才把 `refs/heads/main` 移动到远端 sha。**副作用警告：本地 `main` 有远程没有的领先提交时，脚本跳过同步并输出 `Warning: 本地 main 有远程没有的提交，跳过本地 main 同步（保留本地提交）`**——裸仓库默认不记 reflog，直接改写会让这些提交移出分支且不可恢复
+5. 分支处理：本地分支已存在 → 直接 `worktree add` 检出；否则创建新分支，base 优先取 bare repo 本地分支，本地不存在时回退 `origin/<base-branch>`
+6. 从 main/master worktree 复制 `.claude/settings.local.json` 到新 worktree（源文件与新 worktree 的 `.claude/` 目录都存在时才复制）
+7. 安装依赖（在新 worktree 内执行）：
+   - 项目脚本 `<workspace 根>/.bare/custom-hooks/setup-worktree.sh` 存在且可执行 → 执行它（参数为新 worktree 路径），**跳过通用安装**
+   - 否则通用安装：`backend/pyproject.toml` → `uv sync`；`frontend/package.json` → `pnpm install`（无 npm 回退，不处理根目录 `package.json`）
+   - 任一安装失败仅输出 `Warning: ... 请手动安装`，**不阻断创建流程**
+8. 从 main/master worktree 复制已安装的 `pre-commit` hook 到新 worktree（存在时才复制）
+9. 依赖安装 / hook 复制阶段失败 → 脚本自动清理已创建的 worktree，以非零码退出
 
 ### 输出
 
-成功时输出：
+成功时输出（`Syncing origin refs` 段仅在非 `origin` 远端存在时出现；settings 复制 / setup hook / 依赖安装 / hooks 复制为条件行，按项目结构增减）：
+
 ```
 Workspace: /path/to/project-workspace
-基础分支: main
 Fetching from remote...
-创建分支 'feat/new-feature' (基于 origin/main)...
+Syncing origin refs from github...
+  origin/main -> a1b2c3d4
+  local main -> a1b2c3d4
+创建分支 'feat/new-feature' (基于 main)...
 已复制 .claude/settings.local.json (from main)
-已安装 git hooks
+已安装 git hooks (from primary worktree)
 
 ============================================
 Worktree 创建完成!
@@ -65,6 +71,8 @@ Worktree 创建完成!
   路径: /path/to/project-workspace/feat-new-feature
 ============================================
 ```
+
+成功判据：输出包含 `Worktree 创建完成!`。
 
 ### 错误场景
 
@@ -76,7 +84,7 @@ Worktree 创建完成!
 
 ### AI 操作步骤
 
-1. 向用户获取分支名（必填）和基础分支（可选）
+1. 向用户获取分支名（必填）和基础分支（可选，省略时为 `main`）
 2. 运行 `bash ~/.agents/skills/worktree-manipulate/create-worktree/create-worktree.sh <branch-name> [base-branch]`
 3. 确认输出包含 `"Worktree 创建完成!"`
 4. 告诉用户新 worktree 的路径
