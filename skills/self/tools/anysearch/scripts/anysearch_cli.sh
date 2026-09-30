@@ -85,10 +85,9 @@ _call_api() {
   fi
 
   if [[ "$response" == *'"result"'*'"content"'* ]]; then
-    # Prefer a real JSON parse when python3 is available: the grep fallback below
-    # truncates a text value at its first escaped quote (\") and cannot decode it.
-    # python3 writes the already-decoded text, so it must not be re-run through
-    # the sed unescape that the grep path needs.
+    # JSON 解析按能力分层：python3 与 node 任一在都能得到完整解码文本（正文含
+    # 转义引号或 \uXXXX 中文都不损坏）；两者都不在时走 shell 尽力模式。
+    # python3/node 输出的是解码后的文本，不可再过下面的 sed 反转义。
     if command -v python3 >/dev/null 2>&1; then
       if printf '%s' "$response" | python3 -c '
 import sys, json
@@ -106,12 +105,37 @@ sys.exit(4)
         return 0
       fi
     fi
-    # No python3 (or parse failed / no text item found): best-effort extraction,
-    # dropping everything after the text value's first escaped quote.
+    if command -v node >/dev/null 2>&1; then
+      if printf '%s' "$response" | node -e '
+const fs = require("fs");
+let data;
+try {
+  data = JSON.parse(fs.readFileSync(0, "utf8"));
+} catch (e) {
+  process.exit(3);
+}
+const content = (data.result || {}).content || [];
+for (const item of content) {
+  if (item && item.type === "text") {
+    process.stdout.write(item.text || "");
+    process.exit(0);
+  }
+}
+process.exit(4);
+' 2>/dev/null; then
+        return 0
+      fi
+    fi
+    echo "warning: 无 python3/node，text 抽取为 shell 尽力模式：转义引号后的内容可能缺失、\\uXXXX 未解码" >&2
     local text_block=""
-    text_block=$(echo "$response" | grep -o '"text":"[^"]*"' | head -1 | sed 's/"text":"//;s/"$//' 2>/dev/null)
+    # 交替组 ([^"\\]|\\.)* 匹配「非引号非反斜杠 或 反斜杠加任意字符」的重复，
+    # 能完整取出含转义引号的 JSON 字符串值（旧的 [^"]* 在第一个引号处截断）；
+    # 多个 text item 时 grep -o 逐匹配输出，head -1 取第一个。
+    text_block=$(printf '%s' "$response" | grep -oE '"text":"([^"\\]|\\.)*"' | head -1 | sed 's/^"text":"//; s/"$//' 2>/dev/null)
     if [[ -n "$text_block" ]]; then
-      echo "$text_block" | sed 's/\\n/\n/g; s/\\"/"/g; s/\\\\/\\/g'
+      # 反转义顺序：先把 \\（反斜杠对）替换为哨兵 \x01 保护，再展开 \n \t \r \" \/，
+      # 最后还原 \。旧顺序先展开 \n，会把字面 \\n 误变成 \ 加换行，且 \t 不解。
+      echo "$text_block" | sed 's/\\\\/\x01/g; s/\\n/\n/g; s/\\t/\t/g; s/\\r/\r/g; s/\\"/"/g; s/\\\//\//g; s/\x01/\\/g'
     else
       echo "$response"
     fi
