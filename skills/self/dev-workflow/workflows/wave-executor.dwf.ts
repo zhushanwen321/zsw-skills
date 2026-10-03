@@ -1322,7 +1322,7 @@ async function executeVerifyNode(node: PlanNode): Promise<void> {
 
 async function executeInspectNode(node: PlanNode): Promise<void> {
   await beginNode(node.id);
-  const nodeAgent = agent(`node-${node.id}`, INSPECT_PERSONA);
+  const nodeAgent = agent(`验收-${node.id}`, INSPECT_PERSONA);
   // artifactsRefs 校验过后必须进任务书——否则存在性校验成纯摆设，agent 不知可读哪些上游产物
   const refLines =
     node.artifactsRefs.length > 0

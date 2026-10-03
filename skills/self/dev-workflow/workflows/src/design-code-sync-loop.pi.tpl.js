@@ -294,7 +294,11 @@ function wfAgent(name, persona) {
     ask: async (typeKey, instructions) => {
       const schema = SCHEMA_BY_KEY[typeKey];
       if (!schema) throw new Error(`未知 ask 类型键 ${typeKey}（SCHEMA_BY_KEY 未登记）`);
-      const desc = String(name).replace(/-r\d+$/i, "").replace(/-R\d+$/i, "");
+      // desc 直取 name 原文（不做 -rN/-RN 后缀剥离）：pi 实例名须与静态第一实参一致——
+      // workflow DAG 静态投影模板按调用点第一实参提取，剥离会让带轮次后缀的名字
+      // （主审-r2 等）匹配不上实例；且 zcode 侧同名即续聊，后缀是轮次新 agent 的身份语义，
+      // 两平台显示名本就应当对齐。
+      const desc = String(name);
       const prompt = persona ? persona + "\n\n=====\n\n" + instructions : instructions;
       const raw = await agent({ prompt, schema, description: desc });
       if (raw === null || raw === undefined) throw new Error("agent() 无返回");
