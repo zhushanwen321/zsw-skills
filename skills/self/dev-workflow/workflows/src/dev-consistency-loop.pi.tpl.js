@@ -41,6 +41,12 @@ const world = {
     return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   },
 };
+// report / artifact：zcode 专有通道，pi 无对应面，降级为 no-op（结果仍经 return 交付）
+// [2026-10-04] 曾漏该垫片：R1 审查完成后第 1055 行 report() 首次执行即 ReferenceError
+//   "report is not defined"，整个 D2 run 判 failed（三份分区报告已落 runlog，仅汇总/修复段丢失）。
+const report = () => {};
+const artifact = { chart: () => {}, board: () => {}, markdown: async () => {}, file: async () => {} };
+
 // ── 结果 schema 常量（ask 结构化返回契约；原 TS interface 的 JSDoc 字段描述随迁）──
 
 const SCHEMA_ReasonableEntry = {
