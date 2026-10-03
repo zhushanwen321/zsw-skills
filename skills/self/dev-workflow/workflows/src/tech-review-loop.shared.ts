@@ -42,7 +42,8 @@ const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?
 function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
   const problems: string[] = [];
   for (const key of Object.keys(raw)) {
-    if (!VALID_ARG_KEYS.has(key)) {
+    // `_` 前缀 = 宿主运行时私有键（如 taiji/pi 宿主注入的 _runId），不属于脚本契约，跳过白名单（2026-10-03 实测缺陷修复）
+    if (!VALID_ARG_KEYS.has(key) && !key.startsWith("_")) {
       problems.push(
         `未知参数: ${key}（合法参数: ${[...VALID_ARG_KEYS].join("/")}）——拼错的参数会被静默忽略并回落默认值，故 fail-fast`,
       );

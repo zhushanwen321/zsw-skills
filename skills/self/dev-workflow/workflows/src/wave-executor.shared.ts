@@ -21,7 +21,8 @@
 // ── args 窄化（未知键 fail-fast：拼错键静默忽略比报错危险） ──
 const VALID_ARG_KEYS = new Set(["execPlan"]);
 for (const key of Object.keys(args)) {
-  if (!VALID_ARG_KEYS.has(key)) {
+  // `_` 前缀 = 宿主运行时私有键（如 taiji/pi 宿主注入的 _runId），不属于脚本契约，跳过白名单（2026-10-03 实测缺陷修复）
+  if (!VALID_ARG_KEYS.has(key) && !key.startsWith("_")) {
     throw new Error(`未知参数: ${key}（唯一合法参数: execPlan——exec-plan.json 绝对路径）`);
   }
 }

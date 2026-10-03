@@ -476,7 +476,8 @@ async function fingerprintFiles(absFiles) {
 function deriveInputs(raw) {
     const problems = [];
     for (const key of Object.keys(raw)) {
-        if (!VALID_ARG_KEYS.has(key)) {
+        // `_` 前缀 = 宿主运行时私有键（如 taiji/pi 宿主注入的 _runId），不属于脚本契约，跳过白名单（2026-10-03 实测缺陷修复）
+        if (!VALID_ARG_KEYS.has(key) && !key.startsWith("_")) {
             problems.push(`未知参数: ${key}（合法参数: ${[...VALID_ARG_KEYS].join("/")}）——拼错的参数会被静默忽略并回落默认值，故 fail-fast`);
         }
     }
@@ -2052,6 +2053,95 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     log(`第 ${round} 轮修复分 ${groups.length} 组：${groups.map((g) => `${g.id}(${g.issueIds.length}条)`).join("、")}`);
     const activeById = new Map(active.map((f) => [f.id, f]));
     const roundFixes = [];
+    // ── 修复环 run 内自愈（2026-10-03）：ES 语义覆盖违规不终止 run，回喂纠正至多 FIX_SELFHEAL_MAX 次 ──
+    // 镜像 askValidated 的回喂形态（错误清单回灌 + 全量重报），但作用在语义层：fixer 申报的四桶
+    // 覆盖面与分组任务不符时，把违规清单 + 上轮申报原样回灌；纠正轮 agent 是新实例（pi 无同名
+    // 续聊保证），故纠正 brief 必须自包含。纠正耗尽仍违规 → 维持原 fail-fast（接管协议为最后
+    // 兜底）。与 attempt 重发起的区别：纠正发生在组内状态新鲜时（在途编辑就是本组 fixer 的产物，
+    // 无跨 run 对账成本），attempt 是跨 run 兜底而非常规路径。
+    const FIX_SELFHEAL_MAX = 2;
+    function esCheckGroup(g, o) {
+        const es = [];
+        const ids = new Set(o.fixes.map((fx) => fx.issueId));
+        const defIds = new Set(o.deferred.map((d) => d.issueId));
+        const exemptIds = new Set(o.exempt.map((d) => d.issueId));
+        const dlgIds = new Set(o.delegated.map((d) => d.issueId));
+        for (const fid of g.issueIds) {
+            if (!ids.has(fid) && !defIds.has(fid) && !exemptIds.has(fid) && !dlgIds.has(fid))
+                es.push(`漏修 ${fid}`);
+        }
+        for (const fx of o.fixes) {
+            if (!g.issueIds.includes(fx.issueId))
+                es.push(`fixes 引用未知条目 ${fx.issueId}`);
+        }
+        for (const d of o.deferred) {
+            if (!g.issueIds.includes(d.issueId))
+                es.push(`deferred 引用未知条目 ${d.issueId}`);
+            // 互斥（审查 P3-2）：同 id 既在 fixes 又在 deferred = fixer 矛盾输出——该条的修复
+            // 已执行且被 commit 却被标 deferred 退出复审对账，修复无验证，拒绝
+            if (ids.has(d.issueId))
+                es.push(`条目 ${d.issueId} 同时出现在 fixes 与 deferred（矛盾输出）`);
+            if (exemptIds.has(d.issueId))
+                es.push(`条目 ${d.issueId} 同时出现在 deferred 与 exempt（矛盾输出）`);
+        }
+        for (const d of o.exempt) {
+            if (!g.issueIds.includes(d.issueId))
+                es.push(`exempt 引用未知条目 ${d.issueId}`);
+            if (ids.has(d.issueId))
+                es.push(`条目 ${d.issueId} 同时出现在 fixes 与 exempt（矛盾输出）`);
+            if (d.reason.trim() === "")
+                es.push(`exempt 条目 ${d.issueId} 缺豁免理由`);
+        }
+        for (const d of o.delegated) {
+            if (!g.issueIds.includes(d.issueId))
+                es.push(`delegated 引用未知条目 ${d.issueId}`);
+            if (ids.has(d.issueId))
+                es.push(`条目 ${d.issueId} 同时出现在 fixes 与 delegated（矛盾输出）`);
+            if (defIds.has(d.issueId))
+                es.push(`条目 ${d.issueId} 同时出现在 deferred 与 delegated（矛盾输出）`);
+            if (exemptIds.has(d.issueId))
+                es.push(`条目 ${d.issueId} 同时出现在 exempt 与 delegated（矛盾输出）`);
+        }
+        return es;
+    }
+    async function askFixOutcomeSelfHeal(g, activeById, round) {
+        const basePrompt = fixerPrompt(g, activeById);
+        let prompt = basePrompt;
+        for (let i = 0;; i++) {
+            // 纠正轮实例名带 -cN 后缀：避免与首发实例同名（宿主按名路由时防串实例）
+            const name = i === 0 ? `同步修复-R${round}-${g.id}` : `同步修复-R${round}-${g.id}-c${i}`;
+            const o = await askValidated(validateFixOutcome, (q) => wfAgent(name, FIXER_PERSONA).ask("FixOutcome", q), prompt);
+            if (o === null)
+                throw new Error(`组 ${g.id} fixer 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
+            const norm = normFixOutcome(o, projectRoot);
+            const es = esCheckGroup(g, norm);
+            if (es.length === 0) {
+                if (i > 0)
+                    log(`  [fix-selfheal] 组 ${g.id} 第 ${i} 次纠正回喂后覆盖校验通过`);
+                return { g, o: norm };
+            }
+            if (i >= FIX_SELFHEAL_MAX) {
+                throw new Error(`ES 校验违规（自愈 ${FIX_SELFHEAL_MAX} 次纠正回喂后仍违规）：${g.id} ${es.join("；")}。恢复动作：检查 fixer 返回 issueId 引用；在途编辑已留工作区未提交，接管前先 git status 盘点`);
+            }
+            log(`  [fix-selfheal] 组 ${g.id} 申报覆盖违规（第 ${i + 1}/${FIX_SELFHEAL_MAX} 次纠正）：${es.join("；")}`);
+            const buckets = (arr) => arr.map((x) => x.issueId).join("、") || "空";
+            prompt = [
+                basePrompt,
+                "",
+                `━━━ 自愈纠正（第 ${i + 1} 次申报）━━━`,
+                `你上一轮的四桶申报未通过引擎覆盖校验，违规清单：`,
+                ...es.map((e) => `- ${e}`),
+                ``,
+                `你上一轮的申报为：fixes=[${buckets(norm.fixes)}] deferred=[${buckets(norm.deferred)}] exempt=[${buckets(norm.exempt)}] delegated=[${buckets(norm.delegated)}]`,
+                ``,
+                `要求：`,
+                `1. 你上一轮的实际编辑已留在工作区（未提交）——不要重复执行已声明的修复动作；`,
+                `2. 先用工具核对工作树实际完成面（哪些条目已修、哪些缺口）；`,
+                `3. 缺口条目现在补齐修复；或按四桶语义如实改报（deferred=越权删码申报 / exempt=符号豁免申报 / delegated=职责外申报，三桶均须 reason）；`,
+                `4. 全量重新申报四桶（完整 JSON，不是增量补丁）——引擎将重新执行同一覆盖校验。`,
+            ].join("\n");
+        }
+    }
     try {
         for (let i = 0; i < groups.length; i += FIXER_CONCURRENCY) {
             const batch = groups.slice(i, i + FIXER_CONCURRENCY);
@@ -2064,58 +2154,11 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
             // 分类不变（M→M），状态码差分对它全盲；指纹直读内容，无论申报与否都被看见）
             const snapAbs = [...parsePorcelain(snapRes.stdout).keys()].map((f) => pathUnderRoot(f));
             const snapshot = await fingerprintFiles(snapAbs);
-            const outcomes = await Promise.all(batch.map((g) => askValidated(validateFixOutcome, (q) => wfAgent(`同步修复-R${round}-${g.id}`, FIXER_PERSONA).ask("FixOutcome", q), fixerPrompt(g, activeById)).then((o) => {
-                if (o === null)
-                    throw new Error(`组 ${g.id} fixer 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
-                return { g, o: normFixOutcome(o, projectRoot) };
-            })));
-            // ES 硬校验：本组全部条目必须被 fixes ∪ deferred ∪ exempt ∪ delegated 覆盖（全等级
-            // 当轮修完不留尾巴；deferred = 越权候选防线申报、exempt = 符号豁免申报、delegated =
-            // 职责外申报，引擎放行并转终态呈报，都不算漏修）；未知 id 引用违规；四桶两两互斥
-            // （同 id 多桶 = 矛盾输出——fixes+delegated 并报 = 修复已执行却绕过复审对账，修复无验证）
-            const es = [];
-            for (const { g, o } of outcomes) {
-                const ids = new Set(o.fixes.map((fx) => fx.issueId));
-                const defIds = new Set(o.deferred.map((d) => d.issueId));
-                const exemptIds = new Set(o.exempt.map((d) => d.issueId));
-                const dlgIds = new Set(o.delegated.map((d) => d.issueId));
-                for (const fid of g.issueIds) {
-                    if (!ids.has(fid) && !defIds.has(fid) && !exemptIds.has(fid) && !dlgIds.has(fid))
-                        es.push(`${g.id} 漏修 ${fid}`);
-                }
-                for (const fx of o.fixes) {
-                    if (!g.issueIds.includes(fx.issueId))
-                        es.push(`${g.id} fixes 引用未知条目 ${fx.issueId}`);
-                }
-                for (const d of o.deferred) {
-                    if (!g.issueIds.includes(d.issueId))
-                        es.push(`${g.id} deferred 引用未知条目 ${d.issueId}`);
-                    // 互斥（审查 P3-2）：同 id 既在 fixes 又在 deferred = fixer 矛盾输出——该条的修复
-                    // 已执行且被 commit 却被标 deferred 退出复审对账，修复无验证，拒绝
-                    if (ids.has(d.issueId))
-                        es.push(`${g.id} 条目 ${d.issueId} 同时出现在 fixes 与 deferred（矛盾输出）`);
-                    if (exemptIds.has(d.issueId))
-                        es.push(`${g.id} 条目 ${d.issueId} 同时出现在 deferred 与 exempt（矛盾输出）`);
-                }
-                for (const d of o.exempt) {
-                    if (!g.issueIds.includes(d.issueId))
-                        es.push(`${g.id} exempt 引用未知条目 ${d.issueId}`);
-                    if (ids.has(d.issueId))
-                        es.push(`${g.id} 条目 ${d.issueId} 同时出现在 fixes 与 exempt（矛盾输出）`);
-                    if (d.reason.trim() === "")
-                        es.push(`${g.id} exempt 条目 ${d.issueId} 缺豁免理由`);
-                }
-                for (const d of o.delegated) {
-                    if (!g.issueIds.includes(d.issueId))
-                        es.push(`${g.id} delegated 引用未知条目 ${d.issueId}`);
-                    if (ids.has(d.issueId))
-                        es.push(`${g.id} 条目 ${d.issueId} 同时出现在 fixes 与 delegated（矛盾输出）`);
-                    if (defIds.has(d.issueId))
-                        es.push(`${g.id} 条目 ${d.issueId} 同时出现在 deferred 与 delegated（矛盾输出）`);
-                    if (exemptIds.has(d.issueId))
-                        es.push(`${g.id} 条目 ${d.issueId} 同时出现在 exempt 与 delegated（矛盾输出）`);
-                }
-            }
+            const outcomes = await Promise.all(batch.map((g) => askFixOutcomeSelfHeal(g, activeById, round)));
+            // 批级 ES 断言——逐组校验已前移进 askFixOutcomeSelfHeal 的 run 内自愈纠正环，
+            // 此处退化为不变量防线：仅当自愈耗尽后由自愈函数自身抛出，理论恒过；保留以兜底
+            // 未来改动破坏该不变式
+            const es = outcomes.flatMap(({ g, o }) => esCheckGroup(g, o).map((v) => `${g.id} ${v}`));
             if (es.length > 0) {
                 throw new Error(`ES 校验违规：${es.join("；")}。恢复动作：检查 fixer 返回 issueId 引用；在途编辑已留工作区未提交，接管前先 git status 盘点`);
             }

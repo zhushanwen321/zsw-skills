@@ -22,7 +22,8 @@
 // ── 参数窄化与白名单 ──
 const VALID_ARG_KEYS = new Set(["execPlan", "maxRounds", "reviewerTemplate", "attempt"]);
 for (const key of Object.keys(args)) {
-  if (!VALID_ARG_KEYS.has(key)) {
+  // `_` 前缀 = 宿主运行时私有键（如 taiji/pi 宿主注入的 _runId），不属于脚本契约，跳过白名单（2026-10-03 实测缺陷修复）
+  if (!VALID_ARG_KEYS.has(key) && !key.startsWith("_")) {
     throw new Error(
       `未知参数: ${key}（合法参数: ${[...VALID_ARG_KEYS].join("/")}）——拼错的参数会被静默忽略，故 fail-fast`,
     );
