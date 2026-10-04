@@ -198,6 +198,67 @@ try {
   // 提取的纯函数单测（sanitizeSummary 直接可测）
   check("H sanitizeSummary 折叠换行", sanitizeSummary("a\nb\r\nc") === "a b c", sanitizeSummary("a\nb\r\nc"));
   check("I renderCommit 占位符全量替换", renderCommit(TPL, "x9", "s1 s2") === "dev: x9 — s1 s2", "");
+
+  // ── 场景 J：dev-consistency 轮级改动归属核验（NODE_VERIFY）的 porcelain 解析 ──
+  //    [2026-10-04 根因] 原实现 `l.trim()` 后再 `slice(3)`：未暂存改动（porcelain 形态
+  //    「 M a/x.ts」带前导空格）被 trim 掉首空格后 slice(3) 截断成「/x.ts」→ 组 changedFiles
+  //    恒空 → **修复体永不提交**（实测 d73de893b 只提交了 ?? 新增文件、所有 ` M` 修改全漏），
+  //    继而复审反复判「未提交」并累计触发停机线。本场景把解析钉在真实仓的三种形态上
+  //    （未暂存修改 / 已暂存修改 / 未跟踪），任一形态路径失真即红。
+  {
+    const consistProduct = new URL("../skills/self/dev-workflow/workflows/pi/dev-consistency-loop.js", import.meta.url).pathname;
+    const consistSrc = readFileSync(consistProduct, "utf8");
+    const eq = consistSrc.indexOf("const NODE_VERIFY =");
+    if (eq < 0) throw new Error("产物中找不到 NODE_VERIFY（契约提取失败）");
+    const exprStart = consistSrc.indexOf("=", eq) + 1;
+    let inStr2 = false;
+    let quote2 = "";
+    let exprEnd = -1;
+    for (let i = exprStart; i < consistSrc.length; i += 1) {
+      const ch = consistSrc[i];
+      if (inStr2) {
+        if (ch === "\\") i += 1;
+        else if (ch === quote2) inStr2 = false;
+      } else if (ch === '"' || ch === "'") {
+        inStr2 = true;
+        quote2 = ch;
+      } else if (ch === ";") {
+        exprEnd = i;
+        break;
+      }
+    }
+    if (exprEnd < 0) throw new Error("NODE_VERIFY 常量未闭合");
+    // eslint-disable-next-line no-new-func
+    const NODE_VERIFY = Function(`return (${consistSrc.slice(exprStart, exprEnd)});`)();
+
+    const prepo = mkdtempSync(join(tmpdir(), "porcelain-parse-"));
+    const pgit = (...args) => execFileSync("git", ["-C", prepo, ...args], { encoding: "utf8" });
+    try {
+      pgit("init", "-q");
+      pgit("config", "user.email", "p@test");
+      pgit("config", "user.name", "p-test");
+      pgit("config", "commit.gpgsign", "false");
+      mkdirSync(join(prepo, "sub"), { recursive: true });
+      writeFileSync(join(prepo, "sub", "unstaged.ts"), "x\n");
+      writeFileSync(join(prepo, "staged.ts"), "x\n");
+      pgit("add", ".");
+      pgit("commit", "-q", "-m", "init");
+      writeFileSync(join(prepo, "sub", "unstaged.ts"), "x\nmod\n"); // 形态「 M」
+      writeFileSync(join(prepo, "staged.ts"), "x\nmod\n");
+      pgit("add", "staged.ts"); // 形态「M 」
+      writeFileSync(join(prepo, "sub", "untracked.ts"), "new\n"); // 形态「??」（父目录已跟踪 → 文件级）
+      const parsed = JSON.parse(
+        execFileSync("node", ["-e", NODE_VERIFY, prepo, "[]"], { encoding: "utf8", maxBuffer: 33554432, stdio: ["pipe", "pipe", "pipe"] }),
+      );
+      const ch2 = new Set(parsed.changed);
+      const fu = new Set(parsed.foreignUntracked || []);
+      check("J1 未暂存修改路径不截断（「 M sub/unstaged.ts」→ sub/unstaged.ts）", ch2.has("sub/unstaged.ts"), JSON.stringify(parsed.changed));
+      check("J2 已暂存修改路径正确（「M  staged.ts」）", ch2.has("staged.ts"), JSON.stringify(parsed.changed));
+      check("J3 未跟踪路径入 changed 且归 foreignUntracked", ch2.has("sub/untracked.ts") && fu.has("sub/untracked.ts"), JSON.stringify(parsed.foreignUntracked));
+    } finally {
+      rmSync(prepo, { recursive: true, force: true });
+    }
+  }
 } catch (e) {
   console.error(`契约校验执行异常：${e && e.stack ? e.stack : e}`);
   cleanup();

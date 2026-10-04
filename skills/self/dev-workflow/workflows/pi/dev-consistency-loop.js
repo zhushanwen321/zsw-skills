@@ -375,6 +375,12 @@ const NODE_PREP = [
 const NODE_PREP_CODE = "var templateArgRaw = process.argv[2];\n" + NODE_PREP;
 // 轮级改动归属核验：git status --porcelain → 改动文件清单；foreign = 不在全体组
 // 申报文件并集中的改动（有组改了未申报文件——归属不明，整轮作废不提交）。
+// [2026-10-04 根因修复] 原实现 `.trim()` 后再 `slice(3)`：未暂存改动（porcelain 形态
+// 「 M path」带前导空格）被 trim 吃掉首空格后 slice(3) 截断路径（` M a/b.ts` → `b.ts`），
+// 致 changed/foreign 错位、组 changedFiles 恒空 → **修复体永不提交、留工作区被下一轮复审
+// 反复判「未提交」并累计触发停机线**（实测 d73de893b 只提交了 ?? 新增文件、所有 ` M` 修改
+// 全漏）。修法：按 porcelain 固定列宽取状态码与路径（不 trim），与 wave-executor /
+// design-code-sync 的同名解析口径对齐；并区分 untracked（?? 条目）供 settle 判别。
 const NODE_VERIFY = [
     "var cp = require('child_process');",
     "var projectRoot = process.argv[1];",
@@ -382,15 +388,19 @@ const NODE_VERIFY = [
     "var out = '';",
     "try { out = cp.execFileSync('git', ['status', '--porcelain'], { cwd: projectRoot, encoding: 'utf8', maxBuffer: 67108864, stdio: ['pipe', 'pipe', 'pipe'] }); }",
     "catch (e) { console.error('git status 失败: ' + ((e.stderr || '') + (e.message || e))); process.exit(1); }",
-    "var changed = out.split('\\n').map(function (l) { return l.trim(); }).filter(Boolean).map(function (l) {",
-    "  var p = l.slice(3).trim();",
+    "var entries = out.split('\\n').filter(function (l) { return l.trim() !== ''; }).map(function (l) {",
+    "  var code = l.slice(0, 2);",
+    "  var p = l.length > 3 ? l.slice(3) : '';",
     "  if (p.charCodeAt(0) === 34 && p.slice(-1) === '\"') p = p.slice(1, -1);",
     "  var idx = p.indexOf(' -> ');",
     "  if (idx >= 0) p = p.slice(idx + 4);",
-    "  return p;",
-    "}).filter(Boolean);",
+    "  return { code: code, path: p };",
+    "}).filter(function (e) { return e.path !== ''; });",
+    "var changed = entries.map(function (e) { return e.path; });",
+    "var untracked = entries.filter(function (e) { return e.code.indexOf('?') >= 0; }).map(function (e) { return e.path; });",
     "var foreign = changed.filter(function (f) { return pool.indexOf(f) < 0; });",
-    "console.log(JSON.stringify({ changed: changed, foreign: foreign }));",
+    "var foreignUntracked = foreign.filter(function (f) { return untracked.indexOf(f) >= 0; });",
+    "console.log(JSON.stringify({ changed: changed, foreign: foreign, foreignUntracked: foreignUntracked }));",
 ].join("\n");
 // 组级 commit（引擎统一执行，fixer 不碰 git）：逐文件 existsSync 预过滤 + git add --
 // 终止符 + git commit --only -m -- <本组文件清单>（对齐 W2 GIT_ADD_COMMIT / W4
@@ -839,7 +849,7 @@ const RE_PERSONA = "你是对抗式一致性复审者：只报告、绝不修改
     NO_ASK_RULE;
 const AGGREGATE_PERSONA = "你是审查发现聚合定性员：只读分析、绝不修改任何文件；对审查发现的条目清单做四步裁决——" +
     "①去重：同一根因的多条合并为一条（保留全部 location 证据）；" +
-    "②定性：逐条按三分类定义复核归类，错误定性当场改判（实现未履行登记/同步义务 = unreasonable；文档/注释内容与已提交实现冲突 = doc_errors）；" +
+    "②定性：逐条按三分类定义复核归类，错误定性当场改判（实现未履行登记/同步义务 = unreasonable；文档/注释内容与已提交实现冲突 = doc_errors；**提交完整性/HEAD 自洽性类发现一律不计入 unreasonable**——引擎轮末 settle 收编，此类发现归 reasonable 且 summary 以 `[process]` 开头）；" +
     "③分组：按「预期改动文件无交集」构造修复组，预期文件相交的条目必须同组；" +
     "④路由：条目修复动作与分区职责域不匹配时重派到匹配职责域的组，无任何组可承接时升级呈报。" +
     "清单中每个条目都必须出现在输出中（含 keep），漏报的条目由引擎按原分区机械分组兜底。" +
@@ -1009,6 +1019,8 @@ function r1Prompt(p) {
             : `本分区文件集（分区互斥契约：只审下列文件）：\n${p.files.join("\n")}`,
         "",
         "若 impl-plan 章节映射失效（映射指向的节不存在或与节名对不上）：docErrors 放一条映射失效说明（location = impl-plan 的章节映射节，gap = 失效详情），其余两分类返回空数组，禁止按猜的节继续审。",
+        "",
+        "提交口径（2026-10-04 裁决）：**不得**把「改动未提交 / HEAD 未含某内容 / 工作区仍有未提交改动 / 提交原子性」判为 unreasonable——提交完整性由引擎在轮末 settle 统一收编；此类现象若你认为有价值，写入 reasonable 且 summary 以 `[process]` 开头（引擎按该前缀识别为流程类，不计入停机线，也不派修复组）。对账（fixed/not-fixed）以**工作区实际内容**为准，改动未提交不影响判定。",
         "",
         "返回 JSON：{ reasonable, unreasonable, docErrors, reconciliation }——unreasonable / docErrors 每条 { location, gap, affectsDecision, affectsDelivery, severity, fixHint }（两必填字段按模板口径填写），reasonable 每条 { location, summary, docSyncSuggestion }；reconciliation 本轮（R1）固定返回 []（无对账义务）；空数组必须显式返回 []（表示「在本分区未发现」，含糊的整体性断言无效）。",
     ].join("\n");
@@ -1455,6 +1467,44 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             log(`WARN 组 ${g.name} ${g.commitNote}`);
         }
     }
+    // ── 阶段 B2：未归属改动 settle（2026-10-04 裁决）──
+    //    背景：无人申报的改动若留在工作区，会毒化下一轮复审——实测「断言某锚点的测试已入库、
+    //    而锚点改动未提交」被判 unreasonable，流程债反复占位并累计触发停机线（attempt1 出现
+    //    活跃数 7→10 反增）。故提交阶段后立刻收编：
+    //    ① **已跟踪**的未归属改动 → 按轮级一笔显式提交（排除 .tmp/ 与 .pi/workflows/ 等运行
+    //       / 工具产物路径）；
+    //    ② **未跟踪**（??）的未归属文件不自动提交（防把流程外新文件卷进本流程），只告警并随
+    //       终态 residualFiles 呈报；
+    //    ③ 收编失败只告警不中断（settleNote 随轮次日志与终态呈报）。
+    let settleNote = "";
+    {
+        const excluded = (f) => f === ".tmp" || f.startsWith(".tmp/") || f === ".pi" || f.startsWith(".pi/workflows/");
+        const foreignTracked = verify.foreign.filter((f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0);
+        const foreignUntracked = verify.foreignUntracked.filter((f) => !excluded(f));
+        if (foreignTracked.length > 0) {
+            const settleMsg = `fix(consistency): round-${fixRound} settle 未归属改动 ${foreignTracked.length} 件`;
+            const sc = await world.run("node", ["-e", NODE_COMMIT, info.projectRoot, JSON.stringify(foreignTracked), settleMsg]);
+            if (sc.exitCode === 0) {
+                settleNote = `轮末 settle 收编 ${foreignTracked.length} 个未归属改动（${settleMsg}）`;
+                log(`轮末 settle：收编 ${foreignTracked.length} 个未归属改动（${foreignTracked.slice(0, 5).join("、")}${foreignTracked.length > 5 ? " 等" : ""}）`);
+            }
+            else {
+                settleNote = `轮末 settle 提交失败（exit ${sc.exitCode}）：${sc.stderr.trim() || sc.stdout.trim()}——改动留工作区`;
+                log(`WARN ${settleNote}`);
+            }
+        }
+        if (foreignUntracked.length > 0) {
+            settleNote = [settleNote, `未跟踪且无人申报 ${foreignUntracked.length} 件（不自动提交，留盘待认领）`]
+                .filter(Boolean)
+                .join("；");
+            log(`WARN 未跟踪且无人申报的文件 ${foreignUntracked.length} 件（不自动提交）：${foreignUntracked.slice(0, 5).join("、")}`);
+        }
+        // 已收编的改动不再以「留盘待认领」注入下一轮 prompt（防复审围绕陈旧状态打转）
+        foreignNote =
+            foreignUntracked.length > 0
+                ? wrapUntrusted(`工作区存在无人申报且未跟踪的文件（引擎不自动提交、留盘待认领）：\n${foreignUntracked.join("\n")}\n与本组无关的不要动它。`)
+                : "";
+    }
     // ── 阶段 C：定向复审（每组修完即审该组影响面；复审目标 = 有改动/测试挂的组 ∪ 仍有
     //    活跃条目待裁决的组——后者防 fail-closed 死循环：漏报条目保持活跃后若修复零改动，
     //    「无改动不派复审」会让它永远没有下一次被裁决的机会）──
@@ -1482,7 +1532,9 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
                     "",
                     "背景参数：",
                     ctxBlock,
-                    `上批修复改动可能部分留在工作区未提交——除 git diff ${info.baseline}..HEAD 外，用 git status --porcelain 与 git diff 补充查看未提交改动。`,
+                    `上批修复改动可能部分留在工作区未提交——除 git diff ${info.baseline}..HEAD 外，用 git status --porcelain 与 git diff 补充查看未提交改动（**仅供你判断修复是否落地**，不得据此判 unreasonable）。`,
+                    "",
+                    "提交口径（2026-10-04 裁决）：**不得**把「改动未提交 / HEAD 未含某内容 / 工作区仍有未提交改动 / 提交原子性」判为 unreasonable——提交完整性由引擎在轮末 settle 统一收编；此类现象若你认为有价值，写入 reasonable 且 summary 以 `[process]` 开头（引擎按该前缀识别为流程类，不计入停机线，也不派修复组）。对账（fixed/not-fixed）以**工作区实际内容**为准，改动未提交不影响判定。",
                     "",
                     "本分区复审文件集（上批条目指向文件 + 修复申报文件）：",
                     files.join("\n"),
@@ -1663,7 +1715,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
         }
         const activeAfter = activeItems();
         const clearedCount = roundActive.filter((i) => !i.active).length;
-        log(`第 ${reviewRound} 轮定向复审：清零 ${clearedCount} 条，新增 ${newReports.length} 条，活跃 ${activeAfter.length} 条（组态：${groupStates.map((g) => `${g.name}=${g.committed ? "已提交" : g.testFailed ? "测试未过" : g.changedFiles.length === 0 ? "无改动" : "未提交"}`).join("、")}）`);
+        log(`第 ${reviewRound} 轮定向复审：清零 ${clearedCount} 条，新增 ${newReports.length} 条，活跃 ${activeAfter.length} 条（组态：${groupStates.map((g) => `${g.name}=${g.committed ? "已提交" : g.testFailed ? "测试未过" : g.changedFiles.length === 0 ? "无改动" : "未提交"}`).join("、")}）${settleNote !== "" ? `；${settleNote}` : ""}`);
         report({
             round: reviewRound,
             active: activeAfter.length,
@@ -1677,19 +1729,24 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
         //    后复审仍报）的活跃条目在 stuck 消息中标注，随 escalated 字段呈报用户裁决。
         //    2026-09-26 二次裁决：无人申报改动不再作废轮次（每轮都走提交+复审，轮轮有效），
         //    计数回归单线 reviewRound；无人申报的改动留盘待认领、终态随 residualFiles 呈报）──
-        const stubborn = activeAfter.filter((i) => i.uncleanRounds >= 2);
-        if (activeAfter.length > 0 && (reviewRound >= 3 || activeAfter.length > prevActiveCount)) {
-            const why = activeAfter.length > prevActiveCount
-                ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${activeAfter.length}）`
-                : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${activeAfter.length} 条）`;
+        // 停机线只对**内容类**条目计数（2026-10-04 裁决）：`[process]` 前缀标记的流程类发现
+        //（提交/登记完整性）由引擎轮末 settle 收编，不占停机判据——防流程债堆积触发假 stuck。
+        const contentActive = activeAfter.filter((i) => !String(i.gap ?? "").trim().startsWith("[process]"));
+        const processActiveCount = activeAfter.length - contentActive.length;
+        const stubborn = contentActive.filter((i) => i.uncleanRounds >= 2);
+        if (contentActive.length > 0 && (reviewRound >= 3 || contentActive.length > prevActiveCount)) {
+            const why = contentActive.length > prevActiveCount
+                ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${contentActive.length}${processActiveCount > 0 ? `，已排除 ${processActiveCount} 条 [process] 流程类` : ""}）`
+                : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${contentActive.length} 条${processActiveCount > 0 ? `，另有 ${processActiveCount} 条 [process] 流程类` : ""}）`;
             stuckPendingReason = `计数停机线触发：${why}${stubborn.length > 0 ? `；顽固条目（≥2 轮修复未清，优先人工裁决）：${stubborn.map((i) => `${i.id}（${i.location}，${i.uncleanRounds} 轮）`).join("、")}` : ""}——残留清单见 remaining / 顽固清单见 escalated 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`;
             break;
         }
-        prevActiveCount = activeAfter.length;
+        prevActiveCount = contentActive.length;
     }
 }
-if (activeItems().length > 0 && stuckPendingReason === null) {
-    stuckPendingReason = `修复轮次上限 ${maxRounds} 耗尽仍有 ${activeItems().length} 条 unreasonable 活跃——残留清单见 remaining 字段；恢复动作：主 agent 人工裁决残留条目（定性争议转 doc_errors / 需重设计的走设计流程），不要盲目重跑本工作流`;
+const contentActiveFinal = activeItems().filter((i) => !String(i.gap ?? "").trim().startsWith("[process]"));
+if (contentActiveFinal.length > 0 && stuckPendingReason === null) {
+    stuckPendingReason = `修复轮次上限 ${maxRounds} 耗尽仍有 ${contentActiveFinal.length} 条 unreasonable 活跃——残留清单见 remaining 字段；恢复动作：主 agent 人工裁决残留条目（定性争议转 doc_errors / 需重设计的走设计流程），不要盲目重跑本工作流`;
 }
 // ══════════════ Phase 3：产物类第一波并行预备 + 全量测试 Gate A ══════════════
 // stuck 待收尾时 Gate A 结果并入 stuck 终态（终态 = stuck 非 gate-a-failed——残留条目的
