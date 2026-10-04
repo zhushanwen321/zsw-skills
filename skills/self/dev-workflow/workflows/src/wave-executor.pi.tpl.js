@@ -86,8 +86,23 @@ const SCHEMA_HealFixReport = {
   },
   required: ["fixed", "summary"],
 };
+const SCHEMA_InspectResult = {
+  type: "object",
+  properties: {
+    verdict: {
+      type: "string",
+      enum: ["pass", "fail", "degraded"],
+      description: "验收结论：pass = 通过标准全部达成；fail = 有未达成项；degraded = 场景不可构造但替代构造已证判定面（任务书契约词表，勿用 status 字段）",
+    },
+    test_evidence: { type: "string", description: "验收证据：逐条核对结果与关键观测" },
+    deviations: { type: "array", items: { type: "string" }, description: "与任务书的偏离说明（无偏离为空数组）" },
+    blockers: { type: "array", items: { type: "string" }, description: "阻塞项（非空则节点判 blocked，不进入打回）" },
+  },
+  required: ["verdict", "test_evidence", "deviations", "blockers"],
+};
 const SCHEMA_BY_KEY = {
   NodeResult: SCHEMA_NodeResult,
+  InspectResult: SCHEMA_InspectResult,
   HealVerdict: SCHEMA_HealVerdict,
   HealFixReport: SCHEMA_HealFixReport,
 };
