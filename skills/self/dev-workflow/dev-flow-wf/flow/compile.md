@@ -79,6 +79,7 @@
 
 补编规则：
 
+- **inspect 任务书返回契约 [MANDATORY]**：inspect 节点 promptFile 末尾的返回契约固定为 `{verdict: "pass"|"fail"|"degraded", test_evidence, deviations:[], blockers:[]}`（验收结论词，与 dev 节点的执行语义 `{status,...}` 契约不同源不同词——引擎按 verdict 分流：fail→failed，pass/degraded→核锚后 done），**禁写 status 字段**；判定书 JSON 必须落 `<artifactsDir>/verdict.json` 且文件内 verdict 与结构化返回一致——引擎以此文件为 done 事实锚（缺失/不一致按失败处理；增量重跑对既有 done 也核此锚，不通过回 pending）。任务书契约写成 PASS|FAIL|DEGRADED 或 status 双承载两义，会使 agent 把「执行完成」报成 done 吞掉 FAIL 结论（2026-10-04 taiji D3 A10 实证）
 - **汇总 inspect 节点**：全部 verify 节点产物集中追加一个汇总 inspect 节点（deps=全部 verify 节点）——判 pass/fail + 扫全页截图与 console 兜底（脚本断言盲区由这步补偿）+ fail 归因定位到场景与日志行
 - **一次性 vs 可复用分流**：验收脚本按一次性（迁移/特殊环境/本设计特有）vs 可复用（进项目 e2e 资产）分流落位
 - **fail 先查排障文档**：验收失败处理写在 verify/inspect 节点 promptFile 约束——先 read 项目排障文档（典型 docs/TROUBLESHOOTING.md）归因，禁不归因重试、禁放宽断言

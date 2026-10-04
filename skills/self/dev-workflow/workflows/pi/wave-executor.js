@@ -86,8 +86,23 @@ const SCHEMA_HealFixReport = {
   },
   required: ["fixed", "summary"],
 };
+const SCHEMA_InspectResult = {
+  type: "object",
+  properties: {
+    verdict: {
+      type: "string",
+      enum: ["pass", "fail", "degraded"],
+      description: "验收结论：pass = 通过标准全部达成；fail = 有未达成项；degraded = 场景不可构造但替代构造已证判定面（任务书契约词表，勿用 status 字段）",
+    },
+    test_evidence: { type: "string", description: "验收证据：逐条核对结果与关键观测" },
+    deviations: { type: "array", items: { type: "string" }, description: "与任务书的偏离说明（无偏离为空数组）" },
+    blockers: { type: "array", items: { type: "string" }, description: "阻塞项（非空则节点判 blocked，不进入打回）" },
+  },
+  required: ["verdict", "test_evidence", "deviations", "blockers"],
+};
 const SCHEMA_BY_KEY = {
   NodeResult: SCHEMA_NodeResult,
+  InspectResult: SCHEMA_InspectResult,
   HealVerdict: SCHEMA_HealVerdict,
   HealFixReport: SCHEMA_HealFixReport,
 };
@@ -814,6 +829,35 @@ function validateNodeResult(v) {
         errors.push("blockers 须为字符串数组");
     return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v };
 }
+function validateInspectResult(v) {
+    const o = typeof v === "object" && v !== null ? v : {};
+    const errors = [];
+    if (o["verdict"] !== "pass" && o["verdict"] !== "fail" && o["verdict"] !== "degraded")
+        errors.push('verdict 须为 "pass"|"fail"|"degraded"');
+    if (typeof o["test_evidence"] !== "string")
+        errors.push("test_evidence 须为字符串");
+    if (!isStrArr(o["deviations"]))
+        errors.push("deviations 须为字符串数组");
+    if (!isStrArr(o["blockers"]))
+        errors.push("blockers 须为字符串数组");
+    return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v };
+}
+/**
+ * inspect done 的事实锚（等价 dev 节点的 commit 锚）：判定书固定落
+ * `<artifactsDir>/verdict.json`，结论词（verdict|status 字段任一）与结构化返回一致才
+ * 认通过——单靠结构化自报无第二证据时，「执行完成」语义会再次遮蔽「验收结论」
+ * （本次修复的根因形态）。文件缺失 / 不可解析 / 结论不一致 = 锚不成立。
+ * artifactsDir 为空按锚通过（exec-plan 校验已要求 inspect 带 artifactsDir，防御性宽容）。
+ */
+async function inspectVerdictAnchorOk(node, expected) {
+    if (node.artifactsDir === "")
+        return true;
+    const raw = await readTextViaNode(`${node.artifactsDir}/verdict.json`);
+    if (raw === null)
+        return false;
+    const m = raw.match(/"(?:verdict|status)"\s*:\s*"([^"]+)"/i);
+    return m !== null && m[1].toLowerCase() === expected;
+}
 function validateHealVerdict(v) {
     const o = typeof v === "object" && v !== null ? v : {};
     const errors = [];
@@ -1142,7 +1186,7 @@ async function executeInspectNode(node) {
             }),
         ]
         : [];
-    const result = await askValidated(validateNodeResult, (p) => nodeAgent.ask("NodeResult", p), `读取验收任务书 ${node.promptFile}（绝对路径）并按其完整执行（只检查，不修改代码、不产生 commit），返回该文件末尾定义的 JSON 契约（status / files_changed / test_evidence / deviations / blockers）。${refLines.join("\n")}`);
+    const result = await askValidated(validateInspectResult, (p) => nodeAgent.ask("InspectResult", p), `读取验收任务书 ${node.promptFile}（绝对路径）并按其完整执行（只检查，不修改代码、不产生 commit），返回该文件末尾定义的 JSON 契约（verdict: "pass"|"fail"|"degraded" / test_evidence / deviations / blockers），并把判定书 JSON 写入 ${node.artifactsDir}/verdict.json（文件内 verdict 字段必须与结构化返回一致——引擎以此文件为 done 的事实锚）。${refLines.join("\n")}`);
     if (result === null) {
         await markNodeBlockedOrFailed(node.id, "blocked", `inspect 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`, "任务书可读，接管前先核对上游产物", 1);
         return;
@@ -1151,12 +1195,18 @@ async function executeInspectNode(node) {
         await markNodeBlockedOrFailed(node.id, "blocked", "任务书自报 blockers", result.blockers.join("；"), 1);
         return;
     }
-    if (result.status !== "done") {
-        await markNodeBlockedOrFailed(node.id, "failed", `inspect 自报 status=${result.status}`, result.test_evidence, 1);
+    if (result.verdict === "fail") {
+        await markNodeBlockedOrFailed(node.id, "failed", `inspect 验收结论 fail`, result.test_evidence, 1);
         return;
     }
-    await finishNodeDone(node.id, 1, undefined, result.test_evidence);
-    log(`Inspect 节点 ${node.id} 检查通过`);
+    // pass/degraded 收 done 前核判定书锚：结构化自报与落盘判定文件一致才算数——
+    // verdict 词表已与执行语义解耦，此锚再挡「agent 口头 pass、文件 FAIL」的残余假绿通道
+    if (!(await inspectVerdictAnchorOk(node, result.verdict))) {
+        await markNodeBlockedOrFailed(node.id, "failed", `inspect 结构化 verdict=${result.verdict} 但 ${node.artifactsDir}/verdict.json 缺失或结论不一致——事实锚不成立，按失败处理`, result.test_evidence, 1);
+        return;
+    }
+    await finishNodeDone(node.id, 1, undefined, (result.verdict === "degraded" ? "[DEGRADED] " : "") + result.test_evidence);
+    log(`Inspect 节点 ${node.id} 验收结论 ${result.verdict}${result.verdict === "degraded" ? "（降级通过，evidence 已标注）" : "（判定书锚核对一致）"}`);
 }
 async function executeNode(node) {
     if (node.kind === "dev")
@@ -1454,6 +1504,22 @@ else {
                 aligned[id] = { status: "pending", attempts: 0 };
                 log(`级联失效：${id} 依赖的单元被对账回 pending，其 done 结论基于已消失的 commit——一并回 pending`);
             }
+        }
+    }
+    // inspect 节点的 done 无 commit 锚（上面的对账只核 dev 节点 git 存在性），单独核
+    // verdict 判定文件——防上一 run 的假 done（结构化自报 pass、判定书实际 FAIL，或干脆
+    // 未经真实检查）被「按 status.json 增量跳过」继承（2026-10-04 taiji D3 A10 实证形态）
+    for (const n of plan.nodes) {
+        if (n.kind !== "inspect" || n.artifactsDir === "")
+            continue;
+        if (aligned[n.id]?.status !== "done")
+            continue;
+        const raw = await readTextViaNode(`${n.artifactsDir}/verdict.json`);
+        const m = raw !== null ? raw.match(/"(?:verdict|status)"\s*:\s*"([^"]+)"/i) : null;
+        const v = m?.[1]?.toLowerCase();
+        if (v !== "pass" && v !== "degraded") {
+            aligned[n.id] = { status: "pending", attempts: 0 };
+            log(`inspect 锚核对：${n.id} 的 status.json 记 done，但 ${n.artifactsDir}/verdict.json 缺失或结论非 pass/degraded——回 pending 重跑`);
         }
     }
     for (const n of plan.nodes) {
