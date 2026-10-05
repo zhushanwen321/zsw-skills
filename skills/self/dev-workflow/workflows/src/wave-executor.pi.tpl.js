@@ -1,7 +1,7 @@
 /* @pi-meta
 name: wave-executor
 description: >-
-  dev-flow-wf W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验领地、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），acceptance 模式承载 verify/inspect 节点与核心组熔断，终态 completed、blocked 或 core-failed
+  dev-flow-wf W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验范围声明、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），acceptance 模式承载 verify/inspect 节点与核心组熔断，终态 completed、blocked 或 core-failed
 when: >-
   dev-flow-wf 的 D1 开发循环与 D3 端到端验收发起本 workflow，传入 exec-plan.json 绝对路径（D0 编译产出），断点恢复按 status.json 人读恢复（git 为准）
 phases: ['校验执行计划', '并行执行开发节点', '并行执行验收节点', '收尾汇总']
@@ -10,7 +10,7 @@ parameters:
   properties:
     execPlan:
       type: string
-      description: exec-plan.json 绝对路径（D0 编译产出：nodes/依赖/领地/testCommand/promptFile/statusPath/commitTemplate/acceptance 分组）
+      description: exec-plan.json 绝对路径（D0 编译产出：nodes/依赖/范围声明/testCommand/promptFile/statusPath/commitTemplate/acceptance 分组）
   required: [execPlan]
 */
 
@@ -50,7 +50,7 @@ const SCHEMA_NodeResult = {
       enum: ["done", "fail", "blocked"],
       description: "done = 本单元工作完成且自测通过；fail = 有未解决问题；blocked = 无法继续",
     },
-    files_changed: { type: "array", items: { type: "string" }, description: "改动文件路径（相对节点工作区 git 仓库根的 git 风格路径，须 ⊆ 任务书领地）" },
+    files_changed: { type: "array", items: { type: "string" }, description: "改动文件路径（相对节点工作区 git 仓库根的 git 风格路径，须 ⊆ 任务书范围声明）" },
     test_evidence: { type: "string", description: "自测证据：跑了什么命令、结果如何" },
     deviations: { type: "array", items: { type: "string" }, description: "与任务书的偏离说明（无偏离为空数组）" },
     blockers: { type: "array", items: { type: "string" }, description: "阻塞项（环境缺失/任务书矛盾等；非空则节点判 blocked，不进入打回）" },

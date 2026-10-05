@@ -205,7 +205,7 @@ const SCHEMA_FixOutcome = {
   type: "object",
   properties: {
     fixes: { type: "array", items: SCHEMA_FixRecord },
-    affectedFiles: { type: "array", items: { type: "string" }, description: "实际改动文件（含新增文件与组外正当扩展——引擎据此做领地核验与组级 commit）" },
+    affectedFiles: { type: "array", items: { type: "string" }, description: "实际改动文件（含新增文件与组外正当扩展——引擎据此做范围声明核验与组级 commit）" },
     deferred: {
       type: "array",
       description: "越权候选 defer 申报（§7.3 机器落点）：条目的修复动作将是删码而条目非 must-fix 级 → fixer 不执行删除，申报转呈报；引擎放行（不算漏修）并随终态 overdesignCandidates 呈报",

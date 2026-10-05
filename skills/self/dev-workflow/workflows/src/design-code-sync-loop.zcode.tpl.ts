@@ -144,7 +144,7 @@ interface FixRecord {
 /** 修复组 agent 结构化返回 */
 interface FixOutcome {
   fixes: FixRecord[];
-  /** 实际改动文件（含新增文件与组外正当扩展——引擎据此做领地核验与组级 commit） */
+  /** 实际改动文件（含新增文件与组外正当扩展——引擎据此做范围声明核验与组级 commit） */
   affectedFiles: string[];
   /** 越权候选 defer 申报（§7.3 机器落点）：条目的修复动作将是删码而条目非 must-fix 级 →
    *  fixer 不执行删除，申报转呈报；引擎放行（不算漏修）并随终态 overdesignCandidates 呈报 */

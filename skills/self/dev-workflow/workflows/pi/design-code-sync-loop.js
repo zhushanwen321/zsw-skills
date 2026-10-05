@@ -205,7 +205,7 @@ const SCHEMA_FixOutcome = {
   type: "object",
   properties: {
     fixes: { type: "array", items: SCHEMA_FixRecord },
-    affectedFiles: { type: "array", items: { type: "string" }, description: "实际改动文件（含新增文件与组外正当扩展——引擎据此做领地核验与组级 commit）" },
+    affectedFiles: { type: "array", items: { type: "string" }, description: "实际改动文件（含新增文件与组外正当扩展——引擎据此做范围声明核验与组级 commit）" },
     deferred: {
       type: "array",
       description: "越权候选 defer 申报（§7.3 机器落点）：条目的修复动作将是删码而条目非 must-fix 级 → fixer 不执行删除，申报转呈报；引擎放行（不算漏修）并随终态 overdesignCandidates 呈报",
@@ -372,7 +372,7 @@ const HINT_RETIRE_INVALID = "修订脚本退役 prompt 后重跑";
 // ── 常量（控制流专用，不内插进任何 ask 文本） ──
 const DEFAULT_MAX_ROUNDS = 10;
 const REVIEWER_BATCH = 4; // 模块 fan-out 分批（全局 subagent 并发 ≤5 约束）
-const FIXER_CONCURRENCY = 3; // 修复组并行批大小（rfl 同款；领地互斥由闭包合并保证）
+const FIXER_CONCURRENCY = 3; // 修复组并行批大小（rfl 同款；范围声明互斥由闭包合并保证）
 const STUCK_STALL_ROUNDS = 3; // 停机线：must-fix 连续 N 轮不降判 stuck（2026-09-26 用户裁决三 loop 统一 3 轮；原设计 §7 为 4）
 const STUCK_PER_FINDING_ROUNDS = 2; // 停机线：单条活跃存活超过 N 轮判 stuck（设计 §7：单条超 2 轮）
 const VALID_ARG_KEYS = new Set([
@@ -988,8 +988,8 @@ const delegatedList = [];
 // 呈报主 agent 判归属处置（2026-09-26 用户裁决——各组只对自己的改动负责）
 const residualFiles = new Set();
 const ledgerById = (id) => ledger.find((f) => f.id === id);
-/** 条目编辑目标集（领地/闭包判交用）：code-right → 文档侧；doc-right → location 锚点
- *  ∪ 所属模块 files（模块 files 并集语义：波及扫描的合法领地）；planner 域 doc-right
+/** 条目编辑目标集（范围声明/闭包判交用）：code-right → 文档侧；doc-right → location 锚点
+ *  ∪ 所属模块 files（模块 files 并集语义：波及扫描的合法声明范围）；planner 域 doc-right
  *  无模块可回退时 → impl-plan（②③ 类修 impl-plan）；contested 非 must-fix 级按
  *  doc-right 处理（方向语义权威表默认） */
 function findingEditFiles(f) {
@@ -1013,7 +1013,7 @@ function findingEditFiles(f) {
                 if (!base.includes(fp))
                     base.push(fp);
     }
-    // 空 base = 漏实现条目（doc-right 应补代码，锚点未知）——领地为空集：不回退 impl-plan
+    // 空 base = 漏实现条目（doc-right 应补代码，锚点未知）——声明范围为空集：不回退 impl-plan
     //（与「修代码」方向矛盾，§7.1 回写裁决）；组构造归单席串行组，fixer 按 fix-hint 定位
     // 补码位置、affectedFiles 如实申报，引擎按申报核验 + reconcileGroups 闭包兜底
     return base;
@@ -1039,7 +1039,7 @@ function buildCandidateGroups(active) {
         });
     }
     // 退役引用清理条目（引擎在收敛点生成，owner=retire-cleanup）：修复面 = location 锚点
-    // （引用方文件）；锚点缺失（命中行无路径形态）→ 领地空集，按 fix-hint 定位 +
+    // （引用方文件）；锚点缺失（命中行无路径形态）→ 声明范围空集，按 fix-hint 定位 +
     // affectedFiles 申报核验——与漏实现条目同款降级路径
     const retireIds = active.filter((f) => f.owner === "retire-cleanup");
     if (retireIds.length > 0) {
@@ -1051,14 +1051,14 @@ function buildCandidateGroups(active) {
     }
     // planner 域拆两组（§7.1 回写）：文档侧条目（code-right：架构漂移/②③/登记面/越权回写）
     // 单组串行；漏实现与 contested-suggestion（doc-right 修复面，代码锚点未知）单独成组
-    // 且领地 = 空集（按 fix-hint 定位，affectedFiles 申报核验）
+    // 且声明范围 = 空集（按 fix-hint 定位，affectedFiles 申报核验）
     const plannerDoc = active.filter((f) => f.owner === "planner" && f.direction === "code-right");
     const plannerImpl = active.filter((f) => f.owner === "planner" && f.direction !== "code-right");
     if (plannerDoc.length > 0) {
         raw.push({ id: "M-plan", issueIds: plannerDoc.map((f) => f.id), files: [designDoc, implPlan], note: "框架级条目（架构漂移 / impl-plan 现实性与内部一致性 / 关联登记面）——修复面横跨文档侧，保守单组" });
     }
     if (plannerImpl.length > 0) {
-        raw.push({ id: "M-plan-impl", issueIds: plannerImpl.map((f) => f.id), files: [], note: "框架级漏实现 / contested-suggestion（应补代码，锚点未知）——领地空集：按 fix-hint 定位补码位置，affectedFiles 如实申报（引擎核验），串行单组" });
+        raw.push({ id: "M-plan-impl", issueIds: plannerImpl.map((f) => f.id), files: [], note: "框架级漏实现 / contested-suggestion（应补代码，锚点未知）——声明范围空集：按 fix-hint 定位补码位置，affectedFiles 如实申报（引擎核验），串行单组" });
     }
     return raw;
 }
@@ -1277,8 +1277,8 @@ const plannerPromptText = [
     runlogDutyLine("sync-planner"),
     `仓库 ${projectRoot}；设计文档 ${designDoc}；impl-plan ${implPlan}；审查基线 = 当前 HEAD（${headHash}）——审查对象是 HEAD 终态全量，不是 diff 区间。`,
     statusPathArg !== ""
-        ? `职责②「现实↔impl-plan 进度核对」的数据源 = status.json（${statusPathArg}，D1/D2 各节点终态事实）——进度核对以它为准，impl-plan.json 只有单元面/依赖/领地。`
-        : "职责②注意：本次未提供 status.json——进度核对降级为 impl-plan.json 单侧（单元面/依赖/领地），无法核对节点终态事实，请在 frameworkFindings 的 note 注明该降级。",
+        ? `职责②「现实↔impl-plan 进度核对」的数据源 = status.json（${statusPathArg}，D1/D2 各节点终态事实）——进度核对以它为准，impl-plan.json 只有单元面/依赖/范围声明。`
+        : "职责②注意：本次未提供 status.json——进度核对降级为 impl-plan.json 单侧（单元面/依赖/范围声明），无法核对节点终态事实，请在 frameworkFindings 的 note 注明该降级。",
     "只报告与产出计划，不修改任何文件。",
     "完成后返回 JSON：frameworkFindings（元素 {id, matrixRow: {claim, impl, verdict, note, overdesign?}, severity}）+ modules（元素 {id, module, files, focus}）——结构按模板输出节；无某类发现时显式说明；modules 至少 1 个（规模小返回单模块）。",
 ].join("\n");
@@ -1354,7 +1354,7 @@ function fixerPrompt(g, byId) {
     L.push("修复纪律：");
     L.push("1. 修复前重演每条 fix-hint：建议站不住就换更稳方案并在该条 description 里说明。");
     L.push("2. 波及扫描：每修一处 grep 同模式实例（同类注释/测试文件头/其他文档引用点）一并修——漂移从来不是单点；组外文件里的同模式实例不改（并行冲突），在对应条目 description 标注「组外波及：<位置>」留给聚焦复审立项。");
-    L.push(`3. 领地互斥：优先只改本组文件（${g.files.map((p) => rel(p)).join("、")}）；确需触碰组外文件或新增文件（如增量测试文件），必须列入 affectedFiles 如实申报——未申报的改动不会被提交（留盘随终态呈报主 agent 处置，本组条目可能因修复未落盘而复检重派）。`);
+    L.push(`3. 范围声明互斥：优先只改本组文件（${g.files.map((p) => rel(p)).join("、")}）；确需触碰组外文件或新增文件（如增量测试文件），必须列入 affectedFiles 如实申报——未申报的改动不会被提交（留盘随终态呈报主 agent 处置，本组条目可能因修复未落盘而复检重派）。`);
     L.push("4. git 禁令：禁止一切 git 写操作（add/commit/push 等）——改动留工作区，引擎统一核验后按组 commit。");
     L.push("5. 每条修复给 selfCheck：一条可复跑命令 + 预期结果（改文档类可用 grep 断言；聚焦复审会复核它）。");
     L.push("6. 越权候选防线：若某条的修复动作将是「删除/移除一段现有实现」而其指控仅是「设计文档没写」（无行为矛盾/悬空引用等实质缺陷证据），**无论等级（含 must-fix）**都不要执行删除——放入 deferred（reason 写候选卡论证：小取舍/大简化/核心价值不变），它将随终态呈报用户裁决后才动；「文档没写」更可能是文档侧漏登记而非代码越权，宁可多呈报一张候选卡，不可直接删码。deferred 的另一合法场景 = 退役引用清理条目核实为必须原样指向的合法存证（条目指引会标明）。");
@@ -1514,7 +1514,7 @@ async function retireClosure(round, seqStart) {
         }
     }
     if (cleanups.length > 0) {
-        // 清理条目（复用 FindingRecord 结构走既有修复循环：分组派发 fixer → 领地核验 → 组
+        // 清理条目（复用 FindingRecord 结构走既有修复循环：分组派发 fixer → 范围声明核验 → 组
         // 提交 → 下轮机器对账「词干零命中 = fixed」）；fixer 裁决引用须原样保留 → deferred
         // 终态呈报，下轮收敛时该候选跳过重扫直接移动
         const findings = [];
@@ -2047,7 +2047,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         break;
     }
     // ── 修复：分组（模块 files 并集候选组 → reconcileGroups 机器校验）→ 并行双向修复 →
-    //     领地核验 → 组级一笔 commit ──
+    //     范围声明核验 → 组级一笔 commit ──
     phase("并行修复与复审");
     const groups = reconcileGroups(buildCandidateGroups(active), active.map((f) => ({ id: f.id, files: findingEditFiles(f) })));
     log(`第 ${round} 轮修复分 ${groups.length} 组：${groups.map((g) => `${g.id}(${g.issueIds.length}条)`).join("、")}`);
@@ -2162,7 +2162,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
             if (es.length > 0) {
                 throw new Error(`ES 校验违规：${es.join("；")}。恢复动作：检查 fixer 返回 issueId 引用；在途编辑已留工作区未提交，接管前先 git status 盘点`);
             }
-            // 领地核验：改动 ⊆ 组文件并集 ∪ 如实申报的 affectedFiles；无组认领 / 多组认领均为违规
+            // 范围声明核验：改动 ⊆ 组文件并集 ∪ 如实申报的 affectedFiles；无组认领 / 多组认领均为违规
             const curRes = await world.run("git", ["-C", projectRoot, "status", "--porcelain"]);
             if (curRes.exitCode !== 0) {
                 throw new Error(`git status 复查失败（exit ${curRes.exitCode}）：${curRes.stderr.trim()}`);

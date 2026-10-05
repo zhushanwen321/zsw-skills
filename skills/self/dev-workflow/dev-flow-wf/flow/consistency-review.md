@@ -17,7 +17,7 @@ args: { execPlan: "<path>.exec-plan.json" }
 - **R1**：分区 reviewer 并行（模板 `agents/consistency-reviewer.md`），三分类结构化返回
 - **脚本聚合**：分类计数 / 修复分组（= 分区边界）/ doc_errors·reasonable 收集回流——不派 LLM 聚合；跨区双报的 finding 文件锚点唯一归属一个分区，去重放弃（双修无害）
 - **必填字段分流**（引擎）：影响决策=否 且 影响交付=无 的 unreasonable 降级为登记项不进修复批次，随终态 deferredLedger 回流主 agent 登记残留风险
-- **修复组并行**：组间领地互斥（≤5），每组 fixer；组内核验过即 commit（组级一笔）
+- **修复组并行**：组间范围声明互斥（≤5），每组 fixer；组内核验过即 commit（组级一笔）
 - **R2+**：定向复审（只审上批修复影响面）——对上批待对账条目逐条 reconciliation 申报裁决（{prevId, status: fixed|not-fixed, evidence}，fixed 必须带 file:line 证据；仍存在的条目同时在 unreasonable 带 prevId 重新描述；新问题不带 prevId）；**清零判定唯一采信 reconciliation 的 fixed+证据申报，漏报/not-fixed 保持活跃下轮再核**（fail-closed，条目身份按引擎 U 编号对账，不按文本匹配）；另审修复引入新问题/新 diff 新偏差；复审目标 = 有改动/测试挂的组 ∪ 仍有活跃条目的组（防漏报条目零改动后失去再核机会）
 - **停止线**：审查轮累计 3 轮仍未收敛，或 unreasonable 活跃数不减反增（高于前轮）→ stuck（终态随 remaining 呈报残留清单 + escalated 呈报顽固清单——≥2 轮修复未清的活跃条目在 stuck 消息逐条标注，优先人工裁决）
 - **Gate A**（清零后）：world.run 全量测试（fullSuite = D0 从项目配置真实读取合成的全量命令（含 lint/typecheck），引擎单命令执行；产物类条目 = testPlan.artifacts，引擎自动执行（compile.md §5），无需人工排布——Gate A 前第一波并行预备），输出落 `<name>.gate-a.log`
@@ -28,10 +28,10 @@ args: { execPlan: "<path>.exec-plan.json" }
 
 1. **规模判定**：diff ≤500 行或单元 ≤2 → 单 reviewer 全审（且任务书附带跑 fullSuite（含 lint/typecheck，从项目配置真实读取合成）+ 覆盖矩阵，Gate A 不再单列）；否则分区并行（分区规则同上，主 agent 手工划分 + 核对文件集不相交）
 2. **R1 派发**：每区一个 reviewer（general-purpose + task 内嵌 `agents/consistency-reviewer.md` 全文），后台异步、先到先读、聚合去重待全齐；reviewer 相互独立禁止引用彼此结论
-3. **结论处理**：unreasonable 按领地分组并行修（组内串行组间并行 ≤5；每组三段式 task 附全组条目 + file:line 证据；组完成先到先核验先 commit）；`影响决策 = 是` 的条目优先（先评估是否须改设计文档再修代码）；`影响交付 = 验收` 的条目修复后重核对应验收场景可检验性；doc_errors/reasonable 按上表处理
+3. **结论处理**：unreasonable 按范围声明分组并行修（组内串行组间并行 ≤5；每组三段式 task 附全组条目 + file:line 证据；组完成先到先核验先 commit）；`影响决策 = 是` 的条目优先（先评估是否须改设计文档再修代码）；`影响交付 = 验收` 的条目修复后重核对应验收场景可检验性；doc_errors/reasonable 按上表处理
 4. **微修复合并**：单条小修（<5min）攒入下一修复批次，仅当它是 Gate 通过唯一阻塞项才单独派发并即刻重验
 5. **R2+ 定向复审**：每组修完即派只审该组影响面的复审，不攒轮；未清零回 3
-6. **Gate A**：主 agent 直跑全量段（命令从项目配置真实读取；输出落 gate-a.log）——**零容忍绕过**（发现即失败项；workflow 形态的机器落点 = 环境结构性隔离（不传环境变量）+ Gate A/产物日志尾部扫描 skipped 汇总与 eslint-disable，手工形态逐项人审 SKIP_*/test.skip/禁用 lint 规则）；有 failures 派归因 subagent 读落盘输出逐条归因（回 D1 补修 / 用户签认转残留风险登记）；**覆盖矩阵**：单元领地 × 实际用例列无人认领改动区（补测试或登记理由）；**产物类前置**：产物构建/fixture 生成第一波并行启动，禁现用现建
+6. **Gate A**：主 agent 直跑全量段（命令从项目配置真实读取；输出落 gate-a.log）——**零容忍绕过**（发现即失败项；workflow 形态的机器落点 = 环境结构性隔离（不传环境变量）+ Gate A/产物日志尾部扫描 skipped 汇总与 eslint-disable，手工形态逐项人审 SKIP_*/test.skip/禁用 lint 规则）；有 failures 派归因 subagent 读落盘输出逐条归因（回 D1 补修 / 用户签认转残留风险登记）；**覆盖矩阵**：单元范围声明 × 实际用例列无人认领改动区（补测试或登记理由）；**产物类前置**：产物构建/fixture 生成第一波并行启动，禁现用现建
 7. Gate A 绿 → status.json 记一笔（命令 + 关键输出行，不产生 commit）→ 进 `flow/acceptance.md`
 
 ## 终态处置表

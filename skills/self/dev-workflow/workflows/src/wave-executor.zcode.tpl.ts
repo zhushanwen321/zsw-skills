@@ -1,7 +1,7 @@
 /* zcode-workflow
 description: dev-flow-wf W2 通用 DAG 调度引擎（wave-executor）：读 exec-plan.json 做启动校验
   （schema/依赖环/文件存在性/工作区干净基线），依赖就绪节点流式派发（≤5 并发，wave 字段
-  仅展示不参与调度），每节点确定性核验（files_changed ⊆ 领地 + 全量 status 粗粒度复核 +
+  仅展示不参与调度），每节点确定性核验（files_changed ⊆ 声明范围 + 全量 status 粗粒度复核 +
   节点测试命令重跑）→ commit → 解锁后继；核验不过打回同名 agent 定向修（≤2 轮，超限
   blocked 且后继挂起）；acceptance 模式承载 verify/inspect 节点 + §8.7 依赖可达性熔断
   （blocked/failed 卡未终态后继即停；原 coreIds/haltOnCoreFail 静态短路已退役）；终态 completed / blocked / core-failed，全程 failed-as-return 不 throw。
@@ -12,7 +12,7 @@ args:
   execPlan:
     type: string
     required: true
-    description: exec-plan.json 绝对路径（D0 编译产出：nodes/依赖/领地/testCommand/promptFile/statusPath/commitTemplate/acceptance 分组）
+    description: exec-plan.json 绝对路径（D0 编译产出：nodes/依赖/范围声明/testCommand/promptFile/statusPath/commitTemplate/acceptance 分组）
 */
 
 // ── 类型契约 ──
@@ -21,7 +21,7 @@ args:
 interface NodeResult {
   /** done = 本单元工作完成且自测通过；fail = 有未解决问题；blocked = 无法继续 */
   status: "done" | "fail" | "blocked";
-  /** 改动文件路径（相对节点工作区 git 仓库根的 git 风格路径，须 ⊆ 任务书领地） */
+  /** 改动文件路径（相对节点工作区 git 仓库根的 git 风格路径，须 ⊆ 任务书范围声明） */
   files_changed: string[];
   /** 自测证据：跑了什么命令、结果如何 */
   test_evidence: string;
@@ -143,8 +143,8 @@ interface WaveExecutorOutcome {
   /** 核验通过但 commit 被拒（多为仓库钩子全仓检查 × 并行半成品）转待办的节点——
    *  主 agent 收尾代提交（git commit <message> -- <files>，钩子照常执行） */
   deferredCommits: { id: string; message: string; files: string[]; err: string }[];
-  /** 收尾全工作区对账后的清单外残留（不属于任何节点领地 ∪ 自报 files_changed 并集，
-   *  含并行单元新建文件与未申报改动）——主 agent 判归属后处置（提交/清理/登记新领地） */
+  /** 收尾全工作区对账后的清单外残留（不属于任何节点范围声明 ∪ 自报 files_changed 并集，
+   *  含并行单元新建文件与未申报改动）——主 agent 判归属后处置（提交/清理/登记新范围声明） */
   residualFiles: string[];
 }
 

@@ -1,7 +1,7 @@
 /* @pi-meta
 name: wave-executor
 description: >-
-  dev-flow-wf W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验领地、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），acceptance 模式承载 verify/inspect 节点与核心组熔断，终态 completed、blocked 或 core-failed
+  dev-flow-wf W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验范围声明、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），acceptance 模式承载 verify/inspect 节点与核心组熔断，终态 completed、blocked 或 core-failed
 when: >-
   dev-flow-wf 的 D1 开发循环与 D3 端到端验收发起本 workflow，传入 exec-plan.json 绝对路径（D0 编译产出），断点恢复按 status.json 人读恢复（git 为准）
 phases: ['校验执行计划', '并行执行开发节点', '并行执行验收节点', '收尾汇总']
@@ -10,7 +10,7 @@ parameters:
   properties:
     execPlan:
       type: string
-      description: exec-plan.json 绝对路径（D0 编译产出：nodes/依赖/领地/testCommand/promptFile/statusPath/commitTemplate/acceptance 分组）
+      description: exec-plan.json 绝对路径（D0 编译产出：nodes/依赖/范围声明/testCommand/promptFile/statusPath/commitTemplate/acceptance 分组）
   required: [execPlan]
 */
 
@@ -50,7 +50,7 @@ const SCHEMA_NodeResult = {
       enum: ["done", "fail", "blocked"],
       description: "done = 本单元工作完成且自测通过；fail = 有未解决问题；blocked = 无法继续",
     },
-    files_changed: { type: "array", items: { type: "string" }, description: "改动文件路径（相对节点工作区 git 仓库根的 git 风格路径，须 ⊆ 任务书领地）" },
+    files_changed: { type: "array", items: { type: "string" }, description: "改动文件路径（相对节点工作区 git 仓库根的 git 风格路径，须 ⊆ 任务书范围声明）" },
     test_evidence: { type: "string", description: "自测证据：跑了什么命令、结果如何" },
     deviations: { type: "array", items: { type: "string" }, description: "与任务书的偏离说明（无偏离为空数组）" },
     blockers: { type: "array", items: { type: "string" }, description: "阻塞项（环境缺失/任务书矛盾等；非空则节点判 blocked，不进入打回）" },
@@ -134,12 +134,12 @@ function withPrevContext(initialPrompt, lastResult, retryPrompt) {
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
 // 并发 ≤5，逐节点 settle 即重算（设计 §8.2：单节点完成立即解锁后继补派，不等批内
-//   其他节点——长尾不拖批；活跃领地并集随活跃集动态重建）。
+//   其他节点——长尾不拖批；活跃声明范围并集随活跃集动态重建）。
 // agent 会话异常 → 接替程序（新 agent 名 + 前任证据包 + 当前 diff，先核验现状再续作，
 //   设计 §6.2 F15 第一等路径）；接替者再异常才 blocked。
 // 一律 failed-as-return：throw 的 errored run 不可 resume 且丢结构化错误（参数校验除外
 //   ——args 非法属启动期快失败，errored 形态可接受）。
-// 边界声明（设计 §8.2，2026-09-29 裁决领地降级）：并行单元共享工作区时，单单元改动
+// 边界声明（设计 §8.2，2026-09-29 裁决范围声明降级）：并行单元共享工作区时，单单元改动
 //   归属无法由 git status 精确切分，核验采用对账语义——dev 自报 files_changed 超出
 //   territory 声明范围不打回，登记对账事件随终态呈报；引擎收尾对全工作区清单外残留做
 //   对账（residualFiles），启动前既有改动登记豁免集不拒启动（2026-09-26 裁决），终态
@@ -314,7 +314,7 @@ function tailLines(text, n) {
     const lines = s.split("\n");
     return lines.length <= n ? s : lines.slice(-n).join("\n");
 }
-/** 文件路径是否落在领地内（领地条目=文件或目录前缀） */
+/** 文件路径是否落在声明范围内（条目=文件或目录前缀） */
 function pathInTerritory(file, territories) {
     for (const t of territories) {
         const prefix = t.endsWith("/") ? t : `${t}/`;
@@ -506,7 +506,7 @@ function validatePlan(raw) {
         };
         if (kind === "dev") {
             if (!isStrArr(rn.territory) || rn.territory.length === 0) {
-                errors.push(`dev 节点 ${id} 的 territory 必须是非空字符串数组（领地）`);
+                errors.push(`dev 节点 ${id} 的 territory 必须是非空字符串数组（范围声明）`);
             }
             else {
                 const terrErrs = territoryFormatErrors(id, rn.territory);
@@ -582,9 +582,9 @@ function validatePlan(raw) {
     const cycleHit = detectCycle(nodes.map((n) => n.id), depsOf);
     if (cycleHit !== null)
         errors.push(`依赖图存在环，环上节点：${cycleHit}`);
-    // 领地互斥启动断言（T3 DAG 自检「任意两单元领地交集为空」的机器下限）：重叠条目
+    // 范围声明互斥启动断言（T3 DAG 自检「任意两单元范围声明交集为空」的机器下限）：重叠条目
     // 必须有依赖路径（任一方向可达）——无边重叠对会同时就绪并行派发，同文件写冲突 +
-    // 级二复核按活跃领地并集粗判会互相污染归属；写计划纪律仍取全互斥，依赖串行是逃生通道
+    // 级二复核按活跃声明范围并集粗判会互相污染归属；写计划纪律仍取全互斥，依赖串行是逃生通道
     const terrOwners = new Map();
     for (const n of nodes) {
         if (n.kind !== "dev" || n.territory.length === 0)
@@ -616,7 +616,7 @@ function validatePlan(raw) {
                     const a = owners[i];
                     const b = owners[j];
                     if (!reaches(a, b) && !reaches(b, a)) {
-                        errors.push(`节点 ${a} 与 ${b} 领地重叠（${t}）且两方向均无依赖路径——两者会同时就绪并行派发（同文件写冲突、领地核验互污）。共同文件改动须合并为同一单元或以依赖边串行后重发 exec-plan`);
+                        errors.push(`节点 ${a} 与 ${b} 范围声明重叠（${t}）且两方向均无依赖路径——两者会同时就绪并行派发（同文件写冲突、声明核验互污）。共同文件改动须合并为同一单元或以依赖边串行后重发 exec-plan`);
                     }
                 }
             }
@@ -679,7 +679,7 @@ async function gitPorcelainViaNode(cwd) {
     return r.stdout;
 }
 /** cwd 必须等于其所在 git 仓库根（projectRoot 或 worktree 根）：porcelain 输出相对 cwd、
- * territory 相对仓库根——cwd 落在仓库子目录时两基准全链错位（领地恒判越界、提交被拒）。
+ * territory 相对仓库根——cwd 落在仓库子目录时两基准全链错位（声明恒判越界、提交被拒）。
  * null = git 命令失败；否则返回 toplevel 绝对路径，由调用方比对。 */
 async function gitToplevelViaNode(cwd) {
     const r = await world.run("node", ["-e", GIT_TOPLEVEL, cwd]);
@@ -702,9 +702,9 @@ let coreFail = null;
 function readCoreFail() {
     return coreFail;
 }
-/** 当前 in-flight 节点的领地并集（按 cwd 分组）——级二粗粒度复核的基线，逐节点 settle 后重建 */
+/** 当前 in-flight 节点的声明范围并集（按 cwd 分组）——级二粗粒度复核的基线，逐节点 settle 后重建 */
 let activeTerrByCwd = new Map();
-/** 全部 dev 节点核验通过时自报的 files_changed 并集（终态残留对账的豁免集——静态领地
+/** 全部 dev 节点核验通过时自报的 files_changed 并集（终态残留对账的豁免集——静态声明范围
  *  不含运行中新建文件，自报并集补上这一段） */
 const declaredFiles = new Set();
 /** commit 被拒（多为仓库 pre-commit 钩子全仓检查 × 并行半成品）转待办的节点——节点核验
@@ -973,8 +973,8 @@ async function verifyDevNode(node, result, attempts) {
     if (result.status !== "done") {
         return { outcome: "retry", reason: `自报 status=${result.status}`, detail: result.test_evidence || "（无自测证据）" };
     }
-    // 查一级（对账语义，2026-09-29 裁决领地降级）：自报 files_changed 超出声明范围的
-    // 路径不再打回——运行时逐文件拦截实测零命中真越权、反造成扩展死锁等损耗（u3 领地
+    // 查一级（对账语义，2026-09-29 裁决范围声明降级）：自报 files_changed 超出声明范围的
+    // 路径不再打回——运行时逐文件拦截实测零命中真越权、反造成扩展死锁等损耗（u3 声明范围
     // 扩展死等 35.9min）；多开发/少开发的一致性由 D2 一致性审查与终态残留对账承接。
     // commit 照常按自报精确路径执行（与声明范围无关），此处只登记对账事件
     const outside = result.files_changed.filter((f) => !pathInTerritory(f, node.territory));
@@ -983,7 +983,7 @@ async function verifyDevNode(node, result, attempts) {
         await statusUpdate(node.id, { status: "in-progress", attempts }, "territory-outside", `第 ${attempts} 轮自报声明范围外改动（对账呈报，不打回；多轮重验按轮各登记一笔）：${outside.join("、")}`);
     }
     // 查二级（粗粒度）：引擎另跑全量 status，观察清单外残留——只登记不拦截（2026-09-26
-    // 用户裁决：并行单元运行中新建的文件天然不在启动时载入的静态领地里，把「别人的
+    // 用户裁决：并行单元运行中新建的文件天然不在启动时载入的静态声明范围里，把「别人的
     // 改动」判为当前单元越界是连坐——曾致 d3 被兄弟单元 7 个残留文件卡死、u5/u2a 互卡
     // 成对 blocked。本节点只对自己的纪律负责（查一改动对账登记 + 查二测试绿）；全工作
     // 区残留统一由收尾对账呈报主 agent 处理，防漏报价值由终态呈报承接）
@@ -1086,7 +1086,7 @@ async function executeDevNode(node) {
         if (!cr.ok) {
             // commit 被拒不 blocked：核验已过、编码成果有效；拒因多为仓库 pre-commit 钩子的
             // 全仓检查看到并行兄弟单元的半成品（钩子要求「当场修复」，而修那些文件超出本
-            // 节点领地纪律——节点内无解）。转待办，收尾呈报主 agent 代提交（钩子照常执行）
+            // 节点范围声明纪律——节点内无解）。转待办，收尾呈报主 agent 代提交（钩子照常执行）
             deferredCommits.push({ id: node.id, message, files: result.files_changed, err: cr.err });
             const evidence = `${result.test_evidence}；deviations: ${result.deviations.join("；") || "无"}；commit 待主 agent 代提交（被拒输出见 event）`;
             state.set(node.id, { status: "done", attempts });
@@ -1216,7 +1216,7 @@ async function executeNode(node) {
     return executeInspectNode(node);
 }
 // ── 调度主循环（设计 §8.2 流式）：逐节点 settle 即重算——单节点完成立即解锁后继
-//    在并发余量内补派，不等批内其他节点（长尾不拖批）；活跃领地并集随活跃集动态重建 ──
+//    在并发余量内补派，不等批内其他节点（长尾不拖批）；活跃声明范围并集随活跃集动态重建 ──
 async function runSchedulingLoop() {
     // id → 完成后 resolve 回自身 id（race 的返回值即完成节点）
     const active = new Map();
@@ -1246,7 +1246,7 @@ async function runSchedulingLoop() {
     while (true) {
         if (coreFail !== null)
             break;
-        // （执行期授权连带生效通道已删，2026-09-29 裁决领地降级：运行时不再逐文件核验，
+        // （执行期授权连带生效通道已删，2026-09-29 裁决范围声明降级：运行时不再逐文件核验，
         // territory 无运行中扩容需求——原「每轮重读 exec-plan 吸收扩展」依赖节点落定触发，
         // parked 等扩展 + 长跑单元在场时扩展永不可达（实测 u3 死等 35.9min 后被手动停）。
         // 声明范围外的必要改动由 agent 直接做 + 自报 deviations，核验对账不打回）
@@ -1260,8 +1260,8 @@ async function runSchedulingLoop() {
         }
         if (active.size === 0)
             break; // 无可调度且无活跃 → 依赖挂起或全终态 → 终态判定
-        // 级二粗粒度复核的基线：**单调累积**（launch 时并入该节点领地，settle 后不移除）——
-        // 粗粒度复核「只松不严」原则下，移除已落定节点的领地只会收紧：兄弟节点带残留改动
+        // 级二粗粒度复核的基线：**单调累积**（launch 时并入该节点范围声明，settle 后不移除）——
+        // 粗粒度复核「只松不严」原则下，移除已落定节点的范围声明只会收紧：兄弟节点带残留改动
         // 落定（blocked/commit 失败）后，在飞节点的核验会把残留判为越界 stray 而被误伤打回
         //（审查 P1 修正；launch 后并入保证新派发节点自身必在并集内）
         for (const id of active.keys()) {
@@ -1362,7 +1362,7 @@ for (const c of allCwds) {
     }
     if (top !== c) {
         const ids = plan.nodes.filter((n) => n.cwd === c).map((n) => n.id).join("、");
-        return invalidRet(`节点 ${ids} 的 cwd ${c} 不是其所在 git 仓库根（rev-parse --show-toplevel = ${top}）——cwd 只能为 projectRoot 或 worktree 绝对路径：porcelain 输出相对 cwd、territory 相对仓库根，子目录会使两基准全链错位（领地恒判越界、提交被拒）。恢复动作：exec-plan 中该节点 cwd 改为仓库根后重发`, plan.statusPath);
+        return invalidRet(`节点 ${ids} 的 cwd ${c} 不是其所在 git 仓库根（rev-parse --show-toplevel = ${top}）——cwd 只能为 projectRoot 或 worktree 绝对路径：porcelain 输出相对 cwd、territory 相对仓库根，子目录会使两基准全链错位（声明恒判越界、提交被拒）。恢复动作：exec-plan 中该节点 cwd 改为仓库根后重发`, plan.statusPath);
     }
     const st = await gitPorcelainViaNode(c);
     if (st === null) {
@@ -1578,8 +1578,8 @@ const blockedOut = badNodes.map((n) => {
 const skippedIds = plan.nodes.filter((n) => nodeState(n.id) === "pending").map((n) => n.id);
 const terminated = coreFail !== null ? "core-failed" : badNodes.length === 0 && skippedIds.length === 0 ? "completed" : "blocked";
 // 收尾残留对账（2026-09-26 用户裁决的承接面）：核验不再拦截清单外残留（多为并行单元
-// 运行中新建的文件——静态领地天然不含），全部节点 settle 后统一盘点一次全工作区，
-// 残留 = 全部改动 −（所有 dev 节点领地并集 ∪ 已核验节点自报 files_changed 并集）——
+// 运行中新建的文件——静态声明范围天然不含），全部节点 settle 后统一盘点一次全工作区，
+// 残留 = 全部改动 −（所有 dev 节点声明范围并集 ∪ 已核验节点自报 files_changed 并集）——
 // 既呈报并行新文件，也承接原查二级的防漏报价值（漏报越界的文件会出现在这里被看见）
 const allTerr = [];
 for (const n of plan.nodes)
