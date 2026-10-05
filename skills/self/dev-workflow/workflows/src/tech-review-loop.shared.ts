@@ -140,7 +140,8 @@ function sanitizeDispositions(raw: unknown): Disposition[] {
   return out;
 }
 
-/** blocked 申报防御：形态非法归 null（无卡点处理），字段窄化 */
+/** blocked 申报防御：形态非法归 null（调用方按 status 判别——status="blocked" 时归 null
+ *  即对象残缺走回喂；done 形态不读该字段，附带杂物无效），字段窄化 */
 function sanitizeBlocked(raw: unknown): { items: string[]; reason: string } | null {
   if (raw === null || raw === undefined || typeof raw !== "object") return null;
   const b = raw as { items?: unknown; reason?: unknown };
@@ -595,7 +596,7 @@ const REVIEWER_PERSONA =
   "你是资深设计文档评审员：只读评审，绝不修改任何文件；每个发现都要有你亲自读到的文档原文依据；报告与返回计数一致；指令无法执行或有矛盾时如实说明，不伪造结论。" +
   NO_ASK_RULE;
 const FIXER_PERSONA =
-  "你是设计文档修复者：先核实再修改、反例重演验证修复、联动同步关联章节；方案性意见修不动时如实申报 blocked，不硬改、不静默跳过。" +
+  "你是设计文档修复者：先核实再修改、反例重演验证修复、联动同步关联章节；方案性意见修不动时如实置 status=\"blocked\" 并申报卡点，不硬改、不静默跳过。" +
   NO_ASK_RULE;
 
 let prevDispositions: Disposition[] = [];
@@ -820,7 +821,7 @@ for (let round = 1; round <= maxRounds; round++) {
     "1. 语义去重合并：同根因跨维度表述的问题合并为一条处置（source 记录该条覆盖的全部问题 ref）。",
     "2. 修全部 must-fix：直接编辑设计文档落实修复。",
     "3. suggestion 逐条三选一处置：fixed（修复）/ deferred（登记不修，理由必须具体：涉及章节/机制/代价）/ archived（归档——已过时或不适用，理由必须具体）。",
-    "4. 方案性意见（需要用户裁决的方向变化，如推翻问题定义、方案主干、最小形态）修不动 → 不要硬改：在 blocked 里申报（items=卡住的问题清单，reason=为什么需要用户裁决）；其余可修的照常完成并产出处置表。",
+    "4. 方案性意见（需要用户裁决的方向变化，如推翻问题定义、方案主干、最小形态）修不动 → 不要硬改：status 取 \"blocked\"，并在 blocked 里申报（items=卡住的问题清单，reason=为什么需要用户裁决）；其余可修的照常完成并产出处置表。无方案性卡点时 status 取 \"done\"，返回体不得含 blocked 字段——不要在 blocked 里填「无卡点」之类的说明（引擎只认 status，blocked 不是表态字段）。",
     outstandingBlock,
     problemsBlock,
     "",
@@ -830,7 +831,8 @@ for (let round = 1; round <= maxRounds; round++) {
     "- 联动同步：修复触及的陈述须同步设计文档内关联章节（问题定义、方案对比、验收标准、风险登记、实施计划五处及其他关联处），不留前后矛盾。",
     "- 语言回归：修订语言与原稿一致（中文），术语沿用文档既有词表，不引入未解释的新术语。",
     "",
-    "返回 JSON：dispositions / revisionSummary / blocked。",
+    "返回 JSON：status / dispositions / revisionSummary，仅当 status=\"blocked\" 时再加第四个字段 blocked。",
+    "status（必填，二选一）：\"done\" = 修复与处置完成、无方案性卡点（返回体不得含 blocked 字段）；\"blocked\" = 存在修不动、需用户裁决的方案性分歧（必须携带 blocked 字段）。",
     `dispositions 每条字段：id（新条目格式 D-${round}-<序>；延续上轮的条目复用原 id）、title（一句话标题）、source（数组：该条覆盖的问题 ref 清单——每条必须取自上方「本轮问题清单」，合并处置时把覆盖的 ref 全部列入同一条；上轮延续条目的历史 ref 保留并列）、level（must-fix|suggestion）、action（fixed|deferred|archived）、location（修订位置）、reenactment（反例重演）、attackHints（给下轮聚焦复审的攻击点建议）、affectsDecision（影响决策，必填，无影响也显式写「无」）、affectsDelivery（影响交付，必填，同前）。`,
     "硬约束：清单中每条问题（含 suggestion）都必须被至少一条处置的 source 覆盖——登记不修/归档也算处置；脚本按 source 引用集合机器校验，漏引用会整轮打回。",
   ]
@@ -854,7 +856,7 @@ for (let round = 1; round <= maxRounds; round++) {
         : [
             withRetryContext(baseFixInstructions, fix, lastCheckReport),
             "你此前对设计文档的修订都保留在磁盘上，本轮不要重复修改文档。",
-            "只需修正处置表的结构化返回：按下方校验报告逐条修正（补齐缺失的 source 引用、修正字段形态），重新返回完整 JSON（dispositions / revisionSummary / blocked 全量重新给出，不是增量补丁）。",
+            "只需修正处置表的结构化返回：按下方校验报告逐条修正（补齐缺失的 source 引用、修正字段形态），重新返回完整 JSON（status / dispositions / revisionSummary，仅卡点时加 blocked——全量重新给出，不是增量补丁）。",
             `校验报告（每条 error 都必须在本轮返回中修正）：\n${lastCheckReport}`,
           ].join("\n\n");
     try {
@@ -865,7 +867,16 @@ for (let round = 1; round <= maxRounds; round++) {
     dispositions = sanitizeDispositions(fix.dispositions);
     revisionSummary = typeof fix.revisionSummary === "string" ? fix.revisionSummary : "";
 
-    const blocked = sanitizeBlocked(fix.blocked);
+    // 结论判别唯一键 = status 枚举；blocked 对象不是停回开关——done 形态附带的 blocked
+    // 杂物一律忽略（防「无卡点声明」误触发 escalated）。status="blocked" 但 blocked 对象
+    // 残缺 = 结构化返回残缺，走回喂重试（与处置表校验失败同通道），不停回、不吞卡点
+    const fixStatus: "done" | "blocked" = fix.status === "blocked" ? "blocked" : "done";
+    const blocked = fixStatus === "blocked" ? sanitizeBlocked(fix.blocked) : null;
+    if (fixStatus === "blocked" && blocked === null) {
+      lastCheckReport =
+        'status="blocked" 但 blocked 字段缺失或全空。二选一修正：有卡点 → 补全 blocked { items: 至少一条卡住的问题, reason: 为什么需要用户裁决 }；无卡点 → status 改为 "done" 且返回体不含 blocked 字段。';
+      continue;
+    }
     if (blocked !== null) {
       // 部分修复照常入账（escalated 带出已完成的处置），停回用户裁决（卡点是「修不动」
       // 的方向问题而非结构化格式，不进重试）

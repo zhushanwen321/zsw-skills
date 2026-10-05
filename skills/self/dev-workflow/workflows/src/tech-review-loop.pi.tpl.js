@@ -138,19 +138,26 @@ const SCHEMA_Disposition = {
 const SCHEMA_FixOutcome = {
   type: "object",
   properties: {
+    status: {
+      type: "string",
+      enum: ["done", "blocked"],
+      description:
+        '本轮结论声明（必填，二选一，判别键）："done" = 修复与处置完成、无方案性卡点（返回体不得携带 blocked 字段）；"blocked" = 存在修不动、需用户裁决的方案性分歧（必须携带 blocked 字段）',
+    },
     dispositions: { type: "array", items: SCHEMA_Disposition, description: "本轮处置表全部条目（含延续与新增）" },
     revisionSummary: { type: "string", description: "一段修订摘要：本轮改了设计文档哪些地方（注入下轮 reviewer，不算证据）" },
     blocked: {
-      type: ["object", "null"],
+      type: "object",
       properties: {
         items: { type: "array", items: { type: "string" } },
         reason: { type: "string" },
       },
       required: ["items", "reason"],
-      description: "方案性意见修不动（需用户裁决的方向变化）时非空；为空表示无卡点",
+      description:
+        '仅 status="blocked" 时携带：items=卡住的问题清单，reason=为什么需要用户裁决。不是表态字段——引擎只认 status，done 形态下附带该字段无效',
     },
   },
-  required: ["dispositions", "revisionSummary", "blocked"],
+  required: ["status", "dispositions", "revisionSummary"],
 };
 
 // wfAgent：公共体的 agent(name, persona).ask<T>(prompt) 的 pi 等价。构建管线把公共体

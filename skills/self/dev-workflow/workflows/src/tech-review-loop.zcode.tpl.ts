@@ -105,12 +105,17 @@ interface Disposition {
 }
 
 interface FixOutcome {
+  /** 本轮结论声明（必填，二选一，判别键）：
+   *  "done" = 修复与处置完成、无方案性卡点——返回体不得携带 blocked 字段
+   *  "blocked" = 存在修不动、需用户裁决的方案性分歧——必须携带 blocked 字段 */
+  status: "done" | "blocked";
   /** 本轮处置表全部条目（含延续与新增） */
   dispositions: Disposition[];
   /** 一段修订摘要：本轮改了设计文档哪些地方（注入下轮 reviewer，不算证据） */
   revisionSummary: string;
-  /** 方案性意见修不动（需用户裁决的方向变化）时非空；为空表示无卡点 */
-  blocked: { items: string[]; reason: string } | null;
+  /** 仅 status="blocked" 时携带：items=卡住的问题清单，reason=为什么需要用户裁决。
+   *  不是表态字段——引擎只认 status，done 形态下附带该字段一律无效 */
+  blocked?: { items: string[]; reason: string };
 }
 
 interface LoopResult {
