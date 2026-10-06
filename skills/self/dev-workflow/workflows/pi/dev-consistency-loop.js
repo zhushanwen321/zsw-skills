@@ -857,6 +857,9 @@ const AGGREGATE_PERSONA = "你是审查发现聚合定性员：只读分析、�
 // ── 结构化返回校验回喂（用户裁决 2026-09-26：全部 agent 结构化返回必备，回喂重试上限 3 次）──
 // rawAsk 由调用方闭包提供（用各自具体类型调 ask——pi 构建管线按泛型名查 SCHEMA_BY_KEY，
 // 帮手内不能出现平台 ask 的泛型调用）；回喂 prompt 自包含重发原指令（pi 侧每次新 agent）。
+// 调用方契约：agent( 构造必须在 rawAsk 闭包外完成一次、闭包只做 .ask()——闭包内构造会在
+// 校验重试再入时二次创建同名 agent，zcode run 内同名即整 run 拒绝（2026-10-06 W3 实测）；
+// 构造外提后重试 = 同实例续聊，与回喂 prompt 的续写语义一致，pi 侧 ask 每次仍独立执行。
 const STRUCTURED_RETRY_MAX = 3;
 async function askValidated(validate, rawAsk, prompt) {
     let last = await rawAsk(prompt);
@@ -1028,7 +1031,11 @@ function r1Prompt(p) {
 log(`W3 一致性审查循环：仓库 ${info.projectRoot}，基线 ${info.baseline}，diff ${info.diffFileCount} 文件 / ${info.diffChurn} 行，分区 ${info.partitions.length} 个（${info.partitions.map((p) => `${p.name}(${p.files.length})`).join("、")}）`);
 let r1Norm;
 try {
-    const r1Raw = await mapBatch(info.partitions, (p) => askValidated(validateReviewResult, (q) => wfAgent(`一致性审查-${p.name}`, R1_PERSONA).ask("ReviewResult", q), r1Prompt(p)));
+    const r1Raw = await mapBatch(info.partitions, (p) => {
+        // 构造外提（契约见 askValidated 注释块）：闭包只做 .ask()，防重试再入同名二次创建
+        const reviewAgent = wfAgent(`一致性审查-${p.name}`, R1_PERSONA);
+        return askValidated(validateReviewResult, (q) => reviewAgent.ask("ReviewResult", q), r1Prompt(p));
+    });
     const badPart = r1Raw.findIndex((v) => v === null);
     if (badPart >= 0) {
         return await finish("review-failure", 1, `分区 ${info.partitions[badPart]?.name ?? badPart} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规——${HINT_R1_FAILED}`);
@@ -1161,7 +1168,9 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             "",
             "返回 JSON：{ items: [{ id, action: \"keep\"|\"merge-into\"|\"reclassify-doc-error\"|\"escalate\", mergeInto?, reason?, group?, expectedFiles? }] }——清单中每个 id 都必须出现（含 keep）。",
         ].join("\n");
-        const agg = await askValidated(validateAggregateReport, (q) => wfAgent(`聚合定性-r${fixRound}`, AGGREGATE_PERSONA).ask("AggregateReport", q), aggPrompt);
+        // 构造外提（契约见 askValidated 注释块）：防校验重试再入同名二次创建
+        const aggAgent = wfAgent(`聚合定性-r${fixRound}`, AGGREGATE_PERSONA);
+        const agg = await askValidated(validateAggregateReport, (q) => aggAgent.ask("AggregateReport", q), aggPrompt);
         if (agg !== null)
             aggItems = agg.items;
         else
@@ -1304,7 +1313,9 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             ]
                 .filter(Boolean)
                 .join("\n");
-            const fix = await askValidated(validateFixReport, (q) => wfAgent(`修复-${name}-r${fixRound}`, FIX_PERSONA).ask("FixReport", q), prompt);
+            // 构造外提（契约见 askValidated 注释块）：防校验重试再入同名二次创建（2026-10-06 W3 首跑实炸点）
+            const fixAgent = wfAgent(`修复-${name}-r${fixRound}`, FIX_PERSONA);
+            const fix = await askValidated(validateFixReport, (q) => fixAgent.ask("FixReport", q), prompt);
             if (fix === null)
                 throw new Error(`修复组 ${name} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
             return { name, fix: normalizeFix(fix, `修复-${name}-r${fixRound}`) };
@@ -1566,7 +1577,9 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
                     .filter(Boolean)
                     .join("\n");
                 // agent 名字静态前缀开头（zcode GUI 泳道静态分析预建，变量开头显示「未命名子代理」）
-                const review = await askValidated(validateReviewResult, (q) => wfAgent(`定向复审-${g.name}-r${fixRound}`, RE_PERSONA).ask("ReviewResult", q), prompt);
+                // 构造外提（契约见 askValidated 注释块）：防校验重试再入同名二次创建
+                const reviewAgent = wfAgent(`定向复审-${g.name}-r${fixRound}`, RE_PERSONA);
+                const review = await askValidated(validateReviewResult, (q) => reviewAgent.ask("ReviewResult", q), prompt);
                 if (review === null)
                     throw new Error(`组 ${g.name} 复审结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
                 return { name: g.name, review: normalizeReview(review, `复审-${g.name}-r${fixRound}`) };

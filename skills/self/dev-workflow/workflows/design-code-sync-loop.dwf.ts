@@ -955,6 +955,30 @@ let lastDispatchedIds: string[] = [];
 let lastFixRecords: FixRecord[] = [];
 /** 越权候选卡收集（§7.3：矩阵过度/存疑行 + fixer defer 申报——用户裁决前不删码） */
 const overdesignCandidates: { id: string; location: string; gap: string; reason: string }[] = [];
+
+// 模块行 overdesign 提取（与框架行入账对称——模板 sync-reviewer 输出契约承诺「越权
+// 过度/存疑行只进 matrixRows」，引擎必须兑现转候选卡；2026-10-06 实测模块行携带存疑
+// 标记但终态数组为空：此前提取只接了 planner 框架行与 fixer defer 两条通道）。按
+// location 去重：R2+ 状态复查会重复报同一越权行，候选卡只呈报一次
+const moduleOdSeen = new Set<string>();
+let moduleOdSeq = 0;
+function collectModuleOverdesign(rows: MatrixRowRecord[], round: number): void {
+  for (const r of rows) {
+    const od = r.overdesign ?? "";
+    if (!od.includes("过度") && !od.includes("存疑")) continue;
+    const key = r.impl !== "" ? r.impl : r.claim;
+    if (moduleOdSeen.has(key)) continue;
+    moduleOdSeen.add(key);
+    moduleOdSeq += 1;
+    overdesignCandidates.push({
+      id: `M${round}-${moduleOdSeq}`,
+      location: key,
+      gap: `${r.claim} ↔ ${r.impl}`,
+      reason: `模块三问初评「${od}」——候选卡：${r.note}`,
+    });
+    log(`模块行初评「${od}」→ 候选卡呈报（不进修复循环，用户裁决后才动）：${key}`);
+  }
+}
 /** 符号豁免清单（fixer exempt 申报累积；双落点 = runDir/exempted.json + finish.exemptList，
  *  交主 agent 终审——fixer 的豁免是语义判断，主 agent 可推翻：改词表后 attempt 递增重发） */
 const exemptList: { id: string; word: string; reason: string }[] = [];
@@ -1270,7 +1294,7 @@ const plannerPromptText = [
     ? `职责②「现实↔impl-plan 进度核对」的数据源 = status.json（${statusPathArg}，D1/D2 各节点终态事实）——进度核对以它为准，impl-plan.json 只有单元面/依赖/范围声明。`
     : "职责②注意：本次未提供 status.json——进度核对降级为 impl-plan.json 单侧（单元面/依赖/范围声明），无法核对节点终态事实，请在 frameworkFindings 的 note 注明该降级。",
   "只报告与产出计划，不修改任何文件。",
-  "完成后返回 JSON：frameworkFindings（元素 {id, matrixRow: {claim, impl, verdict, note, overdesign?}, severity}）+ modules（元素 {id, module, files, focus}）——结构按模板输出节；无某类发现时显式说明；modules 至少 1 个（规模小返回单模块）。",
+  "完成后返回 JSON：frameworkFindings（元素 {id, matrixRow: {claim, impl, verdict, note, overdesign?}, severity}）+ modules（元素 {id, module, files, focus}）——结构按模板输出节；无某类发现时显式说明；modules 至少 1 个。模块分解前先按模板职责 4 枚举对照范围（设计文档头部/正文指针指向的子设计文档 + impl-plan 单元表声明全部文件），枚举后确认对照范围只有单一文件域时才允许单模块。",
 ].join("\n");
 
 function reviewPrompt(m: ModulePlanRec): string {
@@ -1800,7 +1824,9 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       break;
     }
     for (const { mid, res } of reviews) {
-      matrixRowsRec.push(...normMatrixRows(res.matrixRows, `模块 ${mid}`, round));
+      const rows = normMatrixRows(res.matrixRows, `模块 ${mid}`, round);
+      matrixRowsRec.push(...rows);
+      collectModuleOverdesign(rows, round);
       const nf = normFindings(res.findings, mid, round, seq);
       seq = nf.next;
       ledger.push(...nf.findings);
@@ -1923,7 +1949,9 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
           confirmed += 1;
         }
       }
-      matrixRowsRec.push(...normMatrixRows(res.matrixRows, owner === "planner" ? "框架（planner）" : `模块 ${owner}`, round));
+      const rows = normMatrixRows(res.matrixRows, owner === "planner" ? "框架（planner）" : `模块 ${owner}`, round);
+      matrixRowsRec.push(...rows);
+      collectModuleOverdesign(rows, round);
       const nf = normFindings(res.findings, owner, round, seq);
       seq = nf.next;
       ledger.push(...nf.findings);
@@ -2124,9 +2152,12 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     for (let i = 0; ; i++) {
       // 纠正轮实例名带 -cN 后缀：避免与首发实例同名（宿主按名路由时防串实例）
       const name = i === 0 ? `同步修复-R${round}-${g.id}` : `同步修复-R${round}-${g.id}-c${i}`;
+      // 构造外提（同 dev-consistency-loop 的 askValidated 调用方契约）：闭包只做 .ask()，
+      // 防校验重试再入同名二次创建（zcode run 内同名即整 run 拒绝）
+      const fixerAgent = agent(name, FIXER_PERSONA);
       const o = await askValidated(
         validateFixOutcome,
-        (q) => agent(name, FIXER_PERSONA).ask<FixOutcome>(q),
+        (q) => fixerAgent.ask<FixOutcome>(q),
         prompt,
       );
       if (o === null) throw new Error(`组 ${g.id} fixer 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
