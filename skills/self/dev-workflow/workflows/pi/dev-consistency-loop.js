@@ -775,7 +775,7 @@ async function finish(terminated, roundsDone, message) {
         const one = (s) => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
         const lg = [`终态 ${terminated}（R${roundsDone}，attempt ${attempt}）：${message}`];
         if (result.docErrors.length > 0)
-            lg.push(`- [待办] docErrors ${result.docErrors.length} 项（主 agent 修设计文档）：${result.docErrors.map((d) => `${d.location}——${one(d.gap)}`).join("；")}`);
+            lg.push(`- [待办] docErrors ${result.docErrors.length} 项（文档修复组未清——方向两可或修复失败，主 agent 裁决 / 亲修）：${result.docErrors.map((d) => `${d.location}——${one(d.gap)}`).join("；")}`);
         if (result.reasonable.length > 0)
             lg.push(`- [待办] reasonable ${result.reasonable.length} 项（写 impl-plan §5 合理偏差登记表）：${result.reasonable.map((r) => `${r.location}——${one(r.summary)}`).join("；")}`);
         if (result.deferredLedger.length > 0) {
@@ -849,7 +849,7 @@ const RE_PERSONA = "你是对抗式一致性复审者：只报告、绝不修改
     NO_ASK_RULE;
 const AGGREGATE_PERSONA = "你是审查发现聚合定性员：只读分析、绝不修改任何文件；对审查发现的条目清单做四步裁决——" +
     "①去重：同一根因的多条合并为一条（保留全部 location 证据）；" +
-    "②定性：逐条按三分类定义复核归类，错误定性当场改判（实现未履行登记/同步义务 = unreasonable；文档/注释内容与已提交实现冲突 = doc_errors；**提交完整性/HEAD 自洽性类发现一律不计入 unreasonable**——引擎轮末 settle 收编，此类发现归 reasonable 且 summary 以 `[process]` 开头）；" +
+    "②定性：逐条按三分类定义复核归类，错误定性当场改判（实现未履行登记/同步义务 = unreasonable；文档/注释内容与已提交实现冲突 = doc_errors——方向已明确（修文档侧），引擎文档修复组当场修，方向两可的不归 doc_errors；**提交完整性/HEAD 自洽性类发现一律不计入 unreasonable**——引擎轮末 settle 收编，此类发现归 reasonable 且 summary 以 `[process]` 开头）；" +
     "③分组：按「预期改动文件无交集」构造修复组，预期文件相交的条目必须同组；" +
     "④路由：条目修复动作与分区职责域不匹配时重派到匹配职责域的组，无任何组可承接时升级呈报。" +
     "清单中每个条目都必须出现在输出中（含 keep），漏报的条目由引擎按原分区机械分组兜底。" +
@@ -1278,6 +1278,41 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             }
         }
     }
+    // ── 阶段 A 前置：文档修复任务构造（docErrors 当场修——哪个阶段审出来就在哪个阶段修，
+    //    2026-10-06 裁决。doc_errors 的类别定义即「文档/注释与已提交实现冲突」，方向已明确
+    //    = 修文档侧；方向两可的条目不满足该定义，走 fixer skipped 回流。此前整体回流主
+    //    agent 的设计曾致已知条目跨阶段转手丢失：6 条 docErrors 移交终态同步后 planner
+    //    漏扫，主 agent 手修兜底）──
+    const docEntries = [...docErrorPool.values()];
+    const docIds = new Map();
+    let docPrompt = null;
+    if (docEntries.length > 0) {
+        docPrompt = [
+            `第 ${fixRound} 轮一致性修复（文档修复组；${docEntries.length} 条 doc_errors——文档/注释与已提交实现冲突，修复方向 = 改文档对齐实现）。`,
+            "",
+            `第一步：Read 设计文档 ${info.designDocPath} 与条目指向的实现文件，核实「实现是对的、文档失真」后再动手。`,
+            "",
+            "待修条目清单：",
+            docEntries
+                .map((d, i) => {
+                const id = `DE-${i + 1}`;
+                docIds.set(id, d);
+                return `- ${id} ${d.location}\n  差距：${d.gap}${d.fixHint ? `\n  修复提示：${d.fixHint}` : ""}`;
+            })
+                .join("\n"),
+            "",
+            "约束：",
+            "1. 修复对象 = 文档与注释（设计文档 / docs/ 项目文档 / 代码注释）；禁止为对齐失真描述去改实现——若你核实后确信实现才错了（文档是对的），该条放 skipped 并写明实现侧证据（file:line），它将回流主 agent 裁决，不盲改。",
+            "2. 波及扫描：每修一处 grep 同模式实例（同类失真表述 / 同键引用 / 同族计数口径），组内实例一并修；组外文件在 description 标注「组外波及：<位置>」。",
+            "3. 联动自检（替代代码组的测试硬门）：修完跑适用的一致性检查（如改 style.css 投影段跑 python3 .githooks/check_css_token_ssot.py、改 i18n 文案跑 python3 .githooks/check_i18n_locale_sync.py）；无适用检查时 grep 复核旧表述零残留。selfCheck.typecheck 填 \"pass\"（纯文档改动无编译面），tests 字段如实写自检命令与结果。",
+            "4. git 禁令同代码组：禁止 git add / commit / push / stash——提交由工作流引擎统一执行。",
+            "5. affectedFiles 如实申报每个改动文件（含 .tmp/ 下设计文档——引擎按申报核验归属；gitignored 文件提交时自然落空不阻塞）。",
+            "",
+            runlogDutyLine(`fix-docs-r${fixRound}`),
+            "",
+            "返回 JSON：{ fixes: [{ id, description, affectedFiles: [] }], skipped: [{ id, reason }], selfCheck: { typecheck: \"pass\", tests: \"<自检: 结果>\" } }（id 用清单中的 DE 编号）。",
+        ].join("\n");
+    }
     const groupNames = [...groupMap.keys()];
     log(`第 ${fixRound} 轮修复：${groupNames.length} 组（${groupNames.map((n) => `${n}(${groupMap.get(n).length}条)`).join("、")}）`);
     // ── 阶段 A：修复组并行（每组一个 agent，条目清单直达；改动留工作区，引擎统一 commit）──
@@ -1323,6 +1358,39 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     }
     catch (e) {
         return await finish("fix-failure", reviewRound, `第 ${fixRound} 轮修复失败：${String(e)}——在途改动可能留在工作区，接管前先 git status 盘点`);
+    }
+    // ── 阶段 A2：文档修复组（docErrors 当场修；构造外提契约见 askValidated 注释块）──
+    if (docPrompt !== null) {
+        const docAgent = wfAgent(`文档修复-r${fixRound}`, FIX_PERSONA);
+        const docFix = await askValidated(validateFixReport, (q) => docAgent.ask("FixReport", q), docPrompt);
+        if (docFix === null) {
+            log(`WARN 文档修复组结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂仍不合规——doc_errors ${docIds.size} 条留池随终态回流`);
+        }
+        else {
+            const fixedDocIds = new Set(docFix.fixes.map((f) => f.id));
+            let fixedCount = 0;
+            for (const [id, d] of docIds) {
+                if (!fixedDocIds.has(id))
+                    continue;
+                docErrorPool.delete(`${d.location}||${d.gap}`);
+                fixedCount += 1;
+            }
+            // skipped 申报（fixer 核实方向两可 / 实现侧错误）：留池回流，gap 前缀承载申报理由
+            for (const s of docFix.skipped) {
+                const d = docIds.get(s.id);
+                if (d === undefined)
+                    continue;
+                const key = `${d.location}||${d.gap}`;
+                const entry = docErrorPool.get(key);
+                if (entry !== undefined) {
+                    docErrorPool.delete(key);
+                    docErrorPool.set(`${d.location}||fixer 申报留回流（${s.reason}）：${d.gap}`, entry);
+                }
+            }
+            if (fixedCount > 0)
+                fixesByGroup.push({ name: `文档修复-r${fixRound}`, fix: docFix });
+            log(`文档修复组：当场修复 ${fixedCount} 条，留池回流 ${docIds.size - fixedCount} 条（方向两可 / 实现侧错误）`);
+        }
     }
     // ── 阶段 B：轮级核验（需要全体组申报——合法汇聚点）→ 逐组增量测试 → 逐组 commit ──
     // skipped 消费（fixerPrompt 纪律 2 的契约闭环）：fixer 申报「设计文档自身错误、不改
@@ -1395,6 +1463,33 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             review: null,
         };
     });
+    // 文档修复组合成入提交管线（auxiliary：不跑增量测试、不派定向复审——纯文档改动无
+    // 编译/回归面；.tmp/ 设计文档改动 git add 自然落空走组级提交幂等跳过，docs/ 改动
+    // 照常组级一笔提交）
+    const docGroup = fixesByGroup.find((f) => f.name === `文档修复-r${fixRound}`);
+    if (docGroup !== undefined) {
+        const own = new Set();
+        for (const f of docGroup.fix.fixes) {
+            for (const a of f.affectedFiles) {
+                const r = toRel(a);
+                if (r)
+                    own.add(r);
+            }
+        }
+        groupStates.push({
+            name: docGroup.name,
+            items: [],
+            own: [...own],
+            fix: docGroup.fix,
+            changedFiles: [],
+            testFailed: false,
+            testTail: "",
+            committed: false,
+            commitNote: "",
+            review: null,
+            auxiliary: true,
+        });
+    }
     const pool = [...new Set(groupStates.flatMap((g) => g.own))];
     for (const g of groupStates)
         for (const f of g.own)
@@ -1427,7 +1522,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     // 共享状态，NODE_RUN_CMD 只读工作区；缺省无 incremental 则跳过测试只验 diff）
     const incrCmd = info.incremental;
     if (incrCmd !== null) {
-        await mapBatch(groupStates.filter((g) => g.changedFiles.length > 0), async (g) => {
+        await mapBatch(groupStates.filter((g) => !g.auxiliary && g.changedFiles.length > 0), async (g) => {
             const t = await world.run("node", ["-e", NODE_RUN_CMD, info.projectRoot, incrCmd.program, JSON.stringify(incrCmd.args), "null", String(INCREMENTAL_TIMEOUT_MS)], { timeoutMs: INCREMENTAL_WORLD_TIMEOUT_MS });
             let tCode = -1;
             let tTail = "";
@@ -1455,7 +1550,9 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             continue; // 核验未过：不 commit（随复审反馈重修）
         // 组级一笔 commit（引擎执行；只 add 本组实际改动文件，精确路径纪律；commit 保持
         // 串行——NODE_COMMIT 的 index.lock 退避是兜底，不主动制造锁竞争）
-        const commitMsg = `fix(consistency): ${g.name} ${g.items.length} unreasonable`;
+        const commitMsg = g.items.length > 0
+            ? `fix(consistency): ${g.name} ${g.items.length} unreasonable`
+            : `fix(consistency): ${g.name} doc_errors`;
         const c = await world.run("node", ["-e", NODE_COMMIT, info.projectRoot, JSON.stringify(g.changedFiles), commitMsg]);
         if (c.exitCode === 0) {
             let noChanges = false;
@@ -1520,7 +1617,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     //    活跃条目待裁决的组——后者防 fail-closed 死循环：漏报条目保持活跃后若修复零改动，
     //    「无改动不派复审」会让它永远没有下一次被裁决的机会）──
     {
-        const reviewTargets = groupStates.filter((g) => g.changedFiles.length > 0 || g.testFailed || g.items.some((i) => i.active));
+        const reviewTargets = groupStates.filter((g) => !g.auxiliary && (g.changedFiles.length > 0 || g.testFailed || g.items.some((i) => i.active)));
         let reviews;
         try {
             reviews = await mapBatch(reviewTargets, async (g) => {

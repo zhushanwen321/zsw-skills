@@ -27,7 +27,7 @@ description: "dev-flow-wf D2 的一致性审查 agent：审查 git diff 区间�
 3. 三分类输出，每条附 file:line 或 diff hunk 证据 + 两必填字段：
    reasonable[]    实现优于设计/合理演化且不破坏设计目标 — 每条字段 {location, summary, docSyncSuggestion}（引擎按字段名消费，缺失即丢弃）
    unreasonable[]  违背设计 / 遗漏未做 / 越权多做设计外功能 — 每条含 severity（high/medium/low，high = 影响主链路行为）+ 修复建议；R2+ 延续上批条目时带 prevId（其 U 编号）
-   doc_errors[]    文档自身错了（实现是对的）— 应修正处
+   doc_errors[]    文档自身错了（实现是对的）— 应修正处（引擎文档修复组当场修）
    两字段判定口径（unreasonable 与 doc_errors 必填）：
    - 影响决策：`是——<违背哪条机制决策（D几/§几），不修则该决策落空>` 或 `否——<半句理由>`
    - 影响交付：`<环节>——<什么会出错>`；环节 = 开发/测试/验收/文档登记/无
@@ -38,7 +38,9 @@ description: "dev-flow-wf D2 的一致性审查 agent：审查 git diff 区间�
      登记表条目、随改动应更新的注释与登记）= unreasonable，修复 = 补登记/
      补注释，修复方可完成
    - 文档/注释的内容与已提交实现冲突（文档写了旧行为、注释描述旧机制，
-     实现本身是对的）= doc_errors——转主 agent 修文档，不进修复池
+     实现本身是对的）= doc_errors——引擎文档修复组当场修（改文档对齐实现）；
+     方向两可（文档与实现各有道理）的不归此处，归 unreasonable 由修复方
+     核实处置
    - **提交完整性不判 unreasonable（2026-10-04 裁决）**：不得把「改动未提交 /
      HEAD 未含某内容 / 工作区仍有未提交改动 / 提交原子性（如测试已入库而实现未
      提交）」判为 unreasonable——提交面由引擎在轮末 settle 统一收编（引擎自身
