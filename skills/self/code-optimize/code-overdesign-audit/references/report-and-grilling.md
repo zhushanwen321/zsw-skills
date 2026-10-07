@@ -31,7 +31,7 @@ markdown 写 `<项目根>/.tmp/code-overdesign-audit/code-overdesign-audit-<ts>.
 # 移交：射程外发现
 <审计中发现的「设计错误但非过度设计」类问题（如持久化介质选错、状态机未收敛、
  传输契约设计错误）——逐条列位置 + 一句话问题 + 建议去向
- （improve-codebase-architecture / tech-design）。不进候选：本 skill 的产出
+ （improve-codebase-architecture / tech-design-wf）。不进候选：本 skill 的产出
  方向是拆除过度设计，不是修复设计错误；也不得丢弃——审查发现必须保留去向>
 
 # 附录：语义层五问记录
@@ -70,7 +70,7 @@ Strong（三段全闭环）/ Worth exploring（缺一段，通常核心价值不
 
 ## 裁决后执行
 
-- **范围**：架构级删减（删抽象层/删机制/改调用方）由本 skill 主导：主 agent 按精确路径操作（git 纪律同 dev-flow——subagent 零 git，主 agent 核验后按精确路径 commit），执行后跑受影响测试，必须绿。
+- **范围**：架构级删减（删抽象层/删机制/改调用方）由本 skill 主导：主 agent 按精确路径操作（git 纪律同 dev-flow-wf——subagent 零 git，主 agent 核验后按精确路径 commit），执行后跑受影响测试，必须绿。
 - **移交**：执行中冒出的语句级清理（死代码/重复）移交 code-simplify，不顺手改。
 - **验收**：删除后调用方行为与裁决确认一致（无超范围删减）；触及原设计验收场景表覆盖行为时，重跑受影响场景。
 - **回写**：裁决结论写基线；若目标仓库有 impl-plan/ADR，删减对应条目同批更新（登记即债务，修复后同批标记完成——post-delivery 同纪律）。

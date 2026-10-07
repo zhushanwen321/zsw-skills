@@ -129,7 +129,7 @@ guidance 承载执行策略（zcode 侧即此形态，已实证可忍）。
 | clean / converged | Strong 清零收敛（clean = 首轮全净；converged = 修复后收敛） | 转第 5 步 |
 | needs-human | 收敛但有 fixer 误报申述（disputed） | 逐条核对 `result.disputed` 反证，人工裁决后处理 |
 | stuck | must-fix 连续 N 轮不降 / 同一问题连续不收敛 | 读分轮报告定位死结，通常需人工介入方案 |
-| needs-redesign | 同一问题修了又坏达 maxFixAttempts（结构性，补丁修不好） | 回到 tech-design 层重新设计该域 |
+| needs-redesign | 同一问题修了又坏达 maxFixAttempts（结构性，补丁修不好） | 回到设计环节重新设计该域（用 tech-design-wf） |
 | max-rounds | 轮次耗尽仍有活跃问题 | 读 remaining 清单，人工收尾 |
 | *-failure | review/aggregate/fix 环节失败 | 按失败信息处置后 ResumeWorkflowRun 或重新发起 |
 
@@ -206,7 +206,7 @@ improve-codebase-architecture、codebase-design、domain-modeling 的职责由�
   reviewer 定义的词汇与判定段
 - **CONTEXT.md 词条纪律与 ADR 三条件/格式**（来自 domain-modeling）：
   reviewer 定义的领域词表与 ADR 纪律段 + SKILL.md 收尾落盘节
-- **grilling**（tech-design 与 code-overdesign-audit 也在引用）：
+- **grilling**（tech-design-wf 与 code-overdesign-audit 也在引用）：
   其决策树问题以 reviewer 的方案质询五问形式存在；「事实自己查不问用户」是 reviewer
   证据纪律
 

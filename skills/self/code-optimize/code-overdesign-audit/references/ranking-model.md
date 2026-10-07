@@ -61,7 +61,7 @@
 
 路径：`<项目根>/.tmp/code-overdesign-audit/baseline.md`（项目根 = `git rev-parse --show-toplevel`，worktree 解析为各 worktree 根；`.tmp/` 应在目标仓库 `.gitignore` 中，全局 ignore 模板已含 `/.tmp/`）。目标非 git 仓库时写 `/tmp/code-overdesign-audit/<repo 标识>/baseline.md`（repo 标识 = 绝对路径哈希）。
 
-基线按项目维度落盘（与 tech-design / dev-flow 的产物路径规则统一）：同仓多 worktree 各自持有独立基线，不共享裁决结论——正确性由「证据快照计数变化强制重验」兜底（不会错误复用，最多重复审计一次）；`.tmp/` 被清理或换机重装 = 基线丢失 = 下次 audit 全量重审，重跑即重建。
+基线按项目维度落盘（与 tech-design-wf / dev-flow-wf 的产物路径规则统一）：同仓多 worktree 各自持有独立基线，不共享裁决结论——正确性由「证据快照计数变化强制重验」兜底（不会错误复用，最多重复审计一次）；`.tmp/` 被清理或换机重装 = 基线丢失 = 下次 audit 全量重审，重跑即重建。
 
 ```markdown
 # code-overdesign-audit baseline: <repo 标识>

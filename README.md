@@ -27,10 +27,8 @@ scripts/           workflow 双平台构建与校验脚本
 
 | Skill | 说明 |
 |-------|------|
-| tech-design | 技术设计文档的写作与对抗式审查，内嵌 4 个 review agent |
-| tech-design-wf | tech-design 的 workflow 版：三阶段产出完整设计包（设计文档 + 实施计划） |
-| dev-flow | 将已通过审查的技术设计文档落地为可运行代码 |
-| dev-flow-wf | dev-flow 的 workflow 版：将完整设计包落地为已验收代码 |
+| tech-design-wf | 三阶段产出完整设计包：设计文档写作 → 对抗式审查循环 → 实施计划（impl-plan 双格式） |
+| dev-flow-wf | 将 tech-design-wf 产出的完整设计包落地为已验收代码 |
 | design-code-sync | 校准代码实现与设计文档的一致性 |
 | architecture-clean-domain-design | 以 DDD 与六边形架构为分析视角的领域建模与架构分析：统一语言、限界上下文、聚合不变量、圈层性质判定；只做映射与登记，不输出结构改造设计 |
 
@@ -100,4 +98,4 @@ dev-workflow 系 skill 的 workflow 脚本同时维护 zcode 与 pi 两个平台
 
 ## Agents
 
-skill 内嵌 agent 以 symlink 登记在 `agents/self/`（如 tech-design 的 tech-design-review、tech-design-impact-review、tech-design-simplicity-review），实体单一事实源在所属 skill 目录内，禁止复制副本进来形成双源。`agents/external/` 预留。
+skill 内嵌 agent 以 symlink 登记在 `agents/self/`，实体单一事实源在所属 skill 目录内，禁止复制副本进来形成双源。`agents/external/` 预留。

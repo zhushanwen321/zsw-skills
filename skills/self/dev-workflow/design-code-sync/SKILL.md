@@ -4,13 +4,12 @@ description: >-
   Use when 校准代码实现与设计文档的一致性、审查实现与设计的差距、"实现和设计
   不一致"、design sync、对齐实现与文档、按设计文档校准代码、差距审查修复循环、
   文档代码漂移、实现漂移检查、交付后修复未回写文档。双向校准代码与设计文档
-  至 0 must-fix。配合 tech-design（文档来源）与 dev-flow（实现来源）使用；
-  dev-flow 交付时（阶段 5 验收全绿后）由其阶段 6 自动衔接执行，无需单独触发；
+  至 0 must-fix。配合 tech-design-wf（文档来源）与 dev-flow-wf（实现来源）使用；
   dev-flow-wf 流程中的终态同步走其内嵌 D5（W4 design-code-sync-loop），不经本 skill。
 
-  Not for 审查设计文档本身（用 tech-design 的 review 流程）、dev-flow 流水线内
-  的一致性审查（走 dev-flow 阶段 3/4）与交付后独立 commit 的定向审查（走
-  dev-flow 的 post-delivery）——本 skill 覆盖其余时刻，或漂移已发生需要全量
+  Not for 审查设计文档本身（用 tech-design-wf 的审查循环）、dev-flow-wf 流水线内
+  的一致性审查与交付后独立 commit 的定向审查（分别走其一致性审查、交付后守护
+  环节）——本 skill 覆盖其余时刻，或漂移已发生需要全量
   校准循环时；无设计文档的泛化代码审查、找 bug（用 diagnose）不在本 skill 范围。
 ---
 
@@ -22,10 +21,10 @@ description: >-
 
 ## 前提与输入
 
-- **设计文档**：应已通过 tech-design 对抗式审查（must-fix==0）。未审查的文档先进 tech-design review——给坏文档纠偏只会把循环拖进泥潭。
-- **impl-plan**（若存在）：dev-flow 产出的 `*.impl-plan.md`。它是**被审对象**而非仅参照系——状态表、残留风险登记、变更历史必须反映当前现实。
+- **设计文档**：应已通过 tech-design-wf 对抗式审查（must-fix==0）。未审查的文档先进 tech-design-wf 审查循环——给坏文档纠偏只会把循环拖进泥潭。
+- **impl-plan**（若存在）：dev-flow-wf 产出的 `*.impl-plan.md`。它是**被审对象**而非仅参照系——状态表、残留风险登记、变更历史必须反映当前现实。
 - **代码实现**：来源不限。审查对象是**当前 HEAD 的终态全量**，不是某个 diff 区间。[HISTORICAL]（2026-08-31 update 模块事故：交付后 23 分钟的修复 commit 未走任何流水线环节，文档回写全漏，9 条偏差无一在流水线审查范围内）。
-- **找文档**：用户给了路径用路径；由 dev-flow 阶段 6 自动衔接进入时，设计文档与 impl-plan 路径由 dev-flow 直接给出（跳过本步），审查基线 = dev-flow 最终 commit；其余情形没给路径则找最近修改的 `*design*.md`、`<项目根>/.tmp/tech-design/`（tech-design 产物路径约定）下的候选，**多于一个候选时列出让用户选，禁止猜**。
+- **找文档**：用户给了路径用路径；没给路径则找最近修改的 `*design*.md`、`<项目根>/.tmp/tech-design/`（tech-design-wf 产物路径约定）下的候选，**多于一个候选时列出让用户选，禁止猜**。
 
 ## 核心原则
 
@@ -42,7 +41,7 @@ description: >-
 
 记录当前 commit hash（循环的 diff 与回滚基准）；确认测试可跑（无测试套件则记录，修复验证降级为构建通过 + 人工走查）。
 
-**验证矩阵前置 [MANDATORY]**：循环开始前列出本循环全部验证项，逐项标执行方式 / 成本 / 收益（1-10），并给出提速判定——与 dev-flow 的验证分级同构（L0 静态规则 → L1 增量单测 → L4 agent 审查），低成本高收益项永远先行：
+**验证矩阵前置 [MANDATORY]**：循环开始前列出本循环全部验证项，逐项标执行方式 / 成本 / 收益（1-10），并给出提速判定——与 dev-flow-wf 的验证方式分级同构（L0 静态规则 → L1 增量单测 → L4 agent 审查），低成本高收益项永远先行：
 
 ```markdown
 | 验证项 | 方式 | 成本 | 收益 | 时机 |
@@ -79,7 +78,7 @@ description: >-
 
 1. **范围**：本设计文档、impl-plan、历史审查报告、probe/探针、验收记录等伴生产物，以及被本交付**整体取代**的旧设计文档。
 2. **判定规则**：
-   - impl-plan 在 `.tmp/dev-flow/`（dev-flow 阶段 1 约定）、审查报告在 `.tmp/tech-design/`（tech-design 约定）→ 已合规，无需处理
+   - impl-plan 在 `.tmp/dev-flow/`（dev-flow-wf 约定）、审查报告在 `.tmp/tech-design/`（tech-design-wf 约定）→ 已合规，无需处理
    - 残留在 docs/ 里的伴生产物（旧版惯例：`<name>.review*.md` / `.impl-plan.md` / probe 等）→ 移入 `<项目根>/.tmp/design-doc-retirement/`（gitignored 物理缓冲）
    - 旧设计文档被本交付整体取代且**零外部引用** → 移入同一退役目录；仍被引用或仍是现行机制依据 → 原位保留（可加 [HISTORICAL] 取代头注指向新权威）
 3. **引用验证 [MANDATORY]**：移动前按**完整文件名**全仓 grep（AGENTS.md / docs/constraints.json / 检查脚本 .githooks+scripts / 源码注释 / 活文档 / skills），任一引用命中即不退役；移动后反向复验，修复保留文档中的悬空链接（markdown 链接改退役标注 + 找回 commit 号；backtick 纯提及可不动）
@@ -102,7 +101,7 @@ description: >-
 - [MANDATORY] must-fix 级 contested 不裁决不修复，必须等用户（方向裁错 = 破坏性修复，不可逆）。
 - [MANDATORY] subagent 零 git 写操作；主 agent 单点 commit（subagent 上下文无全景，防误提交范围外文件与不可回滚变更）。
 - [MANDATORY] 改代码的修复必须有测试证据（或 Step 0 记录的降级证据），无证据的"已修复"退回。
-- [OPTIONAL] 文档改动巨大（重写多章）时，修完可建议用户送 tech-design review 复审一轮。
+- [OPTIONAL] 文档改动巨大（重写多章）时，修完可建议用户送 tech-design-wf 审查循环复审一轮。
 
 ---
 

@@ -27,10 +27,8 @@ scripts/           Dual-platform workflow build and validation scripts
 
 | Skill | Description |
 |-------|-------------|
-| tech-design | Technical design document writing with adversarial review; embeds 4 review agents |
-| tech-design-wf | Workflow variant of tech-design: produces a complete design package (design document + implementation plan) in three stages |
-| dev-flow | Turn an approved design document into runnable code |
-| dev-flow-wf | Workflow variant of dev-flow: turn a complete design package into accepted code |
+| tech-design-wf | Produces a complete design package in three stages: design document writing → adversarial review loop → implementation plan (impl-plan in dual formats) |
+| dev-flow-wf | Turn the complete design package produced by tech-design-wf into accepted code |
 | design-code-sync | Keep code implementation and design documents in sync |
 | architecture-clean-domain-design | Domain modeling and architecture analysis with DDD and hexagonal architecture as analysis lenses: ubiquitous language, bounded contexts, aggregate invariants, ring-nature mapping; records and maps only — never outputs structural transformation designs |
 
@@ -100,4 +98,4 @@ Validation scripts under `scripts/` run in pre-commit (with `core.hooksPath` poi
 
 ## Agents
 
-Skill-embedded agents are registered in `agents/self/` via symlinks (e.g. tech-design's tech-design-review, tech-design-impact-review, tech-design-simplicity-review). The single source of truth lives inside the owning skill's directory; do not duplicate copies here. `agents/external/` is reserved.
+Skill-embedded agents are registered in `agents/self/` via symlinks. The single source of truth lives inside the owning skill's directory; do not duplicate copies here. `agents/external/` is reserved.

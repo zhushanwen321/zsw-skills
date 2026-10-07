@@ -1,1 +1,0 @@
-../../skills/self/tech-design/agents/tech-design-simplicity-review.md
