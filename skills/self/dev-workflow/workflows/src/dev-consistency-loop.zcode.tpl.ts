@@ -182,6 +182,9 @@ interface PrepInfo {
   fullSuite: { program: string; args: string[] };
   /** 产物类条目（§6.1 条目 3——Gate A 起始第一波并行预备；空数组 = 无） */
   artifacts: { id: string; command: { program: string; args: string[] } }[];
+  /** 启动前已存在的已跟踪改动（porcelain 非 ?? 条目，流程外资产）——settle 收编的排除集：
+   *  这些改动的归属判断在主 agent/用户，引擎收编曾把用户的在途诊断代码卷进 fix 笔（实测） */
+  preExistingTracked: string[];
 }
 
 interface FinalResult {

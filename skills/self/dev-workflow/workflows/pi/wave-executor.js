@@ -236,8 +236,12 @@ const RUN_IN_CWD = "try{const a=process.argv.slice(1);const p=a[0],c=a[1],r=a.sl
     "catch(e){process.stderr.write(String((e&&e.message)||'spawn failed'));process.exit(1)}";
 // argv: [cwd] → stdout = git diff --stat 原文（接替程序的前任证据包成分）；失败 exit 1 输出空
 const GIT_DIFF_STAT = "try{const o=require('child_process').execFileSync('git',['diff','--stat'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});process.stdout.write(o)}catch(e){process.stdout.write('(diff 不可用)')}";
-// argv: [statusPath, projectRoot, commitTemplate, runId, ...devIds] → 双向对账（§4.5 崩溃裁决，git 为准）：
-//   ①status=done 的节点：commit 不在 git 对象库 → 回 pending；
+// argv: [statusPath, projectRoot, commitTemplate, runId, ...devEntries] → 双向对账（§4.5 崩溃裁决，git 为准）：
+//   devEntries 条目 = `<id>`（主仓节点）或 `<id>@<仓根绝对路径>`（跨仓节点，如子模块）——
+//   commit 存在性校验与 git log 反查都必须在 commit 所在仓执行：单 projectRoot 口径曾把
+//   子模块 commit 判「不在对象库」致已交付单元全部回 pending 重跑（实测 compute-asr
+//   run 二次发起时 U1/U3/U6b 空重跑）。
+//   ①status=done 的节点：commit 不在其仓 git 对象库 → 回 pending；
 //   ②status≠done 的 dev 节点：git log 反查补写 done（commit 哈希 + 证据）。反查命中条件
 //     三重锚定：a) 时间窗 = baseline..HEAD——无 baseline 时反查禁用（不回退扫 HEAD 起
 //     500 条：跨 run 同模板同单元编号的历史 commit 会撞名误配，正是 431b898 修复的事故
@@ -251,22 +255,22 @@ const GIT_DIFF_STAT = "try{const o=require('child_process').execFileSync('git',[
 //     不同单元。status 无 runId（旧格式引擎写的）→ 兼容路径：只认无 trailer + 前缀 +
 //     词边界（旧引擎 commit 恰好无 trailer，自洽）。stdout = 对账后的完整 status.json
 //     （保留 schema 外顶层字段；runId 缺失时以 argv 传入值补写，保证输出恒含）
-const RECONCILE_STATUS = "try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',ids=process.argv.slice(5);" +
+const RECONCILE_STATUS = "try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',ents=process.argv.slice(5).map(function(s){var i=s.indexOf('@');return i<0?{id:s,cwd:root}:{id:s.slice(0,i),cwd:s.slice(i+1)};});" +
     "const x=require('child_process').execFileSync;const st=JSON.parse(fs.readFileSync(sp,'utf8'));const nodes={};" +
     "for(const k of Object.keys(st.nodes||{}))nodes[k]=st.nodes[k];const events=(st.events||[]).slice();" +
     "const range=typeof st.baseline==='string'&&st.baseline?st.baseline+'..HEAD':null;" +
     "if(!range)events.push({seq:events.length+1,node:'*',event:'reconcile-warn',detail:'status 无 baseline——反查禁用，未记录单元保持 pending 重跑（幂等核验兜底）。恢复动作：旧格式 status.json，重发起后引擎初建即固化 baseline'});" +
-    "let logLines='';" +
-    "if(range){try{logLines=String(x('git',['log','--format=%H%x1f%s%x1f%(trailers:key=Run-Id,valueonly)',range],{cwd:root,encoding:'utf8',maxBuffer:33554432}))}catch(err){}}" +
+    "const logCache={};" +
+    "const logOf=function(cwd){if(logCache[cwd]!==undefined)return logCache[cwd];var v='';if(range){try{v=String(x('git',['log','--format=%H%x1f%s%x1f%(trailers:key=Run-Id,valueonly)',range],{cwd:cwd,encoding:'utf8',maxBuffer:33554432}))}catch(err){}}logCache[cwd]=v;return v;};" +
     "const runId=typeof st.runId==='string'&&st.runId?st.runId:null;" +
     "const preOf=(id)=>(tpl.split('{unitId}')[0]||'')+id;" +
-    "for(const id of ids){const e=nodes[id]||{status:'pending',attempts:0};" +
+    "for(const ent of ents){const id=ent.id,cwd=ent.cwd;const e=nodes[id]||{status:'pending',attempts:0};" +
     "if(e.status==='done'){let ok=false;" +
-    "if(typeof e.commit==='string'&&e.commit.length>=7){try{x('git',['cat-file','-e',e.commit+'^{commit}'],{cwd:root,encoding:'utf8'});ok=true}catch(err){}}" +
+    "if(typeof e.commit==='string'&&e.commit.length>=7){try{x('git',['cat-file','-e',e.commit+'^{commit}'],{cwd:cwd,encoding:'utf8'});ok=true}catch(err){}}" +
     "if(ok)continue;nodes[id]={status:'pending',attempts:0};" +
     "events.push({seq:events.length+1,node:id,event:'reconcile-reset',detail:'status done 但 commit 不在 git 对象库，按 git 为准回 pending'})}" +
     "else{const pre=preOf(id);" +
-    "const hit=logLines.split('\\n').find((l)=>{const seg=l.split('\\x1f');if(seg.length<2)return false;const s=seg[1]||'';const t=(seg[2]||'').trim();" +
+    "const hit=logOf(cwd).split('\\n').find((l)=>{const seg=l.split('\\x1f');if(seg.length<2)return false;const s=seg[1]||'';const t=(seg[2]||'').trim();" +
     "const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));" +
     "if(!subj)return false;" +
     "return runId!==null?(t===runId):(t==='')});" +
@@ -1389,6 +1393,12 @@ const genRunId = async () => {
     return id;
 };
 let activeRunId;
+// 跨仓对账条目：cwd 非空（worktree/子模块仓根）的节点以 `<id>@<仓根>` 传递——
+// RECONCILE 按条目仓根做 cat-file 与 log 反查（单 projectRoot 口径会误判子模块 commit）
+const devEntry = (id) => {
+    const n = plan.nodes.find((x) => x.id === id);
+    return n && n.cwd ? `${id}@${n.cwd}` : id;
+};
 if (existingStatus === null) {
     // baseline 固化：优先 exec-plan 的 baseline（编译时点 HEAD，早于本 run 全部 commit——
     // status 被删但本 run commit 已在 git 的恢复场景，窗口完整覆盖），但 AI 抄写的值不可
@@ -1425,7 +1435,7 @@ if (existingStatus === null) {
     // 非 done 的 dev 节点按 git log 反查补写 done，避免重跑已交付单元
     const freshDevIds = plan.nodes.filter((n) => n.kind === "dev").map((n) => n.id);
     if (freshDevIds.length > 0) {
-        const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, ...freshDevIds]);
+        const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, ...freshDevIds.map(devEntry)]);
         if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
             try {
                 const parsed = JSON.parse(rec.stdout);
@@ -1462,7 +1472,7 @@ else {
     const prevRunId = existingStatus.extra["runId"];
     activeRunId = typeof prevRunId === "string" && prevRunId !== "" ? prevRunId : await genRunId();
     if (allDevIds.length > 0) {
-        const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, ...allDevIds]);
+        const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, ...allDevIds.map(devEntry)]);
         if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
             try {
                 const parsed = JSON.parse(rec.stdout);

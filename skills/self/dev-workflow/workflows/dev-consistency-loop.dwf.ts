@@ -182,6 +182,9 @@ interface PrepInfo {
   fullSuite: { program: string; args: string[] };
   /** 产物类条目（§6.1 条目 3——Gate A 起始第一波并行预备；空数组 = 无） */
   artifacts: { id: string; command: { program: string; args: string[] } }[];
+  /** 启动前已存在的已跟踪改动（porcelain 非 ?? 条目，流程外资产）——settle 收编的排除集：
+   *  这些改动的归属判断在主 agent/用户，引擎收编曾把用户的在途诊断代码卷进 fix 笔（实测） */
+  preExistingTracked: string[];
 }
 
 interface FinalResult {
@@ -369,12 +372,22 @@ const NODE_PREP = [
   "var runlogDir = path.join(statusDir, baseName + '.runlog');",
   "var ledgerPath = path.join(statusDir, baseName + '.ledger.md');",
   "try { fs.mkdirSync(runlogDir, { recursive: true }); } catch (e) { die('runlog 目录创建失败: ' + e.message); }",
+  // 启动前既有改动登记（settle 收编的排除集）：引擎启动时工作区里已存在的已跟踪改动
+  // 属于流程外资产（用户的在途工作），归属判断在主 agent/用户——settle 只收编本流程
+  // 产生的未归属改动。实测：2026-10-09 compute-asr D2 曾把用户会话前留下的 8 行诊断
+  // 代码收编进 fix(consistency) 笔，违反「非本流程改动不提交」纪律后被迫拆笔重写历史。
+  "var preExisting = [];",
+  "try {",
+  "  var pe = String(cp.execSync('git status --porcelain', { cwd: projectRoot, maxBuffer: 33554432 }));",
+  "  preExisting = pe.split('\\n').filter(function (l) { return l.length > 3 && l.slice(0, 2) !== '??'; }).map(function (l) { return l.slice(3); });",
+  "} catch (e) { /* porcelain 失败不阻断启动：settle 退化为无排除集（与旧行为一致） */ }",
   "console.log(JSON.stringify({",
   "  projectRoot: projectRoot, baseline: bl, designDocPath: designAbs, planPath: planAbs, planMdPath: planMd,",
   "  statusPath: statusAbs, runlogDir: runlogDir, ledgerPath: ledgerPath,",
   "  gateALog: gateALog, reviewerTemplate: tplAbs, partitions: partitions,",
   "  diffChurn: churn, diffFileCount: files.length, unitCount: unitCount,",
   "  incremental: incr, fullSuite: { program: fsuite.program, args: fsuite.args }, artifacts: artifacts,",
+  "  preExistingTracked: preExisting,",
   "}));",
 ].join("\n");
 // templateArgRaw 是 NODE_PREP 内引用的第三个 argv（见下方调用：execPlanArg 之后传入）。
@@ -483,6 +496,8 @@ const NODE_RUN_CMD = [
 // 只有最后一包落在窗口内，中间包的跳过证据全部漏扫。
 // SKIP_* 环境变量形态不做输出扫描：环境侧已被结构性隔离（node 执行器只透传 argv），
 // 输出扫描用例名含 SKIP_ 字样的合法测试会误伤（权衡注释见 §6.1 对齐条目）。
+// skipped 计数只认非零：全过输出的「0 skipped, 0 failed」是正常证据行，命中即误报
+// （实测 perf-diff-harness 的 `19 run, 19 passed, 0 skipped, 0 failed` 曾被判 gate-a-failed）。
 const NODE_SKIP_SCAN = [
   "var fs = require('fs');",
   "try {",
@@ -491,7 +506,7 @@ const NODE_SKIP_SCAN = [
   "  var hits = [];",
   "  for (var i = 0; i < lines.length; i++) {",
   "    var l = lines[i];",
-  "    if (/\\b\\d+\\s+skipped\\b/i.test(l) || l.indexOf('eslint-disable') >= 0) hits.push(l.trim());",
+  "    if (/\\b[1-9]\\d*\\s+skipped\\b/i.test(l) || l.indexOf('eslint-disable') >= 0) hits.push(l.trim());",
   "  }",
   "  console.log(JSON.stringify(hits.slice(0, 10)));",
   "} catch (e) { console.log(JSON.stringify({ error: String((e && e.message) || e) })); }",
@@ -1655,16 +1670,32 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
   {
     const excluded = (f: string) =>
       f === ".tmp" || f.startsWith(".tmp/") || f === ".pi" || f.startsWith(".pi/workflows/");
-    const foreignTracked = verify.foreign.filter((f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0);
+    // 启动前既有改动（流程外资产）不收编——归属判断在主 agent/用户，引擎收编曾把用户
+    // 的在途诊断代码卷进 fix(consistency) 笔（2026-10-09 compute-asr D2 实测，被迫拆笔
+    // 重写历史）。被排除项不静默：随 settleNote/终态呈报
+    const preExisting = new Set<string>(info.preExistingTracked ?? []);
+    const isPreExisting = (f: string) => !excluded(f) && preExisting.has(f);
+    const foreignTracked = verify.foreign.filter(
+      (f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),
+    );
+    const preExistingHeld = verify.foreign.filter(isPreExisting);
     const foreignUntracked = verify.foreignUntracked.filter((f) => !excluded(f));
+    if (preExistingHeld.length > 0) {
+      settleNote = `启动前既有改动 ${preExistingHeld.length} 件不收编（流程外资产，归属主 agent/用户）：${preExistingHeld.slice(0, 5).join("、")}${preExistingHeld.length > 5 ? " 等" : ""}`;
+      log(`WARN ${settleNote}`);
+    }
     if (foreignTracked.length > 0) {
       const settleMsg = `fix(consistency): round-${fixRound} settle 未归属改动 ${foreignTracked.length} 件`;
       const sc = await world.run("node", ["-e", NODE_COMMIT, info.projectRoot, JSON.stringify(foreignTracked), settleMsg]);
       if (sc.exitCode === 0) {
-        settleNote = `轮末 settle 收编 ${foreignTracked.length} 个未归属改动（${settleMsg}）`;
+        settleNote = [settleNote, `轮末 settle 收编 ${foreignTracked.length} 个未归属改动（${settleMsg}）`]
+          .filter(Boolean)
+          .join("；");
         log(`轮末 settle：收编 ${foreignTracked.length} 个未归属改动（${foreignTracked.slice(0, 5).join("、")}${foreignTracked.length > 5 ? " 等" : ""}）`);
       } else {
-        settleNote = `轮末 settle 提交失败（exit ${sc.exitCode}）：${sc.stderr.trim() || sc.stdout.trim()}——改动留工作区`;
+        settleNote = [settleNote, `轮末 settle 提交失败（exit ${sc.exitCode}）：${sc.stderr.trim() || sc.stdout.trim()}——改动留工作区`]
+          .filter(Boolean)
+          .join("；");
         log(`WARN ${settleNote}`);
       }
     }
