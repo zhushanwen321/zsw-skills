@@ -162,4 +162,8 @@ function withPrevContext(initialPrompt: string, lastResult: NodeResult | null, r
   return retryPrompt;
 }
 
+// ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
+// 硬编码，两壳各持常量）──
+const HOST_PLATFORM = "zcode";
+
 @@STITCH@@

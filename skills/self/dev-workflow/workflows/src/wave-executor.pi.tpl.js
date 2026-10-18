@@ -130,4 +130,8 @@ function withPrevContext(initialPrompt, lastResult, retryPrompt) {
   return `【前情】此前任务指令：\n${initialPrompt}\n\n上次返回结果：\n${JSON.stringify(lastResult)}\n\n` + retryPrompt;
 }
 
+// ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
+// 硬编码，两壳各持常量）──
+const HOST_PLATFORM = "pi";
+
 @@STITCH@@

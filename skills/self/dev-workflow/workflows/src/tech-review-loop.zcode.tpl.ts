@@ -179,4 +179,8 @@ function withRetryContext(firstInstructions: string, firstReturn: { dispositions
   return "你上一轮返回的处置表未通过脚本校验（同会话续聊，此前的任务指令与你的返回仍可见）。";
 }
 
+// ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
+// 硬编码，两壳各持常量）──
+const HOST_PLATFORM = "zcode";
+
 @@STITCH@@

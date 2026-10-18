@@ -94,6 +94,14 @@ const WHITELIST = new Set([
   "AmendWorkflow 修订退役 prompt 后重跑",
   "修订脚本 prompt 后重跑",
   "修订脚本退役 prompt 后重跑",
+  // —— run manifest 壳常量与 TS 形态（W2 数据落盘批） ——
+  // host 常量值两侧各持一个（skill-data-redesign §5.1：shared 不留 host 硬编码）
+  "zcode",
+  "pi",
+  // RunManifest segment union 的字面量仅在 zcode 侧 interface 声明中成串出现
+  //（pi 侧 transpile 剥类型；对象字面量里每循环只用其中一个值，两侧同文不进差集）
+  "tech-design",
+  "dev-flow",
 ]);
 
 

@@ -58,6 +58,54 @@ const NODE_PROJECT_SLUG =
   "const p=require('fs').realpathSync(process.argv[1]);" +
   "const h=require('crypto').createHash('sha256').update(p).digest('hex').slice(0,8);" +
   "process.stdout.write(p.split('/').filter(Boolean).pop()+'-'+h)";
+
+// run manifest 探针组（skill-data-redesign §5.1：终态在 skillDataDir 根写 run.json）：
+// NODE_PROBE_NOW 取当前时刻（ISO8601）。startedAt 必须经 world.run 探针取而不能脚本内
+// new Date()——world.run 是 journal 语义（resume 重放回放首次记录值），startedAt 因此跨
+// resume 构造性稳定，run.json 防覆盖判据（startedAt 相同 = 同一次 run）才成立
+const NODE_PROBE_NOW = "process.stdout.write(new Date().toISOString())";
+// argv: [projectRoot] → stdout = JSON {branch, head}（当前分支名 + HEAD hash）；git 失败
+// 输出 null 形态——manifest 是分析契约，探针 fail-soft 置 null，不改变终态
+const NODE_GIT_REV =
+  "try{var g=require('child_process').execFileSync;" +
+  "var b=g('git',['-C',process.argv[1],'rev-parse','--abbrev-ref','HEAD'],{encoding:'utf8'}).trim();" +
+  "var h=g('git',['-C',process.argv[1],'rev-parse','HEAD'],{encoding:'utf8'}).trim();" +
+  'process.stdout.write(JSON.stringify({branch:b,head:h}))}catch(e){process.stdout.write(JSON.stringify({branch:null,head:null}))}';
+// argv: [runJsonPath, payloadJson, startedAt] → 写 run.json + 防覆盖轮转：已存在的
+// run.json 其 startedAt 与本次不同 → 先 rename 为 run-<旧startedAt 冒号换连字符>.json
+// 归档（新 run 不冲掉上一 run 的分析数据；W2 wave-executor 同目录先后写也靠此轮转
+// 保留双方）；startedAt 相同（resume 重放）→ 直接覆写；旧文件缺失/损坏/无 startedAt
+//（无判据可归档）→ 覆盖
+const NODE_WRITE_RUN_JSON =
+  "var fs=require('fs'),pt=require('path');" +
+  "try{fs.mkdirSync(pt.dirname(process.argv[1]),{recursive:true})}catch(e){}" +
+  "try{var oldRun=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(oldRun&&typeof oldRun.startedAt==='string'&&oldRun.startedAt!==process.argv[3]){fs.renameSync(process.argv[1],pt.join(pt.dirname(process.argv[1]),'run-'+oldRun.startedAt.replace(/:/g,'-')+'.json'))}}catch(e){}" +
+  "fs.writeFileSync(process.argv[1],process.argv[2])";
+
+// ── run manifest（skill-data-redesign §5.1 统一 schema）：终态收尾在 skillDataDir 根写
+// run.json（分析契约；W2 wave-executor 同目录先后写、防覆盖轮转由 startedAt 判据归档）。
+// terminated 沿用本循环终态词表，分析侧按 workflow 字段分组解读。host 由壳平台常量
+// HOST_PLATFORM 注入（shared 不留 host 硬编码）；model 置 null——facade 不暴露本次 run
+// 的模型标识，不为此扩 agent 调用契约
+interface RunManifest {
+  workflow: string;
+  segment: "tech-design" | "dev-flow";
+  host: string;
+  projectRoot: string;
+  /** 无独立 worktree 概念的循环 = projectRoot */
+  worktreePath: string;
+  branch: string | null;
+  baseCommit: string | null;
+  headCommit: string | null;
+  attempt: number;
+  model: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  terminated: string;
+  rounds: number;
+  /** tech-review-loop = must-fix 计数序列；无审查轮的循环置 null */
+  mustFixTrajectory: number[] | null;
+}
 const NODE_PLAN_PROJECT_ROOT = [
   "var ep;",
   "try { ep = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')); }",
@@ -563,6 +611,29 @@ async function appendLedger(title: string, body: string): Promise<void> {
   }
 }
 
+/** run.json 终态落盘（best-effort：失败只告警——终态数据以返回值为准）；防覆盖轮转
+ *  判定在 NODE_WRITE_RUN_JSON 内（旧文件 startedAt 不同 → rename 归档后覆写） */
+async function writeRunManifest(m: RunManifest): Promise<void> {
+  const w = await world.run("node", ["-e", NODE_WRITE_RUN_JSON, `${skillDataDir}/run.json`, JSON.stringify(m, null, 2), m.startedAt]);
+  if (w.exitCode !== 0) {
+    log(`WARN: run.json 落盘失败（exit ${w.exitCode}：${w.stderr.trim() || w.stdout.trim()}）——终态数据以返回值为准`);
+  }
+}
+
+/** git 探针（NODE_GIT_REV）→ {branch, head}；输出形态非法全 null（fail-soft，不改变终态） */
+async function gitRevProbe(): Promise<{ branch: string | null; head: string | null }> {
+  const r = await world.run("node", ["-e", NODE_GIT_REV, info.projectRoot]);
+  try {
+    const v = JSON.parse(r.stdout) as { branch: unknown; head: unknown };
+    return {
+      branch: typeof v.branch === "string" && v.branch !== "" ? v.branch : null,
+      head: typeof v.head === "string" && v.head !== "" ? v.head : null,
+    };
+  } catch {
+    return { branch: null, head: null };
+  }
+}
+
 async function finish(terminated: FinalResult["terminated"], roundsDone: number, message: string): Promise<FinalResult> {
   // 终态残留对账（2026-09-26 用户裁决承接面）：历轮留盘待认领、终态仍未被任何组申报的
   // 改动——主 agent 判归属后处置（补提交/清理/呈报），引擎不提交不回滚
@@ -661,6 +732,33 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
       lg.push(`- [待办] 工作区残留改动 ${result.residualFiles.length} 项（判归属后处置，禁静默丢弃）：${result.residualFiles.join("、")}`);
     await appendLedger(`W3 一致性审查终态 ${terminated}（attempt ${attempt}）`, lg.join("\n"));
   }
+  // run.json（分析契约，skill-data-redesign §5.1）：落 skillDataDir 根（W2 wave-executor
+  // 同目录先后写，防覆盖轮转由 startedAt 判据归档）。mustFixTrajectory = null（无审查轮）
+  if (runStartedAt !== null) {
+    const endRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
+    const gitRev = await gitRevProbe();
+    await writeRunManifest({
+      workflow: "dev-consistency-loop",
+      segment: "dev-flow",
+      host: HOST_PLATFORM,
+      projectRoot: info.projectRoot,
+      worktreePath: info.projectRoot,
+      branch: gitRev.branch,
+      // 审查基线 = exec-plan baseline（PREP 已验 git hash 形态），head = 终态时点 HEAD
+      //（含本 run 修复组 commit）
+      baseCommit: info.baseline,
+      headCommit: gitRev.head,
+      attempt,
+      model: null,
+      startedAt: runStartedAt,
+      endedAt: endRes.exitCode === 0 && endRes.stdout.trim() !== "" ? endRes.stdout.trim() : null,
+      terminated: result.terminated,
+      rounds: result.rounds,
+      mustFixTrajectory: null,
+    });
+  } else {
+    log("WARN: run.json 未落盘（startedAt 探针失败，防覆盖判据不可用）——终态数据以 status.json 与返回值为准");
+  }
   return result;
 }
 
@@ -689,6 +787,12 @@ if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
   );
 }
 const skillDataDir = `${homeRes.stdout.trim()}/.agents/skill-data/dev-flow/${slugRes.stdout.trim()}`;
+
+// run manifest startedAt（循环启动时记录；探针失败 = 防覆盖判据不可用，终态时放弃写
+// run.json 只告警——终态数据以 status.json 与返回值为准）
+const startedAtRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
+const runStartedAt =
+  startedAtRes.exitCode === 0 && startedAtRes.stdout.trim() !== "" ? startedAtRes.stdout.trim() : null;
 
 const prepRes = await world.run("node", ["-e", NODE_PREP_CODE, execPlanArg, reviewerTemplate, String(attempt), skillDataDir]);
 if (prepRes.exitCode !== 0) {

@@ -207,4 +207,8 @@ function withRetryContext(firstInstructions, firstReturn, checkReport) {
 const HINT_RELAUNCH_WITH_ARGS = "修正参数后重新 workflow run 发起（pi runs 一次性：修订脚本后重跑即可，防产物覆盖用 attempt 递增）";
 const HINT_REVIEW_BAD_COUNT = "修订脚本 prompt 后重新 run，或 args.attempt 递增重新发起";
 
+// ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
+// 硬编码，两壳各持常量）──
+const HOST_PLATFORM = "pi";
+
 @@STITCH@@

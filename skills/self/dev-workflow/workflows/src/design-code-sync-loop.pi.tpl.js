@@ -331,4 +331,8 @@ const HINT_RELAUNCH_WITH_ARGS = "修正参数后重新 workflow run 发起（pi 
 const HINT_PLANNER_INVALID = "修订脚本 prompt 后重跑";
 const HINT_RETIRE_INVALID = "修订脚本退役 prompt 后重跑";
 
+// ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
+// 硬编码，两壳各持常量）──
+const HOST_PLATFORM = "pi";
+
 @@STITCH@@

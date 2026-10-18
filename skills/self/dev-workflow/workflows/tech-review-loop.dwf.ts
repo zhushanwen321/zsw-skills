@@ -179,6 +179,10 @@ function withRetryContext(firstInstructions: string, firstReturn: { dispositions
   return "你上一轮返回的处置表未通过脚本校验（同会话续聊，此前的任务指令与你的返回仍可见）。";
 }
 
+// ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
+// 硬编码，两壳各持常量）──
+const HOST_PLATFORM = "zcode";
+
 // ============================================================================
 // tech-review-loop — tech-design-wf 技能 W1 审查循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
@@ -225,6 +229,53 @@ const NODE_PROJECT_SLUG =
   "const p=require('fs').realpathSync(process.argv[1]);" +
   "const h=require('crypto').createHash('sha256').update(p).digest('hex').slice(0,8);" +
   "process.stdout.write(p.split('/').filter(Boolean).pop()+'-'+h)";
+
+// run manifest 探针组（skill-data-redesign §5.1：终态在 runDir 根写 run.json）：
+// NODE_PROBE_NOW 取当前时刻（ISO8601）。startedAt 必须经 world.run 探针取而不能脚本内
+// new Date()——world.run 是 journal 语义（resume 重放回放首次记录值），startedAt 因此跨
+// resume 构造性稳定，run.json 防覆盖判据（startedAt 相同 = 同一次 run）才成立
+const NODE_PROBE_NOW = "process.stdout.write(new Date().toISOString())";
+// argv: [projectRoot] → stdout = JSON {branch, head}（当前分支名 + HEAD hash）；git 失败
+// 输出 null 形态——manifest 是分析契约，探针 fail-soft 置 null，不改变终态
+const NODE_GIT_REV =
+  "try{var g=require('child_process').execFileSync;" +
+  "var b=g('git',['-C',process.argv[1],'rev-parse','--abbrev-ref','HEAD'],{encoding:'utf8'}).trim();" +
+  "var h=g('git',['-C',process.argv[1],'rev-parse','HEAD'],{encoding:'utf8'}).trim();" +
+  'process.stdout.write(JSON.stringify({branch:b,head:h}))}catch(e){process.stdout.write(JSON.stringify({branch:null,head:null}))}';
+// argv: [runJsonPath, payloadJson, startedAt] → 写 run.json + 防覆盖轮转：已存在的
+// run.json 其 startedAt 与本次不同 → 先 rename 为 run-<旧startedAt 冒号换连字符>.json
+// 归档（新 run 不冲掉上一 run 的分析数据）；startedAt 相同（resume 重放）→ 直接覆写；
+// 旧文件缺失/损坏/无 startedAt（无判据可归档）→ 覆盖
+const NODE_WRITE_RUN_JSON =
+  "var fs=require('fs'),pt=require('path');" +
+  "try{fs.mkdirSync(pt.dirname(process.argv[1]),{recursive:true})}catch(e){}" +
+  "try{var oldRun=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(oldRun&&typeof oldRun.startedAt==='string'&&oldRun.startedAt!==process.argv[3]){fs.renameSync(process.argv[1],pt.join(pt.dirname(process.argv[1]),'run-'+oldRun.startedAt.replace(/:/g,'-')+'.json'))}}catch(e){}" +
+  "fs.writeFileSync(process.argv[1],process.argv[2])";
+
+// ── run manifest（skill-data-redesign §5.1 统一 schema）：终态收尾在 runDir 根写
+// run.json（分析契约）；terminated 沿用本循环终态词表，分析侧按 workflow 字段分组解读。
+// host 由壳平台常量 HOST_PLATFORM 注入（shared 不留 host 硬编码）；model 置 null——
+// facade 不暴露本次 run 的模型标识，不为此扩 agent 调用契约
+interface RunManifest {
+  workflow: string;
+  segment: "tech-design" | "dev-flow";
+  host: string;
+  projectRoot: string;
+  /** 无独立 worktree 概念的循环 = projectRoot */
+  worktreePath: string;
+  branch: string | null;
+  baseCommit: string | null;
+  headCommit: string | null;
+  attempt: number;
+  model: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  terminated: string;
+  rounds: number;
+  /** tech-review-loop = must-fix 计数序列（与 final.json 同名字段同源，不二次计算）；
+   *  无审查轮的循环置 null */
+  mustFixTrajectory: number[] | null;
+}
 
 // ── 参数窄化（纯函数，便于片段级验证） ──
 function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
@@ -584,6 +635,35 @@ const projectSlug = slugRes.stdout.trim();
 const runDir = `${home}/.agents/skill-data/tech-design/${projectSlug}/${docName !== "" ? docName : "design"}`;
 const finalJsonPath = `${runDir}/final.json`;
 
+// run manifest startedAt（循环启动时记录；探针失败 = 防覆盖判据不可用，终态时放弃写
+// run.json 只告警——终态数据以 final.json 与返回值为准）
+const startedAtRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
+const runStartedAt =
+  startedAtRes.exitCode === 0 && startedAtRes.stdout.trim() !== "" ? startedAtRes.stdout.trim() : null;
+
+/** run.json 终态落盘（best-effort：失败只告警——终态数据以返回值为准）；防覆盖轮转
+ *  判定在 NODE_WRITE_RUN_JSON 内（旧文件 startedAt 不同 → rename 归档后覆写） */
+async function writeRunManifest(m: RunManifest): Promise<void> {
+  const w = await world.run("node", ["-e", NODE_WRITE_RUN_JSON, `${runDir}/run.json`, JSON.stringify(m, null, 2), m.startedAt]);
+  if (w.exitCode !== 0) {
+    log(`WARN: run.json 落盘失败（exit ${w.exitCode}：${w.stderr.trim() || w.stdout.trim()}）——终态数据以 final.json 与返回值为准`);
+  }
+}
+
+/** git 探针（NODE_GIT_REV）→ {branch, head}；输出形态非法全 null（fail-soft，不改变终态） */
+async function gitRevProbe(): Promise<{ branch: string | null; head: string | null }> {
+  const r = await world.run("node", ["-e", NODE_GIT_REV, projectRoot]);
+  try {
+    const v = JSON.parse(r.stdout) as { branch: unknown; head: unknown };
+    return {
+      branch: typeof v.branch === "string" && v.branch !== "" ? v.branch : null,
+      head: typeof v.head === "string" && v.head !== "" ? v.head : null,
+    };
+  } catch {
+    return { branch: null, head: null };
+  }
+}
+
 // 重发起检测：扫描 runDir 内已有 attempt 后缀的最大序号（round-*.attemptM），未显式传
 // attempt → 取 max+1（多次重发起不覆盖历史——固定取 2 会覆盖第三次及以后的 attempt2 产物）；
 // 无 attempt 后缀时 runDir 已有任何轮次产物（无后缀 round-* 或 final.json）→ 取 1
@@ -701,6 +781,32 @@ async function finish(
   if (w.exitCode !== 0) {
     log(`WARN: final.json 落盘失败（exit ${w.exitCode}：${w.stderr.trim() || w.stdout.trim()}）——终态数据以本次返回值为准`);
     result.message += `；（注：final.json 落盘失败 exit ${w.exitCode}）`;
+  }
+  // run.json（分析契约，skill-data-redesign §5.1）与 final.json 同批终态写出；固定名
+  // final.json 是 dev-flow-wf 入口门契约保持不动，run.json 承载跨 run 分析字段
+  if (runStartedAt !== null) {
+    const endRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
+    const gitRev = await gitRevProbe();
+    await writeRunManifest({
+      workflow: "tech-review-loop",
+      segment: "tech-design",
+      host: HOST_PLATFORM,
+      projectRoot,
+      worktreePath: projectRoot,
+      branch: gitRev.branch,
+      // 审查对象是设计文档，无 git 基线分界——baseCommit 恒 null
+      baseCommit: null,
+      headCommit: gitRev.head,
+      attempt,
+      model: null,
+      startedAt: runStartedAt,
+      endedAt: endRes.exitCode === 0 && endRes.stdout.trim() !== "" ? endRes.stdout.trim() : null,
+      terminated: result.terminated,
+      rounds: result.rounds,
+      mustFixTrajectory: result.mustFixTrajectory,
+    });
+  } else {
+    log("WARN: run.json 未落盘（startedAt 探针失败，防覆盖判据不可用）——终态数据以 final.json 与返回值为准");
   }
   try {
     await artifact.markdown("final-report", renderFinalMd(result), {

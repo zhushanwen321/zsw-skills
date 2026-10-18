@@ -331,6 +331,10 @@ const HINT_RELAUNCH_WITH_ARGS = "修正参数后重新 workflow run 发起（pi 
 const HINT_PLANNER_INVALID = "修订脚本 prompt 后重跑";
 const HINT_RETIRE_INVALID = "修订脚本退役 prompt 后重跑";
 
+// ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
+// 硬编码，两壳各持常量）──
+const HOST_PLATFORM = "pi";
+
 // ============================================================================
 // design-code-sync-loop — dev-flow-wf 技能 W4 终态同步循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts 与 tech-review-loop.dwf.ts（多脚本循环骨架
@@ -448,6 +452,26 @@ const NODE_PROBE_HOME = "process.stdout.write(require('os').homedir())";
 const NODE_PROJECT_SLUG = "const p=require('fs').realpathSync(process.argv[1]);" +
     "const h=require('crypto').createHash('sha256').update(p).digest('hex').slice(0,8);" +
     "process.stdout.write(p.split('/').filter(Boolean).pop()+'-'+h)";
+// run manifest 探针组（skill-data-redesign §5.1：终态在 runDir 根写 run.json）：
+// NODE_PROBE_NOW 取当前时刻（ISO8601）。startedAt 必须经 world.run 探针取而不能脚本内
+// new Date()——world.run 是 journal 语义（resume 重放回放首次记录值），startedAt 因此跨
+// resume 构造性稳定，run.json 防覆盖判据（startedAt 相同 = 同一次 run）才成立
+const NODE_PROBE_NOW = "process.stdout.write(new Date().toISOString())";
+// argv: [projectRoot] → stdout = JSON {branch, head}（当前分支名 + HEAD hash）；git 失败
+// 输出 null 形态——manifest 是分析契约，探针 fail-soft 置 null，不改变终态
+const NODE_GIT_REV = "try{var g=require('child_process').execFileSync;" +
+    "var b=g('git',['-C',process.argv[1],'rev-parse','--abbrev-ref','HEAD'],{encoding:'utf8'}).trim();" +
+    "var h=g('git',['-C',process.argv[1],'rev-parse','HEAD'],{encoding:'utf8'}).trim();" +
+    'process.stdout.write(JSON.stringify({branch:b,head:h}))}catch(e){process.stdout.write(JSON.stringify({branch:null,head:null}))}';
+// argv: [runJsonPath, payloadJson, startedAt] → 写 run.json + 防覆盖轮转：已存在的
+// run.json 其 startedAt 与本次不同 → 先 rename 为 run-<旧startedAt 冒号换连字符>.json
+// 归档（attempt 后缀目录内的 run.json 不覆盖历史产物，此轮转防的是同 runDir 重放）；
+// startedAt 相同（resume 重放）→ 直接覆写；旧文件缺失/损坏/无 startedAt（无判据可归档）
+// → 覆盖
+const NODE_WRITE_RUN_JSON = "var fs=require('fs'),pt=require('path');" +
+    "try{fs.mkdirSync(pt.dirname(process.argv[1]),{recursive:true})}catch(e){}" +
+    "try{var oldRun=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(oldRun&&typeof oldRun.startedAt==='string'&&oldRun.startedAt!==process.argv[3]){fs.renameSync(process.argv[1],pt.join(pt.dirname(process.argv[1]),'run-'+oldRun.startedAt.replace(/:/g,'-')+'.json'))}}catch(e){}" +
+    "fs.writeFileSync(process.argv[1],process.argv[2])";
 // argv: [...绝对路径] → stdout JSON 同序数组 [{f, h}]（h = sha256(工作区内容)，文件不
 // 存在 = null）。批改动检测的内容指纹快照用：porcelain 状态码是「工作区相对 index/HEAD
 // 的状态分类」，不是内容身份——批前已改文件（如用户未提交的修改）被 fixer 再改后分类
@@ -906,6 +930,32 @@ const retirementDestDir = `${projectRoot}/${RETIREMENT_DIR}`;
 // 不按 attempt 分目录，重发起的过程记录靠文件内条目时间线自然累积）
 const runlogDir = `${skillDataDir}/${docName !== "" ? docName : "design"}.runlog`;
 const ledgerPath = `${skillDataDir}/${docName !== "" ? docName : "design"}.ledger.md`;
+// run manifest startedAt（循环启动时记录；探针失败 = 防覆盖判据不可用，终态时放弃写
+// run.json 只告警——终态数据以 final.json 与返回值为准）
+const startedAtRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
+const runStartedAt = startedAtRes.exitCode === 0 && startedAtRes.stdout.trim() !== "" ? startedAtRes.stdout.trim() : null;
+/** run.json 终态落盘（best-effort：失败只告警——终态数据以返回值为准）；防覆盖轮转
+ *  判定在 NODE_WRITE_RUN_JSON 内（旧文件 startedAt 不同 → rename 归档后覆写） */
+async function writeRunManifest(m) {
+    const w = await world.run("node", ["-e", NODE_WRITE_RUN_JSON, `${runDir}/run.json`, JSON.stringify(m, null, 2), m.startedAt]);
+    if (w.exitCode !== 0) {
+        log(`WARN: run.json 落盘失败（exit ${w.exitCode}：${w.stderr.trim() || w.stdout.trim()}）——终态数据以 final.json 与返回值为准`);
+    }
+}
+/** git 探针（NODE_GIT_REV）→ {branch, head}；输出形态非法全 null（fail-soft，不改变终态） */
+async function gitRevProbe() {
+    const r = await world.run("node", ["-e", NODE_GIT_REV, projectRoot]);
+    try {
+        const v = JSON.parse(r.stdout);
+        return {
+            branch: typeof v.branch === "string" && v.branch !== "" ? v.branch : null,
+            head: typeof v.head === "string" && v.head !== "" ? v.head : null,
+        };
+    }
+    catch {
+        return { branch: null, head: null };
+    }
+}
 // 重发起检测（沿 W1 惯例）：扫描 runDir 内已有 attempt 后缀最大序号，未显式传 → max+1
 //（固定取 2 会覆盖第三次及以后重发起的 attempt2 产物）；无 attempt 后缀时，runDir 已有
 // 任何轮次产物（无后缀 round-* 或 final.json）→ 取 1（缺省 attempt=2），防首次重发起覆盖首轮
@@ -2361,6 +2411,34 @@ if (finalResult !== null) {
     // 扫描（attemptM 后缀 max+1；存在无后缀 round-* 或 final.json → 至少 attempt2 防覆盖
     // 首轮）；syncRoot 存在性兜底语义不受影响，round 目录后缀仍可由显式 args.attempt 可控
     await auditJson(finalJsonPath, JSON.stringify(finalResult, null, 2));
+    // run.json（分析契约，skill-data-redesign §5.1）与 final.json 同批终态写出。
+    // mustFixTrajectory = 逐轮活跃 must-fix 计数（roundsHist.mustActive 序列——该循环的
+    // 终态同步语义口径）；baseCommit = null（终态同步审 HEAD 全量，无 diff 基线分界），
+    // headCommit = 终态时点 HEAD（含本 run 修复组 commit）
+    if (runStartedAt !== null) {
+        const endRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
+        const gitRev = await gitRevProbe();
+        await writeRunManifest({
+            workflow: "design-code-sync-loop",
+            segment: "dev-flow",
+            host: HOST_PLATFORM,
+            projectRoot,
+            worktreePath: projectRoot,
+            branch: gitRev.branch,
+            baseCommit: null,
+            headCommit: gitRev.head,
+            attempt,
+            model: null,
+            startedAt: runStartedAt,
+            endedAt: endRes.exitCode === 0 && endRes.stdout.trim() !== "" ? endRes.stdout.trim() : null,
+            terminated: finalResult.terminated,
+            rounds: finalResult.rounds,
+            mustFixTrajectory: roundsHist.map((r) => r.mustActive),
+        });
+    }
+    else {
+        log("WARN: run.json 未落盘（startedAt 探针失败，防覆盖判据不可用）——终态数据以 final.json 与返回值为准");
+    }
     // 终态写入 ledger（W4 终态全量已在 final.json——此处只记终态行 + 未决清单 + 指针，
     // 供主会话中断后从 skill-data dev-flow 段平铺档案直接恢复「哪些事待处置」）
     {

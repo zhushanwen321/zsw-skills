@@ -218,4 +218,8 @@ interface FinalResult {
 const HINT_MISSING_EXECPLAN = "恢复动作：经 CreateWorkflow 重新发起并传 execPlan。注意 AmendWorkflow 不透传 args——修订脚本时 args 恒空，请把 execPlan 路径直接写进脚本 const 后再发起。";
 const HINT_R1_FAILED = "读 run 日志定位失败分区，AmendWorkflow 修订后重发";
 
+// ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
+// 硬编码，两壳各持常量）──
+const HOST_PLATFORM = "zcode";
+
 @@STITCH@@

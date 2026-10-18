@@ -275,6 +275,10 @@ const HINT_RELAUNCH_WITH_ARGS = "修正参数后经 CreateWorkflow 重新发起�
 const HINT_PLANNER_INVALID = "AmendWorkflow 修订 prompt 后重跑";
 const HINT_RETIRE_INVALID = "AmendWorkflow 修订退役 prompt 后重跑";
 
+// ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
+// 硬编码，两壳各持常量）──
+const HOST_PLATFORM = "zcode";
+
 // ── F 区平台钩子：R2+ 聚焦复审的 R1 上下文——zcode 同名续聊天然承载，返回空 ──
 function r2PrevContextBlock(
   owner: string,

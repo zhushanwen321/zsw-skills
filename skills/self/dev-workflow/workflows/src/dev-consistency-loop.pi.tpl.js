@@ -216,4 +216,8 @@ function wfAgent(name, persona) {
 const HINT_MISSING_EXECPLAN = "恢复动作：重新 workflow run 发起并传 execPlan（--args execPlan=<路径>）；runs 一次性无续跑通道，修订脚本后重跑即可。";
 const HINT_R1_FAILED = "读 run 日志定位失败分区，修订脚本后重发";
 
+// ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
+// 硬编码，两壳各持常量）──
+const HOST_PLATFORM = "pi";
+
 @@STITCH@@
