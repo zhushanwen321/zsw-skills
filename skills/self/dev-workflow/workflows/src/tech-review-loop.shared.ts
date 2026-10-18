@@ -12,8 +12,9 @@
 //  - 终态枚举按设计 §5.3：value-rejected / converged / escalated / stuck /
 //    max-rounds（+ 环节失败三态）；escalated 一律停回用户裁决，不轮内自行重跑
 //    方案对比（F18 语义变化：方向裁决权上收）
-//  - runDir 命名按 F22：<projectRoot>/.tmp/tech-design/<文档 basename 去扩展名>/，
-//    重发起轮次目录带 attempt 后缀（round-3.attempt2），不覆盖历史
+//  - runDir 命名按 F22：~/.agents/skill-data/tech-design/<project-slug>/<文档 basename
+//    去扩展名>/（project-slug = realpath(projectRoot) basename + sha256 前 8 位，六域
+//    对账同一组固定向量），重发起轮次目录带 attempt 后缀（round-3.attempt2），不覆盖历史
 //  - 一切失败 failed-as-return（T8：throw 的 errored run 不可 resume）——含未知
 //    参数键白名单 fail-fast 也走 return（rfl 此处用 throw，本脚本按 T8 收紧）
 // 数据传递 = 文件总线（沿 rfl 惯例）：报告 / 处置表落盘于 runDir，ask 只传路径；
@@ -37,6 +38,12 @@ const NODE_WRITE_FILE =
 const NODE_CHECK_EXISTS =
   "const fs=require('fs');const missing=process.argv.slice(1).filter(p=>!fs.existsSync(p));if(missing.length>0){process.stdout.write(missing.join(' | '));process.exit(1)}";
 const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
+// project-slug 探针：输出 basename-realhash8（realpath + sha256 前 8 位十六进制小写；
+// impl-spec §1 全域唯一算法，与 skill-data-dir.mjs / 各循环实现对同一组固定向量一致）
+const NODE_PROJECT_SLUG =
+  "const p=require('fs').realpathSync(process.argv[1]);" +
+  "const h=require('crypto').createHash('sha256').update(p).digest('hex').slice(0,8);" +
+  "process.stdout.write(p.split('/').filter(Boolean).pop()+'-'+h)";
 
 // ── 参数窄化（纯函数，便于片段级验证） ──
 function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
@@ -56,7 +63,7 @@ function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
     problems.push("designDoc 缺失或非绝对路径：须传入设计文档绝对路径（审查与修复对象）");
   }
   if (projectRoot === "") {
-    problems.push("projectRoot 缺失或非绝对路径：须传入项目根绝对路径（产物目录 .tmp/tech-design 落点与 AGENTS/PRODUCT 上下文来源）");
+    problems.push("projectRoot 缺失或非绝对路径：须传入项目根绝对路径（skill-data 产物落点的 slug 计算输入与 AGENTS/PRODUCT 上下文来源）");
   }
   const maxRounds =
     typeof raw.maxRounds === "number" && Number.isFinite(raw.maxRounds) && raw.maxRounds >= 1
@@ -373,10 +380,27 @@ if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
 const home = homeRes.stdout.trim();
 const expandTilde = (p: string): string => (p.startsWith("~/") ? `${home}/${p.slice(2)}` : p);
 
-// runDir 命名（F22）：<projectRoot>/.tmp/tech-design/<设计文档 basename 去扩展名>/
+// runDir 命名（F22）：~/.agents/skill-data/tech-design/<project-slug>/<设计文档 basename 去扩展名>/
 const docBase = designDoc.split("/").pop() ?? designDoc;
 const docName = docBase.replace(/\.[^.]+$/, "");
-const runDir = `${projectRoot}/.tmp/tech-design/${docName !== "" ? docName : "design"}`;
+// project-slug 探针（realpath + sha256 前 8 位）：realpath 失败 = projectRoot 不存在，setup-failure
+const slugRes = await world.run("node", ["-e", NODE_PROJECT_SLUG, projectRoot]);
+if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
+  return {
+    terminated: "setup-failure",
+    rounds: 0,
+    runDir: "",
+    designDoc,
+    valueOneliner: "",
+    mustFixTrajectory: [],
+    suggestionDispositions: [],
+    remaining: [],
+    blocked: null,
+    message: `projectRoot 无法解析为项目 slug（realpath + sha256 探针失败，exit ${slugRes.exitCode}）：${slugRes.stderr.trim()}。恢复动作：确认 projectRoot 目录存在后重新发起`,
+  };
+}
+const projectSlug = slugRes.stdout.trim();
+const runDir = `${home}/.agents/skill-data/tech-design/${projectSlug}/${docName !== "" ? docName : "design"}`;
 const finalJsonPath = `${runDir}/final.json`;
 
 // 重发起检测：扫描 runDir 内已有 attempt 后缀的最大序号（round-*.attemptM），未显式传

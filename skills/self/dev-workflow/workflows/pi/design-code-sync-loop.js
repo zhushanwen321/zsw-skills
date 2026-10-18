@@ -443,6 +443,11 @@ const NODE_CHECK_EXISTS = "const fs=require('fs');const missing=process.argv.sli
 const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
 const NODE_RENAME_FILE = "require('fs').mkdirSync(require('path').dirname(process.argv[2]),{recursive:true});require('fs').renameSync(process.argv[1],process.argv[2])";
 const NODE_PROBE_HOME = "process.stdout.write(require('os').homedir())";
+// project-slug 探针：输出 basename-realhash8（realpath + sha256 前 8 位十六进制小写；
+// impl-spec §1 全域唯一算法，与 skill-data-dir.mjs / 各循环实现对同一组固定向量一致）
+const NODE_PROJECT_SLUG = "const p=require('fs').realpathSync(process.argv[1]);" +
+    "const h=require('crypto').createHash('sha256').update(p).digest('hex').slice(0,8);" +
+    "process.stdout.write(p.split('/').filter(Boolean).pop()+'-'+h)";
 // argv: [...绝对路径] → stdout JSON 同序数组 [{f, h}]（h = sha256(工作区内容)，文件不
 // 存在 = null）。批改动检测的内容指纹快照用：porcelain 状态码是「工作区相对 index/HEAD
 // 的状态分类」，不是内容身份——批前已改文件（如用户未提交的修改）被 fixer 再改后分类
@@ -486,13 +491,13 @@ function deriveInputs(raw) {
     const implPlan = isAbs(raw.implPlan) ? raw.implPlan.trim() : "";
     const projectRoot = isAbs(raw.projectRoot) ? raw.projectRoot.trim() : "";
     if (designDoc === "") {
-        problems.push("designDoc 缺失或非绝对路径：须传入设计文档绝对路径（.tmp/tech-design/<name>.md）");
+        problems.push("designDoc 缺失或非绝对路径：须传入设计文档绝对路径（tech-design-wf 设计包产出的 .md 文件）");
     }
     if (implPlan === "") {
-        problems.push("implPlan 缺失或非绝对路径：须传入实施计划 JSON 路径（.tmp/tech-design/<name>.impl-plan.json）");
+        problems.push("implPlan 缺失或非绝对路径：须传入实施计划 JSON 路径（tech-design-wf 产出的 .impl-plan.json）");
     }
     if (projectRoot === "") {
-        problems.push("projectRoot 缺失或非绝对路径：须传入项目根绝对路径（git 操作基准 + .tmp/dev-flow 产物落点）");
+        problems.push("projectRoot 缺失或非绝对路径：须传入项目根绝对路径（git 操作基准 + skill-data 产物段 project-slug 计算输入）");
     }
     const maxRounds = typeof raw.maxRounds === "number" && Number.isFinite(raw.maxRounds) && raw.maxRounds >= 1
         ? Math.floor(raw.maxRounds)
@@ -868,18 +873,39 @@ if (planParse.exitCode !== 0) {
         message: `impl-plan 不是合法 JSON（${implPlan}）：${planParse.stderr.trim()}。恢复动作：回 tech-design-wf T3 重产双格式 impl-plan 后重新发起`,
     };
 }
-// runDir 命名：<projectRoot>/.tmp/dev-flow/<设计文档 basename 去扩展名>.sync/
+// 产物目录组装：~/.agents/skill-data/dev-flow/<project-slug>/（<name>.sync/、<name>.runlog/、
+// <name>.ledger.md 平铺同基准）。project-slug 探针（realpath + sha256 前 8 位）：realpath 失败 =
+// projectRoot 不存在，setup-failure
+const slugRes = await world.run("node", ["-e", NODE_PROJECT_SLUG, projectRoot]);
+if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
+    return {
+        terminated: "setup-failure",
+        rounds: 0,
+        runDir: "",
+        designDoc,
+        matrixFile: "",
+        directionStats: { docRight: 0, codeRight: 0, contested: 0 },
+        retirement: { retired: [], kept: [] },
+        contestedList: [],
+        overdesignCandidates: [],
+        remaining: [],
+        message: `projectRoot 无法解析为项目 slug（realpath + sha256 探针失败，exit ${slugRes.exitCode}）：${slugRes.stderr.trim()}。恢复动作：确认 projectRoot 目录存在后重新发起`,
+    };
+}
+const projectSlug = slugRes.stdout.trim();
+const skillDataDir = `${homeDir}/.agents/skill-data/dev-flow/${projectSlug}`;
+// runDir 命名：<skillDataDir>/<设计文档 basename 去扩展名>.sync/
 const docBase = designDoc.split("/").pop() ?? designDoc;
 const docName = docBase.replace(/\.[^.]+$/, "");
-const runDir = `${projectRoot}/.tmp/dev-flow/${docName !== "" ? docName : "design"}.sync`;
+const runDir = `${skillDataDir}/${docName !== "" ? docName : "design"}.sync`;
 const matrixFile = `${runDir}/matrix.md`;
 const trajectoryFile = `${runDir}/trajectory.md`;
 const finalJsonPath = `${runDir}/final.json`;
 const retirementDestDir = `${projectRoot}/${RETIREMENT_DIR}`;
-// 过程记录目录与未决/裁决档案（与 <name>.sync/ 平铺同基准——SKILL「运行记录」节；
+// 过程记录目录与未决/裁决档案（与 <name>.sync/ 同一 skillDataDir 平铺——SKILL「运行记录」节；
 // 不按 attempt 分目录，重发起的过程记录靠文件内条目时间线自然累积）
-const runlogDir = `${projectRoot}/.tmp/dev-flow/${docName !== "" ? docName : "design"}.runlog`;
-const ledgerPath = `${projectRoot}/.tmp/dev-flow/${docName !== "" ? docName : "design"}.ledger.md`;
+const runlogDir = `${skillDataDir}/${docName !== "" ? docName : "design"}.runlog`;
+const ledgerPath = `${skillDataDir}/${docName !== "" ? docName : "design"}.ledger.md`;
 // 重发起检测（沿 W1 惯例）：扫描 runDir 内已有 attempt 后缀最大序号，未显式传 → max+1
 //（固定取 2 会覆盖第三次及以后重发起的 attempt2 产物）；无 attempt 后缀时，runDir 已有
 // 任何轮次产物（无后缀 round-* 或 final.json）→ 取 1（缺省 attempt=2），防首次重发起覆盖首轮
@@ -1393,7 +1419,7 @@ function fixerPrompt(g, byId) {
 const retirePromptText = [
     "终态同步已收敛，做伴生产物退役判定——只产判定清单，不执行任何移动/修改/删除。",
     "判定规则：",
-    "1. 盘点本设计相关产物（设计文档 / impl-plan / 各轮审查留档）：已在 .tmp/ 工作流产物目录下的属合规放置，逐项列 kept（理由 = 合规放置无需处理）。",
+    "1. 盘点本设计相关产物（设计文档 / impl-plan / 各轮审查留档）：已在 ~/.agents/skill-data/ 工作流产物目录下的属合规放置；项目内 .tmp/design-doc-retirement/ 下的也属合规放置（退役移动目标，git mv 语义绑定项目内目录）——两类逐项列 kept（理由 = 合规放置无需处理）。",
     "2. 残留在源码树（docs/ 等）的伴生产物——旧惯例 .review* 报告、probe 产物等——若内容判断已无存留价值，列 candidates。",
     "3. 被本次设计整体取代的旧设计文档——由你独立做内容判断（新版是否完全覆盖其价值），不受「是否还有引用」影响：引用的存在不是保留的理由，引擎会把全仓引用扫描结果转为清理条目先修引用、清零后才执行移动。",
     `输入：仓库 ${projectRoot}；设计文档 ${designDoc}；同步矩阵 ${matrixFile}（可 Read 了解本次改动面与涉及文件）。`,
@@ -1403,8 +1429,8 @@ const retirePromptText = [
 //    否决——「grep 命中即不退役」的旧门禁整体删除；命中只产清理素材，先修引用后移动，
 //    引用迁移工作由修复循环承载而非冻结为永久保留）──
 /** 退役引用扫描：文件名去扩展名词干的字面搜索（词干是完整名的超串，一发覆盖完整名
- *  与省扩展名链接两种形态）+ --untracked-files（未跟踪新文件的引用可见；gitignore 的
- *  .tmp 产物天然排除）。词干误命中方向 = 保守多生成清理条目（fixer 处置时判伪），比
+ *  与省扩展名链接两种形态）+ --untracked-files（未跟踪新文件的引用可见；工作流产物已迁
+ *  HOME 下 skill-data 目录、不在 repo 内天然不可见，存量 gitignore 的 .tmp 产物同样排除）。词干误命中方向 = 保守多生成清理条目（fixer 处置时判伪），比
  *  链接形态正则枚举（变体不全 = 新盲区）安全；动态拼接路径是机械搜索固有边界，由
  *  「退役 = 移动可找回 + README 索引 + 反向告警」兜住后果。返回命中行（file:line:内容），
  *  null = git grep 异常（≠ 无引用，调用方按保守处理） */
@@ -1626,7 +1652,13 @@ async function commitGroupFiles(round, gid, count, files) {
             skipped.push(p);
             continue;
         }
-        // gitignore 产物（.tmp 工作流产物不入 git）留盘不提交
+        // projectRoot 外的文件（skill-data 产物已迁 HOME 下，如设计文档/impl-plan）：不属于本仓，
+        // git add 会报 repo 外错误——留盘即可（HOME 下天然不入 git），语义与 gitignore 产物一致
+        if (!p.startsWith(`${projectRoot}/`)) {
+            log(`  ${gid}: ${p} 在 projectRoot 外（skill-data 产物），留盘不入 commit`);
+            continue;
+        }
+        // gitignore 产物（存量 .tmp 产物等）留盘不提交
         const ig = await world.run("git", ["-C", projectRoot, "check-ignore", "--", p]);
         if (ig.exitCode === 0) {
             log(`  ${gid}: ${rel(p)} 属 gitignore 产物，改动留盘不入 commit`);
@@ -2330,7 +2362,7 @@ if (finalResult !== null) {
     // 首轮）；syncRoot 存在性兜底语义不受影响，round 目录后缀仍可由显式 args.attempt 可控
     await auditJson(finalJsonPath, JSON.stringify(finalResult, null, 2));
     // 终态写入 ledger（W4 终态全量已在 final.json——此处只记终态行 + 未决清单 + 指针，
-    // 供主会话中断后从 .tmp/dev-flow/ 平铺档案直接恢复「哪些事待处置」）
+    // 供主会话中断后从 skill-data dev-flow 段平铺档案直接恢复「哪些事待处置」）
     {
         const one = (s) => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
         const lgLines = [

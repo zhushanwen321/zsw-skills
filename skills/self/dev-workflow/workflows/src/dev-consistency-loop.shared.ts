@@ -48,11 +48,29 @@ const reviewerTemplate =
     ? args.reviewerTemplate.trim()
     : DEFAULT_REVIEWER_TEMPLATE;
 
+// skillDataDir 探针组（impl-spec §2.1：workflow 域无 import，路径解析走 node -e 子进程）：
+// home 探针 + project-slug 探针（realpath + sha256 前 8 位十六进制小写，全域唯一算法与
+// 同一组固定测试向量对账）+ exec-plan projectRoot 前置探针（NODE_PREP 需要 skillDataDir
+// 作 argv，而 slug 计算又需要 exec-plan 里的 projectRoot——先单独读出。相对形态按 cwd
+// 解析，与 NODE_PREP 内 path.resolve(process.cwd(), ep.projectRoot) 同一语义）
+const NODE_PROBE_HOME = "process.stdout.write(require('os').homedir())";
+const NODE_PROJECT_SLUG =
+  "const p=require('fs').realpathSync(process.argv[1]);" +
+  "const h=require('crypto').createHash('sha256').update(p).digest('hex').slice(0,8);" +
+  "process.stdout.write(p.split('/').filter(Boolean).pop()+'-'+h)";
+const NODE_PLAN_PROJECT_ROOT = [
+  "var ep;",
+  "try { ep = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')); }",
+  "catch (e) { console.error('exec-plan 读取失败: ' + (e.message || e)); process.exit(2); }",
+  "if (typeof ep.projectRoot !== 'string' || !ep.projectRoot.trim()) { console.error('exec-plan 缺字段 projectRoot（恢复：核对 D0 编译产物）'); process.exit(2); }",
+  "process.stdout.write(require('path').resolve(process.cwd(), ep.projectRoot));",
+].join("\n");
+
 // ── node 执行器（全部 world.run("node", ["-e", ...])：cwd 可指定 projectRoot，
 //    git/测试命令不经 shell 拼接，argv 传参无注入面）──
 
-// 启动准备：读 exec-plan → schema 校验 → 推导 projectRoot（designDocPath 的
-// .tmp/tech-design/ 向上两级）→ git diff 文件清单 + numstat 行数 → 按顶层目录段
+// 启动准备：读 exec-plan → schema 校验 → 解析 projectRoot（消费 exec-plan 的 projectRoot
+// 字段，相对形态按 cwd 解析）→ git diff 文件清单 + numstat 行数 → 按顶层目录段
 // 归组为不相交分区（硬校验）→ 规模判定（diff ≤500 行或单元 ≤2 或 diff 空 → 单分区）
 // → Gate A 日志路径（statusPath 同目录 <name>.gate-a.log）→ 模板路径 ~ 展开与存在性校验。
 const NODE_PREP = [
@@ -147,10 +165,14 @@ const NODE_PREP = [
   "var baseName = path.basename(statusAbs).replace(/\\.status\\.json$/, '');",
   "var attemptNo = parseInt(process.argv[3] || '1', 10) || 1;",
   "var gateALog = path.join(statusDir, baseName + '.gate-a' + (attemptNo > 1 ? '.attempt' + attemptNo : '') + '.log');",
-  // 过程记录目录（agent prompt 注入的防丢失落点）+ 未决/裁决档案——平铺在 .tmp/dev-flow/
-  // 与既有 <name>.* 产物族同基准（SKILL「运行记录」节）；mkdir 幂等，手工路径 D0 已建则空操作
-  "var runlogDir = path.join(statusDir, baseName + '.runlog');",
-  "var ledgerPath = path.join(statusDir, baseName + '.ledger.md');",
+  // 过程记录目录（agent prompt 注入的防丢失落点）+ 未决/裁决档案——落外部算好的
+  // skillDataDir（~/.agents/skill-data/dev-flow/<project-slug>/，argv[4] 传入；impl-spec
+  // §2.1：不在内联脚本内重推导）。与既有 <name>.* 产物族同前缀（SKILL「运行记录」节）；
+  // mkdir 幂等，目录已存在则空操作
+  "var skillDataDir = path.resolve(process.argv[4] || '');",
+  "if (!skillDataDir) die('skillDataDir 缺失（argv[4]，恢复：核对脚本 argv 布局）');",
+  "var runlogDir = path.join(skillDataDir, baseName + '.runlog');",
+  "var ledgerPath = path.join(skillDataDir, baseName + '.ledger.md');",
   "try { fs.mkdirSync(runlogDir, { recursive: true }); } catch (e) { die('runlog 目录创建失败: ' + e.message); }",
   // 启动前既有改动登记（settle 收编的排除集）：引擎启动时工作区里已存在的已跟踪改动
   // 属于流程外资产（用户的在途工作），归属判断在主 agent/用户——settle 只收编本流程
@@ -646,7 +668,29 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
 
 phase("生成分区并全面审查");
 
-const prepRes = await world.run("node", ["-e", NODE_PREP_CODE, execPlanArg, reviewerTemplate, String(attempt)]);
+// skillDataDir 组装（失败 = 启动期快失败，与下方 NODE_PREP 失败同型 throw）：
+// home → exec-plan projectRoot → project-slug → ~/.agents/skill-data/dev-flow/<slug>/
+const homeRes = await world.run("node", ["-e", NODE_PROBE_HOME]);
+if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
+  throw new Error(
+    `无法解析用户 home 目录（node 探针失败，exit ${homeRes.exitCode}）：${homeRes.stderr.trim()}。恢复动作：确认 node 可执行后重新发起`,
+  );
+}
+const planRootRes = await world.run("node", ["-e", NODE_PLAN_PROJECT_ROOT, execPlanArg]);
+if (planRootRes.exitCode !== 0 || planRootRes.stdout.trim() === "") {
+  throw new Error(
+    `exec-plan projectRoot 读取失败（exit ${planRootRes.exitCode}）：${planRootRes.stderr.trim() || planRootRes.stdout.trim()}——恢复动作：核对 execPlan 路径与 projectRoot 字段（D0 编译产物）`,
+  );
+}
+const slugRes = await world.run("node", ["-e", NODE_PROJECT_SLUG, planRootRes.stdout.trim()]);
+if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
+  throw new Error(
+    `projectRoot 无法解析为项目 slug（realpath + sha256 探针失败，exit ${slugRes.exitCode}）：${slugRes.stderr.trim()}——恢复动作：确认 exec-plan 的 projectRoot 目录存在后重新发起`,
+  );
+}
+const skillDataDir = `${homeRes.stdout.trim()}/.agents/skill-data/dev-flow/${slugRes.stdout.trim()}`;
+
+const prepRes = await world.run("node", ["-e", NODE_PREP_CODE, execPlanArg, reviewerTemplate, String(attempt), skillDataDir]);
 if (prepRes.exitCode !== 0) {
   throw new Error(
     `exec-plan 解析 / 分区生成失败（exit ${prepRes.exitCode}）：${prepRes.stderr.trim() || prepRes.stdout.trim()}` +
@@ -1161,7 +1205,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
       "2. 波及扫描：每修一处 grep 同模式实例（同类失真表述 / 同键引用 / 同族计数口径），组内实例一并修；组外文件在 description 标注「组外波及：<位置>」。",
       "3. 联动自检（替代代码组的测试硬门）：修完跑适用的一致性检查（如改 style.css 投影段跑 python3 .githooks/check_css_token_ssot.py、改 i18n 文案跑 python3 .githooks/check_i18n_locale_sync.py）；无适用检查时 grep 复核旧表述零残留。selfCheck.typecheck 填 \"pass\"（纯文档改动无编译面），tests 字段如实写自检命令与结果。",
       "4. git 禁令同代码组：禁止 git add / commit / push / stash——提交由工作流引擎统一执行。",
-      "5. affectedFiles 如实申报每个改动文件（含 .tmp/ 下设计文档——引擎按申报核验归属；gitignored 文件提交时自然落空不阻塞）。",
+      "5. affectedFiles 如实申报每个改动文件（含设计文档——无论在仓库内还是 ~/.agents/skill-data/ 下都如实申报，引擎按申报核验归属；仓库外与 gitignored 文件提交时自然落空不阻塞）。",
       "",
       runlogDutyLine(`fix-docs-r${fixRound}`),
       "",
@@ -1321,8 +1365,8 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     };
   });
   // 文档修复组合成入提交管线（auxiliary：不跑增量测试、不派定向复审——纯文档改动无
-  // 编译/回归面；.tmp/ 设计文档改动 git add 自然落空走组级提交幂等跳过，docs/ 改动
-  // 照常组级一笔提交）
+  // 编译/回归面；skill-data（仓库外）与 gitignored 的设计文档改动不匹配 porcelain 相对
+  // 路径、changedFiles 天然不含走组级提交幂等跳过，docs/ 改动照常组级一笔提交）
   const docGroup = fixesByGroup.find((f) => f.name === `文档修复-r${fixRound}`);
   if (docGroup !== undefined) {
     const own = new Set<string>();
