@@ -2,7 +2,7 @@
 
 > 输入：T2 converged 的设计文档（final.json 存在且 terminated == "converged"）。产出：**双格式 impl-plan**（`.impl-plan.md` 人读 + `.impl-plan.json` 机器）+ 并行度复审（门槛触发时）。全程不停等用户确认（阶段内动作），完成即 T3 确认点。
 
-> **产物路径 [MANDATORY]**：`<项目根>/.tmp/tech-design/<basename>.impl-plan.md` 与 `.impl-plan.json`（与设计文档同目录——设计包整体在 `.tmp/tech-design/`）。`.tmp/` 不入 git，禁止 `git add`（含 -f）。基线 = 计划文件落盘，不依赖 git 跟踪。
+> **产物路径 [MANDATORY]**：`~/.agents/skill-data/tech-design/<project-slug>/<basename>.impl-plan.md` 与 `.impl-plan.json`（与设计文档同目录——设计包整体在该目录，slug 规则见 SKILL.md 设计包节）。产物在 HOME 下天然不入 git。基线 = 计划文件落盘，不依赖 git 跟踪。
 
 ## 入口自检（老 dev-flow 预检门的承接）
 
@@ -19,8 +19,9 @@
 ## 0 章节映射     # 四类内容 + 待验证检查点在本文档的实际位置（坐标唯一来源）
 ## 1 目标快照     # 摘录设计背景/目标 + Out-of-scope，逐字摘录禁止改写
 ## 2 单元列表
-| Unit | 职责 | 范围声明（精确文件路径） | 依赖 | 隔离(plain/worktree) | 验收条款 |
+| Unit | 职责 | 范围声明（精确文件路径） | 依赖 | 隔离(plain/worktree) | 验收条款 | 决策分级 |
 # u-foundation 固定为共享契约根节点，初始即就绪的 DAG 根
+# 决策分级 = 该单元实现的设计决策中的最高审核级别（A/B，来源 = 设计文档「人工审核导航」表）；无决策覆盖的单元标 B
 ## 3 DAG 图       # mermaid
 ## 4 测试与验收计划  # 测试命令从项目 AGENTS.md / package.json scripts / 项目测试策略文档（若存在，典型 docs/TEST-STRATEGY.md）真实读取；增量与全量分开列
                     # 全量段 = 改动范围 + 依赖闭包（防跨单元叠加回归），逐条标注 产物类/验证类
@@ -55,12 +56,12 @@
 ```jsonc
 {
   "name": "<name>",
-  "designDoc": ".tmp/tech-design/<name>.md",
+  "designDoc": "~/.agents/skill-data/tech-design/<project-slug>/<name>.md",
   "baseline": "<git rev-parse HEAD>",
   "sectionMap": { "goal": "§N", "mechanism": "§N", "acceptance": "§N", "breakdown": "§N" },
   "units": [
     { "id": "u-foundation", "responsibility": "…", "territory": ["…"],
-      "deps": [], "isolation": "plain", "acceptance": ["条款…"] }
+      "deps": [], "isolation": "plain", "acceptance": ["条款…"], "decisionTier": "A" }
   ],
   "testPlan": { "incremental": "…", "fullSuite": "…" },
   "acceptancePlan": [
@@ -76,13 +77,13 @@
 
 设计文档（含 impl-plan.md）会被下游 design-code-sync 的机械扫描消费：扫描器不再自行抓取反引号词，**只读本节产出的词表**——哪些词该扫由本节的语义分析裁决，扫描器与文档作者之间不再有隐式形态约定。
 
-1. **抓草稿**：`node <本技能>/scripts/extract-backticks.mjs .tmp/tech-design/<name>.md .tmp/tech-design/<name>.impl-plan.md`（stdout = JSON 词数组；提取规则与扫描器逐字同源，勿手抄手补）
+1. **抓草稿**：`node <本技能>/scripts/extract-backticks.mjs ~/.agents/skill-data/tech-design/<project-slug>/<name>.md ~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.md`（stdout = JSON 词数组；提取规则与扫描器逐字同源，勿手抄手补）
 2. **语义甄别**：对照设计文档逐词判定——`scan` = 本项目代码里可定位、悬空时应被揪出的符号；`skip` = 其余一切（外部/上游包符号、shell 命令、协议词、JSON 字段名、纯排版标注……），每个 skip 词必须带一句理由（典型：「pi 上游符号」「命令行示例」）。拿不准的词归 skip——漏扫的代价由下游 LLM 语义审查兜底，误扫的代价是下游误报死循环
-3. **落盘**：`.tmp/tech-design/<basename>.symbol-watchlist.json`（与设计文档同目录），格式：
+3. **落盘**：`~/.agents/skill-data/tech-design/<project-slug>/<basename>.symbol-watchlist.json`（与设计文档同目录），格式：
 
 ```jsonc
 {
-  "designDoc": ".tmp/tech-design/<name>.md",
+  "designDoc": "~/.agents/skill-data/tech-design/<project-slug>/<name>.md",
   "scan": ["exitPlanMode", "u-foundation"],
   "skip": [{ "word": "executeToolCallsSequential", "reason": "pi 上游符号，非本项目代码" }]
 }
@@ -99,13 +100,14 @@
 3. 验收条款无遗漏：每单元至少一条可机械核验条款；设计验收场景表每行落到某单元验收条款**且出现在验收计划表**
 4. 验收计划表自洽：核心组覆盖主链路；依赖列无环，非默认依赖带理由
 5. e2e 影响面圈定无悬空：设计「e2e 影响面评估」子节存在且非空（或含显式「无受影响项（依据）」）——缺节/空集须已交回 T1 补写，禁止空集通过自检；每项落到验收计划表或「不跑（理由）」
+6. 决策分级列无遗漏：每单元已标注其实现决策的最高审核级别（来源 = 设计文档「人工审核导航」表），A 级决策至少被一个单元覆盖
 
 仅当出现无法机械判定的歧义（范围声明必须重叠 / 设计自相矛盾）才停下问用户。
 
 ## 并行度复审（门槛触发，落盘前）
 
-触发门槛：实现链关键路径深度 ≥3 或单元数 ≥4（门槛内小计划不派——零收益）。派 `~/.agents/skills/dev-flow-wf/agents/parallelism-reviewer.md`（zcode 环境按 subagent_type 派发；无注册机制环境用 general-purpose + 内嵌 agent 文件全文）；task 附 impl-plan 双格式 + 设计文档 + 项目根三绝对路径；报告落 `.tmp/tech-design/<name>.plan-review.md`。reviewer 只报告——主 agent 逐条裁决（采纳即改计划并重跑自检；不采纳记理由），裁决记入 json 的 notes。头两个使用并行度复审的项目交付后回看其产出：连续零 finding 则降级为自检清单条目、砍掉派发（流程环节要能证明收益）。
+触发门槛：实现链关键路径深度 ≥3 或单元数 ≥4（门槛内小计划不派——零收益）。派 `~/.agents/skills/dev-flow-wf/agents/parallelism-reviewer.md`（zcode 环境按 subagent_type 派发；无注册机制环境用 general-purpose + 内嵌 agent 文件全文）；task 附 impl-plan 双格式 + 设计文档 + 项目根三绝对路径；报告落 `~/.agents/skill-data/tech-design/<project-slug>/<name>.plan-review.md`。reviewer 只报告——主 agent 逐条裁决（采纳即改计划并重跑自检；不采纳记理由），裁决记入 json 的 notes。头两个使用并行度复审的项目交付后回看其产出：连续零 finding 则降级为自检清单条目、砍掉派发（流程环节要能证明收益）。
 
 ## 落盘与 T3 确认
 
-Write 双格式文件 + 一致性校验通过 = 落盘完成（不 commit）。呈现 DAG/单元表/验收计划表 + 自检与复审结论，**默认等用户确认拆分与验收计划** → 授权后设计包交付，进入 dev-flow-wf（D0 编译）。
+Write 双格式文件 + 一致性校验通过 = 落盘完成（不 commit）。呈现 DAG/单元表/验收计划表 + 自检与复审结论——**单元表按决策分级分组呈现（A 级单元在前列出，B 级紧随其后一行一条）**，默认等用户确认拆分与验收计划 → 授权后设计包交付，进入 dev-flow-wf（D0 编译）。
