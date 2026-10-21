@@ -30,7 +30,7 @@
 ## D4 收尾（主 agent，不 workflow 化）
 
 1. 全绿交付汇总：目标达成对照表 + 合理偏差登记表 + 残留风险 + 覆盖概览 + 剧本分流结果
-2. 最终 commit（可复用 e2e spec、文档登记；impl-plan/exec-plan/status 不入 git——`.tmp/` 禁 add）
+2. 最终 commit（可复用 e2e spec、文档登记；impl-plan/exec-plan/status 落 `~/.agents/skill-data/`，HOME 下天然不入 git）
 3. **功能分级登记同步**：新功能/新用例或「挂掉后果」变化 → 同 commit 更新（如 `docs/FEATURE-PRIORITIES.md`）；纯重构不触发；零触发也须汇报注明
 4. **文档资产更新检查**：对照项目 AGENTS.md 文档索引按变更内容判定同 commit 更新（产品→PRODUCT / 拓扑→ARCHITECTURE / 术语→CONTEXT / 视觉→DESIGN / 规范→STANDARDS / 测试→TEST-STRATEGY / 排障→TROUBLESHOOTING；采样管道资产同 commit 回写）；零触发注明「文档资产零同步」
 5. **ADR 复审**：对照本次交付复审（开发中拍板的重要决策漏登的补登记；既有 ADR 被推翻的修订）；核对来源优先 = 设计文档头部「关联登记清单」字段（历史文档同义旧字段名等同——凡头部以「关联登记」开头的字段即认作该字段；字段缺失按变更语义扫描兜底）；零触发注明「ADR 零同步」

@@ -37,6 +37,10 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第一级（framew
     无对应模块的条目归入 frameworkFindings 立项（severity=suggestion，gap
     标注「职责域外待裁决：<修复动作属什么域>」），随框架发现呈报主 agent
     ——禁止塞进职责不匹配的模块
+4b. files 硬性约束（引擎机器校验，不过整单打回重产）：modules 的每条 files
+    路径必须是仓库内既有文件——绝对路径以 <cwd> 为前缀；相对路径解析后落在
+    仓库内；且磁盘已存在。禁止仓库外路径（如 /tmp 下目录）与计划性待建文件
+    （impl-plan 声明但不存在的文件应作为 frameworkFindings 立项，不塞进 files）
 5. 越权行三问初评：verdict = 越权实现的行，对实现侧做「过度/存疑/合理」三问
    初评（小取舍？大简化？核心价值不变？），结论写进 matrixRow.overdesign——
    引擎按该字段判过度/存疑档转候选卡呈报（用户裁决后才动删码），字段缺失或

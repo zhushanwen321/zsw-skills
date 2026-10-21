@@ -1,6 +1,6 @@
 # D5 终态同步 — W4 design-code-sync-loop 契约与手工路径
 
-> 把「代码实现 vs 设计文档」差距收敛到 0 must-fix 的**双向**校准循环。审查对象 = **当前 HEAD 终态全量**（不是 diff 区间——交付后的修复 commit 不在任何流水线记录里，只有全量对照能抓到）。报告落 `<项目根>/.tmp/dev-flow/<name>.sync/round-N/`。
+> 把「代码实现 vs 设计文档」差距收敛到 0 must-fix 的**双向**校准循环。审查对象 = **当前 HEAD 终态全量**（不是 diff 区间——交付后的修复 commit 不在任何流水线记录里，只有全量对照能抓到）。报告落 `~/.agents/skill-data/dev-flow/<project-slug>/<name>.sync/round-N/`。
 
 ## W4 workflow 契约（zcode 环境默认动作）
 
@@ -83,7 +83,7 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 
 ## 伴生产物退役判定（converged 时）
 
-本设计相关产物去留：已在 `.tmp/` 的（设计文档/impl-plan/审查报告）合规无需处理；残留在 docs/ 的伴生产物（旧惯例 `.review*` / probe）→ 移入 `.tmp/design-doc-retirement/`（引用验证：按完整文件名全仓 grep，任一命中不退役；移动后反向复验悬空链接）；被整体取代的旧设计文档零外部引用 → 同目录退役。退役移动结果与依据记入 final.json 的 retirement 字段；退役目录同时写 README.md 索引（文件名/日期/依据/找回方式）。判定结果进交付汇报（退役 N / 保留 N 含依据 / 无可退役显式说）。
+本设计相关产物去留：已在 `~/.agents/skill-data/` 的（设计文档/impl-plan/审查报告）合规无需处理；残留在 docs/ 的伴生产物（旧惯例 `.review*` / probe）→ 移入项目内 `.tmp/design-doc-retirement/`（引用验证：按完整文件名全仓 grep，任一命中不退役；移动后反向复验悬空链接）；被整体取代的旧设计文档零外部引用 → 同目录退役。退役移动结果与依据记入 final.json 的 retirement 字段；退役目录同时写 README.md 索引（文件名/日期/依据/找回方式）。判定结果进交付汇报（退役 N / 保留 N 含依据 / 无可退役显式说）。
 
 ## 手工降级路径
 

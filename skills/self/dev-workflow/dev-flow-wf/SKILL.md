@@ -18,14 +18,14 @@ description: >-
 
 ## 设计包入口门 [MANDATORY]（机械可查）
 
-入口逐行核对（任一缺失 → 拒绝并指明缺什么、回 tech-design-wf 哪个阶段补）：
+入口逐行核对（任一缺失 → 拒绝并指明缺什么、回 tech-design-wf 哪个阶段补；`<project-slug>` = 项目根 basename + "-" + 项目根绝对路径 sha256 前 8 位十六进制，脚本自动拼）：
 
 | 文件 | 判据 |
 |------|------|
-| `.tmp/tech-design/<name>.md` | 存在 |
-| `<name>.impl-plan.md` + `.impl-plan.json` | 存在且单元 id 集一致 |
-| `.tmp/tech-design/<name>/final.json` | terminated == "converged" |
-| `<name>.plan-review.md` | 触发门槛（关键路径深度 ≥3 或单元 ≥4）时必须存在 |
+| `~/.agents/skill-data/tech-design/<project-slug>/<name>.md` | 存在 |
+| `<name>.impl-plan.md` + `.impl-plan.json`（与设计文档同目录） | 存在且单元 id 集一致 |
+| `<name>/final.json`（审查报告目录，与设计文档同根） | terminated == "converged" |
+| `<name>.plan-review.md`（与设计文档同目录） | 触发门槛（关键路径深度 ≥3 或单元 ≥4）时必须存在 |
 
 **外部设计文档直投** → 拒绝，转 tech-design-wf（先补 T2 审查再 T3 拆计划）。
 
@@ -50,21 +50,22 @@ description: >-
 3. **验证方式分级 L0-L4**（低成本高收益前置）：L0 静态规则（主 agent/world.run 直跑）→ L1 增量单测（节点/dev 自跑）→ L2 全量套件（D2 Gate A）→ L3 脚本端到端（verify 节点）→ L4 agent 端到端（inspect 节点）。低级未清不进高级
 4. **范围对账**：节点/dev 优先改任务书声明范围内的文件；范围外的必要改动直接做 + 自报 deviations/自报清单如实登记——运行时不再逐文件打回（2026-09-29 裁决范围声明降级），改动对账由核验对账事件、终态残留核查与 D2 一致性审查承接；并行单元互不触碰对方声明内的文件（写冲突会互相覆盖丢改动，不可恢复）
 5. **git 单点**：subagent 禁止一切 git 写；workflow 形态下 commit 由引擎 world.run 执行（精确路径 add，禁 -A），手工形态下由主 agent 执行；文档类同步改动禁止单独成笔——随触发它的单元同笔提交（files_changed 含文档路径即同笔）；确因验收结论后置的攒批成一笔，禁止一文档一笔
-6. **基线先行**：exec-plan.json 落盘即基线（`.tmp/` 不入 git）；执行态事实源 = `<name>.status.json`
+6. **基线先行**：exec-plan.json 落盘即基线（产物在 `~/.agents/skill-data/`，HOME 下天然不入 git）；执行态事实源 = `<name>.status.json`
+7. **单波次交付**：一个设计包 = 一次实施流程，实际执行只有一个波次；未经用户明确指示，禁止按「波次/批次」把一个 impl-plan 拆成多次独立实施（每波各自走 D1-D6 完整流程）。允许的拆分 = impl-plan 内部的单元分组与 DAG 并行（多 subagent / 多组执行，W2 一次承接全部单元）；分期交付仅随用户明确指示出现
 
 ## 运行记录（防丢失）[MANDATORY]
 
-任务执行期信息统一平铺落 `.tmp/dev-flow/`（`<name>.` 前缀隔离，与既有产物族同基准），两类载体、三条写入通道：
+任务执行期信息统一平铺落 `~/.agents/skill-data/dev-flow/<project-slug>/`（`<name>.` 前缀隔离；设计包在同根 `tech-design/<project-slug>/` 段，slug 同源），两类载体、三条写入通道：
 
 | 载体 | 写入者 | 内容 |
 |------|--------|------|
 | `<name>.runlog/<记录者>.md` | 每个执行 agent（任务书 / W3·W4 prompt 注入义务行，路径由注入方给出） | 过程性发现：临时待办、需裁决事项、复盘观察（踩坑根因 / 方案取舍 / 环境异常）。一行一条 `[HH:MM] 类型: 一句话事实`，append 式即时写盘——agent 中途退出也留痕；每记录者独占一文件，无并发冲突 |
 | `<name>.ledger.md` | ① W2/W3/W4 引擎终态各一笔（attempt 标识）② 主 agent 处置时追加 | ① 未决事项清单：blocked / deferredCommits / deferredLedger / escalated / contested / overdesignCandidates / 工作区残留等 ② 熔断处置与用户裁决记录（时间 + 终态 + 动作 + 理由 + 结果） |
 
-- 引擎侧已核实互不干扰：porcelain 核验把 `.tmp/` 过滤在清单外（wave-executor `isTmpArtifact`），agent 写 runlog 不触发核验红灯
+- 引擎侧已核实互不干扰：产物在 HOME 下不在项目工作区内，`git status --porcelain` 天然看不到（引擎对项目内 `.tmp/` 的过滤器仍在——wave-executor `isTmpArtifact`，覆盖仍在项目内的其他临时产物），agent 写 runlog 不触发核验红灯
 - **ledger 是中转不是归宿**：合理偏差 / 残留风险 / ADR 的最终登记处仍是 impl-plan §5、impl-plan 残留风险节、docs/adr——D4 收尾把未清项分流过去（处置完成标记 / 登记到既有归宿 / 显式记录丢弃理由），禁止双登记并存
 - 主 agent 处置熔断终态（各 flow 终态处置表任一行）与用户裁决落地时，append 处置记录到 ledger
-- 档案交付后默认保留（`.tmp/` 不入 git），仅用户指示时清理（D4 第 7 条）
+- 档案交付后默认保留（HOME 下天然不入 git），仅用户指示时清理（D4 第 7 条）
 
 ## Workflow 契约（执行体按宿主环境选择）
 
@@ -96,7 +97,7 @@ description: >-
 
 ## 状态恢复
 
-进度唯一事实源 = `<name>.status.json`（D0 生成，workflow/手工路径每次节点终态后回写）。恢复程序：以 git log 与工作区实物校准 status（**冲突以 git 为准**：标 done 无 commit → 回 pending；有 commit 未写 → 补写 done）→ 按所处段选 flow 落点续跑。
+进度唯一事实源 = `<name>.status.json`（D0 生成于 `~/.agents/skill-data/dev-flow/<project-slug>/`，实际落点以 exec-plan 内 statusPath 声明为准；workflow/手工路径每次节点终态后回写）。恢复程序：以 git log 与工作区实物校准 status（**冲突以 git 为准**：标 done 无 commit → 回 pending；有 commit 未写 → 补写 done）→ 按所处段选 flow 落点续跑。
 
 ## 与老 dev-flow 的关系（灰度并行）
 

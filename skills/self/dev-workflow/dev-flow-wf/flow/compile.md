@@ -1,6 +1,6 @@
 # D0 编译 — 设计包 → 执行数据结构
 
-> 一次性判断性工作（主 agent 亲为），替代此后每单元的重复手工编排。产物：`<name>.exec-plan.json` + `<name>.prompts/*.md` + 初始 `<name>.status.json` + `<name>.runlog/` 目录 + `<name>.ledger.md` 头部初始化，全部落 `<项目根>/.tmp/dev-flow/`（不入 git）。完成后进 D1。
+> 一次性判断性工作（主 agent 亲为），替代此后每单元的重复手工编排。产物：`<name>.exec-plan.json` + `<name>.prompts/*.md` + 初始 `<name>.status.json` + `<name>.runlog/` 目录 + `<name>.ledger.md` 头部初始化，全部落 `~/.agents/skill-data/dev-flow/<project-slug>/`（HOME 下天然不入 git；`<project-slug>` = 项目根 basename + "-" + 项目根绝对路径 sha256 前 8 位，脚本自动拼）。项目内 `.tmp/dev-flow/` 未整体废弃——acceptance/plan-mode 脚本族的既有用法不属本流程产物。完成后进 D1。
 
 ## 编译清单（按序执行）
 
@@ -15,10 +15,10 @@
   "version": 1,
   "mode": "dev",                       // dev（D1）| acceptance（D3）
   "projectRoot": "<项目根绝对路径>",      // 引擎缺省 cwd（W2/W3 消费；节点 cwd 为 null 时用）
-  "planPath": ".tmp/tech-design/<name>.impl-plan.json",
-  "designDocPath": ".tmp/tech-design/<name>.md",
+  "planPath": "~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.json",
+  "designDocPath": "~/.agents/skill-data/tech-design/<project-slug>/<name>.md",
   "baseline": "<git rev-parse HEAD>",
-  "statusPath": ".tmp/dev-flow/<name>.status.json",
+  "statusPath": "~/.agents/skill-data/dev-flow/<project-slug>/<name>.status.json",
   "testPlan": {                        // 从 impl-plan.json 的 testPlan 继承（W3 Gate A 消费，缺失即 fail-fast）
     "incremental": "…",                // 可选：修复组核验用的增量测试
     "fullSuite": { "program": "pnpm", "args": ["…"] },  // 必填：项目全量命令（含 lint/typecheck，从项目配置真实读取合成；复杂多命令封装为脚本走 bash）
@@ -32,7 +32,7 @@
       "designRef": "§3.2",              // 设计章节锚（从 impl-plan 章节映射提取；commit 渲染时前置于 summary——老三要素保真：unit id + 设计章节 + 测试结论）
       "territory": ["packages/shared/src/..."],   // 相对该节点 cwd 所在 git 仓库根（与 files_changed / porcelain 同基准；禁绝对路径——引擎启动校验拒绝）
       "testCommand": { "program": "pnpm", "args": ["-C", "packages/shared", "test"] },
-      "promptFile": ".tmp/dev-flow/<name>.prompts/u-foundation.md" }
+      "promptFile": "~/.agents/skill-data/dev-flow/<project-slug>/<name>.prompts/u-foundation.md" }
   ],
   "acceptance": {                       // D3 实例化时生成（本步先空着）
     "nodes": [],                        // kind=verify（script/artifactsDir）| inspect（promptFile/artifactsRefs/deps）
@@ -66,7 +66,7 @@
 
 - L0 静态检查基线：lint / typecheck / 项目检查脚本在 baseline 上全绿记录（命令从项目 AGENTS.md / package.json scripts 真实读取，禁凭记忆编）
 - 产物类条目编入 testPlan.artifacts（引擎 Gate A 第一波并行预备，见 §2 testPlan 注释；禁只标注不落位）
-- 覆盖矩阵骨架：从 impl-plan 范围声明表 × 验收计划表生成「单元声明范围 × 计划用例」骨架表落 `.tmp/dev-flow/<name>.coverage.md`（D4 收尾时回填实际覆盖并处置 uncovered 区——补测试或登记理由）
+- 覆盖矩阵骨架：从 impl-plan 范围声明表 × 验收计划表生成「单元声明范围 × 计划用例」骨架表落 `~/.agents/skill-data/dev-flow/<project-slug>/<name>.coverage.md`（D4 收尾时回填实际覆盖并处置 uncovered 区——补测试或登记理由）
 - 章节映射锚点核对：逐条 read 设计文档核对 §N 实际存在，对不上停回 tech-design-wf T3（不猜测）
 - （进 D3 前）环境 smoke：场景依赖的每个环境面跑无 LLM 探针验证可用；剧本 dry-run：机械断言先对样本数据跑通；bash 语义歧义点（管道子 shell 的 cwd 隔离、`$()` 剥尾换行、引号嵌套、**管道退出码陷阱**）逐行过一遍——`cmd | tail; echo $?` 取的是管道末段（tail）的退出码，主命令失败会被判绿，验收/测试命令一律无管道形态 `cmd > log 2>&1; echo "EXIT=$?"`，判定读 EXIT 行 + grep 日志，禁止 `| tail`/`| head` 后跟 `$?`/`&&` 判定退出；采样管道复用检查：read 项目采样管道文档，已有脚本直接复用，新做法记录回写（进管道文档），禁现场重写管道；多实例分配：互斥场景组绑独立 dev 实例（装配器端口段派生 + 独立数据目录）
 - **verify 剧本每步汇总落盘 [MANDATORY]**：剧本骨架的 step 函数每步结束时向 `<artifactsDir>/summary.jsonl` 追加一行 JSON：`{"step":"<步骤名>","command":"<命令>","exitCode":<n>,"stats":"<vitest/断言统计行，可空>"}`——供 L4 inspect 以汇总文件为准核对（只读 summary、仅异常步骤读全文日志；实测 inspect 逐个全文读 19 份日志耗 259 万 token 占 D3 时长 85.7%，2026-09-29）。step 函数自身拿不到 artifactsDir 时由剧本头部变量注入

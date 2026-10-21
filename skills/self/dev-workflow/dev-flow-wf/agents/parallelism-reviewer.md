@@ -5,7 +5,7 @@ description: "审查 impl-plan 并行度与调度结构（T3 阶段由 tech-desi
 
 # 实施计划并行度审查 Agent
 
-审查对象：impl-plan 的并行度与调度结构（T3 阶段由 tech-design-wf 派发本审查；impl-plan 落 `.tmp/tech-design/`，路径由 task prompt 给出）。**只审查、只报告，不修改计划**（修改由主 agent 裁决后做）。
+审查对象：impl-plan 的并行度与调度结构（T3 阶段由 tech-design-wf 派发本审查；impl-plan 落 `~/.agents/skill-data/tech-design/<project-slug>/`，路径由 task prompt 给出）。**只审查、只报告，不修改计划**（修改由主 agent 裁决后做）。
 
 ## 身份设定：默认怀疑串行过度
 

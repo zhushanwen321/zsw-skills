@@ -6,6 +6,9 @@
     word-scan.py --watch ...         追加「观察名单」（待裁决词，仅提示）
     word-scan.py --conditional ...   追加「带条件保留表」（能用但需解释，仅提示）
     word-scan.py --all ...           三张表全扫
+    word-scan.py --mian-scan ...     面族候选盘点：枚举「面」复合构词（前后各 5 字
+                                     上下文），过滤白名单与已收录词面，输出待判断
+                                     候选（词表外同族词发现用，非命中报告）
     word-scan.py --wordlist <path>   指定词表文件（默认全局 AGENTS.md：
                                      ~/.zcode/AGENTS.md，回退 ~/.pi/agent/AGENTS.md）
 
@@ -55,14 +58,21 @@ ALL_TABLE_NAMES = (*TABLE_HEADERS, WHITELIST_TABLE)
 
 
 def split_variants(cell):
-    """把词表单元格拆成可匹配词面：去括号注、按 / 与 、拆分；括号内含 / 时并入变体。"""
+    """把词表单元格拆成可匹配词面：去括号注、按 / 与 、拆分；括号中含 / 的括号注并入变体。
+
+     prose 前缀剥离：单元格若含全角冒号（如面族条目的
+    「面族「XX 面」构词（...）：调用面 / 拒绝面 / ...」），冒号前是说明文字而非词面，
+    首个变体否则会被粘在前缀上永远匹配不到；变体尾部的「等」同理剥掉（枚举未尽标记）。
+    """
     parens = re.findall(r"[（(]([^（）()]*)[）)]", cell)
     base = re.sub(r"[（(][^（）()]*[）)]", "", cell)
+    if "：" in base:
+        base = base.split("：", 1)[1]
     parts = [base] + [p for p in parens if "/" in p]
     variants = []
     for part in parts:
         for v in re.split(r"\s*/\s*|、", part):
-            v = v.strip()
+            v = v.strip().rstrip("等")
             if v:
                 variants.append(v)
     return variants
@@ -72,6 +82,10 @@ def to_regex(term):
     pat = re.escape(term).replace("…", r".{0,30}?")
     if re.fullmatch(r"[A-Za-z0-9_-]+", term):
         pat = rf"(?<![A-Za-z0-9_-]){pat}(?![A-Za-z0-9_-])"
+    elif term.endswith("面"):
+        # 面族词的负向断言：后接「板」（XX面板，标准 UI 术语）或「向」（面向，动词）时
+        # 是子串误报——「聚合面∈聚合面板」「扩展面∈扩展面向」，非该族词的名词用法
+        pat = rf"{pat}(?![板向])"
     return re.compile(pat)
 
 
@@ -180,12 +194,63 @@ def scan_file(path, terms, is_wordlist):
     return hits, None
 
 
+def mian_inventory(paths, table_surfaces, whitelist):
+    """面族候选盘点（--mian-scan）：枚举「面」的复合构词，供词表外同族词发现。
+
+    对每个「面」出现点：取构成复合词（面结尾的最长中文串，≤6 字，剥前导虚词）+ 前 5 字
+    + 后 5 字上下文，按复合词聚合（次数 / 文件数 / 样本）。裸「面」（面向/面板/方面等
+    通用用法）与含虚词的语法碎片不构成候选。过滤两类已接管项：白名单词（如影响面）、
+    复合词含替换表词面为子串者（常规扫描已覆盖）。剩余即待判断候选——由人或 agent
+    按「X 的作用面」同族构词判据逐词裁定（通用词/标准术语如门面、切面、负面不属该族）。
+    跳过构建产物目录（apps/electron/resources/）与测试报告（test-results/）。
+    """
+    # 前导虚词（单字集合）：剥掉后剩下的才是词根（「…的导出面」→「导出面」）。
+    # 注意：必须是单字集合——lstrip 按字符集剥离，多字条目（如「依据」）会把「依赖面」
+    # 误剥成「赖面」这类尾坠；含虚词的复合词不再整体丢弃（「文本探针依赖面」是真实术语，
+    # 虚词判定交给判断方），只剥前导。
+    particles = "的了与和及该此各其或而则即都也还就才只把被从向对为以于在是有每另等随按"
+    compounds = {}
+    for f in iter_files(paths):
+        ps = str(f)
+        if ps.startswith("apps/electron/resources/") or "test-results" in ps:
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            for m in re.finditer("面", line):
+                i = m.start()
+                before, after = line[:i], line[i + 1:]
+                run = []
+                for ch in reversed(before):
+                    if "\u4e00" <= ch <= "\u9fff" and len(run) < 8:
+                        run.append(ch)
+                    else:
+                        break
+                core = "".join(reversed(run))
+                while core and core[0] in particles:
+                    core = core[1:]
+                compound = core + "面"
+                if not core or compound in whitelist:
+                    continue
+                if any(s in compound for s in table_surfaces):
+                    continue
+                entry = compounds.setdefault(compound, {"count": 0, "files": set(), "samples": []})
+                entry["count"] += 1
+                entry["files"].add(ps)
+                if len(entry["samples"]) < 3:
+                    entry["samples"].append(f"{ps}:{lineno}: …{before[-5:]}【面】{after[:5]}…")
+    return compounds
+
+
 def main():
     ap = argparse.ArgumentParser(description="扫描文档命中用语词表的位置（详见文件头注释）")
     ap.add_argument("paths", nargs="+", help="文件或目录，可多个")
     ap.add_argument("--watch", action="store_true", help="追加观察名单")
     ap.add_argument("--conditional", action="store_true", help="追加带条件保留表")
     ap.add_argument("--all", action="store_true", help="三张表全扫")
+    ap.add_argument("--mian-scan", action="store_true", help="面族候选盘点：枚举「面」复合构词（前后各 5 字上下文），过滤白名单与已收录词面后输出待判断候选")
     ap.add_argument("--wordlist", type=Path, default=DEFAULT_WORDLIST, help="词表文件路径")
     args = ap.parse_args()
 
@@ -212,6 +277,17 @@ def main():
         for w in conflicts:
             print(f"错误：词「{w}」同时登记在白名单与其他表中，放行与限制矛盾——先修词表再扫描", file=sys.stderr)
         return 2
+
+    if args.mian_scan:
+        surfaces = {v for _, v, _, _ in full_terms}
+        inventory = mian_inventory(args.paths, surfaces, whitelist)
+        for compound, entry in sorted(inventory.items(), key=lambda kv: -kv[1]["count"]):
+            print(f"{compound}｜{entry['count']} 处｜{len(entry['files'])} 文件")
+            for s in entry["samples"]:
+                print(f"    {s}")
+        print(f"{len(inventory)} 个候选复合词（已过滤白名单与替换表已收录词面；通用词/标准术语需判断后剔除）")
+        return 0
+
     all_hits, skipped = [], 0
     wordlist_resolved = args.wordlist.resolve()
     for f in iter_files(args.paths):

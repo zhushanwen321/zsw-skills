@@ -42,7 +42,7 @@ impl-plan——事后对抗审查抓出 9 条漂移：残留风险登记仍标�
 - 三分类输出（reasonable / unreasonable / doc_errors），处理链同 consistency-review：
   doc_errors 主 agent 修，注释级可派 subagent 批量修， unreasonable 打回修复
 - 审查结论（**即使零发现**）回写 impl-plan 变更历史——零发现也是有效证据，
-  证明该 commit 经过了独立审查。回写是写盘动作（`.tmp/` 不入 git），不产生 commit
+  证明该 commit 经过了独立审查。回写是写盘动作（产物在 `~/.agents/skill-data/`，HOME 下天然不入 git），不产生 commit
 
 ## 与既有环节的关系
 

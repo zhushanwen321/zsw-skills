@@ -6,7 +6,7 @@
 
 ```
 CreateWorkflow saved: wave-executor
-args: { execPlan: "<项目根>/.tmp/dev-flow/<name>.exec-plan.json" }
+args: { execPlan: "~/.agents/skill-data/dev-flow/<project-slug>/<name>.exec-plan.json" }
 ```
 
 引擎内循环（每节点四节拍，全部确定性代码 + 一次 agent 会话）：
