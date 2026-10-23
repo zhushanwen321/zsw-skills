@@ -52,6 +52,7 @@ T1 写设计文档 + 用例走查（Step 0-7）──确认──▶ T2 审查�
 | 审查后修复 / 多轮循环协议 | `flow/write.md` Step 8（循环由 must-fix 驱动 + suggestion 处置制） |
 | 问结构/原则/反模式/验收最佳实践 | `references/`（doc-structure / design-principles / anti-patterns / acceptance-practices） |
 | 决策审核分级（A/B/C 判据 + 六维影响评估 + 导航节格式） | `references/review-guide-rubric.md` |
+| 行为 × 状态组合类决策的裁决材料（穷举矩阵 + 视觉元素 HTML demo） | `references/enumeration-matrix.md` |
 | 要文档骨架模板 | `resources/templates/design-doc-template.md` |
 | 优化表达 / 换个说法 / agent 说得太绕 | `flow/express.md`（一次性表达优化，不写文档不派 review） |
 
