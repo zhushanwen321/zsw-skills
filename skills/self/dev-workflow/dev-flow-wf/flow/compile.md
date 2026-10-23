@@ -68,19 +68,28 @@
 - 产物类条目编入 testPlan.artifacts（引擎 Gate A 第一波并行预备，见 §2 testPlan 注释；禁只标注不落位）
 - 覆盖矩阵骨架：从 impl-plan 范围声明表 × 验收计划表生成「单元声明范围 × 计划用例」骨架表落 `~/.agents/skill-data/dev-flow/<project-slug>/<name>.coverage.md`（D4 收尾时回填实际覆盖并处置 uncovered 区——补测试或登记理由）
 - 章节映射锚点核对：逐条 read 设计文档核对 §N 实际存在，对不上停回 tech-design-wf T3（不猜测）
-- （进 D3 前）环境 smoke：场景依赖的每个环境面跑无 LLM 探针验证可用；剧本 dry-run：机械断言先对样本数据跑通；bash 语义歧义点（管道子 shell 的 cwd 隔离、`$()` 剥尾换行、引号嵌套、**管道退出码陷阱**）逐行过一遍——`cmd | tail; echo $?` 取的是管道末段（tail）的退出码，主命令失败会被判绿，验收/测试命令一律无管道形态 `cmd > log 2>&1; echo "EXIT=$?"`，判定读 EXIT 行 + grep 日志，禁止 `| tail`/`| head` 后跟 `$?`/`&&` 判定退出；采样管道复用检查：read 项目采样管道文档，已有脚本直接复用，新做法记录回写（进管道文档），禁现场重写管道；多实例分配：互斥场景组绑独立 dev 实例（装配器端口段派生 + 独立数据目录）
+- （进 D3 前）环境 smoke：场景依赖的每个环境面跑无 LLM 探针验证可用；项目 verification skill 提供环境体检脚本（doctor 类启动前体检）时纳入 smoke 探针清单；剧本 dry-run：机械断言先对样本数据跑通；bash 语义歧义点（管道子 shell 的 cwd 隔离、`$()` 剥尾换行、引号嵌套、**管道退出码陷阱**）逐行过一遍——`cmd | tail; echo $?` 取的是管道末段（tail）的退出码，主命令失败会被判绿，验收/测试命令一律无管道形态 `cmd > log 2>&1; echo "EXIT=$?"`，判定读 EXIT 行 + grep 日志，禁止 `| tail`/`| head` 后跟 `$?`/`&&` 判定退出；采样管道复用检查：read 项目采样管道文档，已有脚本直接复用，新做法记录回写（进管道文档），禁现场重写管道；多实例分配：互斥场景组绑独立 dev 实例（装配器端口段派生 + 独立数据目录）
 - **verify 剧本每步汇总落盘 [MANDATORY]**：剧本骨架的 step 函数每步结束时向 `<artifactsDir>/summary.jsonl` 追加一行 JSON：`{"step":"<步骤名>","command":"<命令>","exitCode":<n>,"stats":"<vitest/断言统计行，可空>"}`——供 L4 inspect 以汇总文件为准核对（只读 summary、仅异常步骤读全文日志；实测 inspect 逐个全文读 19 份日志耗 259 万 token 占 D3 时长 85.7%，2026-09-29）。step 函数自身拿不到 artifactsDir 时由剧本头部变量注入
 
 ### 6. 验收编译规则（为 D3 预生成 acceptance 面）
 
-验收计划表逐行：**L3 → verify 节点**（script = 剧本路径，artifactsDir）；**L4 → inspect 节点**（promptFile 任务书含「确定性产物已就绪」指针 + 逐节点 `<artifactsDir>/summary.jsonl` 汇总路径——核对以汇总为准、仅异常步骤读全文日志，deps 指向其 verify 前驱）；**L0/L2 不编译成节点**——已由 D1 单元测试与 D2 Gate A 覆盖，行标注「已覆盖」，D3 入口门引用 Gate A 证据（HEAD 未前进则免重跑）。混合行拆行（确定性部分降 L3 先行，判断行依赖它）。分组按「组」列；熔断判据 = 依赖可达性（设计 §8.7；核心短路 haltOnCoreFail 已退役被引擎忽略）。
+验收计划表逐行：**L3 → verify 节点**（script = 剧本路径，artifactsDir）；**L4 → inspect 节点**（promptFile 任务书含「确定性产物已就绪」指针 + 逐节点 `<artifactsDir>/summary.jsonl` 汇总路径——核对以汇总为准、仅异常步骤读全文日志，deps 指向其 verify 前驱；任务书驱动约束：项目有 verification skill 时真机驱动一律经其进行（发现规则同 tech-design-wf T3：`verify-*` 前缀 + Launch/Drive 节，AGENTS.md 声明优先），禁绕过技能裸驱动）；**L0/L2 不编译成节点**——已由 D1 单元测试与 D2 Gate A 覆盖，行标注「已覆盖」，D3 入口门引用 Gate A 证据（HEAD 未前进则免重跑）。混合行拆行（确定性部分降 L3 先行，判断行依赖它）。分组按「组」列；熔断判据 = 依赖可达性（设计 §8.7；核心短路 haltOnCoreFail 已退役被引擎忽略）。
 
-**剧本实装硬门槛 [MANDATORY]**：verify 节点引用的每个 script 文件必须在 D0 编译完成前已写好并对样本数据跑通过（exit 0）——D0 只填路径不写剧本 = 给 D3 埋启动即炸的雷（引擎启动校验 verify 节点 script 必须存在；曾实测留占位引用 batch-rerun.mjs 未实装，D3 无法按默认形态发起，被迫全程手工）。剧本确实写不出的行，降级为 L4 判断行（promptFile 派 agent 按断言清单执行）并在验收计划表标注——禁止引用未来文件。
+**verify 节点 script 落实（impl-plan verifyAsset 三态；verifyAsset = "-" 即项目无 verification skill 时不适用本段——script = D0 实装的剧本本体路径，不走 wrapper）**：引擎与剧本进程之间只有 script 路径一个通道（`node <script>` 直跑，无参数、无 per-node env），而项目 verification skill 的场景剧本必须经其 runner 加载——因此 verify 节点的 script = D0 生成的 **wrapper 文件**，不是剧本本体：
+
+- wrapper 落 `<name>.verify/<nodeId>.mjs`（exec-plan 同目录，与 `.prompts/` 同模式），内容 = `spawnSync(process.execPath, [<runner 绝对路径>, <scenario 绝对路径>, '--repo', '<项目根>', '--artifacts-dir', '<节点 artifactsDir>', '--name', 'verify-<nodeId>', '--run-id', '<nodeId>-<时间戳>'], { stdio: 'inherit' })` 后 `process.exit(r.status ?? 1)`——全部参数 D0 已知写死；`--name`/`--run-id` 兜底隔离（runner 默认 runId 是秒级时间戳，同秒并发会共享数据目录）；runner 不认这些 flag 时省略之；生成后 `node --check` 过语法即可
+- **同一 verification skill 的 verify 节点串行成链**：D0 编译时在 acceptance.nodes 内为它们加线性依赖边（按「依赖」列拓扑，无依赖的按编号串接）——并行启动有两条实测坑：同秒 runId 共享数据目录、并发 run 争抢项目内共享构建产物（两坑均已由项目侧登记在其 API 契约文档；不同 verification skill 或与其他类型节点并行不受限）
+- **锚点对齐契约**：runner 必须把 `verdict.json` 与 `summary.jsonl` 镜像到 `--artifacts-dir` 根（引擎事实锚 `inspectVerdictAnchorOk` 读此根）——采用 wrapper 形态前核对项目 runner 具备该行为；不具备时 wrapper 在 spawn 后自行把这两个文件复制到 artifactsDir 根
+- `reuse:` 态：scenario 绝对路径从 verification skill 场景库取（T3 已核 id 真实存在）
+- `new` 态：D0 按其能力原语组装剧本 → 实跑 exit 0 → 入其场景库并把覆盖矩阵行改为可执行剧本态（下次交付即可 reuse）→ 同 reuse 生成 wrapper
+- `inspect-only` 态：该行编译为 inspect 节点（同 L4 规则）
+
+**剧本实装硬门槛 [MANDATORY]**：verify 节点引用的每个 script 文件必须在 D0 编译完成前已写好并对样本数据跑通过（exit 0）——D0 只填路径不写剧本 = 给 D3 埋启动即炸的雷（引擎启动校验 verify 节点 script 必须存在；曾实测留占位引用 batch-rerun.mjs 未实装，D3 无法按默认形态发起，被迫全程手工）。wrapper 形态下「已写好跑通」= 剧本本体实跑过 exit 0（reuse 态以矩阵登记时的实跑证据为准，new 态 D0 当场实跑）；剧本确实写不出的行，降级为 L4 判断行（promptFile 派 agent 按断言清单执行）并在验收计划表标注——禁止引用未来文件。
 
 补编规则：
 
 - **inspect 任务书返回契约 [MANDATORY]**：inspect 节点 promptFile 末尾的返回契约固定为 `{verdict: "pass"|"fail"|"degraded", test_evidence, deviations:[], blockers:[]}`（验收结论词，与 dev 节点的执行语义 `{status,...}` 契约不同源不同词——引擎按 verdict 分流：fail→failed，pass/degraded→核锚后 done），**禁写 status 字段**；判定书 JSON 必须落 `<artifactsDir>/verdict.json` 且文件内 verdict 与结构化返回一致——引擎以此文件为 done 事实锚（缺失/不一致按失败处理；增量重跑对既有 done 也核此锚，不通过回 pending）。任务书契约写成 PASS|FAIL|DEGRADED 或 status 双承载两义，会使 agent 把「执行完成」报成 done 吞掉 FAIL 结论（2026-10-04 taiji D3 A10 实证）
-- **汇总 inspect 节点**：全部 verify 节点产物集中追加一个汇总 inspect 节点（deps=全部 verify 节点）——判 pass/fail + 扫全页截图与 console 兜底（脚本断言盲区由这步补偿）+ fail 归因定位到场景与日志行
+- **汇总 inspect 节点**：全部 verify 节点产物集中追加一个汇总 inspect 节点（deps=全部 verify 节点）——判 pass/fail + 扫全页截图与 console 兜底（脚本断言盲区由这步补偿）+ 扫各 verify 节点 report 中的未决项/未覆盖登记并汇入交付口径 + fail 归因定位到场景与日志行
 - **一次性 vs 可复用分流**：验收脚本按一次性（迁移/特殊环境/本设计特有）vs 可复用（进项目 e2e 资产）分流落位
 - **fail 先查排障文档**：验收失败处理写在 verify/inspect 节点 promptFile 约束——先 read 项目排障文档（典型 docs/TROUBLESHOOTING.md）归因，禁不归因重试、禁放宽断言
 - **开发期 e2e**：验收计划表「单元 committed 后」时点的项编译为 kind=verify 节点插入 dev 模式 nodes（deps=所属 dev 单元）

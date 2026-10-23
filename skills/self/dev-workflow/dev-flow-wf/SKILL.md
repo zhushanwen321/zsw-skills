@@ -65,7 +65,7 @@ description: >-
 - 引擎侧已核实互不干扰：产物在 HOME 下不在项目工作区内，`git status --porcelain` 天然看不到（引擎对项目内 `.tmp/` 的过滤器仍在——wave-executor `isTmpArtifact`，覆盖仍在项目内的其他临时产物），agent 写 runlog 不触发核验红灯
 - **ledger 是中转不是归宿**：合理偏差 / 残留风险 / ADR 的最终登记处仍是 impl-plan §5、impl-plan 残留风险节、docs/adr——D4 收尾把未清项分流过去（处置完成标记 / 登记到既有归宿 / 显式记录丢弃理由），禁止双登记并存
 - 主 agent 处置熔断终态（各 flow 终态处置表任一行）与用户裁决落地时，append 处置记录到 ledger
-- 档案交付后默认保留（HOME 下天然不入 git），仅用户指示时清理（D4 第 7 条）
+- 档案交付后默认保留（HOME 下天然不入 git），仅用户指示时清理（D4 第 8 条）
 
 ## Workflow 契约（执行体按宿主环境选择）
 
