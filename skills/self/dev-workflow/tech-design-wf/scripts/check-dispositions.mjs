@@ -8,8 +8,9 @@
 // 用法：
 //   node check-dispositions.mjs <dispositions.json> [--problems <problems.json>]
 //     dispositions.json：{dispositions:[...]} 或裸数组（tech-review-loop 落盘格式）
-//     problems.json：{problems:[{ref,level,title},...]} 或裸数组（本轮问题清单，
-//       ref 形如 review-main#2；不传则只做内部一致性校验，不做覆盖校验）
+//     problems.json：{problems:[{ref,title},...]} 或裸数组（本轮问题清单，
+//       ref 形如 review-main#2；条目无 level 字段——唯一报告级别是 must-fix；
+//       不传则只做内部一致性校验，不做覆盖校验）
 // 输出（stdout 一行 JSON）：
 //   {ok, counts, errors:[{kind, detail}], warnings:[...], coverage?}
 // 退出码：0 = 通过；1 = 校验失败（errors 非空）；2 = 用法/文件错误
@@ -55,7 +56,6 @@ if (probPath !== null) {
 
 const errors = [];
 const warnings = [];
-const LEVELS = new Set(["must-fix", "suggestion"]);
 const ACTIONS = new Set(["fixed", "deferred", "archived"]);
 
 if (dispArr.length === 0) {
@@ -79,7 +79,6 @@ dispArr.forEach((d, i) => {
       warnings.push(`${at} id「${d.id}」不符合 D-<轮>-<序> 形态（延续条目应复用上轮原 id，新造形态会导致下轮对账失配）`);
     }
   }
-  if (!LEVELS.has(d.level)) errors.push({ kind: "field", detail: `${at}（${d.id ?? "?"}）level 非法：${JSON.stringify(d.level)}（须 must-fix|suggestion）` });
   if (!ACTIONS.has(d.action)) errors.push({ kind: "field", detail: `${at}（${d.id ?? "?"}）action 非法：${JSON.stringify(d.action)}（须 fixed|deferred|archived）` });
   if (!Array.isArray(d.source) || d.source.length === 0 || d.source.some((s) => typeof s !== "string" || s.trim() === "")) {
     errors.push({ kind: "field", detail: `${at}（${d.id ?? "?"}）source 须为非空字符串数组（该条覆盖的原始问题引用，合并几条列几条）` });
@@ -103,20 +102,17 @@ if (probArr !== null && errors.filter((e) => e.kind === "shape" || e.kind === "e
     .map((p, i) => ({ ...p, _at: `problems[${i}]` }))
     .filter((p) => p && typeof p === "object");
   for (const p of probs) {
-    if (typeof p.ref !== "string" || p.ref.trim() === "" || !LEVELS.has(p.level)) {
-      errors.push({ kind: "problem-shape", detail: `${p._at} 缺 ref/level 或形态非法（ref 如 review-main#2；level 须 must-fix|suggestion）` });
+    if (typeof p.ref !== "string" || p.ref.trim() === "") {
+      errors.push({ kind: "problem-shape", detail: `${p._at} 缺 ref 或形态非法（ref 如 review-main#2；条目无 level 字段——唯一级别是 must-fix）` });
     }
   }
-  const coverageInner = {};
-  for (const lv of LEVELS) {
-    const ofLevel = probs.filter((p) => p.level === lv && typeof p.ref === "string" && p.ref.trim() !== "");
-    const missing = ofLevel.filter((p) => !cited.has(p.ref)).map((p) => `${p.ref}（${typeof p.title === "string" ? p.title : ""}）`);
-    coverageInner[lv] = { total: ofLevel.length, missing };
-    for (const m of missing) {
-      errors.push({ kind: "coverage", detail: `${lv} 问题 ${m} 未被任何处置条目的 source 引用——处置表必须覆盖本轮全部问题（含登记不修/归档形态）` });
-    }
+  const missing = probs
+    .filter((p) => typeof p.ref === "string" && p.ref.trim() !== "" && !cited.has(p.ref))
+    .map((p) => `${p.ref}（${typeof p.title === "string" ? p.title : ""}）`);
+  for (const m of missing) {
+    errors.push({ kind: "coverage", detail: `问题 ${m} 未被任何处置条目的 source 引用——处置表必须覆盖本轮全部问题（含登记不修/归档形态）` });
   }
-  coverage = coverageInner;
+  coverage = { total: probs.filter((p) => typeof p.ref === "string" && p.ref.trim() !== "").length, missing };
   const knownRefs = new Set(probs.map((p) => p.ref));
   for (const ref of cited) {
     if (!knownRefs.has(ref)) {

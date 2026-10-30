@@ -3,13 +3,13 @@
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
 // 改动任一侧循环骨架时评估另一侧是否需要同步）。语义权威源 = tech-design-wf
 // 设计文档 §5（轮次形态唯一定义 / 停机线 / 终态与停回通道）。与 rfl 的结构差异：
-//  - 维度固定四席（价值审 gate + 三审并行），无 rfl 的批内慢快池调度（三审恒定
+//  - 维度固定四席（方向审 gate + 三审并行），无 rfl 的批内慢快池调度（三审恒定
 //    并行，无分批收益）
 //  - 无独立聚合 phase：文档修复者单 agent 兼做语义去重合并（C2 核实：语义判断
 //    保留 agent）+ 修复 + 处置表产出
 //  - 对账对象 = 上轮处置表（dispositions），非 rfl 的 issue 台账；deferred/archived
 //    条目的唯一复活入口 = reviewer reconciliation status="escalate" 结构化申报
-//  - 终态枚举按设计 §5.3：value-rejected / converged / escalated / stuck /
+//  - 终态枚举按设计 §5.3：direction-rejected / converged / escalated / stuck /
 //    max-rounds（+ 环节失败三态）；escalated 一律停回用户裁决，不轮内自行重跑
 //    方案对比（F18 语义变化：方向裁决权上收）
 //  - runDir 命名按 F22：~/.agents/skill-data/tech-design/<project-slug>/<文档 basename
@@ -26,7 +26,7 @@ const DEFAULT_MAX_ROUNDS = 10;
 const STUCK_THRESHOLD = 3;
 const FIX_RETRY_MAX = 3; // 修复者结构化返回校验失败的重试上限（初始 1 次 + 回喂重试 3 次，与其他 agent 的 STRUCTURED_RETRY_MAX 对齐）
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
-//（定义置于文件顶部常量区：价值审的顶层 await 调用早于 persona 常量区，晚定义会 TDZ）
+//（定义置于文件顶部常量区：方向审的顶层 await 调用早于 persona 常量区，晚定义会 TDZ）
 const NO_ASK_RULE =
   "禁止向用户提问（无 AskUserQuestion / ask-user / 任何等待用户输入的操作）——workflow 内没有用户交互位；" +
   "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
@@ -134,7 +134,7 @@ function sanitizeCount(v: unknown): number | null {
 }
 
 /** 报告路径校验函数已删除：三审 reportFile 自报字段无消费（报告落盘走确定性位置校验），
- *  价值审 reportFile 直接窄化比较，均不需要归一函数 */
+ *  方向审 reportFile 直接窄化比较，均不需要归一函数 */
 
 /** 不可信内容隔离（rfl wrapUntrusted 同款）：报告/处置表/修订摘要等外部 agent 产出
  *  注入 prompt 时显式宣告为数据，防其中反引号/分隔线截断 prompt 结构 */
@@ -158,7 +158,7 @@ function sanitizeReconciliation(raw: unknown): ReconEntry[] {
     }));
 }
 
-/** LLM 返回的处置条目防御：缺 id/level/action 或形态非法的条目丢弃（覆盖校验据此
+/** LLM 返回的处置条目防御：缺 id/action 或形态非法的条目丢弃（覆盖校验据此
  *  拦截，不裸 TypeError）；字符串字段窄化为 string（缺失归空串） */
 function sanitizeDispositions(raw: unknown): Disposition[] {
   if (!Array.isArray(raw)) return [];
@@ -167,12 +167,10 @@ function sanitizeDispositions(raw: unknown): Disposition[] {
     if (item === null || typeof item !== "object") continue;
     const d = item as Partial<Disposition>;
     const id = typeof d.id === "string" && d.id.trim() !== "" ? d.id.trim() : "";
-    const level: "must-fix" | "suggestion" | null =
-      d.level === "must-fix" || d.level === "suggestion" ? d.level : null;
     const action: "fixed" | "deferred" | "archived" | null =
       d.action === "fixed" || d.action === "deferred" || d.action === "archived" ? d.action : null;
-    if (id === "" || level === null || action === null) {
-      log(`WARN: 处置条目畸形被丢弃（id=${JSON.stringify(d.id)} level=${JSON.stringify(d.level)} action=${JSON.stringify(d.action)}）——若属漏报，覆盖校验将拦截本轮`);
+    if (id === "" || action === null) {
+      log(`WARN: 处置条目畸形被丢弃（id=${JSON.stringify(d.id)} action=${JSON.stringify(d.action)}）——若属漏报，覆盖校验将拦截本轮`);
       continue;
     }
     const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -182,7 +180,6 @@ function sanitizeDispositions(raw: unknown): Disposition[] {
       source: Array.isArray(d.source)
         ? d.source.filter((s): s is string => typeof s === "string" && s.trim() !== "")
         : [],
-      level,
       action,
       location: str(d.location),
       reenactment: str(d.reenactment),
@@ -207,22 +204,20 @@ function sanitizeBlocked(raw: unknown): { items: string[]; reason: string } | nu
   return { items, reason };
 }
 
-/** reviewer 返回的问题清单防御：ref/level 形态非法的条目丢弃；当轮计数以清单派生为准
- *  （自报 mustFix/suggestion 仅做交叉校验——单一事实源，防「计数对、清单漏」的对账失配） */
-function sanitizeProblems(raw: unknown): { ref: string; level: "must-fix" | "suggestion"; title: string }[] {
+/** reviewer 返回的问题清单防御：ref 形态非法的条目丢弃；当轮计数以清单派生为准
+ *  （自报 mustFix 仅做交叉校验——单一事实源，防「计数对、清单漏」的对账失配） */
+function sanitizeProblems(raw: unknown): { ref: string; title: string }[] {
   if (!Array.isArray(raw)) return [];
-  const out: { ref: string; level: "must-fix" | "suggestion"; title: string }[] = [];
+  const out: { ref: string; title: string }[] = [];
   for (const item of raw) {
     if (item === null || typeof item !== "object") continue;
-    const p = item as Partial<{ ref: string; level: string; title: string }>;
+    const p = item as Partial<{ ref: string; title: string }>;
     const ref = typeof p.ref === "string" ? p.ref.trim() : "";
-    const level: "must-fix" | "suggestion" | null =
-      p.level === "must-fix" || p.level === "suggestion" ? p.level : null;
-    if (ref === "" || level === null) {
-      log(`WARN: 问题清单条目畸形被丢弃（ref=${JSON.stringify(p.ref)} level=${JSON.stringify(p.level)}）——丢弃后计数以剩余清单派生`);
+    if (ref === "") {
+      log(`WARN: 问题清单条目畸形被丢弃（ref=${JSON.stringify(p.ref)}）——丢弃后计数以剩余清单派生`);
       continue;
     }
-    out.push({ ref, level: level!, title: typeof p.title === "string" ? p.title.trim() : "" });
+    out.push({ ref, title: typeof p.title === "string" ? p.title.trim() : "" });
   }
   return out;
 }
@@ -258,16 +253,15 @@ async function askValidated<T>(
   return fin.ok ? fin.value : null;
 }
 
-/** 价值审返回校验：计数非负整数 + 文本字段为字符串 + problems 清单逐条形态合法（ref/level/title） */
-function validateValueVerdict(v: unknown): Validated<ValueVerdict> {
+/** 方向审返回校验：计数非负整数 + 文本字段为字符串 + problems 清单逐条形态合法（ref/title） */
+function validateDirectionVerdict(v: unknown): Validated<DirectionVerdict> {
   const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
   const errors: string[] = [];
   if (sanitizeCount(o["mustFix"]) === null) errors.push("mustFix 须为非负整数（与报告一致）");
-  if (sanitizeCount(o["suggestion"]) === null) errors.push("suggestion 须为非负整数（与报告一致）");
   if (typeof o["oneliner"] !== "string") errors.push("oneliner 须为字符串");
   if (typeof o["reportFile"] !== "string") errors.push("reportFile 须为字符串");
   const rawProblems = o["problems"];
-  if (!Array.isArray(rawProblems)) errors.push("problems 须为数组（逐条 {ref, level, title}）");
+  if (!Array.isArray(rawProblems)) errors.push("problems 须为数组（逐条 {ref, title}）");
   else {
     const badIdx: string[] = [];
     rawProblems.forEach((item, i) => {
@@ -275,23 +269,21 @@ function validateValueVerdict(v: unknown): Validated<ValueVerdict> {
         badIdx.push(String(i + 1));
         return;
       }
-      const p = item as Partial<{ ref: string; level: string }>;
-      if (typeof p.ref !== "string" || p.ref.trim() === "" || (p.level !== "must-fix" && p.level !== "suggestion"))
-        badIdx.push(String(i + 1));
+      const p = item as Partial<{ ref: string }>;
+      if (typeof p.ref !== "string" || p.ref.trim() === "") badIdx.push(String(i + 1));
     });
-    if (badIdx.length > 0) errors.push(`problems 第 ${badIdx.join("、")} 条畸形（ref 须非空字符串，level 须 must-fix|suggestion）`);
+    if (badIdx.length > 0) errors.push(`problems 第 ${badIdx.join("、")} 条畸形（ref 须非空字符串）`);
   }
-  return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as ValueVerdict };
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as DirectionVerdict };
 }
 
-/** 三审返回校验：计数非负整数 + problems 清单逐条形态合法（ref/level/title）+ reconciliation 数组 */
+/** 三审返回校验：计数非负整数 + problems 清单逐条形态合法（ref/title）+ reconciliation 数组 */
 function validateReviewerVerdict(v: unknown): Validated<ReviewerVerdict> {
   const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
   const errors: string[] = [];
   if (sanitizeCount(o["mustFix"]) === null) errors.push("mustFix 须为非负整数（与报告一致）");
-  if (sanitizeCount(o["suggestion"]) === null) errors.push("suggestion 须为非负整数（与报告一致）");
   const rawProblems = o["problems"];
-  if (!Array.isArray(rawProblems)) errors.push("problems 须为数组（逐条 {ref, level, title}）");
+  if (!Array.isArray(rawProblems)) errors.push("problems 须为数组（逐条 {ref, title}）");
   else {
     const badIdx: string[] = [];
     rawProblems.forEach((item, i) => {
@@ -299,11 +291,10 @@ function validateReviewerVerdict(v: unknown): Validated<ReviewerVerdict> {
         badIdx.push(String(i + 1));
         return;
       }
-      const p = item as Partial<{ ref: string; level: string; title: string }>;
-      if (typeof p.ref !== "string" || p.ref.trim() === "" || (p.level !== "must-fix" && p.level !== "suggestion"))
-        badIdx.push(String(i + 1));
+      const p = item as Partial<{ ref: string }>;
+      if (typeof p.ref !== "string" || p.ref.trim() === "") badIdx.push(String(i + 1));
     });
-    if (badIdx.length > 0) errors.push(`problems 第 ${badIdx.join("、")} 条畸形（ref 须非空字符串，level 须 must-fix|suggestion）`);
+    if (badIdx.length > 0) errors.push(`problems 第 ${badIdx.join("、")} 条畸形（ref 须非空字符串）`);
   }
   if (!Array.isArray(o["reconciliation"])) errors.push("reconciliation 须为数组（R1 为空数组）");
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as ReviewerVerdict };
@@ -317,7 +308,6 @@ function mergeRound(disps: Disposition[], round: number, ledger: LedgerEntry[]):
     if (prev !== undefined) {
       prev.title = d.title;
       prev.source = d.source;
-      prev.level = d.level;
       prev.action = d.action;
       prev.location = d.location;
       prev.reenactment = d.reenactment;
@@ -347,7 +337,7 @@ function renderDispositionsMd(round: number, disps: Disposition[], revisionSumma
   ];
   for (const d of disps) {
     lines.push(
-      `## ${d.id} [${d.level}] → ${d.action}`,
+      `## ${d.id} → ${d.action}`,
       `- 标题：${d.title}`,
       `- 来源：${d.source.length > 0 ? d.source.join("；") : "(无)"}`,
       `- 修订位置：${d.location}`,
@@ -369,20 +359,16 @@ function renderFinalMd(r: LoopResult): string {
     `- 设计文档：${r.designDoc}`,
     `- 产物目录：${r.runDir}`,
     `- 审查轮数：${r.rounds}${r.mustFixTrajectory.length > 0 ? `（must-fix 轨迹：${r.mustFixTrajectory.join(" → ")}）` : ""}`,
-    `- 价值判定：${r.valueOneliner !== "" ? r.valueOneliner : "（未到达）"}`,
+    `- 方向判定：${r.directionOneliner !== "" ? r.directionOneliner : "（未到达）"}`,
     `- 终态说明：${r.message}`,
   ];
   if (r.blocked !== null) {
     lines.push("", "## 方案性卡点（待用户裁决）", `- 原因：${r.blocked.reason}`);
     for (const it of r.blocked.items) lines.push(`- ${it}`);
   }
-  if (r.suggestionDispositions.length > 0) {
-    lines.push("", "## suggestion 处置汇总");
-    for (const d of r.suggestionDispositions) lines.push(`- ${d.id} [${d.action}] ${d.title}（${d.location}）`);
-  }
   if (r.remaining.length > 0) {
     lines.push("", "## 残余条目（未收敛/未复核）");
-    for (const d of r.remaining) lines.push(`- ${d.id} [${d.level}/${d.status}] ${d.title} — ${d.attackHints}`);
+    for (const d of r.remaining) lines.push(`- ${d.id} [${d.status}] ${d.title} — ${d.attackHints}`);
   }
   return lines.join("\n");
 }
@@ -395,9 +381,8 @@ if (inputs.problems.length > 0) {
     rounds: 0,
     runDir: "",
     designDoc: inputs.designDoc,
-    valueOneliner: "",
+    directionOneliner: "",
     mustFixTrajectory: [],
-    suggestionDispositions: [],
     remaining: [],
     blocked: null,
     message: `参数校验失败：${inputs.problems.join("；")}。恢复动作：${HINT_RELAUNCH_WITH_ARGS}`,
@@ -406,7 +391,7 @@ if (inputs.problems.length > 0) {
 const { designDoc, projectRoot, maxRounds } = inputs;
 
 // ── 环境准备（home 展开 / runDir / attempt / 模板探针） ──
-phase("校验审查环境并做价值评审");
+phase("校验审查环境并做方向审");
 
 // home 展开：模板/rubric 的 ~ 前缀运行时解析（脚本无 node API，经 node -e 通道）
 const homeRes = await world.run("node", ["-e", "process.stdout.write(require('os').homedir())"]);
@@ -416,9 +401,8 @@ if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
     rounds: 0,
     runDir: "",
     designDoc,
-    valueOneliner: "",
+    directionOneliner: "",
     mustFixTrajectory: [],
-    suggestionDispositions: [],
     remaining: [],
     blocked: null,
     message: `无法解析用户 home 目录（node os.homedir 探针失败，exit ${homeRes.exitCode}）：${homeRes.stderr.trim()}。恢复动作：确认 node 可执行后重新发起`,
@@ -438,9 +422,8 @@ if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
     rounds: 0,
     runDir: "",
     designDoc,
-    valueOneliner: "",
+    directionOneliner: "",
     mustFixTrajectory: [],
-    suggestionDispositions: [],
     remaining: [],
     blocked: null,
     message: `projectRoot 无法解析为项目 slug（realpath + sha256 探针失败，exit ${slugRes.exitCode}）：${slugRes.stderr.trim()}。恢复动作：确认 projectRoot 目录存在后重新发起`,
@@ -496,13 +479,15 @@ const roundDirName = (n: number): string => (attempt > 1 ? `round-${n}.attempt${
 
 // 默认 reviewer 模板（脚本内字面量，~ 运行时展开）；args.reviewers 按 basename 覆盖同名维度
 const TEMPLATE_BASENAMES: { dim: string; file: string }[] = [
-  { dim: "value", file: "tech-design-value-review.md" },
+  { dim: "direction", file: "tech-design-direction-review.md" },
   { dim: "main", file: "tech-design-review.md" },
   { dim: "impact", file: "tech-design-impact-review.md" },
   { dim: "simplicity", file: "tech-design-simplicity-review.md" },
 ];
 const TILDE_ROOT = "~/.agents/skills/tech-design-wf/agents";
 const RUBRIC_TILDE = "~/.agents/skills/tech-design-wf/review/rubric-design-doc.md";
+// 原则层（D 系列方向审攻击的产物表规格与触发条件来源，flow/review.md Step 2 同源）
+const PRINCIPLES_TILDE = "~/.agents/skills/tech-design-wf/references/principles.md";
 // 处置表业务级校验 CLI（覆盖完整性 + 条目一致性；workflow 与 flow/review.md 手工路径
 // 双轨共用同一实现——校验器单一来源，双轨语义等价由同一脚本保证）
 const CHECK_CLI_TILDE = "~/.agents/skills/tech-design-wf/scripts/check-dispositions.mjs";
@@ -521,6 +506,7 @@ for (const t of TEMPLATE_BASENAMES) {
   templates.set(t.dim, overrides.get(t.dim) ?? expandTilde(`${TILDE_ROOT}/${t.file}`));
 }
 const rubricPath = expandTilde(RUBRIC_TILDE);
+const principlesPath = expandTilde(PRINCIPLES_TILDE);
 const checkCliAbs = expandTilde(CHECK_CLI_TILDE);
 
 // 三审维度（固定三席并行；报告名确定性）
@@ -539,9 +525,8 @@ if (probe.exitCode !== 0) {
     rounds: 0,
     runDir: "",
     designDoc,
-    valueOneliner: "",
+    directionOneliner: "",
     mustFixTrajectory: [],
-    suggestionDispositions: [],
     remaining: [],
     blocked: null,
     message: `必读文件缺失：${probe.stdout.trim()}。恢复动作：确认 tech-design-wf skill 已安装（四模板应位于 ~/.agents/skills/tech-design-wf/agents/ 下）或经 args.reviewers 传入自定义模板绝对路径覆盖同名维度；designDoc 路径笔误则修正后重新发起`,
@@ -551,8 +536,8 @@ if (probe.exitCode !== 0) {
 // ── 终态收尾（写 final.json + 发布终态 markdown；run 级状态在闭包中） ──
 const trajectory: number[] = [];
 const ledger: LedgerEntry[] = [];
-let valueOneliner = "";
-let valueReportFile = "";
+let directionOneliner = "";
+let directionReportFile = "";
 
 async function finish(
   terminated: LoopResult["terminated"],
@@ -560,20 +545,16 @@ async function finish(
   message: string,
   blocked: { items: string[]; reason: string } | null = null,
 ): Promise<LoopResult> {
-  const suggestionDispositions = ledger
-    .filter((e) => e.level === "suggestion")
-    .map((e) => ({ id: e.id, action: e.action, title: e.title, location: e.location }));
   const remaining = ledger
     .filter((e) => e.status === "open" || e.status === "pending")
-    .map((e) => ({ id: e.id, title: e.title, level: e.level, status: e.status, attackHints: e.attackHints }));
+    .map((e) => ({ id: e.id, title: e.title, status: e.status, attackHints: e.attackHints }));
   const result: LoopResult = {
     terminated,
     rounds,
     runDir,
     designDoc,
-    valueOneliner,
+    directionOneliner,
     mustFixTrajectory: [...trajectory],
-    suggestionDispositions,
     remaining,
     blocked,
     message,
@@ -584,10 +565,9 @@ async function finish(
     rounds: result.rounds,
     runDir,
     designDoc,
-    oneliner: result.valueOneliner,
-    reportFile: valueReportFile,
+    oneliner: result.directionOneliner,
+    reportFile: directionReportFile,
     mustFixTrajectory: result.mustFixTrajectory,
-    suggestionDispositions: result.suggestionDispositions,
     remaining: result.remaining,
     blocked: result.blocked,
     message: result.message,
@@ -642,78 +622,83 @@ artifact.chart("trajectory", {
   y: { field: "mustFix", label: "must-fix 总和" },
 });
 
-// ── phase 1：价值审 gate ──
-const valueReportAbs = `${runDir}/review-value.md`;
-log(`审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttemptMax > 0 ? `（检测到历史 attempt 后缀至 ${prevAttemptMax}，历史产物不覆盖）` : ""}）；价值审先行`);
+// ── phase 1：方向审 gate ──
+const directionReportAbs = `${runDir}/review-direction.md`;
+log(`审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttemptMax > 0 ? `（检测到历史 attempt 后缀至 ${prevAttemptMax}，历史产物不覆盖）` : ""}）；方向审先行`);
 
-let valueVerdict: ValueVerdict | null;
+let directionVerdict: DirectionVerdict | null;
 try {
-  valueVerdict = await askValidated(
-    validateValueVerdict,
+  directionVerdict = await askValidated(
+    validateDirectionVerdict,
     (p) =>
       agent(
-        "价值评审",
-        "你是设计价值评审员：判断这份设计是否值得做、方向是否正确、是否回答了正确的问题；只读评审，绝不修改任何文件；每个判断都要有你亲自读到的文档原文依据；指令无法执行或有矛盾时如实说明，不伪造结论。" +
+        "方向审",
+        "你是方向审评审员：攻击设计的前提层与终态层——分型是否正确、前提清单能否被写者侧反例击穿、公理是真不变量还是实现细节、产物表是否完整且真实、问题定义是否忠于真问题；只读评审，绝不修改任何文件；每个判定都要有你亲自读到的文档原文或源码依据；指令无法执行或有矛盾时如实说明，不伪造结论。" +
           NO_ASK_RULE,
-      ).ask<ValueVerdict>(p),
+      ).ask<DirectionVerdict>(p),
     [
-      "价值门评审（先于审查循环）。",
+      "方向审（先于三审的第一道门）。",
       "",
-      `第一步：Read 价值审模板 ${templates.get("value") ?? ""}——其中是你的完整评审基准，按它执行。`,
-      `评审 rubric（分级依据，先读）：${rubricPath}`,
+      `第一步：Read 方向审模板 ${templates.get("direction") ?? ""}——其中是你的攻击方法与完整评审基准（D1-D5 判据），按它执行。`,
+      `评审 rubric（D 系列判据来源，先读）：${rubricPath}`,
+      `原则层（产物表规格与触发条件——D2 攻击前提清单、D4 对账产物表都要用）：${principlesPath}`,
       `审查对象：${designDoc}`,
-      `项目上下文（存在则读，作产品与规范基准）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
+      `项目上下文（存在则读，攻击「写者枚举 / 上游依赖」以项目自己的架构事实为依据，不凭偏好）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
       "只读评审：禁止修改设计文档与项目内任何文件。",
       "",
-      `报告落盘：${valueReportAbs}（绝对路径；需要时先创建目录）。内容：价值判定结论 + 依据（你读到的原文事实）+ 问题清单（Findings 表每行一条，行首带锚点编号 review-value#<序>，含 [must-fix|suggestion] 分级、位置、原文依据、修复方向）+ 一句话判定。这份报告是价值否决时的唯一证据。`,
-      "完成后返回 JSON：reportFile、mustFix（must-fix 条数，与报告一致）、suggestion（suggestion 条数，与报告一致）、problems（逐条问题清单，每条 {ref, level, title}——ref 即报告 Findings 行锚点（review-value#<序>，行序即序号）、level 与报告分级一致、title 一句话；条数合计须等于 mustFix+suggestion）、oneliner（一句话价值判定）。",
+      "五大方向逐项攻击（判据 D1-D5，每项先找反例，找不到反例才判通过）：",
+      "① 分型（D1）：终态型有无触发依据（用户显式要求 / 修复史判定表「未修到」/ 架构级设计对象）；演进型的「为什么不需要终态视角」辩护是否被修复史判定表支撑。",
+      "② 前提清单（D2，增强版，落文档 §2 末）：否定性断言逐条攻击——先枚举「谁可能在写、谁可能在持有」（跨包跨进程、含写者侧）再找写者侧反例，只查读侧不算核实；✅ 条目抽样复核实（亲自 read 它声称的核实位置，验证核实动作真实发生）；⏳ 待裁决项逐条判「是否影响方向」——动摇方案主干所依赖的现状理解的，升级 must-fix 要求先行裁决。",
+      "③ 终态层（D3，终态型专用、演进型跳过）：公理清单逐条判「真不变量还是实现细节」（假设推翻重建，该陈述还必须成立吗）；终态-现状差距表逐维对照现状查漏项；迁移波次查是否制造新差距。",
+      "④ 产物表（D4）：触发的产物表存在且无漏行（写者枚举漏持有者、信号-蕴涵漏信号、上游依赖漏接触点均算漏行）+ 行级真实性抽样（随机挑行 read 源码验证行内容与代码一致）。",
+      "⑤ 问题定义（D5）：§1 定义的是现象还是根因、有无未识别的深层问题；探明手段（加日志/探针/先收集数据）不占设计主体；问题定义不被现状实现污染。",
+      "声称「击穿 / 填表不实」前必须 read 源码取证；机制正确性 / 影响面 / 机制必要性留给三审（标 INFO 交接，不计数、不进 problems）。",
+      `报告落盘：${directionReportAbs}（绝对路径；需要时先创建目录）。内容：Summary（must-fix 数量）+ 方向判定（一句话）+ Findings 表（每行：锚点编号 review-direction#<序>、优先级 MUST_FIX、位置、维度、描述、影响决策、影响交付、修复方向——每个 must-fix 引用 D 系列编号 + 文档位置；报告小节/行标题必须带锚点）。这份报告是方向打回时的唯一证据。`,
+      "完成后返回 JSON：reportFile、mustFix（must-fix 条数，与报告一致）、problems（逐条问题清单，每条 {ref, title}——ref 即报告 Findings 行锚点（review-direction#<序>，行序即序号）、title 一句话；条目无 level 字段——唯一报告级别是 must-fix；条数合计须等于 mustFix）、oneliner（一句话方向判定）。",
     ].join("\n"),
   );
 } catch (e) {
-  return await finish("review-failure", 0, `价值审调用失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——结构化校验不过 / 上下文超限则拆分投喂精简模板 / IO 失败）；args.attempt 递增重新发起（历史产物不覆盖）`);
+  return await finish("review-failure", 0, `方向审调用失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——结构化校验不过 / 上下文超限则拆分投喂精简模板 / IO 失败）；args.attempt 递增重新发起（历史产物不覆盖）`);
 }
-if (valueVerdict === null) {
+if (directionVerdict === null) {
   return await finish(
     "review-failure",
     0,
-    `价值审结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规。恢复动作：报告若已写好，读 ${valueReportAbs} 人工核对后重新发起`,
+    `方向审结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规。恢复动作：报告若已写好，读 ${directionReportAbs} 人工核对后重新发起`,
   );
 }
 // 计数从 problems 清单派生（单一事实源）；自报计数只做交叉校验——自报非零但清单
-// 缺失/全畸形时派生归零会假放行，fail-fast（与三审 668 行防线同构）
-const vProblems = sanitizeProblems(valueVerdict.problems);
-const vSelfMf = sanitizeCount(valueVerdict.mustFix) ?? 0;
-const vSelfSf = sanitizeCount(valueVerdict.suggestion) ?? 0;
-if (vSelfMf + vSelfSf > 0 && vProblems.length === 0) {
+// 缺失/全畸形时派生归零会假放行，fail-fast（与三审同构防线）
+const dProblems = sanitizeProblems(directionVerdict.problems);
+const dSelfMf = sanitizeCount(directionVerdict.mustFix) ?? 0;
+if (dSelfMf > 0 && dProblems.length === 0) {
   return await finish(
     "review-failure",
     0,
-    `价值审自报计数（must-fix ${vSelfMf}/suggestion ${vSelfSf}）非零但 problems 清单缺失或全畸形——否决判定无对账锚点，报告可读 ${valueReportAbs} 人工核对。恢复动作：args.attempt 递增重新发起`,
+    `方向审自报计数（must-fix ${dSelfMf}）非零但 problems 清单缺失或全畸形——打回判定无对账锚点，报告可读 ${directionReportAbs} 人工核对。恢复动作：args.attempt 递增重新发起`,
   );
 }
-const vMust = vProblems.filter((p) => p.level === "must-fix").length;
-const vSugg = vProblems.filter((p) => p.level === "suggestion").length;
-if (vMust !== vSelfMf || vSugg !== vSelfSf) {
-  log(`价值审自报计数（${vSelfMf}/${vSelfSf}）与 problems 清单派生（${vMust}/${vSugg}）不一致，以清单为准`);
+if (dProblems.length !== dSelfMf) {
+  log(`方向审自报计数（${dSelfMf}）与 problems 清单派生（${dProblems.length}）不一致，以清单为准`);
 }
-valueOneliner = valueVerdict.oneliner;
-if (valueVerdict.reportFile !== valueReportAbs) {
-  log(`价值审自报 reportFile（${JSON.stringify(valueVerdict.reportFile)}）与确定性位置不一致，回退采用 ${valueReportAbs}`);
+directionOneliner = directionVerdict.oneliner;
+if (directionVerdict.reportFile !== directionReportAbs) {
+  log(`方向审自报 reportFile（${JSON.stringify(directionVerdict.reportFile)}）与确定性位置不一致，回退采用 ${directionReportAbs}`);
 }
-const vChk = await world.run("node", ["-e", NODE_CHECK_EXISTS, valueReportAbs]);
-if (vChk.exitCode !== 0) {
-  return await finish("review-failure", 0, `价值审报告未落盘（${valueReportAbs}）——报告是下游唯一证据，缺失即失败。恢复动作：重新发起（args.attempt 递增）`);
+const dChk = await world.run("node", ["-e", NODE_CHECK_EXISTS, directionReportAbs]);
+if (dChk.exitCode !== 0) {
+  return await finish("review-failure", 0, `方向审报告未落盘（${directionReportAbs}）——报告是下游唯一证据，缺失即失败。恢复动作：重新发起（args.attempt 递增）`);
 }
-valueReportFile = valueReportAbs;
+directionReportFile = directionReportAbs;
 
-if (vMust > 0) {
+if (dProblems.length > 0) {
   return await finish(
-    "value-rejected",
+    "direction-rejected",
     0,
-    `价值审否决（must-fix ${vMust} 条）：${valueOneliner}。停回通道：回 T1 对话重写——价值/方向问题不进审查循环；报告见 ${valueReportAbs}`,
+    `方向审打回（must-fix ${dProblems.length} 条）：${directionOneliner}。停回通道：回 T1 对话重写——问题定义/方案主干/前提层按报告修复方向重写（含 Step D 诊断期重做），修完 attempt+1 重新发起（重过方向审）；报告见 ${directionReportAbs}`,
   );
 }
-log(`价值审通过（must-fix 0${vSugg > 0 ? `，suggestion ${vSugg} 条随首轮全面审一并处置` : ""}）：${valueOneliner}`);
+log(`方向审通过（must-fix 0）：${directionOneliner}`);
 
 // ── 审查-修复主循环 ──
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
@@ -734,15 +719,13 @@ for (let round = 1; round <= maxRounds; round++) {
   phase("三审并行聚焦复审");
   const roundAbs = `${runDir}/${roundDirName(round)}`;
 
-  // 必对账集 = must-fix 级全部（fixed 的核修复成立性；deferred/archived 的核登记是否
-  // 仍成立）；登记监视集 = 任意级别 action≠fixed（escalate 唯一复活通道的申报对象面，
-  // 漏报即维持，不算未确认）。suggestion 且已修复的条目不强制逐条对账（聚焦复审不
-  // 全面重扫）。
-  const mustReconcile = prevDispositions.filter((d) => d.level === "must-fix");
+  // 必对账集 = 上轮处置表全部条目（fixed 的核修复成立性；deferred/archived 的核登记
+  // 是否仍成立）；登记监视集 = action≠fixed（escalate 唯一复活通道的申报对象面，
+  // 漏报即维持，不算未确认）。
+  const mustReconcile = prevDispositions;
   const parkedWatch = prevDispositions.filter((d) => d.action !== "fixed");
   const dispProjection = (d: Disposition) => ({
     id: d.id,
-    level: d.level,
     action: d.action,
     title: d.title,
     location: d.location,
@@ -755,9 +738,9 @@ for (let round = 1; round <= maxRounds; round++) {
       : [
           "",
           "本轮为聚焦复审，不做全面重扫。审查范围：",
-          "(a) 上轮处置表必对账集——must-fix 级全部条目（reconciliation 每条必填，prevId 用下表 id；action=fixed 的核修复是否成立，action=deferred/archived 的核登记/归档是否仍成立）：",
+          "(a) 上轮处置表必对账集——全部条目（reconciliation 每条必填，prevId 用下表 id；action=fixed 的核修复是否成立，action=deferred/archived 的核登记/归档是否仍成立）：",
           mustReconcile.length > 0 ? wrapUntrusted(JSON.stringify(mustReconcile.map(dispProjection))) : "- (空)",
-          "(b) 登记/归档监视清单（任意级别、action≠fixed；仅当本轮修复改变了其相关上下文才申报 escalate——结构化申报，唯一复活通道；无变化不重报、不升级）：",
+          "(b) 登记/归档监视清单（action≠fixed；仅当本轮修复改变了其相关上下文才申报 escalate——结构化申报，唯一复活通道；无变化不重报、不升级）：",
           parkedWatch.length > 0 ? wrapUntrusted(JSON.stringify(parkedWatch.map(dispProjection))) : "- (空)",
           `(c) 上轮修订摘要（修复者声称，不算证据，必须亲自读文档核实）：${wrapUntrusted(prevRevisionSummary !== "" ? prevRevisionSummary : "(无)")}`,
           "对账规则：亲自读设计文档核实——确认已修复/登记仍成立（evidence 写你读到的原文事实）→ fixed；仍存在或登记不再成立 → not-fixed 并计入 mustFix；修复复发或引入新问题 → regressed 并计入 mustFix（只扫修复触及的章节）；监视清单条目上下文已变 → escalate。",
@@ -775,7 +758,7 @@ for (let round = 1; round <= maxRounds; round++) {
       "",
       `第一步：Read 评审模板 ${templates.get(t.dim) ?? ""}——其中是你的完整审查 checklist，按它执行评审。`,
       `评审 rubric（分级依据，先读）：${rubricPath}`,
-      "意见形态约束（防止审查-修复螺旋）：发现的问题按其事实性质分两类处置——①断言失实：文档把推断/未核实/未尝试的查询写成了事实或 ✅（核实状态标注错误）——正常打 must-fix/suggestion；②前提登记缺口：影响决策的信息缺失——正常打。但「文档没有给出设计期无法知道的运行时结论」本身不是问题：对 CI 运行行为、构建产物、真机表现这类实施期才能核实的事实，唯一合格的登记形态就是 ⏳ 前提 + 实施期探针；文档已按此形态登记完备时，不得因「还能挖更深」或「该结论实施期才见分晓」继续打 must-fix——前提登记完备即该域已修复。你的修复方向同样受此约束：对实施期事实，方向只能是「登记/修正为 ⏳ 前提 + 探针」，不得要求修复者给出设计期无法知道的运行时结论。",
+      "意见形态约束（防止审查-修复螺旋）：发现的问题按其事实性质分两类处置——①断言失实：文档把推断/未核实/未尝试的查询写成了事实或 ✅（核实状态标注错误）——正常打 must-fix；②前提登记缺口：影响决策的信息缺失——正常打 must-fix。但「文档没有给出设计期无法知道的运行时结论」本身不是问题：对 CI 运行行为、构建产物、真机表现这类实施期才能核实的事实，唯一合格的登记形态就是 ⏳ 前提 + 实施期探针；文档已按此形态登记完备时，不得因「还能挖更深」或「该结论实施期才见分晓」继续打 must-fix——前提登记完备即该域已修复。你的修复方向同样受此约束：对实施期事实，方向只能是「登记/修正为 ⏳ 前提 + 探针」，不得要求修复者给出设计期无法知道的运行时结论。",
       `审查对象：${designDoc}`,
       `项目上下文（存在则读，作产品与规范基准）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
       "只读评审：禁止修改设计文档与项目内任何文件。",
@@ -785,8 +768,8 @@ for (let round = 1; round <= maxRounds; round++) {
         ? "（简洁审一律执行——设计 B8 裁决无跳过通道）若本设计属纯文案/参数调整类记录（无结构、方案主干、验收形态变化），照常逐项过 checklist，在报告开头说明该分类并给出简洁面结论（零发现就写「简洁面零发现」）。"
         : "",
       "",
-      `报告落盘：${roundAbs}/${t.reportName}（绝对路径；需要时先创建目录）。每条问题一节：锚点编号（${t.reportName.replace(".md", "")}#<序>，如 ${t.reportName.replace(".md", "")}#2，报告小节标题必须带此锚点）+ [must-fix|suggestion] + 所在章节 + 描述 + 原文依据（你读到的原句）+ 修复方向。报告是修复者的唯一输入。`,
-      `完成后返回 JSON：mustFix（must-fix 条数，与报告一致）、suggestion（suggestion 条数）、problems（逐条问题清单，每条 {ref, level, title}——ref 即报告小节锚点（${t.reportName.replace(".md", "")}#<序>）、level 与报告小节分级一致、title 一句话；条数合计须等于 mustFix+suggestion）、reconciliation（${round === 1 ? "本轮返回空数组 []" : "对上方必对账集逐条申报"}）。`,
+      `报告落盘：${roundAbs}/${t.reportName}（绝对路径；需要时先创建目录）。每条问题一节：锚点编号（${t.reportName.replace(".md", "")}#<序>，如 ${t.reportName.replace(".md", "")}#2，报告小节标题必须带此锚点）+ 所在章节 + 描述 + 原文依据（你读到的原句）+ 修复方向。唯一报告级别是 must-fix（无 suggestion 级——不影响决策的表述偏好不报）。报告是修复者的唯一输入。`,
+      `完成后返回 JSON：mustFix（must-fix 条数，与报告一致）、problems（逐条问题清单，每条 {ref, title}——ref 即报告小节锚点（${t.reportName.replace(".md", "")}#<序>）、title 一句话；条目无 level 字段；条数合计须等于 mustFix）、reconciliation（${round === 1 ? "本轮返回空数组 []" : "对上方必对账集逐条申报"}）。`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -821,19 +804,16 @@ for (let round = 1; round <= maxRounds; round++) {
     verdicts = (raw as ReviewerVerdict[]).map((v, i) => {
       const problems = sanitizeProblems(v.problems);
       const selfMf = sanitizeCount(v.mustFix) ?? 0;
-      const selfSf = sanitizeCount(v.suggestion) ?? 0;
       // 防线：自报计数非零但清单缺失/全畸形 → 派生计数归零会假 converged，fail-fast
-      if (selfMf + selfSf > 0 && problems.length === 0) {
+      if (selfMf > 0 && problems.length === 0) {
         throw new Error(
-          `维度 ${TRIALS[i].label} 自报计数（must-fix ${selfMf}/suggestion ${selfSf}）非零但 problems 清单缺失或全畸形——覆盖校验无对账锚点，报告可读 ${roundAbs}/${TRIALS[i].reportName} 人工核对`,
+          `维度 ${TRIALS[i].label} 自报计数（must-fix ${selfMf}）非零但 problems 清单缺失或全畸形——覆盖校验无对账锚点，报告可读 ${roundAbs}/${TRIALS[i].reportName} 人工核对`,
         );
       }
-      const mf = problems.filter((p) => p.level === "must-fix").length;
-      const sf = problems.filter((p) => p.level === "suggestion").length;
-      if (mf !== selfMf || sf !== selfSf) {
-        log(`WARN: ${TRIALS[i].label} 自报计数（${selfMf}/${selfSf}）与 problems 清单派生（${mf}/${sf}）不一致，以清单为准`);
+      if (problems.length !== selfMf) {
+        log(`WARN: ${TRIALS[i].label} 自报计数（${selfMf}）与 problems 清单派生（${problems.length}）不一致，以清单为准`);
       }
-      return { mustFix: mf, suggestion: sf, problems, reconciliation: sanitizeReconciliation(v.reconciliation), dim: TRIALS[i].dim };
+      return { mustFix: problems.length, problems, reconciliation: sanitizeReconciliation(v.reconciliation), dim: TRIALS[i].dim };
     });
   } catch (e) {
     return await finish("review-failure", round, `三审调用或归并失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——上下文超限则拆分投喂 / 结构化校验不过见当轮报告）；args.attempt 递增重新发起`);
@@ -852,9 +832,8 @@ for (let round = 1; round <= maxRounds; round++) {
   }
 
   const roundMustFix = verdicts.reduce((s, v) => s + v.mustFix, 0);
-  const roundSuggestion = verdicts.reduce((s, v) => s + v.suggestion, 0);
   trajectory.push(roundMustFix);
-  report({ round, mustFix: roundMustFix, suggestion: roundSuggestion }, "trajectory");
+  report({ round, mustFix: roundMustFix }, "trajectory");
 
   // 对账套用（verify-first：fixed 必须带非空 evidence 才采信）
   const confirmedIds = new Set<string>();
@@ -885,22 +864,14 @@ for (let round = 1; round <= maxRounds; round++) {
   const coreIds = new Set(outstandingCore.map((d) => d.id));
   const outstanding = [...outstandingCore, ...parkedWatch.filter((d) => escalateIds.has(d.id) && !coreIds.has(d.id))];
 
-  // converged 判定（设计 §5.2 唯一权威公式）：must-fix==0 且上轮处置表全处置即终止——
-  // 不要求当轮 suggestion==0（处置完即终止，不为 suggestion 单独驱动确认轮——2026-09-19
-  // 实测教训：must-fix 收敛后为清 suggestion 续 2 轮确认，占收敛期约 1/4 时长）。
-  // R1 全 0 且零 suggestion → 直接 converged（不派修复者）；有 suggestion → 派修复者
-  // 处置后同轮收敛（convergeAfterFix 出口），不派下轮确认。
-  let convergeAfterFix = false;
+  // converged 判定（设计 §5.2 唯一权威公式）：must-fix==0 且上轮处置表全处置即终止。
+  // R1 全 0 → 直接 converged（不派修复者）。
   if (roundMustFix === 0 && outstanding.length === 0) {
-    if (roundSuggestion === 0) {
-      return await finish(
-        "converged",
-        round,
-        `第 ${round} 轮收敛：三报告 must-fix 与 suggestion 均 0${round > 1 ? "，上轮处置条目全部经实证复核确认" : "（首轮即净，未派修复者）"}。下游：T2 确认点`,
-      );
-    }
-    log(`第 ${round} 轮 must-fix 0、outstanding 0、suggestion ${roundSuggestion} 条——派修复者处置 suggestion 后收敛（不派纯确认轮）`);
-    convergeAfterFix = true;
+    return await finish(
+      "converged",
+      round,
+      `第 ${round} 轮收敛：三报告 must-fix 均 0${round > 1 ? "，上轮处置条目全部经实证复核确认" : "（首轮即净，未派修复者）"}。下游：T2 确认点`,
+    );
   }
 
   // stuck 熔断（连续多轮 must-fix 总和不降；计数判定归脚本）
@@ -946,9 +917,8 @@ for (let round = 1; round <= maxRounds; round++) {
     "",
     "任务：",
     "1. 语义去重合并：同根因跨维度表述的问题合并为一条处置（source 记录该条覆盖的全部问题 ref）。",
-    "2. 修全部 must-fix：直接编辑设计文档落实修复。",
-    "3. suggestion 逐条三选一处置：fixed（修复）/ deferred（登记不修，理由必须具体：涉及章节/机制/代价）/ archived（归档——已过时或不适用，理由必须具体）。",
-    "4. 方案性意见（需要用户裁决的方向变化，如推翻问题定义、方案主干、最小形态）修不动 → 不要硬改：status 取 \"blocked\"，并在 blocked 里申报（items=卡住的问题清单，reason=为什么需要用户裁决）；其余可修的照常完成并产出处置表。无方案性卡点时 status 取 \"done\"，返回体不得含 blocked 字段——不要在 blocked 里填「无卡点」之类的说明（引擎只认 status，blocked 不是表态字段）。",
+    "2. 逐条三选一处置全部问题：fixed（修复——默认处置，直接编辑设计文档落实）/ deferred（登记不修，理由必须具体：涉及章节/机制/代价）/ archived（归档——已过时或不适用，理由必须具体）。判定存疑按 fixed 处理（滑坡防护）。",
+    "3. 方案性意见（需要用户裁决的方向变化，如推翻问题定义、方案主干、最小形态）修不动 → 不要硬改：status 取 \"blocked\"，并在 blocked 里申报（items=卡住的问题清单，reason=为什么需要用户裁决）；其余可修的照常完成并产出处置表。无方案性卡点时 status 取 \"done\"，返回体不得含 blocked 字段——不要在 blocked 里填「无卡点」之类的说明（引擎只认 status，blocked 不是表态字段）。",
     outstandingBlock,
     problemsBlock,
     "",
@@ -961,8 +931,8 @@ for (let round = 1; round <= maxRounds; round++) {
     "",
     "返回 JSON：status / dispositions / revisionSummary，仅当 status=\"blocked\" 时再加第四个字段 blocked。",
     "status（必填，二选一）：\"done\" = 修复与处置完成、无方案性卡点（返回体不得含 blocked 字段）；\"blocked\" = 存在修不动、需用户裁决的方案性分歧（必须携带 blocked 字段）。",
-    `dispositions 每条字段：id（新条目格式 D-${round}-<序>；延续上轮的条目复用原 id）、title（一句话标题）、source（数组：该条覆盖的问题 ref 清单——每条必须取自上方「本轮问题清单」，合并处置时把覆盖的 ref 全部列入同一条；上轮延续条目的历史 ref 保留并列）、level（must-fix|suggestion）、action（fixed|deferred|archived）、location（修订位置）、reenactment（反例重演）、attackHints（给下轮聚焦复审的攻击点建议）、affectsDecision（影响决策，必填，无影响也显式写「无」）、affectsDelivery（影响交付，必填，同前）。`,
-    "硬约束：清单中每条问题（含 suggestion）都必须被至少一条处置的 source 覆盖——登记不修/归档也算处置；脚本按 source 引用集合机器校验，漏引用会整轮打回。",
+    `dispositions 每条字段：id（新条目格式 D-${round}-<序>；延续上轮的条目复用原 id）、title（一句话标题）、source（数组：该条覆盖的问题 ref 清单——每条必须取自上方「本轮问题清单」，合并处置时把覆盖的 ref 全部列入同一条；上轮延续条目的历史 ref 保留并列）、action（fixed|deferred|archived）、location（修订位置）、reenactment（反例重演）、attackHints（给下轮聚焦复审的攻击点建议）、affectsDecision（影响决策，必填，无影响也显式写「无」）、affectsDelivery（影响交付，必填，同前）。`,
+    "硬约束：清单中每条问题都必须被至少一条处置的 source 覆盖——登记不修/归档也算处置；脚本按 source 引用集合机器校验，漏引用会整轮打回。",
   ]
     .filter(Boolean)
     .join("\n");
@@ -1014,7 +984,7 @@ for (let round = 1; round <= maxRounds; round++) {
       return await finish(
         "escalated",
         round,
-        `方案性意见修不动，停回用户裁决：${blocked.reason}。停回通道：用户裁决新候选后重写设计文档再重新发起 W1（价值审必送）；本轮已完成的部分处置见处置表`,
+        `方案性意见修不动，停回用户裁决：${blocked.reason}。停回通道：用户裁决新候选后重写设计文档再重新发起 W1（方向审必送）；本轮已完成的部分处置见处置表`,
         blocked,
       );
     }
@@ -1089,15 +1059,6 @@ for (let round = 1; round <= maxRounds; round++) {
   const deferredCount = dispositions.filter((d) => d.action === "deferred").length;
   const archivedCount = dispositions.filter((d) => d.action === "archived").length;
   log(`第 ${round} 轮修复完成：处置 ${dispositions.length} 条（修复 ${fixedCount} / 登记 ${deferredCount} / 归档 ${archivedCount}），处置表 ${roundAbs}/dispositions.md`);
-
-  // suggestion 处置后收敛出口（设计 §5.2：处置完即终止，不派纯确认轮）
-  if (convergeAfterFix) {
-    return await finish(
-      "converged",
-      round,
-      `第 ${round} 轮收敛：must-fix 0 且上轮 must-fix 处置全部经实证复核确认（suggestion 处置不经实证，以台账状态保留于 remaining）；当轮 suggestion ${roundSuggestion} 条已全部处置（修复 ${fixedCount} / 登记 ${deferredCount} / 归档 ${archivedCount}，处置表 ${roundAbs}/dispositions.md）。下游：T2 确认点`,
-    );
-  }
 }
 
 // ── 轮次耗尽收尾 ──

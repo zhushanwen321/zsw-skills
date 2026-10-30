@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: tech-design-wf 技能 W1 设计文档审查循环：价值审 gate（否决即停回 T1）→
+description: tech-design-wf 技能 W1 设计文档审查循环：方向审 gate（打回即停回 T1）→
   三维并行审查（主审/影响面审/简洁审，R1 全面审、R2+ 聚焦复审逐条对账）→ 文档修复者
   单 agent 兼语义去重合并 + 修复 + 处置表产出（dispositions.json/md）→ 循环至
   converged / escalated / stuck / max-rounds。产物落
@@ -24,7 +24,7 @@ args:
   reviewers:
     type: json
     description: 自定义 reviewer 模板绝对路径数组，按文件 basename 覆盖同名维度
-      （tech-design-value-review.md / tech-design-review.md /
+      （tech-design-direction-review.md / tech-design-review.md /
       tech-design-impact-review.md / tech-design-simplicity-review.md）；
       未匹配任何维度的条目忽略并告警
   attempt:
@@ -37,16 +37,15 @@ args:
 
 // ── 结果与中间类型（JSDoc 作为字段描述注入子 agent） ──
 
-interface ValueVerdict {
-  /** 价值审报告文件路径（脚本按确定性位置校验，不以自报为准） */
+interface DirectionVerdict {
+  /** 方向审报告文件路径（脚本按确定性位置校验，不以自报为准） */
   reportFile: string;
   /** must-fix 条数（与报告一致；脚本以 problems 清单派生计数为准，此字段做交叉校验） */
   mustFix: number;
-  /** suggestion 条数（与报告一致；同上做交叉校验） */
-  suggestion: number;
-  /** 逐条问题清单（否决判定与计数派生的唯一事实源；条数合计须等于 mustFix+suggestion） */
+  /** 逐条问题清单（打回判定与计数派生的唯一事实源；条目无 level 字段——唯一级别是
+   *  must-fix；条数合计须等于 mustFix） */
   problems: ProblemRef[];
-  /** 一句话价值判定（终态档案 valueOneliner/oneliner 字段来源） */
+  /** 一句话方向判定（终态档案 oneliner 字段来源） */
   oneliner: string;
 }
 
@@ -62,10 +61,8 @@ interface ReconEntry {
 }
 
 interface ProblemRef {
-  /** 报告内问题锚点，格式 review-<维度>#<序>（如 review-main#2），与报告小节标题一致 */
+  /** 报告内问题锚点，格式 review-<维度>#<序>（如 review-main#2 / 方向审 review-direction#<序>），与报告小节标题/表格行一致 */
   ref: string;
-  /** must-fix 级或 suggestion 级（与报告小节分级一致） */
-  level: "must-fix" | "suggestion";
   /** 一句话问题标题 */
   title: string;
 }
@@ -73,9 +70,8 @@ interface ProblemRef {
 interface ReviewerVerdict {
   /** must-fix 条数（与报告一致；脚本以 problems 清单派生计数为准，此字段做交叉校验） */
   mustFix: number;
-  /** suggestion 条数（与报告一致；同上做交叉校验） */
-  suggestion: number;
-  /** 逐条问题清单（处置表覆盖校验的对账锚点；条数须与 mustFix/suggestion 计数一致） */
+  /** 逐条问题清单（处置表覆盖校验的对账锚点；条目无 level 字段——唯一级别是 must-fix；
+   *  条数须与 mustFix 计数一致） */
   problems: ProblemRef[];
   /** R1 恒空数组；R2+ 对上轮处置表必对账集逐条申报 */
   reconciliation: ReconEntry[];
@@ -88,8 +84,6 @@ interface Disposition {
   title: string;
   /** 该条合并覆盖的原始问题引用（如 review-main#2；同根因跨维度合并时多个来源并列） */
   source: string[];
-  /** must-fix 级或 suggestion 级 */
-  level: "must-fix" | "suggestion";
   /** fixed = 已修复 / deferred = 登记不修 / archived = 归档 */
   action: "fixed" | "deferred" | "archived";
   /** 修订位置（设计文档章节/锚点） */
@@ -119,24 +113,22 @@ interface FixOutcome {
 }
 
 interface LoopResult {
-  /** converged = 收敛；value-rejected = 价值审否决；escalated = 方案性卡点停回用户；
+  /** converged = 收敛；direction-rejected = 方向审打回；escalated = 方案性卡点停回用户；
    *  stuck = must-fix 连续多轮不降；max-rounds = 轮次上限耗尽；
    *  setup-failure / review-failure / fix-failure = 环节失败（message 含恢复动作） */
-  terminated: "converged" | "value-rejected" | "escalated" | "stuck" | "max-rounds" | "setup-failure" | "review-failure" | "fix-failure";
-  /** 实际执行的审查轮数（价值审不计轮；converged 记收敛轮） */
+  terminated: "converged" | "direction-rejected" | "escalated" | "stuck" | "max-rounds" | "setup-failure" | "review-failure" | "fix-failure";
+  /** 实际执行的审查轮数（方向审不计轮；converged 记收敛轮） */
   rounds: number;
   /** 审查产物根目录（绝对路径；setup-failure 早期可能为空串） */
   runDir: string;
   /** 审查对象设计文档（绝对路径） */
   designDoc: string;
-  /** 价值审一句话判定（未跑到价值审时为空串） */
-  valueOneliner: string;
+  /** 方向审一句话判定（final.json 对外字段名 = oneliner；未跑到方向审时为空串） */
+  directionOneliner: string;
   /** 每轮三报告 must-fix 总和轨迹（下标 0 = 第 1 轮） */
   mustFixTrajectory: number[];
-  /** suggestion 处置汇总（终态在档的全部 suggestion 级处置条目） */
-  suggestionDispositions: { id: string; action: string; title: string; location: string }[];
   /** 终态仍未收敛/未复核的条目（stuck/max-rounds 残余风险矩阵的输入） */
-  remaining: { id: string; title: string; level: string; status: string; attackHints: string }[];
+  remaining: { id: string; title: string; status: string; attackHints: string }[];
   /** escalated 时的方案性卡点（其余终态为 null） */
   blocked: { items: string[]; reason: string } | null;
   /** 一句话终态说明；失败态与停回态含恢复动作/停回通道 */

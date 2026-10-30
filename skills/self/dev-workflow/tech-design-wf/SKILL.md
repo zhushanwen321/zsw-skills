@@ -15,19 +15,23 @@ description: >-
 **三阶段产出完整设计包**，每阶段结束默认停下向用户确认产出是否合理，确认后进下一阶段：
 
 ```
-T1 写设计文档 + 用例走查（Step 0-7）──确认──▶ T2 审查循环（价值审 → 三审 → 修复收敛）
-                                              │确认
-                                              ▼
-                                   T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
-                                              │确认
-                                              ▼
-                                        设计包交付 → dev-flow-wf 执行
+T1 设计文档（Step 0 问题定义 → Step D 诊断期 → Step 1-5 写作 → Step 6 自检 → Step 7 用例走查）
+   │ 确认
+   ▼
+T2 审查循环（方向审先行 → 三审并行 → 三态修复循环至收敛）
+   │ 确认
+   ▼
+T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
+   │ 确认
+   ▼
+设计包交付 → dev-flow-wf 执行
 ```
 
 - **跳过确认的唯一通道 = 前期授权**：用户宣布全托管/夜间托管，或显式说「一路执行」时三阶段连续推进，阶段产出仍完整呈现（陈述性展示，不构成等待点）
+- **T2 进场门槛 = 机器项全绿 [MANDATORY]**：进 T2 派审前 `scripts/check-design-doc.mjs` 必须 exit 0（T1 Step 6 机器自检跑同一脚本）——骨架完整性、锚点对齐、导航表-决策节对账这类机器可查的写作完备性问题在 T1 拦截，T2 审查不花轮次报它们（执行细节见 `flow/review.md` T2 进场门槛节）
 - **用语规范 [MANDATORY]**：T1 动笔写设计文档前必须加载 meta-words-guidance skill（zcode 用 Skill 工具；pi / 无 Skill 工具环境直接 Read `~/.agents/skills/meta-words-guidance/SKILL.md` 及其词表），写出的文档必须遵守其中的用语规范（四张词表逐条适用 + 该 skill 的扫描自查），细则见 `flow/write.md` 头部
-- 确认的裁决维度：T1 = 问题定义、方案方向与用例走查缺口处置；T2 = 审查是否真收敛（含价值审复述的理解校验）；T3 = 拆分粒度与验收计划。打回 = 回该阶段或上一阶段修订。**T1/T3 确认点以「人工审核导航」为入口**：每条关键决策写作期已定审核级别（A = 必须逐条裁决 / B = 无异议即过 / C = 局部实现细节不入决策节），用户只逐条裁决 A 级、扫 B 级清单，不再默认通读全文；分级判据与六维影响评估（架构/功能/复杂度/性能/资源/红线触碰）见 `references/review-guide-rubric.md`
-- **与老 tech-design 的关系（灰度并行）**：本技能是流程重构版（impl-plan 创建从 dev-flow 上移至 T3；审查循环 workflow 化），老 tech-design 原样保留——判据面（红线/准则/rubric/reviewer）与老版一致，变量只锁流程形态；任一时点可切回老版
+- 确认的裁决维度：T1 = 问题定义、方案方向与用例走查缺口处置；T2 = 审查是否真收敛（含方向审一句话判定的转述）；T3 = 拆分粒度与验收计划。打回 = 回该阶段或上一阶段修订。**T1/T3 确认点以「人工审核导航」为入口**：每条关键决策写作期已定审核级别（A = 必须逐条裁决 / B = 无异议即过 / C = 局部实现细节不入决策节），用户只逐条裁决 A 级、扫 B 级清单，不再默认通读全文；分级判据与六维影响评估（架构/功能/复杂度/性能/资源/红线触碰）见 `references/review-guide-rubric.md`
+- **与老 tech-design 的关系（灰度并行）**：本技能是流程与判据的重构版（impl-plan 创建从 dev-flow 上移至 T3；审查循环 workflow 化；自带原则层、Step D 诊断期、方向审与三态修复循环），老 tech-design 原样保留作灰度对照——两技能判据面已正式分叉，任一时点可切回老版，退役时点由用户裁决
 
 ## 设计包（dev-flow-wf 的唯一入口输入）
 
@@ -38,18 +42,19 @@ T1 写设计文档 + 用例走查（Step 0-7）──确认──▶ T2 审查�
 | `<name>.md` | T1 | 文件存在 |
 | `<name>.impl-plan.md` + `<name>.impl-plan.json`（双格式） | T3 | 两文件存在且单元 id 集一致 |
 | `<name>.symbol-watchlist.json`（符号词表） | T3 | 文件存在且 scan ∪ skip 词集 = 设计文档+impl-plan.md 反引号词全集（design-code-sync 发起时机器复验） |
-| `<name>/`（审查报告目录）+ `<name>/final.json`（终态记录） | T2 | 目录存在且 final.json.terminated == "converged" |
+| `<name>/`（审查报告目录：根 `review-direction.md` 方向审报告 + `round-N/` 三审报告与处置表）+ `<name>/final.json`（终态记录） | T2 | 目录存在且 final.json.terminated == "converged" |
 | `<name>.plan-review.md`（并行度复审） | T3 | 触发门槛（关键路径深度 ≥3 或单元 ≥4）时必须存在；未触发缺省合法 |
 
 ## 意图路由
 
 | 用户意图 | read |
 |---|---|
-| 开始三阶段（拿到问题/需求） | `flow/write.md`（T1 全程，含 Step 0 问题定义） |
+| 开始三阶段（拿到问题/需求） | `flow/write.md`（T1 全程，含 Step 0 问题定义与 Step D 诊断期） |
 | T1 用例走查（方向确定性检查 / 生成用例 / 派走查 / 缺口反哺） | `flow/write.md` Step 7 |
 | T2 审查循环（发起/复审/手工降级） | `flow/review.md` |
 | T3 实施计划（审查收敛后） | `flow/plan.md` |
-| 审查后修复 / 多轮循环协议 | `flow/write.md` Step 8（循环由 must-fix 驱动 + suggestion 处置制） |
+| 审查后修复 / 多轮循环协议 | `flow/write.md` Step 8（循环由 must-fix 驱动 + 处置三态） |
+| 七原则 / 产物表 / 设计分型 | `references/principles.md` |
 | 问结构/原则/反模式/验收最佳实践 | `references/`（doc-structure / design-principles / anti-patterns / acceptance-practices） |
 | 决策审核分级（A/B/C 判据 + 六维影响评估 + 导航节格式） | `references/review-guide-rubric.md` |
 | 行为 × 状态组合类决策的裁决材料（穷举矩阵 + 视觉元素 HTML demo） | `references/enumeration-matrix.md` |
@@ -65,33 +70,34 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 | zcode | 会话可见 CreateWorkflow 工具 / saved workflows | saved workflow `tech-review-loop`（`CreateWorkflow saved` 发起） |
 | pi（subagent-workflow extension） | 宿主为 pi coding agent、workflow 工具可用 | 本 skill 安装位置上级的 `../workflows/pi/tech-review-loop.js`——复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run tech-review-loop --args designDoc=<路径> projectRoot=<路径> maxRounds=<N>`（数组型参数 reviewers 不支持——--args 值全字符串，用缺省四件模板） |
 
-**两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers? }`（reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件）；终态：converged / value-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 停回通道表）。
+**两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers? }`（reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件 = 方向审 `tech-design-direction-review` + 三审 `tech-design-review` / `tech-design-impact-review` / `tech-design-simplicity-review`）；终态：converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 终态处置表）。
 
-## 核心红线（13 条，详解见 references/design-principles.md）
+## 核心红线（14 条，详解见 references/design-principles.md 与 references/principles.md）
 
-1. [MANDATORY] 问题定义先行：前置探明门 + 产品最小形态三问 + 前提清单节；未探明先调研，禁止猜
-2. [MANDATORY] 产品最小形态前置：最小形态主干 / 增量逐项裁决 / 扩展点须已发生证据
-3. [MANDATORY] 五段骨架：背景目标 → 现状与问题 → 解决方案（多方案对比）→ 验收 → 下一层拆分
-4. [MANDATORY] 方案对比 ≥2，评长期/短期/风险给推荐；标注触及的最高 P 级（功能分级登记表取）
-5. [MANDATORY] 使用者视角主线 + 抽象锚定例子
-6. [MANDATORY] 自包含 + 结论先行；SCQA 开篇、每章首句结论
-7. [MANDATORY] scope = 当前层 → 紧邻下一层，不跨 2 层
-8. [MANDATORY] 全流程坐标系：端到端大流程图 + 问题点/决策以环节锚定
-9. [MANDATORY] 验收用真实场景（非单测非 mock）+ e2e 影响面评估
-10. [MANDATORY] 陈述四分类推断必核实 + 绝对化断言禁令（改写为取舍表）
-11. [MANDATORY] 直接解决优先：定级 → 路线显式进对比 → 方案落病因环节 → 非功能后置三档裁决
-12. [MANDATORY] 单波次交付：一个需求 = 一份设计文档 + 一份 impl-plan，实际执行只有一个波次；未经用户明确指示，禁止拆成多个波次分别走完整流程（如「先完成波次 1 的 tech-design → T3 → 实施，再发起波次 2 的完整流程」）。允许的拆分 = 文档与 impl-plan 内部的单元/分组编排（多 subagent、多组并行执行）；分期交付仅随用户明确指示出现，且各期共用同一份设计文档与同一审查终态
-13. [MANDATORY] 决策审核分级：关键决策节每条决策定 A/B 级（C 级挪实现机制节），文档头部落「人工审核导航」表且锚点集与决策节一致；判据与格式见 `references/review-guide-rubric.md`
+1. [MANDATORY] 五段骨架：背景目标 → 现状与问题 → 解决方案（演进型多方案对比 / 终态型公理与迁移路径）→ 验收 → 下一层拆分
+2. [MANDATORY] 方案对比 ≥2：演进型评长期/短期/风险给推荐并标注触及的最高 P 级；终态型改为迁移路径对比（候选至少含一次到位与分波次两型），成本只呈现不作推荐依据
+3. [MANDATORY] 使用者视角主线 + 抽象概念配真实例子锚定
+4. [MANDATORY] 自包含 + 结论先行：SCQA 开篇、每章首句结论
+5. [MANDATORY] scope = 当前层 → 紧邻下一层，不跨 2 层
+6. [MANDATORY] 全流程坐标系：端到端大流程图 + 问题点/决策以环节锚定
+7. [MANDATORY] 验收用真实场景（非单测非 mock）+ e2e 影响面评估固定子节
+8. [MANDATORY] 陈述四分类（事实/推断/知识/决策）推断必核实 + 绝对化断言禁令（改写为取舍表）
+9. [MANDATORY] 决策审核分级：关键决策节每条决策定 A/B 级（C 级挪实现机制节），文档头部落「人工审核导航」表且锚点集与决策节一致；判据见 `references/review-guide-rubric.md`
+10. [MANDATORY] 原则层强制：Step D 逐条扫描七原则（P1-P7）触发条件，触发的必须执行思考操作子并产出对应产物表，P5 推断核实全量强制；规格见 `references/principles.md`
+11. [MANDATORY] 设计分型声明：文档头部标注终态型/演进型与判定依据（终态型 = 用户显式要求 / 修复史判定「未修到」/ 架构级设计对象，任一即触发；演进型附「为什么不需要终态视角」辩护）
+12. [MANDATORY] T2 进场门槛 = 机器项全绿：`scripts/check-design-doc.mjs` exit 0 才派审，机器可查的写作完备性问题不带进 T2
+13. [MANDATORY] 处置三态：审查唯一报告级别 = must-fix，每条 finding 处置 fixed（修复）/ deferred（登记不修）/ archived（归档）之一并逐条记录
+14. [MANDATORY] 单波次交付：一个需求 = 一份设计文档 + 一份 impl-plan，未经用户明确指示禁止拆成多个波次分别走完整流程；例外 = 终态型波次可标注目标交付版本（项目存在版本化交付队列时），各期共用同一设计文档与审查终态，分期映射在 T3 确认点一次批准
 
-> 红线细则与操作化表达在 `flow/write.md` 对应 Step 内；完整 14 条准则见 `references/design-principles.md`。
+> 红线细则与操作化表达在 `flow/write.md` 对应 Step 内；完整准则见 `references/design-principles.md`。问题定义先行（前置探明门 + 产品最小形态三问）与直接解决优先同样强制，因属流程步骤而非文档判据，落在 `flow/write.md` Step 0 与 Step 3 承载，不占本清单条目。
 
 ## 层适配
 
 层无关——差异只在 §3/§4 侧重点（子系统划分 / 需求集合 / 接口与数据模型 / 测试用例与代码任务），完整调节表见 `references/doc-structure.md` 末尾。**下一层产物 = 代码任务/技术方案的设计才进 T3**；到子系统/需求集合为止的设计在 T2 收敛即交付（无 T3）。
 
-## 审查：价值评审先行 + 三 reviewer 并行
+## 审查：方向审先行 + 三 reviewer 并行
 
-两阶段审查（T2）：`tech-design-value-review` 先行（一句话复述测试/问题值不值得这么解/最小形态检查）——must-fix > 0 打回重写**不派三审**；通过后三 reviewer 并行（`tech-design-review` 主审 / `tech-design-impact-review` 影响面审 / `tech-design-simplicity-review` 简洁审，agent 定义在 `agents/`，分工判据在 `review/rubric-design-doc.md`）。审查与修复分离：agent 只报告不代改；修复按 `flow/write.md` Step 8 循环协议。**轮次唯一形态：每轮 = 聚焦审 + 修复（R1 全面、R2+ 只审上轮处置表 + 攻击点），不存在全面审+聚焦审双重派发**。
+两阶段审查（T2）：`tech-design-direction-review` 方向审先行——第一道门，判据 D1-D5（D1 分型正确 / D2 前提可击穿：否定性断言找写者侧反例、✅ 条目抽样复核实 / D3 终态有效：公理是真不变量、差距表无漏项、波次不制造新差距 / D4 产物表完整且真实：漏行与行级填表不实都算 / D5 问题定义忠于真问题）——must-fix > 0 打回 T1 重做（含 Step D 诊断期重跑）**不派三审**；通过后三 reviewer 并行（`tech-design-review` 主审：方案级判据 + 断言-红灯映射表核对 / `tech-design-impact-review` 影响面审：写入点穷举与代价量化 / `tech-design-simplicity-review` 简洁审：机制必要性与概念数净增；agent 定义在 `agents/`，分工判据在 `review/rubric-design-doc.md`）。审查与修复分离：agent 只报告不代改；修复按 `flow/write.md` Step 8 循环协议。**轮次唯一形态：每轮 = 聚焦审 + 修复（R1 全面、R2+ 只审上轮处置表 + 攻击点），不存在全面审+聚焦审双重派发**。
 
 ## 标记说明
 
@@ -100,4 +106,4 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 | `[MANDATORY]` | 写作红线，不遵守文档不合格 |
 | （无标记） | 强烈建议 |
 
-本 skill 无 `[HISTORICAL]` 项（首建）；老 tech-design 的事故教训经其 [HISTORICAL] 条目承载，判据同源继承。
+本 skill 无 `[HISTORICAL]` 项（首建）；老 tech-design 的事故教训经其 [HISTORICAL] 条目承载，可参照。
