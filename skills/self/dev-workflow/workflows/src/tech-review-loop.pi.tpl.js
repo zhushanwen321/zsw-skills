@@ -11,10 +11,10 @@ parameters:
   properties:
     designDoc:
       type: string
-      description: 审查对象设计文档绝对路径（修复者会直接编辑该文件完成修复）
+      description: 设计目录绝对路径（内含六个章节 JSON 权威源；修复者直接编辑章节 JSON 完成修复）或其渲染 md 路径（以 .rendered.md 结尾时内部归一为设计目录）；存量 md 单文件设计包不受支持——进场校验会输出迁移指引
     projectRoot:
       type: string
-      description: 项目根绝对路径（AGENTS/PRODUCT 上下文提示来源 + .tmp/tech-design 产物目录落点）
+      description: 项目根绝对路径（AGENTS/PRODUCT 上下文提示来源 + skill-data 审查产物目录的 project-slug 计算输入）
     maxRounds:
       type: number
       default: 10

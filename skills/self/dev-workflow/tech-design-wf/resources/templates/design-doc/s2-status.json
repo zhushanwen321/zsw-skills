@@ -1,0 +1,37 @@
+{
+  "currentBehaviour": "<使用者视角的现状 + 真实例子（系统提示词 / 接口请求响应 / 界面片段），取自代码不编造>",
+  "flowDiagram": "<端到端大流程图（ASCII）：本设计涉及的主链路从源头到终点，全文坐标系，问题点与决策用它的环节名锚定>",
+  "problems": [
+    {
+      "id": "PR1",
+      "stage": "<大流程 → 环节名>",
+      "symptom": "<现象（当前实际怎么出错，最好附触发条件）>",
+      "rootCause": "<根因（不是「体验差」这类表象）>"
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "AS1",
+      "statement": "<前提陈述（设计当作输入而未在本设计中论证的假设）>",
+      "status": "pending",
+      "evidence": "<verified 时必填：核实动作（file:line / 探针 / 排除记录）>",
+      "impactIfFalse": "<该前提不成立时的影响>"
+    }
+  ],
+  "artifactTables": {
+    "stateCopies": [
+      {
+        "id": "SC1",
+        "state": "<被枚举的核心运行态数据名>",
+        "location": "<该副本的持有位置：进程 / 模块 / 文件，具体到代码真实路径>",
+        "nature": "authority",
+        "sync": "<该副本靠什么跟随权威（单读源 / 事件订阅 / 重建）；权威行写「唯一权威」>",
+        "excluded": false,
+        "exclusionNote": "<excluded=true 时必填：排除依据一句话>"
+      }
+    ],
+    "signalImplications": [],
+    "repairHistory": [],
+    "upstreamDeps": []
+  }
+}

@@ -2,20 +2,25 @@
 description: tech-design-wf 技能 W1 设计文档审查循环：方向审 gate（打回即停回 T1）→
   三维并行审查（主审/影响面审/简洁审，R1 全面审、R2+ 聚焦复审逐条对账）→ 文档修复者
   单 agent 兼语义去重合并 + 修复 + 处置表产出（dispositions.json/md）→ 循环至
-  converged / escalated / stuck / max-rounds。产物落
-  <projectRoot>/.tmp/tech-design/<文档名>/（round-N[.attemptM]/ 子目录），终态档案
-  final.json。终态判定 / 覆盖校验 / stuck 计数全部脚本侧完成，不信任 agent 自报收敛
-whenToUse: tech-design-wf 技能 W1 阶段——技术设计文档（tech-design 产物）需要对抗式
-  审查修复循环时调用；必传 designDoc（设计文档绝对路径，修复者会直接编辑它）与
-  projectRoot（项目根绝对路径）。不用于代码 review-fix 循环（用 saved review-fix-loop）
+  converged / escalated / stuck / max-rounds。审查读设计目录内章节 JSON 渲染出的
+  rendered.md（setup 跑 check-design-doc.mjs 进场校验 + render-design-doc.mjs 刷新视图），
+  修复者直接编辑章节 JSON 并在修改后重渲染。产物落
+  ~/.agents/skill-data/tech-design/<project-slug>/<设计名>/（round-N[.attemptM]/ 子目录），
+  终态档案 final.json。终态判定 / 覆盖校验 / stuck 计数全部脚本侧完成，不信任 agent 自报收敛
+whenToUse: tech-design-wf 技能 W1 阶段——技术设计文档（tech-design 产物，分章节 JSON 形态）
+  需要对抗式审查修复循环时调用；必传 designDoc（设计目录绝对路径，或其渲染 md 路径——内部
+  归一为设计目录；修复者直接编辑章节 JSON）与 projectRoot（项目根绝对路径）。不用于代码
+  review-fix 循环（用 saved review-fix-loop）
 args:
   designDoc:
     type: string
-    description: 审查对象设计文档绝对路径（修复者会直接编辑该文件完成修复）
+    description: 设计目录绝对路径（内含六个章节 JSON 权威源；修复者直接编辑章节 JSON 完成
+      修复）或其渲染 md 路径（以 .rendered.md 结尾时内部归一为设计目录）；存量 md 单文件
+      设计包不受支持——进场校验（check-design-doc.mjs）会输出迁移指引
     required: true
   projectRoot:
     type: string
-    description: 项目根绝对路径（AGENTS/PRODUCT 上下文提示来源 + .tmp/tech-design 产物目录落点）
+    description: 项目根绝对路径（AGENTS/PRODUCT 上下文提示来源 + skill-data 审查产物目录的 project-slug 计算输入）
     required: true
   maxRounds:
     type: number
@@ -121,7 +126,7 @@ interface LoopResult {
   rounds: number;
   /** 审查产物根目录（绝对路径；setup-failure 早期可能为空串） */
   runDir: string;
-  /** 审查对象设计文档（绝对路径） */
+  /** 审查对象设计目录（绝对路径；渲染 md 输入已归一——目录内章节 JSON 为权威源） */
   designDoc: string;
   /** 方向审一句话判定（final.json 对外字段名 = oneliner；未跑到方向审时为空串） */
   directionOneliner: string;
@@ -189,9 +194,15 @@ const HOST_PLATFORM = "zcode";
 //  - 终态枚举按设计 §5.3：direction-rejected / converged / escalated / stuck /
 //    max-rounds（+ 环节失败三态）；escalated 一律停回用户裁决，不轮内自行重跑
 //    方案对比（F18：方向裁决权上收）
-//  - runDir 命名按 F22：~/.agents/skill-data/tech-design/<project-slug>/<文档 basename
-//    去扩展名>/（project-slug = realpath(projectRoot) basename + sha256 前 8 位，六域
+//  - runDir 命名按 F22：~/.agents/skill-data/tech-design/<project-slug>/<设计目录
+//    basename>/（project-slug = realpath(projectRoot) basename + sha256 前 8 位，六域
 //    对账同一组固定向量），重发起轮次目录带 attempt 后缀（round-3.attempt2），不覆盖历史
+//  - designDoc 语义 = 设计目录（六个章节 JSON 权威源所在）或其渲染 md 路径（以
+//    .rendered.md 结尾时取其目录归一）；setup 对设计目录跑 check-design-doc.mjs
+//    （exit 0 = 进场门槛，非 0 = setup-failure 且 message 透传校验脚本 stdout——含存量
+//    md 输入的迁移指引），随后跑 render-design-doc.mjs 刷新阅读视图（幂等）——方向审 /
+//    三审读渲染视图（需核对结构化字段时提示读章节 JSON）；修复者直接编辑章节 JSON
+//    （逐文件小步修改）、修改后重渲染并同步跨章节引用字段
 //  - 一切失败 failed-as-return（T8：throw 的 errored run 不可 resume）——含未知
 //    参数键白名单 fail-fast 也走 return（rfl 此处用 throw，本脚本按 T8 收紧）
 // 数据传递 = 文件总线（沿 rfl 惯例）：报告 / 处置表落盘于 runDir，ask 只传路径；
@@ -270,6 +281,16 @@ interface RunManifest {
 }
 
 // ── 参数窄化（纯函数，便于片段级验证） ──
+
+/** designDoc 归一：设计目录直接用；渲染 md 路径（.rendered.md 结尾）取其目录。
+ *  其余 .md 输入（存量 md 设计包）原样透传——由 setup 的 check 脚本输出迁移指引 */
+function normalizeDesignDoc(p: string): string {
+  if (!p.endsWith(".rendered.md")) return p;
+  const stem = p.slice(0, -".rendered.md".length);
+  const slash = stem.lastIndexOf("/");
+  return slash > 0 ? stem.slice(0, slash) : slash === 0 ? "/" : stem;
+}
+
 function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
   const problems: string[] = [];
   for (const key of Object.keys(raw)) {
@@ -281,10 +302,10 @@ function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
     }
   }
   const isAbs = (v: unknown): v is string => typeof v === "string" && v.trim().startsWith("/");
-  const designDoc = isAbs(raw.designDoc) ? raw.designDoc.trim() : "";
+  const designDoc = normalizeDesignDoc(isAbs(raw.designDoc) ? raw.designDoc.trim().replace(/\/+$/, "") : "");
   const projectRoot = isAbs(raw.projectRoot) ? raw.projectRoot.trim() : "";
   if (designDoc === "") {
-    problems.push("designDoc 缺失或非绝对路径：须传入设计文档绝对路径（审查与修复对象）");
+    problems.push("designDoc 缺失或非绝对路径：须传入设计目录绝对路径（或其渲染 md 路径——内部归一为设计目录；审查与修复对象）");
   }
   if (projectRoot === "") {
     problems.push("projectRoot 缺失或非绝对路径：须传入项目根绝对路径（skill-data 产物落点的 slug 计算输入与 AGENTS/PRODUCT 上下文来源）");
@@ -588,7 +609,8 @@ if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
 const home = homeRes.stdout.trim();
 const expandTilde = (p: string): string => (p.startsWith("~/") ? `${home}/${p.slice(2)}` : p);
 
-// runDir 命名（F22）：~/.agents/skill-data/tech-design/<project-slug>/<设计文档 basename 去扩展名>/
+// runDir 命名（F22）：~/.agents/skill-data/tech-design/<project-slug>/<设计目录 basename>/
+//（designDoc 已归一为设计目录，basename 即设计名；runDir 与设计包目录语义上同位）
 const docBase = designDoc.split("/").pop() ?? designDoc;
 const docName = docBase.replace(/\.[^.]+$/, "");
 // project-slug 探针（realpath + sha256 前 8 位）：realpath 失败 = projectRoot 不存在，setup-failure
@@ -665,6 +687,14 @@ const TILDE_ROOT = "~/.agents/skills/tech-design-wf/agents";
 const RUBRIC_TILDE = "~/.agents/skills/tech-design-wf/review/rubric-design-doc.md";
 // 原则层（D 系列方向审攻击的产物表规格与触发条件来源，flow/review.md Step 2 同源）
 const PRINCIPLES_TILDE = "~/.agents/skills/tech-design-wf/references/principles.md";
+// 章节 JSON 字段规格（修复者编辑章节 JSON 的字段权威定义；渲染产物的命名 = 目录 basename
+// + .rendered.md，与渲染脚本一致）
+const SCHEMA_TILDE = "~/.agents/skills/tech-design-wf/references/design-doc-schema.md";
+// 设计文档机器校验 CLI（T2 进场门槛——flow/review.md 手工路径同一实现；对 md 输入输出迁移指引）
+const CHECK_DESIGN_TILDE = "~/.agents/skills/tech-design-wf/scripts/check-design-doc.mjs";
+// 渲染 CLI（阅读视图刷新：setup 刷新一次保证审查者读到的视图与章节 JSON 一致；修复者每轮
+// 修改章节 JSON 后由 prompt 指令重跑）
+const RENDER_TILDE = "~/.agents/skills/tech-design-wf/scripts/render-design-doc.mjs";
 // 处置表业务级校验 CLI（覆盖完整性 + 条目一致性；workflow 与 flow/review.md 手工路径
 // 双轨共用同一实现——校验器单一来源，双轨语义等价由同一脚本保证）
 const CHECK_CLI_TILDE = "~/.agents/skills/tech-design-wf/scripts/check-dispositions.mjs";
@@ -684,7 +714,12 @@ for (const t of TEMPLATE_BASENAMES) {
 }
 const rubricPath = expandTilde(RUBRIC_TILDE);
 const principlesPath = expandTilde(PRINCIPLES_TILDE);
+const schemaPath = expandTilde(SCHEMA_TILDE);
+const checkDesignCliAbs = expandTilde(CHECK_DESIGN_TILDE);
+const renderCliAbs = expandTilde(RENDER_TILDE);
 const checkCliAbs = expandTilde(CHECK_CLI_TILDE);
+// 渲染视图路径（方向审 / 三审的审查对象；渲染脚本按目录 basename + .rendered.md 命名）
+const renderedMd = `${designDoc}/${docBase}.rendered.md`;
 
 // 三审维度（固定三席并行；报告名确定性）
 const TRIALS: { dim: "main" | "impact" | "simplicity"; label: string; reportName: string }[] = [
@@ -693,8 +728,8 @@ const TRIALS: { dim: "main" | "impact" | "simplicity"; label: string; reportName
   { dim: "simplicity", label: "简洁审", reportName: "review-simplicity.md" },
 ];
 
-// 必读文件存在性探针：designDoc + 四模板 + 校验 CLI（rubric 是提示性路径，不挡启动）
-const requiredPaths = [designDoc, checkCliAbs, ...TEMPLATE_BASENAMES.map((t) => templates.get(t.dim) ?? "")].filter((p) => p !== "");
+// 必读文件存在性探针：设计目录 + 四模板 + 校验/渲染 CLI（rubric 与 schema 是提示性路径，不挡启动）
+const requiredPaths = [designDoc, checkCliAbs, checkDesignCliAbs, renderCliAbs, ...TEMPLATE_BASENAMES.map((t) => templates.get(t.dim) ?? "")].filter((p) => p !== "");
 const probe = await world.run("node", ["-e", NODE_CHECK_EXISTS, ...requiredPaths]);
 if (probe.exitCode !== 0) {
   return {
@@ -706,9 +741,44 @@ if (probe.exitCode !== 0) {
     mustFixTrajectory: [],
     remaining: [],
     blocked: null,
-    message: `必读文件缺失：${probe.stdout.trim()}。恢复动作：确认 tech-design-wf skill 已安装（四模板应位于 ~/.agents/skills/tech-design-wf/agents/ 下）或经 args.reviewers 传入自定义模板绝对路径覆盖同名维度；designDoc 路径笔误则修正后重新发起`,
+    message: `必读文件缺失：${probe.stdout.trim()}。恢复动作：确认 tech-design-wf skill 已安装（四模板位于 ~/.agents/skills/tech-design-wf/agents/，校验与渲染脚本位于 ~/.agents/skills/tech-design-wf/scripts/）或经 args.reviewers 传入自定义模板绝对路径覆盖同名维度；designDoc 应为设计目录（内含六个章节 JSON），路径笔误则修正后重新发起`,
   };
 }
+
+// ── T2 进场门槛 + 渲染视图刷新（与 flow/review.md 手工路径同一实现） ──
+// check：对设计目录跑七条规则校验，exit 0 = 机器项全绿才派审；非 0 时 stdout 是逐项失败
+// 原因（md 输入则是迁移指引原文）——原样透传进 message，恢复动作可循
+const designChk = await world.run("node", [checkDesignCliAbs, designDoc]);
+if (designChk.exitCode !== 0) {
+  return {
+    terminated: "setup-failure",
+    rounds: 0,
+    runDir: "",
+    designDoc,
+    directionOneliner: "",
+    mustFixTrajectory: [],
+    remaining: [],
+    blocked: null,
+    message: `设计文档机器项未全绿（check-design-doc.mjs exit ${designChk.exitCode}）：${designChk.stdout.trim() || designChk.stderr.trim()}。恢复动作：回 T1 按上述校验报告修复对应章节 JSON 后重跑脚本至 exit 0 再发起；输入为存量 md 设计包时按迁移指引处理（新格式只对新设计生效，存量不迁移）`,
+  };
+}
+// render：幂等刷新阅读视图——check 对渲染过期只告警不阻塞，这里主动重渲染消除告警，
+// 保证方向审 / 三审读到的 rendered.md 与章节 JSON 一致（缺失则生成）
+const designRender = await world.run("node", [renderCliAbs, designDoc]);
+if (designRender.exitCode !== 0) {
+  return {
+    terminated: "setup-failure",
+    rounds: 0,
+    runDir: "",
+    designDoc,
+    directionOneliner: "",
+    mustFixTrajectory: [],
+    remaining: [],
+    blocked: null,
+    message: `渲染产物刷新失败（render-design-doc.mjs exit ${designRender.exitCode}）：${designRender.stderr.trim() || designRender.stdout.trim()}。恢复动作：确认 ${RENDER_TILDE} 存在且设计目录内六个章节 JSON 完整可解析后重新发起（审查者读渲染视图，视图缺失即无法审查）`,
+  };
+}
+if (designRender.stdout.trim() !== "") log(designRender.stdout.trim());
 
 // ── 终态收尾（写 final.json + 发布终态 markdown；run 级状态在闭包中） ──
 const trajectory: number[] = [];
@@ -819,15 +889,16 @@ try {
       `第一步：Read 方向审模板 ${templates.get("direction") ?? ""}——其中是你的攻击方法与完整评审基准（D1-D5 判据），按它执行。`,
       `评审 rubric（D 系列判据来源，先读）：${rubricPath}`,
       `原则层（产物表规格与触发条件——D2 攻击前提清单、D4 对账产物表都要用）：${principlesPath}`,
-      `审查对象：${designDoc}`,
-      `项目上下文（存在则读，攻击「写者枚举 / 上游依赖」以项目自己的架构事实为依据，不凭偏好）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
+      `审查对象（渲染视图——读它）：${renderedMd}`,
+      `章节 JSON（需核对产物表等结构化字段原文时读，如 s2-status.json 的 artifactTables）：设计目录 ${designDoc}（meta / s1-context / s2-status / s3-solution / s4-accept / s5-breakdown 六个 json，字段规格见 ${schemaPath}）。`,
+      `项目上下文（存在则读，攻击「状态副本清单 / 上游依赖」以项目自己的架构事实为依据，不凭偏好）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
       "只读评审：禁止修改设计文档与项目内任何文件。",
       "",
       "五大方向逐项攻击（判据 D1-D5，每项先找反例，找不到反例才判通过）：",
       "① 分型（D1）：终态型有无触发依据（用户显式要求 / 修复史判定表「未修到」/ 架构级设计对象）；演进型的「为什么不需要终态视角」辩护是否被修复史判定表支撑。",
       "② 前提清单（D2，增强版，落文档 §2 末）：否定性断言逐条攻击——先枚举「谁可能在写、谁可能在持有」（跨包跨进程、含写者侧）再找写者侧反例，只查读侧不算核实；✅ 条目抽样复核实（亲自 read 它声称的核实位置，验证核实动作真实发生）；⏳ 待裁决项逐条判「是否影响方向」——动摇方案主干所依赖的现状理解的，升级 must-fix 要求先行裁决。",
       "③ 终态层（D3，终态型专用、演进型跳过）：公理清单逐条判「真不变量还是实现细节」（假设推翻重建，该陈述还必须成立吗）；终态-现状差距表逐维对照现状查漏项；迁移波次查是否制造新差距。",
-      "④ 产物表（D4）：触发的产物表存在且无漏行（写者枚举漏持有者、信号-蕴涵漏信号、上游依赖漏接触点均算漏行）+ 行级真实性抽样（随机挑行 read 源码验证行内容与代码一致）。",
+      "④ 产物表（D4）：触发的产物表存在且无漏行（状态副本清单漏持有者、信号-蕴涵漏信号、上游依赖漏接触点均算漏行）+ 行级真实性抽样（随机挑行 read 源码验证行内容与代码一致）。",
       "⑤ 问题定义（D5）：§1 定义的是现象还是根因、有无未识别的深层问题；探明手段（加日志/探针/先收集数据）不占设计主体；问题定义不被现状实现污染。",
       "声称「击穿 / 填表不实」前必须 read 源码取证；机制正确性 / 影响面 / 机制必要性留给三审（标 INFO 交接，不计数、不进 problems）。",
       `报告落盘：${directionReportAbs}（绝对路径；需要时先创建目录）。内容：Summary（must-fix 数量）+ 方向判定（一句话）+ Findings 表（每行：锚点编号 review-direction#<序>、优先级 MUST_FIX、位置、维度、描述、影响决策、影响交付、修复方向——每个 must-fix 引用 D 系列编号 + 文档位置；报告小节/行标题必须带锚点）。这份报告是方向打回时的唯一证据。`,
@@ -884,7 +955,7 @@ const REVIEWER_PERSONA =
   "你是资深设计文档评审员：只读评审，绝不修改任何文件；每个发现都要有你亲自读到的文档原文依据；报告与返回计数一致；指令无法执行或有矛盾时如实说明，不伪造结论。" +
   NO_ASK_RULE;
 const FIXER_PERSONA =
-  "你是设计文档修复者：先核实再修改、反例重演验证修复、联动同步关联章节；写入文档的每个断言必须标核实状态——能静态核实的（读源码/API 查询/文档核对）本会话核实后才写 ✅，不能核实的写 ⏳ 前提并指向实施期探针，禁止把推断、未尝试的查询、平台通用知识写成事实或 ✅；方案性意见修不动时如实置 status=\"blocked\" 并申报卡点，不硬改、不静默跳过。" +
+  "你是设计文档修复者：直接编辑设计目录内的章节 JSON（六个 json 是权威源，渲染视图由脚本生成、不手改）；先核实再修改、反例重演验证修复、联动同步关联章节与跨章节引用字段、修改后重跑渲染脚本；写入文档的每个断言必须标核实状态——能静态核实的（读源码/API 查询/文档核对）本会话核实后才写 ✅，不能核实的写 ⏳ 前提并指向实施期探针，禁止把推断、未尝试的查询、平台通用知识写成事实或 ✅；方案性意见修不动时如实置 status=\"blocked\" 并申报卡点，不硬改、不静默跳过。" +
   NO_ASK_RULE;
 
 let prevDispositions: Disposition[] = [];
@@ -936,7 +1007,8 @@ for (let round = 1; round <= maxRounds; round++) {
       `第一步：Read 评审模板 ${templates.get(t.dim) ?? ""}——其中是你的完整审查 checklist，按它执行评审。`,
       `评审 rubric（分级依据，先读）：${rubricPath}`,
       "意见形态约束（防止审查-修复螺旋）：发现的问题按其事实性质分两类处置——①断言失实：文档把推断/未核实/未尝试的查询写成了事实或 ✅（核实状态标注错误）——正常打 must-fix；②前提登记缺口：影响决策的信息缺失——正常打 must-fix。但「文档没有给出设计期无法知道的运行时结论」本身不是问题：对 CI 运行行为、构建产物、真机表现这类实施期才能核实的事实，唯一合格的登记形态就是 ⏳ 前提 + 实施期探针；文档已按此形态登记完备时，不得因「还能挖更深」或「该结论实施期才见分晓」继续打 must-fix——前提登记完备即该域已修复。你的修复方向同样受此约束：对实施期事实，方向只能是「登记/修正为 ⏳ 前提 + 探针」，不得要求修复者给出设计期无法知道的运行时结论。",
-      `审查对象：${designDoc}`,
+      `审查对象（渲染视图——读它）：${renderedMd}`,
+      `章节 JSON（需核对断言-红灯表等结构化字段原文时读，如 s4-accept.json 的 assertionRedlights）：设计目录 ${designDoc}（字段规格见 ${schemaPath}）。`,
       `项目上下文（存在则读，作产品与规范基准）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
       "只读评审：禁止修改设计文档与项目内任何文件。",
       round === 1 ? "本轮为首轮全面审：按模板 checklist 全项覆盖。" : "",
@@ -1090,11 +1162,11 @@ for (let round = 1; round <= maxRounds; round++) {
     "",
     "第一步：Read 三份评审报告：",
     ...TRIALS.map((t) => `- ${roundAbs}/${t.reportName}`),
-    `审查对象：${designDoc}——直接编辑该文件完成修复（你有文件工具，逐处小步修改）。`,
+    `审查对象：设计目录 ${designDoc}——权威源是目录内六个章节 JSON（meta / s1-context / s2-status / s3-solution / s4-accept / s5-breakdown），${renderedMd} 是渲染出的阅读视图（非权威，禁止手改）。直接编辑章节 JSON 文件完成修复（你有文件工具，逐文件小步修改）；字段规格见 ${schemaPath}。`,
     "",
     "任务：",
     "1. 语义去重合并：同根因跨维度表述的问题合并为一条处置（source 记录该条覆盖的全部问题 ref）。",
-    "2. 逐条三选一处置全部问题：fixed（修复——默认处置，直接编辑设计文档落实）/ deferred（登记不修，理由必须具体：涉及章节/机制/代价）/ archived（归档——已过时或不适用，理由必须具体）。判定存疑按 fixed 处理（滑坡防护）。",
+    "2. 逐条三选一处置全部问题：fixed（修复——默认处置，直接编辑章节 JSON 落实）/ deferred（登记不修，理由必须具体：涉及章节/机制/代价）/ archived（归档——已过时或不适用，理由必须具体）。判定存疑按 fixed 处理（滑坡防护）。",
     "3. 方案性意见（需要用户裁决的方向变化，如推翻问题定义、方案主干、最小形态）修不动 → 不要硬改：status 取 \"blocked\"，并在 blocked 里申报（items=卡住的问题清单，reason=为什么需要用户裁决）；其余可修的照常完成并产出处置表。无方案性卡点时 status 取 \"done\"，返回体不得含 blocked 字段——不要在 blocked 里填「无卡点」之类的说明（引擎只认 status，blocked 不是表态字段）。",
     outstandingBlock,
     problemsBlock,
@@ -1102,8 +1174,9 @@ for (let round = 1; round <= maxRounds; round++) {
     "修复纪律：",
     "- 反例重演：每条处置的 reenactment 写清该问题如何被发现，且修复后在修订稿上重演验证问题已消除。",
     "- 事实标注：你写入或触及的运行时、环境、宿主行为断言必须带核实状态——✅ 仅用于本会话亲自核实（读码/实测/静态查询）过的陈述，能静态核实的不许标 ⏳（先核实再写），设计期无法核实的写 ⏳ 前提并指向实施期探针。把推断或未尝试的查询写成事实/✅ 是下轮 must-fix 的头号来源（历次实测：连续 6 轮 must-fix 不降全部由此而来）。联动修改触及的每处既有断言同步重核实，防止标注在多次联动中丢失或失实。",
-    "- 否决记录：方案对比中被否决的候选，修复时把否决理由写进「不采用」栏，不删除候选项。",
-    "- 联动同步：修复触及的陈述须同步设计文档内关联章节（问题定义、方案对比、验收标准、风险登记、实施计划五处及其他关联处），不留前后矛盾。",
+    "- 否决记录：方案对比中被否决的候选，修复时把否决理由写进「不采用」栏（decisions 的 rejected 字段），不删除候选项。",
+    "- 联动同步：修复触及的陈述须同步设计文档内关联章节 JSON（问题定义、方案对比、验收标准、风险登记、实施计划五处及其他关联处），不留前后矛盾；跨章节引用字段（decisions 的 gapRefs / unitRefs / axiomRefs、scenarios 的 goalRefs、meta.json reviewNav 的 decisionId）与被引用数组的 id 同步更新——改 id 必须同步全部引用处。",
+    `- 渲染刷新：章节 JSON 每次修改后运行 node ${renderCliAbs} ${designDoc} 刷新渲染视图（rendered.md 由脚本生成、禁止手改；全部处置完成后确保已重渲染——下轮审查读渲染视图，视图过期会误判为未修复）。`,
     "- 语言回归：修订语言与原稿一致（中文），术语沿用文档既有词表，不引入未解释的新术语。",
     "",
     "返回 JSON：status / dispositions / revisionSummary，仅当 status=\"blocked\" 时再加第四个字段 blocked。",

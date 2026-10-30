@@ -2,20 +2,25 @@
 description: tech-design-wf 技能 W1 设计文档审查循环：方向审 gate（打回即停回 T1）→
   三维并行审查（主审/影响面审/简洁审，R1 全面审、R2+ 聚焦复审逐条对账）→ 文档修复者
   单 agent 兼语义去重合并 + 修复 + 处置表产出（dispositions.json/md）→ 循环至
-  converged / escalated / stuck / max-rounds。产物落
-  <projectRoot>/.tmp/tech-design/<文档名>/（round-N[.attemptM]/ 子目录），终态档案
-  final.json。终态判定 / 覆盖校验 / stuck 计数全部脚本侧完成，不信任 agent 自报收敛
-whenToUse: tech-design-wf 技能 W1 阶段——技术设计文档（tech-design 产物）需要对抗式
-  审查修复循环时调用；必传 designDoc（设计文档绝对路径，修复者会直接编辑它）与
-  projectRoot（项目根绝对路径）。不用于代码 review-fix 循环（用 saved review-fix-loop）
+  converged / escalated / stuck / max-rounds。审查读设计目录内章节 JSON 渲染出的
+  rendered.md（setup 跑 check-design-doc.mjs 进场校验 + render-design-doc.mjs 刷新视图），
+  修复者直接编辑章节 JSON 并在修改后重渲染。产物落
+  ~/.agents/skill-data/tech-design/<project-slug>/<设计名>/（round-N[.attemptM]/ 子目录），
+  终态档案 final.json。终态判定 / 覆盖校验 / stuck 计数全部脚本侧完成，不信任 agent 自报收敛
+whenToUse: tech-design-wf 技能 W1 阶段——技术设计文档（tech-design 产物，分章节 JSON 形态）
+  需要对抗式审查修复循环时调用；必传 designDoc（设计目录绝对路径，或其渲染 md 路径——内部
+  归一为设计目录；修复者直接编辑章节 JSON）与 projectRoot（项目根绝对路径）。不用于代码
+  review-fix 循环（用 saved review-fix-loop）
 args:
   designDoc:
     type: string
-    description: 审查对象设计文档绝对路径（修复者会直接编辑该文件完成修复）
+    description: 设计目录绝对路径（内含六个章节 JSON 权威源；修复者直接编辑章节 JSON 完成
+      修复）或其渲染 md 路径（以 .rendered.md 结尾时内部归一为设计目录）；存量 md 单文件
+      设计包不受支持——进场校验（check-design-doc.mjs）会输出迁移指引
     required: true
   projectRoot:
     type: string
-    description: 项目根绝对路径（AGENTS/PRODUCT 上下文提示来源 + .tmp/tech-design 产物目录落点）
+    description: 项目根绝对路径（AGENTS/PRODUCT 上下文提示来源 + skill-data 审查产物目录的 project-slug 计算输入）
     required: true
   maxRounds:
     type: number
@@ -121,7 +126,7 @@ interface LoopResult {
   rounds: number;
   /** 审查产物根目录（绝对路径；setup-failure 早期可能为空串） */
   runDir: string;
-  /** 审查对象设计文档（绝对路径） */
+  /** 审查对象设计目录（绝对路径；渲染 md 输入已归一——目录内章节 JSON 为权威源） */
   designDoc: string;
   /** 方向审一句话判定（final.json 对外字段名 = oneliner；未跑到方向审时为空串） */
   directionOneliner: string;

@@ -4,20 +4,21 @@
 
 ## 产物路径约定 [MANDATORY]
 
-- 方向审报告落 runDir 根 `~/.agents/skill-data/tech-design/<project-slug>/<name>/review-direction.md`（方向审在轮次循环外——与 workflow 引擎落点一致）；三审报告落 `round-N/`：`review-<dimension>.md`（dimension = main / impact / simplicity）+ `dispositions.md`（当轮处置表）
+- runDir 即设计包目录 `~/.agents/skill-data/tech-design/<project-slug>/<name>/`（六个章节 JSON 权威源与渲染产物 `<name>.rendered.md` 所在；审查者读渲染视图，需核对结构化字段时读章节 JSON）
+- 方向审报告落 runDir 根 `review-direction.md`（方向审在轮次循环外——与 workflow 引擎落点一致）；三审报告落 `round-N/`：`review-<dimension>.md`（dimension = main / impact / simplicity）+ `dispositions.md`（当轮处置表）
 - 重发起（direction-rejected 修完重来 / escalated 裁决后重跑）时新轮次目录带 attempt 后缀：`round-3.attempt2/`——不覆盖历史
-- 终态记录 `<name>/final.json`：`{ terminated, rounds, runDir, designDoc, oneliner, reportFile, mustFixTrajectory, remaining, blocked, message }`——oneliner = 方向审一句话判定；reportFile = runDir 根 review-direction.md 路径；设计包的审查证据（dev-flow-wf 入口判据读它）
+- 终态记录 `<name>/final.json`：`{ terminated, rounds, runDir, designDoc, oneliner, reportFile, mustFixTrajectory, remaining, blocked, message }`——oneliner = 方向审一句话判定；reportFile = runDir 根 review-direction.md 路径；designDoc = 设计目录绝对路径；设计包的审查证据（dev-flow-wf 入口判据读它）
 - 产物根 `~/.agents/skill-data/` 在 HOME 下天然不入 git；用户显式指定路径时以用户为准
 
 ## T2 进场门槛 [MANDATORY]
 
-进 T2 派审前，设计文档机器项必须全绿：`node <skill 安装位置>/scripts/check-design-doc.mjs <设计文档绝对路径>`（T1 `flow/write.md` Step 6 机器自检跑同一脚本）。exit 非 0 = 未全绿——**不派审**，先回 T1 按 stdout 校验报告修文档、重跑脚本至 exit 0 再进 T2。骨架完整性、锚点对齐、导航表-决策节对账、词表这类机器可查问题在 T1 拦截，T2 各 reviewer 不报它们。
+进 T2 派审前，设计文档机器项必须全绿：`node <skill 安装位置>/scripts/check-design-doc.mjs <设计目录绝对路径>`（T1 `flow/write.md` Step 6 机器自检跑同一脚本）。脚本按七条规则判定：六文件完整与枚举合法 / id 全局唯一 / 导航对齐 / 跨章节引用存在（引用字段指向的 id 必须在被引用数组中）/ 分型一致 / 产物表触发完备（渲染产物过期只告警不阻塞）。exit 非 0 = 未全绿——**不派审**，先回 T1 按 stdout 校验报告修对应章节 JSON、重跑脚本至 exit 0 再进 T2。输入是存量 md 单文件时脚本 exit 1 并输出迁移指引（新格式只对新设计生效、存量 md 设计包不迁移——指引全文见 `references/design-doc-schema.md` §11），按指引处理后另行发起。骨架完整性、引用对账、导航对齐这类机器可查问题在 T1 拦截，T2 各 reviewer 不报它们。
 
 ## W1 workflow 发起（zcode 环境默认动作）
 
 ```
 CreateWorkflow saved: tech-review-loop
-args: { designDoc: <绝对路径>, projectRoot: <项目根绝对路径>, maxRounds?: 10, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件> }
+args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workflow 内部归一为设计目录）>, projectRoot: <项目根绝对路径>, maxRounds?: 10, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件> }
 终态: converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / fix-failure（环境失败族）
 ```
 
@@ -33,7 +34,7 @@ args: { designDoc: <绝对路径>, projectRoot: <项目根绝对路径>, maxRoun
 
 ## 手工路径 Step 1：确认审查对象
 
-从用户/上游拿到：待审文档路径、一句话说明（这是什么设计）。报告路径按产物约定解析；进场门槛（机器项全绿）未过先回 T1。
+从用户/上游拿到：设计目录路径（给出的是渲染 md 路径时取其所在目录）、一句话说明（这是什么设计）。报告路径按产物约定解析；进场门槛（机器项全绿）未过先回 T1。
 
 ## 手工路径 Step 2：第一阶段——方向审（先于三 reviewer）
 
@@ -42,14 +43,14 @@ args: { designDoc: <绝对路径>, projectRoot: <项目根绝对路径>, maxRoun
 派 `tech-design-direction-review`（task 三段式）：
 
 ```text
-背景：对设计文档 <绝对路径> 做方向审（先于三 reviewer 的第一道门）。
-  该文档是 <一句话说明>。
+背景：对设计 <一句话说明> 做方向审（先于三 reviewer 的第一道门；设计包在 <设计目录绝对路径>）。
 目标：
   1. read <rubric 绝对路径> 加载方向审判据（D 系列）+ <principles 绝对路径>
      加载原则层（产物表规格与触发条件——D2 攻击前提清单、D4 对账产物表都要用）
-  2. read <文档绝对路径>
+  2. read <设计目录>/<name>.rendered.md（渲染视图——审查读它；需核对产物表等
+     结构化字段原文时读 <设计目录>/ 内章节 JSON，如 s2-status.json 的 artifactTables）
   3. 目标项目根：<绝对路径>——read 其 AGENTS.md（若存在）提取项目约定与架构
-     事实；攻击「写者枚举 / 上游依赖」以项目自己的架构事实为依据，不凭偏好
+     事实；攻击「状态副本清单 / 上游依赖」以项目自己的架构事实为依据，不凭偏好
   4. 五大方向逐项攻击（判据 D1-D5，每项先找反例，找不到反例才判通过）：
      ① 分型：终态型有无触发依据（用户显式要求 / 修复史判定表「未修到」/
         架构级设计对象）；演进型的「为什么不需要终态视角」辩护是否被修复史
@@ -87,12 +88,14 @@ args: { designDoc: <绝对路径>, projectRoot: <项目根绝对路径>, maxRoun
 ```text
 agent: tech-design-review
 task:
-  背景：对设计文档 <绝对路径> 做对抗式审查（已通过方向审）。
+  背景：对设计 <一句话说明> 做对抗式审查（已通过方向审；设计包在 <设计目录绝对路径>）。
   目标：
     1. read <rubric 绝对路径> 加载 P0 清单与分工（你只判主审条目：方案对比
        P0-7/8/9、对抗三问 P0-10/11/12、断言-红灯映射表核对 P0-27——P0-27 的
        产物规格见 <principles 绝对路径> P6）
-    2. read <文档绝对路径>
+    2. read <设计目录>/<name>.rendered.md（渲染视图——审查读它；需核对断言-红灯
+       表等结构化字段原文时读 <设计目录>/ 内章节 JSON，如 s4-accept.json 的
+       assertionRedlights）
     3. 目标项目根：<绝对路径>——read 其 AGENTS.md / ARCHITECTURE.md（若存在）提取
        项目约定；read 源码核实声称时以此为锚
     4. <R1：逐项对抗式审查，找反例和攻击点，声称事实错误前必须 read 源码核实；
@@ -117,7 +120,7 @@ task:
 ## 手工路径 Step 4：修复轮（主 agent 亲为）
 
 1. 读三份结构化返回，合并去重（同根因跨维度表述合并）；三审 problems 清单合并落 `<runDir>/round-N/problems.json`（`{ round, problems: [...] }`，条目 `{ ref, title }`——无 level 字段）
-2. 按 `flow/write.md` Step 8.1/8.2 修复全部 must-fix，不留尾巴。每条问题处置三选一：**修复（fixed）** / **登记不修（deferred，记一句话理由）** / **归档（archived，记入设计文档相应节的待办或残留风险）**——判定存疑按修复处理（滑坡防护）
+2. 按 `flow/write.md` Step 8.1/8.2 修复全部 must-fix，不留尾巴。修复 = 编辑设计目录内章节 JSON（长文本是字段值；跨章节引用字段 gapRefs / unitRefs / axiomRefs / goalRefs / reviewNav.decisionId 与被引用数组的 id 同步更新），每轮修复后重跑 `node <skill 安装位置>/scripts/render-design-doc.mjs <设计目录>` 刷新渲染视图。每条问题处置三选一：**修复（fixed）** / **登记不修（deferred，记一句话理由）** / **归档（archived，记入章节 JSON 相应内容的待办或残留风险）**——判定存疑按修复处理（滑坡防护）
 3. 产出当轮处置表 `<runDir>/round-N/dispositions.md`（每条九字段：id（D-<轮>-<序>）/ title（一句话标题）/ source（数组，逐条引用 problems.json 的 ref）/ action（fixed|deferred|archived）/ location（修订位置）/ reenactment（反例重演）/ attackHints（攻击点建议）/ affectsDecision（影响决策）/ affectsDelivery（影响交付）），并同步落 `<runDir>/round-N/dispositions.json`（结构：`{ dispositions: [...] }`，字段同 workflow 路径）
 4. 处置表机器校验（与 workflow 路径同一校验器——双轨语义等价由此保证）：`node ~/.agents/skills/tech-design-wf/scripts/check-dispositions.mjs <runDir>/round-N/dispositions.json --problems <runDir>/round-N/problems.json`；exit 1 时按 stdout 校验报告（缺失 ref 清单）补正处置表后重跑，至 exit 0
 5. 终态判定（机械）：三报告 must-fix==0 且上轮处置全部经复核确认（reconciliation 无 not-fixed / regressed / escalate）即终止（converged，写 final.json）；R1 三报告全 0 直接收敛，不派修复者。否则 → 下一轮聚焦复审（Step 3 的 R2+ 形态），轮次 +1

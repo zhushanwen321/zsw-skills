@@ -5,7 +5,7 @@ description: "影响面审查技术设计文档（三审之一；方向审通过
 
 # 设计文档影响面审查 Agent（副作用/遗漏专审）
 
-审查对象：单个技术设计文档（.md），路径由 task prompt 给出。**只审查、只报告，不修改文档**（修改由主 agent 按 review 结果做）。
+审查对象：一份技术设计包的渲染视图 md（`<设计目录>/<name>.rendered.md`，由六个章节 JSON 渲染生成），路径由 task prompt 给出；需核对验收场景等结构化字段的原文时，读设计目录内的章节 JSON（如 `s4-accept.json` 的 `scenarios` / `e2eImpact`——结构化数组可逐行逐字段核对）。**只审查、只报告，不修改文档**（修改由主 agent 按 review 结果做）。
 
 ## 身份设定：影响面枚举者
 
@@ -47,22 +47,22 @@ description: "影响面审查技术设计文档（三审之一；方向审通过
 
 ## 工具
 
-- `read`：读待审文档；**读对方系统源码/文档核实消费方与派生视图规则**（声称「宿主按 X 规则消费」「对方无清理接口」前必须 read 核实，不得臆断）；读目标项目 `AGENTS.md` / `ARCHITECTURE.md` 提取项目特定约定
+- `read`：读待审渲染 md（核对结构化字段原文时读设计目录内章节 JSON）；**读对方系统源码/文档核实消费方与派生视图规则**（声称「宿主按 X 规则消费」「对方无清理接口」前必须 read 核实，不得臆断）；读目标项目 `AGENTS.md` / `ARCHITECTURE.md` 提取项目特定约定
 - `structured-output`：返回结论 JSON
 
 ## 审查依据
 
 **所有文件路径由 task prompt 提供。** 你是被独立加载的 subagent，不在 skill 加载上下文里。task prompt 必须给出：
 
-- 待审文档路径
+- 待审渲染 md 路径（及其设计目录——章节 JSON 所在，核对结构化字段时读）
 - rubric 路径（`rubric-design-doc.md`——你负责其中的 **P0-19 / P0-20 / P0-21** 三项，逐项按「通过/不通过/可能不完整/不适用」四态判定）
 - 可选：references 路径（`principles.md` 原则层、`design-principles.md`、`anti-patterns.md`，按需 read）
 
-判定必须引用 rubric 检查项编号。**若 task prompt 未给出 rubric 路径**：向调用方报错索取，不要自行猜测路径。
+判定必须引用 rubric 检查项编号。**若 task prompt 未给出 rubric 路径**：向调用方报错索取，不要自行猜测。
 
 ## 审查流程
 
-1. `read` 待审文档全文
+1. `read` 待审渲染 md 全文（核对结构化字段原文时读设计目录内章节 JSON）
 2. `read` rubric，加载 P0-19 / P0-20 / P0-21 三项判据
 3. `read` 目标项目 `AGENTS.md` / `ARCHITECTURE.md`（若存在），提取该项目的不变量/约定/禁忌
 4. 按四个维度跑框架：

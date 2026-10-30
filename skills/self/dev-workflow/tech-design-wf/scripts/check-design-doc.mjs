@@ -1,207 +1,350 @@
 #!/usr/bin/env node
-// 设计文档机器自检（T1 flow/write.md Step 6.1 与 T2 flow/review.md 进场门槛同一实现，
-// 双轨语义等价由同一脚本保证）。机器项全绿 = T2 进场门槛：骨架完整、锚点对齐、
-// e2e 子节、分型声明这类机器可查问题在 T1 拦截，不进 T2 消耗审查轮次。
+// 设计包机器自检（flow/write.md 写作自检与 flow/review.md 进场门槛同一实现，
+// 双轨语义等价由同一脚本保证）。设计文档权威源 = 设计目录内六个章节 JSON
+// （schema 见 references/design-doc-schema.md）；本脚本按七条规则判定合法性，
+// 机器可查问题在写作期拦截，不进审查轮次消耗人工。
 //
-// 四项判定：
-//   1. 骨架：五段骨架二级章节存在（背景目标 / 现状与问题 / 解决方案 / 验收 /
-//      下一层拆分——标题剥编号前缀后按核心词前缀匹配，骨架定义见
-//      references/doc-structure.md 五段骨架）
-//   2. e2e：「e2e 影响面评估」子节存在于验收节内（标题逐字含该词；无受影响项时
-//      保留子节写「无受影响项（依据）」也算过——下游 T3 按标题检索继承）
-//   3. 导航：文档头部「人工审核导航」表锚点集 = 关键决策标题集（A/B 分级双向对账；
-//      格式刚性约定见 references/review-guide-rubric.md「文档落法」节）
-//   4. 分型：文档头部出现设计分型声明（「终态型」或「演进型」任一；判定规则见
-//      flow/write.md Step D）
+// 七条规则：
+//   1. 完整性：六文件存在；meta 必填字段非空；designType / priority / nature 枚举合法；
+//      relatedDocs 为数组形态且元素有 path（不强制非空——纯语义登记，通用性不设 warning）
+//   2. id 唯一：各数组内 id 不重复，全部 id 数组并集无重复（不同前缀 G/U/D 等各自编号，天然共存）
+//   3. 导航对齐：meta.reviewNav[].decisionId 集合 == s3.decisions[].id 集合（A/B 级决策不得缺导航行）
+//   4. 引用存在：gapRefs / unitRefs / axiomRefs / goalRefs 引用的 id 在被引用数组中存在
+//   5. 分型一致：terminal 必填 terminalForm 三字段与 migrationWaves；evolution 必须为空或缺失
+//   6. 产物表完备：verified 前提 evidence 非空；stateCopies 至少一行、nature 枚举合法、
+//      excluded=false 行 sync 非空、excluded=true 行 exclusionNote 必填
+//   7. warning（不阻塞）：rendered.md 缺失或早于任一 json 修改时间
 //
 // 用法：
-//   node check-design-doc.mjs <设计文档绝对路径>
-// 输出：exit 0 = 四项全绿（stdout 一行确认）；exit 1 = stdout 逐项失败原因
-//（每条指向缺什么、预期形态、权威规则出处）；exit 2 = 用法/文件错误
+//   node check-design-doc.mjs <设计目录>
+// 输出：exit 0 = 七条规则全绿（stdout 一行确认；渲染过期 warning 只提示不改判定）；
+//   exit 1 = stdout 逐项失败原因（每条指明哪个文件哪个字段缺什么 / 引用了不存在的
+//   什么 id），或 md 输入的迁移指引；exit 2 = 用法错误
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { basename, join } from "node:path";
+
+const CHAPTER_FILES = [
+  "meta.json",
+  "s1-context.json",
+  "s2-status.json",
+  "s3-solution.json",
+  "s4-accept.json",
+  "s5-breakdown.json",
+];
+
+const MIGRATION_HINT =
+  "设计文档格式已升级为分章节 JSON（<name>/meta.json … s5-breakdown.json）；存量 md 设计包不迁移——继续旧流程请用技能 git 历史版本，新设计请按 references/design-doc-schema.md 产出";
 
 function failUsage(msg) {
-  process.stderr.write(`用法错误：${msg}\n用法：node check-design-doc.mjs <设计文档绝对路径>\n`);
+  process.stderr.write(`用法错误：${msg}\n用法：node check-design-doc.mjs <设计目录>\n`);
   process.exit(2);
 }
 
-const docPath = process.argv[2];
-if (!docPath) failUsage("缺少设计文档路径参数");
-let md;
+// ── 输入判定：目录 → 校验；.md 文件 → 迁移指引；其余 → 用法错误 ──
+
+const designDir = process.argv[2];
+if (!designDir) failUsage("缺少设计目录参数");
+let dirStat;
 try {
-  md = readFileSync(docPath, "utf8");
-} catch (e) {
-  failUsage(`读取设计文档失败（${docPath}）：${e.message}`);
+  dirStat = statSync(designDir);
+} catch {
+  failUsage(`设计目录不存在（${designDir}）`);
+}
+if (dirStat.isFile()) {
+  if (designDir.endsWith(".md")) {
+    process.stdout.write(MIGRATION_HINT + "\n");
+    process.exit(1);
+  }
+  failUsage("参数须是设计包目录（含六个章节 JSON），不是单个文件");
 }
 
-// ── 通用解析 ──
+// ── 读取六章节 JSON（失败指明文件名；文件级失败不阻断其余规则对已读文件的判定） ──
 
-/** 剥标题文本的编号前缀（「1.」「3.2 」「4.1.」等数字编号形态），返回裸标题 */
-function stripHeadingNumber(text) {
-  return text.replace(/^\s*\d+(?:\.\d+)*[.、:：]?\s*/, "").trim();
-}
-
-/** 标题行扫描：{level, text, line}[]（level = # 个数；跳过代码块内的伪标题） */
-function scanHeadings(source) {
-  const out = [];
-  const lines = source.split("\n");
-  let inFence = false;
-  lines.forEach((raw, i) => {
-    if (/^\s*(```|~~~)/.test(raw)) inFence = !inFence;
-    if (inFence) return;
-    const m = /^(#{1,6})\s+(.*)$/.exec(raw);
-    if (m !== null) out.push({ level: m[1].length, text: m[2].trim(), line: i + 1 });
-  });
-  return out;
-}
-
-const headings = scanHeadings(md);
+const docs = {};
 const failures = [];
+const warnings = [];
 
-// ── 判定 1：五段骨架 ──
+for (const file of CHAPTER_FILES) {
+  let raw;
+  try {
+    raw = readFileSync(join(designDir, file), "utf8");
+  } catch {
+    failures.push(
+      `[文件] 缺少 ${file}——设计目录须含六个章节 JSON（meta / s1-context / s2-status / s3-solution / s4-accept / s5-breakdown），字段规格见 references/design-doc-schema.md`,
+    );
+    continue;
+  }
+  try {
+    docs[file] = JSON.parse(raw);
+  } catch (e) {
+    failures.push(`[文件] ${file} 解析失败：${e.message}——修复 JSON 语法后重跑本脚本`);
+  }
+}
 
-const SKELETON_SECTIONS = [
-  { key: "背景目标", hint: "## 1. 背景目标" },
-  { key: "现状与问题", hint: "## 2. 现状与问题分析" },
-  { key: "解决方案", hint: "## 3. 解决方案" },
-  { key: "验收", hint: "## 4. 验收" },
-  { key: "下一层拆分", hint: "## 5. 下一层拆分" },
+// ── 通用 helper ──
+
+const arr = (v) => (Array.isArray(v) ? v : []);
+const isFilled = (v) => v !== undefined && v !== null && String(v).trim() !== "";
+const meta = docs["meta.json"];
+const s1 = docs["s1-context.json"];
+const s2 = docs["s2-status.json"];
+const s3 = docs["s3-solution.json"];
+const s4 = docs["s4-accept.json"];
+const s5 = docs["s5-breakdown.json"];
+
+// ── 规则 1：完整性 + 枚举 ──
+
+if (meta !== undefined) {
+  const META_FIELDS = [
+    ["name", "设计名（kebab-case，与目录名一致）"],
+    ["designType", "设计分型：terminal（终态型）/ evolution（演进型）"],
+    ["typeRationale", "分型依据"],
+    ["priority", "功能分级（P0/P1/P2/P3）"],
+    ["riskScore", "风险分"],
+    ["riskRationale", "风险依据"],
+    ["reviewNav", "人工审核导航（数组，每条 A/B 级决策一行）"],
+  ];
+  for (const [field, expect] of META_FIELDS) {
+    if (!isFilled(meta[field])) {
+      failures.push(`[完整性] meta.json 字段 ${field} 缺失或为空——必填，应填：${expect}`);
+    }
+  }
+  if (isFilled(meta.designType) && !["terminal", "evolution"].includes(meta.designType)) {
+    failures.push(`[枚举] meta.json designType 值「${meta.designType}」不合法——合法取值：terminal（终态型）/ evolution（演进型）`);
+  }
+  if (isFilled(meta.priority) && !["P0", "P1", "P2", "P3"].includes(meta.priority)) {
+    failures.push(`[枚举] meta.json priority 值「${meta.priority}」不合法——合法取值：P0 / P1 / P2 / P3`);
+  }
+  // relatedDocs：仅形态校验（数组、元素须有 path），可空——无关联时空数组，不强制非空也不加 warning
+  if (meta.relatedDocs !== undefined) {
+    if (!Array.isArray(meta.relatedDocs)) {
+      failures.push(
+        "[关联登记] meta.json relatedDocs 须为数组——每条登记一个关联文档（{ path, relation }），无关联时留空数组",
+      );
+    } else {
+      meta.relatedDocs.forEach((r, i) => {
+        if (!isFilled(r?.path)) {
+          failures.push(
+            `[关联登记] meta.json relatedDocs[${i}] 缺 path——每条须填关联文档的项目内相对路径`,
+          );
+        }
+      });
+    }
+  }
+}
+if (s2 !== undefined) {
+  arr(s2.artifactTables?.upstreamDeps).forEach((row, i) => {
+    if (!["contract", "observed", "bet"].includes(row?.nature)) {
+      failures.push(
+        `[枚举] s2-status.json artifactTables.upstreamDeps[${i}]（${row?.id ?? "缺 id"}）nature 值「${row?.nature ?? "缺失"}」不合法——合法取值：contract（契约级）/ observed（观察级）/ bet（押注）`,
+      );
+    }
+  });
+}
+
+// ── 规则 2：id 唯一（数组内 + 全局并集） ──
+
+const ID_ARRAYS = [
+  ["s1-context.json", "goals", (d) => d.goals],
+  ["s2-status.json", "problems", (d) => d.problems],
+  ["s2-status.json", "assumptions", (d) => d.assumptions],
+  ["s2-status.json", "artifactTables.stateCopies", (d) => d.artifactTables?.stateCopies],
+  ["s2-status.json", "artifactTables.signalImplications", (d) => d.artifactTables?.signalImplications],
+  ["s2-status.json", "artifactTables.repairHistory", (d) => d.artifactTables?.repairHistory],
+  ["s2-status.json", "artifactTables.upstreamDeps", (d) => d.artifactTables?.upstreamDeps],
+  ["s3-solution.json", "terminalForm.axioms", (d) => d.terminalForm?.axioms],
+  ["s3-solution.json", "terminalForm.gapTable", (d) => d.terminalForm?.gapTable],
+  ["s3-solution.json", "options", (d) => d.options],
+  ["s3-solution.json", "decisions", (d) => d.decisions],
+  ["s3-solution.json", "migrationWaves", (d) => d.migrationWaves],
+  ["s4-accept.json", "scenarios", (d) => d.scenarios],
+  ["s4-accept.json", "assertionRedlights", (d) => d.assertionRedlights],
+  ["s5-breakdown.json", "units", (d) => d.units],
 ];
-const h2 = headings.filter((h) => h.level === 2);
-/** 各骨架节的命中标题（供判定 2 定位验收节范围、判定 4 划头部范围） */
-const sectionHits = new Map();
-for (const s of SKELETON_SECTIONS) {
-  const hit = h2.find((h) => stripHeadingNumber(h.text).startsWith(s.key));
-  if (hit === undefined) {
+const globalIdLocations = new Map(); // id -> `${file} ${path}[i]`[]
+for (const [file, path, getItems] of ID_ARRAYS) {
+  const doc = docs[file];
+  if (doc === undefined) continue;
+  const localSeen = new Map(); // id -> index[]
+  arr(getItems(doc)).forEach((item, i) => {
+    const id = item?.id;
+    if (!isFilled(id)) return;
+    if (!localSeen.has(id)) localSeen.set(id, []);
+    localSeen.get(id).push(i);
+  });
+  for (const [id, indexes] of localSeen) {
+    if (indexes.length > 1) {
+      failures.push(
+        `[id] ${file} ${path} 内 id「${id}」重复出现（${indexes.map((i) => `${path}[${i}]`).join(" 与 ")}）——同一数组内 id 不得重复`,
+      );
+    }
+    if (!globalIdLocations.has(id)) globalIdLocations.set(id, []);
+    globalIdLocations.get(id).push(`${file} ${path}[${indexes[0]}]`);
+  }
+}
+for (const [id, locations] of globalIdLocations) {
+  if (locations.length > 1) {
+    failures.push(`[id] id「${id}」重复定义于 ${locations.join(" 与 ")}——全部章节 JSON 的 id 须全局唯一`);
+  }
+}
+
+// ── 规则 3：导航对齐（reviewNav.decisionId 集合 == decisions.id 集合） ──
+
+const navRows = arr(meta?.reviewNav);
+const decisionRows = arr(s3?.decisions);
+const decisionIdSet = new Set(decisionRows.map((d) => d?.id).filter(isFilled));
+for (const r of navRows) {
+  if (isFilled(r?.decisionId) && !decisionIdSet.has(r.decisionId)) {
     failures.push(
-      `[骨架] 缺二级章节「${s.key}」——预期标题形如「${s.hint}」（编号前缀可有可无，标题以「${s.key}」开头）；五段骨架定义见 references/doc-structure.md`,
+      `[导航] meta.json reviewNav 引用的 decisionId「${r.decisionId}」在 s3-solution.json decisions 中不存在——核对 id 拼写，或删除该多余导航行`,
     );
-  } else {
-    sectionHits.set(s.key, hit);
   }
 }
-
-// ── 判定 2：「e2e 影响面评估」子节（验收节内） ──
-
-const E2E_TITLE = "e2e 影响面评估";
-const acceptHeading = sectionHits.get("验收");
-if (acceptHeading !== undefined) {
-  const startIdx = headings.indexOf(acceptHeading);
-  const subHeadings = [];
-  for (const h of headings.slice(startIdx + 1)) {
-    if (h.level <= 2) break; // 下一个二级章节 = 验收节结束
-    subHeadings.push(h);
-  }
-  const hit = subHeadings.find((h) => stripHeadingNumber(h.text).startsWith(E2E_TITLE));
-  if (hit === undefined) {
+const navIdSet = new Set(navRows.map((r) => r?.decisionId).filter(isFilled));
+for (const d of decisionRows) {
+  if (isFilled(d?.id) && !navIdSet.has(d.id)) {
+    const level = isFilled(d.level) ? `${d.level} 级` : "A/B 级";
     failures.push(
-      `[e2e] 验收节内未找到子节「${E2E_TITLE}」——标题须逐字含该词（容许编号前缀，如「### 4.1 ${E2E_TITLE}」；下游 T3 按标题检索继承，措辞漂移会检索失败）；无受影响项时保留该子节并写「无受影响项（依据）」也算过，禁止省略子节`,
+      `[导航] s3-solution.json 决策「${d.id}（${d.title ?? "无标题"}）」未出现在 meta.json reviewNav——${level}决策必须逐条有人工审核导航行`,
     );
   }
 }
 
-// ── 判定 3：导航表锚点集 = 关键决策标题集 ──
+// ── 规则 4：引用存在（引用 id ⊆ 被引用数组 id 集） ──
 
-/** 关键决策标题：形如「### 6.1 <标题>（A 级）」（A/B 级别词逐字如此，rubric 文档落法
- *  第 1 条）；级别标记后允许尾注（存量形态「（A 级，走查缺口 xx#1 反哺）」同样认） */
-const DECISION_TITLE_RE = /^(\d+(?:\.\d+)+)\s*(.*?)\s*[（(]\s*([AB])\s*级\s*(?:[）)]|[，,])/;
-const decisionTitles = { A: [], B: [] };
-for (const h of headings) {
-  const m = DECISION_TITLE_RE.exec(h.text);
-  if (m !== null) decisionTitles[m[3]].push({ num: m[1], title: m[2], line: h.line });
+const gapIds = new Set(arr(s3?.terminalForm?.gapTable).map((g) => g?.id).filter(isFilled));
+const unitIds = new Set(arr(s5?.units).map((u) => u?.id).filter(isFilled));
+const axiomIds = new Set(arr(s3?.terminalForm?.axioms).map((a) => a?.id).filter(isFilled));
+const goalIds = new Set(arr(s1?.goals).map((g) => g?.id).filter(isFilled));
+
+function checkRefs(where, refs, idSet, targetLabel) {
+  const hint = idSet.size > 0 ? `现有 id：${[...idSet].join("、")}` : "该数组当前为空（或字段缺失）";
+  for (const ref of arr(refs)) {
+    if (!idSet.has(ref)) {
+      failures.push(`[引用] ${where} 引用了不存在的「${ref}」——${targetLabel}${hint}`);
+    }
+  }
 }
 
-const navHeading = headings.find((h) => h.text.includes("人工审核导航"));
-if (navHeading === undefined) {
-  failures.push(
-    "[导航] 未找到「人工审核导航」节——预期位于文档头部（一句话结论之后、正文之前）；固定结构见 references/review-guide-rubric.md「文档落法」节",
+decisionRows.forEach((d, i) => {
+  const where = `s3-solution.json decisions[${i}]（${d?.id ?? "缺 id"}）`;
+  checkRefs(`${where} gapRefs`, d?.gapRefs, gapIds, "终态-现状差距表（terminalForm.gapTable）");
+  checkRefs(`${where} unitRefs`, d?.unitRefs, unitIds, "下一层拆分单元（s5-breakdown.json units）");
+  checkRefs(`${where} axiomRefs`, d?.axiomRefs, axiomIds, "公理清单（terminalForm.axioms）");
+});
+arr(s3?.migrationWaves).forEach((w, i) => {
+  checkRefs(
+    `s3-solution.json migrationWaves[${i}]（${w?.id ?? "缺 id"}）gapRefs`,
+    w?.gapRefs,
+    gapIds,
+    "终态-现状差距表（terminalForm.gapTable）",
   );
-} else {
-  // 导航节范围：节标题行到下一个同级或更高级标题；取原文行区间解析表格
-  const navIdx = headings.indexOf(navHeading);
-  const lines = md.split("\n");
-  let endLine = lines.length;
-  for (const h of headings.slice(navIdx + 1)) {
-    if (h.level <= navHeading.level) {
-      endLine = h.line - 1;
+});
+arr(s4?.scenarios).forEach((v, i) => {
+  checkRefs(
+    `s4-accept.json scenarios[${i}]（${v?.id ?? "缺 id"}）goalRefs`,
+    v?.goalRefs,
+    goalIds,
+    "设计目标（s1-context.json goals）",
+  );
+});
+
+// ── 规则 5：分型一致 ──
+
+const designType = meta?.designType;
+if (designType === "terminal") {
+  const tf = s3?.terminalForm;
+  if (tf === null || tf === undefined || typeof tf !== "object" || Array.isArray(tf)) {
+    failures.push("[分型] meta.json designType=terminal 但 s3-solution.json 缺 terminalForm——终态型必填（axioms / targetForm / gapTable）");
+  } else {
+    if (arr(tf.axioms).length === 0) {
+      failures.push("[分型] s3-solution.json terminalForm.axioms 缺失或为空——终态型须先立公理清单（每条为不变量陈述）");
+    }
+    if (!isFilled(tf.targetForm)) {
+      failures.push("[分型] s3-solution.json terminalForm.targetForm 缺失或为空——终态型须写终态形态描述");
+    }
+    if (arr(tf.gapTable).length === 0) {
+      failures.push("[分型] s3-solution.json terminalForm.gapTable 缺失或为空——终态型须写终态-现状差距表");
+    }
+  }
+  if (arr(s3?.migrationWaves).length === 0) {
+    failures.push("[分型] s3-solution.json migrationWaves 缺失或为空——终态型须有差距-波次映射（每条差距有归属波次）");
+  }
+} else if (designType === "evolution") {
+  const tf = s3?.terminalForm;
+  if (tf !== null && tf !== undefined && typeof tf === "object" && !Array.isArray(tf) && Object.keys(tf).length > 0) {
+    failures.push("[分型] meta.json designType=evolution 但 s3-solution.json 带非空 terminalForm——演进型不得有终态形态登记（如需终态视角，把 designType 改为 terminal 并补全三字段）");
+  }
+  if (arr(s3?.migrationWaves).length > 0) {
+    failures.push("[分型] meta.json designType=evolution 但 s3-solution.json 带非空 migrationWaves——演进型不得有迁移波次（如需分波迁移，把 designType 改为 terminal）");
+  }
+}
+
+// ── 规则 6：产物表触发完备 ──
+
+arr(s2?.assumptions).forEach((a, i) => {
+  if (a?.status === "verified" && !isFilled(a.evidence)) {
+    failures.push(
+      `[前提] s2-status.json assumptions[${i}]（${a.id ?? "缺 id"}）status=verified 但 evidence 为空——已核实的前提必须附核实动作（file:line / 探针 / 排除记录）`,
+    );
+  }
+});
+const stateCopies = arr(s2?.artifactTables?.stateCopies);
+if (stateCopies.length === 0) {
+  failures.push(
+    "[产物表] s2-status.json artifactTables.stateCopies 至少一行——状态副本清单不可为空（候选位置不存在副本时，登记为 excluded=true 的排除行）",
+  );
+}
+stateCopies.forEach((row, i) => {
+  const where = `s2-status.json artifactTables.stateCopies[${i}]（${row?.id ?? "缺 id"}）`;
+  if (!["authority", "projection", "cache"].includes(row?.nature)) {
+    failures.push(
+      `[产物表] ${where} nature 值「${row?.nature ?? "缺失"}」不合法——合法取值：authority（权威）/ projection（派生视图）/ cache（缓存）`,
+    );
+  }
+  if (row?.excluded === true) {
+    if (!isFilled(row.exclusionNote)) {
+      failures.push(`[产物表] ${where} excluded=true 但 exclusionNote 缺失——排除行必须附一句排除依据`);
+    }
+  } else if (!isFilled(row?.sync)) {
+    failures.push(`[产物表] ${where} excluded=false 但 sync 为空——非排除行须写明与权威副本的同步机制`);
+  }
+});
+
+// ── 规则 7：渲染产物过期 warning（不阻塞） ──
+
+const renderedName = `${basename(designDir)}.rendered.md`;
+try {
+  const renderedStat = statSync(join(designDir, renderedName));
+  for (const file of CHAPTER_FILES) {
+    let jsonStat;
+    try {
+      jsonStat = statSync(join(designDir, file));
+    } catch {
+      continue;
+    }
+    if (renderedStat.mtimeMs < jsonStat.mtimeMs) {
+      warnings.push(
+        `[提示] 渲染产物 ${renderedName} 早于 ${file} 的修改时间——重跑 node scripts/render-design-doc.mjs <设计目录> 刷新阅读视图（不阻塞本判定）`,
+      );
       break;
     }
   }
-  const navLines = lines.slice(navHeading.line, endLine);
-  // 表格解析：表头含「锚点」判定为导航表；含「命中判据」= A 级表，含「主要影响」不含「命中判据」= B 级表
-  const anchorRe = /^\s*\|?\s*§?\s*(\d+(?:\.\d+)+)\s*\|/;
-  const tables = { A: new Set(), B: new Set() };
-  let currentKind = null;
-  let sawNavTable = false;
-  for (const raw of navLines) {
-    if (!/^\s*\|/.test(raw)) {
-      currentKind = null;
-      continue;
-    }
-    const cells = raw.split("|").map((c) => c.trim());
-    const first = cells[1] ?? "";
-    const joined = cells.join(" ");
-    if (joined.includes("锚点") && joined.includes("决策")) {
-      // 表头行：按列名判 A/B
-      currentKind = joined.includes("命中判据") ? "A" : joined.includes("主要影响") ? "B" : null;
-      if (currentKind !== null) sawNavTable = true;
-      continue;
-    }
-    if (/^\s*[:\-\|\s]+\|?\s*$/.test(raw) || first === "") continue; // 分隔行 / 空行
-    if (currentKind === null) continue;
-    const m = anchorRe.exec(raw);
-    if (m !== null) tables[currentKind].add(m[1]);
-    else if (first !== "") tables[currentKind].add(first.replace(/^§/, "").trim());
-  }
-  if (!sawNavTable) {
-    failures.push(
-      "[导航] 「人工审核导航」节内未找到 A 级/B 级表——预期 A 级表表头「| 锚点 | 决策 | 命中判据 | 关键影响 |」、B 级表表头「| 锚点 | 决策 | 主要影响 |」（结构见 references/review-guide-rubric.md「文档落法」节）",
-    );
-  } else {
-    for (const kind of ["A", "B"]) {
-      const anchors = tables[kind];
-      const titles = decisionTitles[kind];
-      const titleNums = new Set(titles.map((t) => t.num));
-      const kindLabel = kind === "A" ? "A 级（必须逐条裁决）" : "B 级（无异议即过）";
-      for (const t of titles) {
-        if (!anchors.has(t.num)) {
-          failures.push(
-            `[导航] ${kind} 级决策标题「${t.num} ${t.title}（${kind} 级）」（第 ${t.line} 行）未出现在导航表 ${kindLabel}的锚点列——导航表须补「§${t.num}」行`,
-          );
-        }
-      }
-      for (const a of [...anchors].sort()) {
-        if (!titleNums.has(a)) {
-          failures.push(
-            `[导航] 导航表 ${kindLabel}锚点「§${a}」没有对应的 ${kind} 级决策标题——正文须有形如「### ${a} <标题>（${kind} 级）」的标题，或从导航表删除该行`,
-          );
-        }
-      }
-    }
-  }
-}
-
-// ── 判定 4：分型声明（头部出现「终态型」或「演进型」） ──
-
-/** 头部 = 第一个骨架二级章节之前的内容（含文档标题、一句话结论、导航表）；
- *  骨架节缺失时退化到第一个二级标题之前 */
-const headBoundary =
-  SKELETON_SECTIONS.map((s) => sectionHits.get(s.key)).find((h) => h !== undefined) ?? h2[0] ?? null;
-const headText =
-  headBoundary === null ? md : md.split("\n").slice(0, headBoundary.line - 1).join("\n");
-if (!headText.includes("终态型") && !headText.includes("演进型")) {
-  failures.push(
-    "[分型] 文档头部未见设计分型声明——预期出现「终态型」或「演进型」字样（与功能分级 P 级、风险分并列于头部；判定规则见 flow/write.md Step D：终态型须登记触发依据，演进型须登记「为什么不需要终态视角」辩护）",
+} catch {
+  warnings.push(
+    `[提示] 渲染产物 ${renderedName} 缺失——运行 node scripts/render-design-doc.mjs <设计目录> 生成阅读视图（不阻塞本判定）`,
   );
 }
 
 // ── 输出 ──
 
 if (failures.length === 0) {
-  process.stdout.write("骨架 5/5、e2e 影响面评估子节、导航表锚点对齐、分型声明——四项全绿\n");
+  process.stdout.write("六文件完整、meta 必填、id 唯一、导航对齐、跨章节引用存在、分型一致、产物表完备——七条规则全绿\n");
+  for (const w of warnings) process.stdout.write(w + "\n");
   process.exit(0);
 }
 for (const f of failures) process.stdout.write(f + "\n");
-process.stdout.write(`\n共 ${failures.length} 项未过：按上述逐条修复文档后重跑本脚本，至全绿才进 T2（机器项全绿 = T2 进场门槛）\n`);
+process.stdout.write(`\n共 ${failures.length} 项未过：按上述逐条修复对应章节 JSON 后重跑本脚本，至全绿才进审查（机器项全绿 = 审查进场门槛）\n`);
+for (const w of warnings) process.stdout.write(w + "\n");
 process.exit(1);
