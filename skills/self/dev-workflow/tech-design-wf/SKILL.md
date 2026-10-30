@@ -2,7 +2,7 @@
 name: tech-design-wf
 description: >-
   Use when 三阶段产出完整设计包（设计文档 + 实施计划）：写技术设计文档 → 对抗式审查循环 →
-  实施计划（impl-plan 双格式）。tech-design 的 workflow 版（灰度并行，老版保留可随时切回）。
+  实施计划（impl-plan 双格式）。tech-design 的 workflow 形态版本（老 tech-design 保留作对照，可随时切回）。
   触发词：「三阶段设计」「设计包」「wf 设计」「workflow 版设计」；「优化表达」「换个说法」「agent 说得太绕」（借用 flow/express.md 易理解性准则优化沟通表达，不走 review 流程）。
   每阶段结束默认停下等用户确认，前期授权可连跑。含 W1 tech-review-loop 审查循环
   （workflow 就绪前走内置手工路径）。
@@ -30,8 +30,8 @@ T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
 - **跳过确认的唯一通道 = 前期授权**：用户宣布全托管/夜间托管，或显式说「一路执行」时三阶段连续推进，阶段产出仍完整呈现（陈述性展示，不构成等待点）
 - **T2 进场门槛 = 机器项全绿 [MANDATORY]**：进 T2 派审前 `scripts/check-design-doc.mjs` 必须 exit 0（T1 Step 6 机器自检跑同一脚本）——骨架完整性、锚点对齐、导航表-决策节对账这类机器可查的写作完备性问题在 T1 拦截，T2 审查不花轮次报它们（执行细节见 `flow/review.md` T2 进场门槛节）
 - **用语规范 [MANDATORY]**：T1 动笔写设计文档前必须加载 meta-words-guidance skill（zcode 用 Skill 工具；pi / 无 Skill 工具环境直接 Read `~/.agents/skills/meta-words-guidance/SKILL.md` 及其词表），写出的文档必须遵守其中的用语规范（四张词表逐条适用 + 该 skill 的扫描自查），细则见 `flow/write.md` 头部
-- 确认的裁决维度：T1 = 问题定义、方案方向与用例走查缺口处置；T2 = 审查是否真收敛（含方向审一句话判定的转述）；T3 = 拆分粒度与验收计划。打回 = 回该阶段或上一阶段修订。**T1/T3 确认点以「人工审核导航」为入口**：每条关键决策写作期已定审核级别（A = 必须逐条裁决 / B = 无异议即过 / C = 局部实现细节不入决策节），用户只逐条裁决 A 级、扫 B 级清单，不再默认通读全文；分级判据与六维影响评估（架构/功能/复杂度/性能/资源/红线触碰）见 `references/review-guide-rubric.md`
-- **与老 tech-design 的关系（灰度并行）**：本技能是流程与判据的重构版（impl-plan 创建从 dev-flow 上移至 T3；审查循环 workflow 化；自带原则层、Step D 诊断期、方向审与三态修复循环），老 tech-design 原样保留作灰度对照——两技能判据面已正式分叉，任一时点可切回老版，退役时点由用户裁决
+- 确认的裁决维度：T1 = 问题定义、方案方向与用例走查缺口处置；T2 = 审查是否真收敛（含方向审一句话判定的转述）；T3 = 拆分粒度与验收计划。打回 = 回该阶段或上一阶段修订。**T1/T3 确认点以「人工审核导航」为入口**：每条关键决策写作期已定审核级别（A = 必须逐条裁决 / B = 无异议即过 / C = 局部实现细节不入决策节），用户只逐条裁决 A 级、扫 B 级清单，无需通读全文；分级判据与六维影响评估（架构/功能/复杂度/性能/资源/红线触碰）见 `references/review-guide-rubric.md`
+- **与老 tech-design 的关系**：两技能独立维护。本技能自带原则层（references/principles.md）、Step D 诊断期、方向审与三态修复循环，impl-plan 创建在 T3，审查循环为 workflow 形态；老 tech-design 保留作对照，任一时点可切回，退役时点由用户裁决
 
 ## 设计包（dev-flow-wf 的唯一入口输入）
 
@@ -75,7 +75,7 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 ## 核心红线（14 条，详解见 references/design-principles.md 与 references/principles.md）
 
 1. [MANDATORY] 五段骨架：背景目标 → 现状与问题 → 解决方案（演进型多方案对比 / 终态型公理与迁移路径）→ 验收 → 下一层拆分
-2. [MANDATORY] 方案对比 ≥2：演进型评长期/短期/风险给推荐并标注触及的最高 P 级；终态型改为迁移路径对比（候选至少含一次到位与分波次两型），成本只呈现不作推荐依据
+2. [MANDATORY] 方案对比 ≥2：演进型评长期/短期/风险给推荐并标注触及的最高 P 级；终态型用迁移路径对比（候选至少含一次到位与分波次两型），成本只呈现不作推荐依据
 3. [MANDATORY] 使用者视角主线 + 抽象概念配真实例子锚定
 4. [MANDATORY] 自包含 + 结论先行：SCQA 开篇、每章首句结论
 5. [MANDATORY] scope = 当前层 → 紧邻下一层，不跨 2 层
@@ -106,4 +106,4 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 | `[MANDATORY]` | 写作红线，不遵守文档不合格 |
 | （无标记） | 强烈建议 |
 
-本 skill 无 `[HISTORICAL]` 项（首建）；老 tech-design 的事故教训经其 [HISTORICAL] 条目承载，可参照。
+本 skill 无 `[HISTORICAL]` 项；老 tech-design 的事故教训经其 [HISTORICAL] 条目承载，可参照。

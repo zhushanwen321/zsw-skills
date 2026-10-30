@@ -11,7 +11,7 @@
 //    条目的唯一复活入口 = reviewer reconciliation status="escalate" 结构化申报
 //  - 终态枚举按设计 §5.3：direction-rejected / converged / escalated / stuck /
 //    max-rounds（+ 环节失败三态）；escalated 一律停回用户裁决，不轮内自行重跑
-//    方案对比（F18 语义变化：方向裁决权上收）
+//    方案对比（F18：方向裁决权上收）
 //  - runDir 命名按 F22：~/.agents/skill-data/tech-design/<project-slug>/<文档 basename
 //    去扩展名>/（project-slug = realpath(projectRoot) basename + sha256 前 8 位，六域
 //    对账同一组固定向量），重发起轮次目录带 attempt 后缀（round-3.attempt2），不覆盖历史
@@ -133,8 +133,8 @@ function sanitizeCount(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : null;
 }
 
-/** 报告路径校验函数已删除：三审 reportFile 自报字段无消费（报告落盘走确定性位置校验），
- *  方向审 reportFile 直接窄化比较，均不需要归一函数 */
+/** 三审 reportFile 自报字段无消费——报告落盘走确定性位置校验，方向审 reportFile
+ *  直接窄化比较，无需归一函数 */
 
 /** 不可信内容隔离（rfl wrapUntrusted 同款）：报告/处置表/修订摘要等外部 agent 产出
  *  注入 prompt 时显式宣告为数据，防其中反引号/分隔线截断 prompt 结构 */
@@ -941,7 +941,7 @@ for (let round = 1; round <= maxRounds; round++) {
   // CLI 判定（与 flow/review.md 手工路径同一实现——双轨语义等价由同一校验器保证）；
   // 失败不直接终态，先带校验报告回喂重试（夜间托管场景 fix-failure = 停机等人，
   // 而结构化缺失多数可由修复者自查补正）；outstanding（上轮遗留）按 id 校验——漏处置
-  // 的遗留条目不进任何对账集，会以 open 状态滞留台账直到假 converged（曾无此校验）
+  // 的遗留条目不进任何对账集，会以 open 状态滞留台账直到假 converged
   let fix: FixOutcome | null = null;
   let dispositions: Disposition[] = [];
   let revisionSummary = "";

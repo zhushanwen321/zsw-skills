@@ -39,7 +39,7 @@
 ## 6 残留风险与变更历史  # 残留风险四要素：触发条件/影响/处置/重审触发条件
 ```
 
-（状态表不再内嵌——执行态事实源是 dev-flow-wf 的 `<name>.status.json`，由 D0 编译生成。）
+（执行态事实源是 dev-flow-wf 的 `<name>.status.json`，由 D0 编译生成；本文件不内嵌状态表。）
 
 ### 验收计划表（§4 内，7 列）
 
@@ -90,7 +90,7 @@
 
 ## 符号词表 [MANDATORY]
 
-设计文档（含 impl-plan.md）会被下游 design-code-sync 的机械扫描消费：扫描器不再自行抓取反引号词，**只读本节产出的词表**——哪些词该扫由本节的语义分析裁决，扫描器与文档作者之间不再有隐式形态约定。
+设计文档（含 impl-plan.md）会被下游 design-code-sync 的机械扫描消费：扫描器**只读本节产出的词表**、不自行抓取反引号词——哪些词该扫由本节的语义分析裁决，扫描器与文档作者之间无隐式形态约定。
 
 1. **抓草稿**：`node <本技能>/scripts/extract-backticks.mjs ~/.agents/skill-data/tech-design/<project-slug>/<name>.md ~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.md`（stdout = JSON 词数组；提取规则与扫描器逐字同源，勿手抄手补）
 2. **语义甄别**：对照设计文档逐词判定——`scan` = 本项目代码里可定位、悬空时应被揪出的符号；`skip` = 其余一切（外部/上游包符号、shell 命令、协议词、JSON 字段名、纯排版标注……），每个 skip 词必须带一句理由（典型：「上游包符号，非本项目代码」「命令行示例」）。拿不准的词归 skip——漏扫的代价由下游 LLM 语义审查兜底，误扫的代价是下游误报死循环

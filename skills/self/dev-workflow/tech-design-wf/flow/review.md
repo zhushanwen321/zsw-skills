@@ -11,7 +11,7 @@
 
 ## T2 进场门槛 [MANDATORY]
 
-进 T2 派审前，设计文档机器项必须全绿：`node <skill 安装位置>/scripts/check-design-doc.mjs <设计文档绝对路径>`（T1 `flow/write.md` Step 6 机器自检跑同一脚本）。exit 非 0 = 未全绿——**不派审**，先回 T1 按 stdout 校验报告修文档、重跑脚本至 exit 0 再进 T2。骨架完整性、锚点对齐、导航表-决策节对账、词表这类机器可查问题在 T1 拦截，T2 各 reviewer 不再花轮次报它们。
+进 T2 派审前，设计文档机器项必须全绿：`node <skill 安装位置>/scripts/check-design-doc.mjs <设计文档绝对路径>`（T1 `flow/write.md` Step 6 机器自检跑同一脚本）。exit 非 0 = 未全绿——**不派审**，先回 T1 按 stdout 校验报告修文档、重跑脚本至 exit 0 再进 T2。骨架完整性、锚点对齐、导航表-决策节对账、词表这类机器可查问题在 T1 拦截，T2 各 reviewer 不报它们。
 
 ## W1 workflow 发起（zcode 环境默认动作）
 

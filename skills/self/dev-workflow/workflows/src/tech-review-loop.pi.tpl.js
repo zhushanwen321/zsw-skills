@@ -46,7 +46,7 @@ const world = {
   },
 };
 // args：pi 的 $ARGS（--args k=v）由宿主以 `const args = $ARGS` 注入——产物重声明
-// args 会炸 SyntaxError（曾因此 pi 侧首跑即崩），故就地归一化 $ARGS（宿主别名同指此对象）
+// args 会炸 SyntaxError，故就地归一化 $ARGS（宿主别名同指此对象）
 for (const [k, v] of Object.entries(typeof $ARGS === "object" && $ARGS !== null ? $ARGS : {})) {
   if (typeof v === "string" && v !== "" && !Number.isNaN(Number(v)) && /^-?\d+(\.\d+)?$/.test(v.trim())) {
     $ARGS[k] = Number(v);
