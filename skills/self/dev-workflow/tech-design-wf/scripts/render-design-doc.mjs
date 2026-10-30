@@ -19,7 +19,7 @@ import { readFileSync, writeFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 
 const MIGRATION_HINT =
-  "设计文档格式已升级为分章节 JSON（<name>/meta.json … s5-breakdown.json）；存量 md 设计包不迁移——继续旧流程请用技能 git 历史版本，新设计请按 references/design-doc-schema.md 产出";
+  "本工具只接受分章节 JSON 设计目录（<name>/meta.json … s5-breakdown.json）；md 文件不是有效输入。存量 md 设计包继续处理请用技能 git 历史版本；新设计按 references/design-doc-schema.md 产出。";
 
 const CHAPTER_FILES = [
   ["meta.json", "meta"],
