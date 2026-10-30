@@ -12,7 +12,7 @@
 
 ## T2 进场门槛 [MANDATORY]
 
-进 T2 派审前，设计文档机器项必须全绿：`node <skill 安装位置>/scripts/check-design-doc.mjs <设计目录绝对路径>`（T1 `flow/write.md` Step 6 机器自检跑同一脚本）。脚本按七条规则判定：六文件完整与枚举合法 / id 全局唯一 / 导航对齐 / 跨章节引用存在（引用字段指向的 id 必须在被引用数组中）/ 分型一致 / 产物表触发完备（渲染产物过期只告警不阻塞）。exit 非 0 = 未全绿——**不派审**，先回 T1 按 stdout 校验报告修对应章节 JSON、重跑脚本至 exit 0 再进 T2。输入是存量 md 单文件时脚本 exit 1 并输出迁移指引（新格式只对新设计生效、存量 md 设计包不迁移——指引全文见 `references/design-doc-schema.md` §11），按指引处理后另行发起。骨架完整性、引用对账、导航对齐这类机器可查问题在 T1 拦截，T2 各 reviewer 不报它们。
+进 T2 派审前，设计文档机器项必须全绿：`node <skill 安装位置>/scripts/check-design-doc.mjs <设计目录绝对路径>`（T1 `flow/write.md` Step 6 机器自检跑同一脚本）。脚本按七条规则判定：六文件完整与枚举合法 / id 全局唯一 / 导航对齐 / 跨章节引用存在（引用字段指向的 id 必须在被引用数组中）/ 分型一致 / 产物表触发完备（渲染产物过期只告警不阻塞）。exit 非 0 = 未全绿——**不派审**，先回 T1 按 stdout 校验报告修对应章节 JSON、重跑脚本至 exit 0 再进 T2。输入是 md 单文件时脚本 exit 1 并输出指引（全文见 `references/design-doc-schema.md` §11），按指引处理后另行发起。骨架完整性、引用对账、导航对齐这类机器可查问题在 T1 拦截，T2 各 reviewer 不报它们。
 
 ## W1 workflow 发起（zcode 环境默认动作）
 

@@ -17,7 +17,7 @@
 //    对账同一组固定向量），重发起轮次目录带 attempt 后缀（round-3.attempt2），不覆盖历史
 //  - designDoc 语义 = 设计目录（六个章节 JSON 权威源所在）或其渲染 md 路径（以
 //    .rendered.md 结尾时取其目录归一）；setup 对设计目录跑 check-design-doc.mjs
-//    （exit 0 = 进场门槛，非 0 = setup-failure 且 message 透传校验脚本 stdout——含存量
+//    （exit 0 = 进场门槛，非 0 = setup-failure 且 message 透传校验脚本 stdout——含
 //    md 输入的迁移指引），随后跑 render-design-doc.mjs 刷新阅读视图（幂等）——方向审 /
 //    三审读渲染视图（需核对结构化字段时提示读章节 JSON）；修复者直接编辑章节 JSON
 //    （逐文件小步修改）、修改后重渲染并同步跨章节引用字段
@@ -101,7 +101,7 @@ interface RunManifest {
 // ── 参数窄化（纯函数，便于片段级验证） ──
 
 /** designDoc 归一：设计目录直接用；渲染 md 路径（.rendered.md 结尾）取其目录。
- *  其余 .md 输入（存量 md 设计包）原样透传——由 setup 的 check 脚本输出迁移指引 */
+ *  其余 .md 输入原样透传——由 setup 的 check 脚本输出迁移指引 */
 function normalizeDesignDoc(p: string): string {
   if (!p.endsWith(".rendered.md")) return p;
   const stem = p.slice(0, -".rendered.md".length);
@@ -577,7 +577,7 @@ if (designChk.exitCode !== 0) {
     mustFixTrajectory: [],
     remaining: [],
     blocked: null,
-    message: `设计文档机器项未全绿（check-design-doc.mjs exit ${designChk.exitCode}）：${designChk.stdout.trim() || designChk.stderr.trim()}。恢复动作：回 T1 按上述校验报告修复对应章节 JSON 后重跑脚本至 exit 0 再发起；输入为存量 md 设计包时按迁移指引处理（新格式只对新设计生效，存量不迁移）`,
+    message: `设计文档机器项未全绿（check-design-doc.mjs exit ${designChk.exitCode}）：${designChk.stdout.trim() || designChk.stderr.trim()}。恢复动作：回 T1 按上述校验报告修复对应章节 JSON 后重跑脚本至 exit 0 再发起；输入为 md 文件时按校验输出中的指引处理`,
   };
 }
 // render：幂等刷新阅读视图——check 对渲染过期只告警不阻塞，这里主动重渲染消除告警，
