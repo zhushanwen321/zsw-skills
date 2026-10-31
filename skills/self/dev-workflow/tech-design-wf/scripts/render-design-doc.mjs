@@ -191,7 +191,10 @@ section("## 2. 现状与问题分析");
 section("### 2.1 使用者视角现状");
 out.push(prose(s2.currentBehaviour), "");
 section("### 2.2 端到端大流程图");
-out.push("```", prose(s2.flowDiagram), "```", "");
+// 内容自带 ``` 围栏时外层升级为四反引号——同长围栏会交错截断，ASCII 图会掉出代码块
+const flowText = prose(s2.flowDiagram);
+const flowFence = flowText.includes("```") ? "````" : "```";
+out.push(flowFence, flowText, flowFence, "");
 
 const problems = arr(s2.problems);
 if (problems.length > 0) {

@@ -32,7 +32,7 @@
 |---|---|---|---|
 | name | string | 必填 | 设计名，kebab-case，与目录名一致 |
 | designType | string 枚举 | 必填 | `terminal`（终态型）/ `evolution`（演进型）。判定规则见 `flow/write.md` Step D；终态型须有触发依据，演进型须有一句「为什么不需要终态视角」的辩护 |
-| typeRationale | string | 必填 | 分型依据一句话（终态型写触发依据，演进型写辩护） |
+| typeRationale | string | 必填 | 分型依据一句话（终态型写触发依据，演进型写辩护）；不以分型名「终态型 / 演进型」开头——渲染器在「设计分型」行已带枚举前缀，理由再以分型名开头会在渲染产物中重复（机器检查规则 7 拦截） |
 | priority | string 枚举 | 必填 | `P0` / `P1` / `P2` / `P3`，判定规则见 `flow/write.md` 前置「判断层性质」 |
 | riskScore | number | 必填 | 风险分（整数） |
 | riskRationale | string | 必填 | 风险分依据一句话 |
@@ -240,7 +240,7 @@ P7 上游约束原则的产物表（触发条件：设计依赖非本项目代�
 | units | object 数组 | 必填 | 拆分单元清单。终态型：拆分单元 = 迁移波次（对应 6.4 的差距-波次映射），尽量让每个单元可独立验收 |
 | fileMap | string（长文本） | 必填 | 文件改动地图：新增 / 改写 / 收敛哪些模块，让实施者有清单可循 |
 
-**units 行内字段**：`id`（必填，建议 `U` 前缀，被 s3 decisions[].unitRefs 引用）、`title`（必填，单元名）、`justification`（必填，为什么这么拆——让拆分可审查）、`files`（string 数组，必填，涉及的文件路径清单）、`checkpoints`（string 数组，必填，待验证检查点：设计阶段无法确定、留给实施期验证的点，诚实标注）。
+**units 行内字段**：`id`（必填，建议 `U` 前缀，被 s3 decisions[].unitRefs 引用）、`title`（必填，单元名）、`justification`（必填，为什么这么拆——让拆分可审查）、`files`（string 数组，必填，涉及的文件路径清单；每条的说明括号须配对——全/半角各自配平，不配对的说明括号会使该文件的说明与后续条目粘连，机器检查规则 7 拦截）、`checkpoints`（string 数组，必填，待验证检查点：设计阶段无法确定、留给实施期验证的点，诚实标注）。
 
 ## 9. 跨章节引用字段
 

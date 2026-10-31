@@ -147,7 +147,7 @@ SCQA 开篇 + 系统是什么 + 设计目标（从使用者体验倒推）+ in/o
 
 ### 6.1 机器层（脚本判定）
 
-跑机器校验脚本：`node <tech-design-wf 技能根>/scripts/check-design-doc.mjs <设计目录>`。脚本按七条规则判定：六文件完整与枚举合法 / id 全局唯一 / 导航对齐（reviewNav 与 decisions 对账）/ 跨章节引用存在（gapRefs / unitRefs / axiomRefs / goalRefs 指向的 id 必须在被引用数组中存在）/ 分型一致 / 产物表触发完备（渲染产物过期只告警不阻塞）。exit 非 0 时按 stdout 报告逐项修复对应章节 JSON 后重跑，至 exit 0 才进 6.2。**机器项全绿 = T2 进场门槛**不变。每次章节 JSON 修改后同步跑渲染脚本 `node <tech-design-wf 技能根>/scripts/render-design-doc.mjs <设计目录>` 刷新 `<name>.rendered.md`（阅读视图非权威，审查与走查读它）。
+跑机器校验脚本：`node <tech-design-wf 技能根>/scripts/check-design-doc.mjs <设计目录>`。脚本按八条规则判定：六文件完整与枚举合法 / id 全局唯一 / 导航对齐（reviewNav 与 decisions 对账）/ 跨章节引用存在（gapRefs / unitRefs / axiomRefs / goalRefs 指向的 id 必须在被引用数组中存在）/ 分型一致 / 产物表触发完备 / 内容形态合法（分型理由不重复前缀、文件条目括号配对）（渲染产物过期只告警不阻塞）。exit 非 0 时按 stdout 报告逐项修复对应章节 JSON 后重跑，至 exit 0 才进 6.2。**机器项全绿 = T2 进场门槛**不变。每次章节 JSON 修改后同步跑渲染脚本 `node <tech-design-wf 技能根>/scripts/render-design-doc.mjs <设计目录>` 刷新 `<name>.rendered.md`（阅读视图非权威，审查与走查读它）。
 
 ### 6.2 语义层（一页清单）
 

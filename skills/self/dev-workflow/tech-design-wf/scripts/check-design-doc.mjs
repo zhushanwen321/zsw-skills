@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // 设计包机器自检（flow/write.md 写作自检与 flow/review.md 进场门槛同一实现，
 // 双轨语义等价由同一脚本保证）。设计文档权威源 = 设计目录内六个章节 JSON
-// （schema 见 references/design-doc-schema.md）；本脚本按七条规则判定合法性，
+// （schema 见 references/design-doc-schema.md）；本脚本按八条规则判定合法性，
 // 机器可查问题在写作期拦截，不进审查轮次消耗人工。
 //
-// 七条规则：
+// 八条规则：
 //   1. 完整性：六文件存在；meta 必填字段非空；designType / priority / nature 枚举合法；
 //      relatedDocs 为数组形态且元素有 path（不强制非空——纯语义登记，通用性不设 warning）
 //   2. id 唯一：各数组内 id 不重复，全部 id 数组并集无重复（不同前缀 G/U/D 等各自编号，天然共存）
@@ -13,11 +13,13 @@
 //   5. 分型一致：terminal 必填 terminalForm 三字段与 migrationWaves；evolution 必须为空或缺失
 //   6. 产物表完备：verified 前提 evidence 非空；stateCopies 至少一行、nature 枚举合法、
 //      excluded=false 行 sync 非空、excluded=true 行 exclusionNote 必填
-//   7. warning（不阻塞）：rendered.md 缺失或早于任一 json 修改时间
+//   7. 内容形态：typeRationale 不以分型名开头（渲染器已带「终态型（terminal）——」前缀，重复即冗余）；
+//      s5 units files 条目全/半角括号配对（不配对的说明括号使条目与后续文件粘连）
+//   8. warning（不阻塞）：rendered.md 缺失或早于任一 json 修改时间
 //
 // 用法：
 //   node check-design-doc.mjs <设计目录>
-// 输出：exit 0 = 七条规则全绿（stdout 一行确认；渲染过期 warning 只提示不改判定）；
+// 输出：exit 0 = 八条规则全绿（stdout 一行确认；渲染过期 warning 只提示不改判定）；
 //   exit 1 = stdout 逐项失败原因（每条指明哪个文件哪个字段缺什么 / 引用了不存在的
 //   什么 id），或 md 输入的迁移指引；exit 2 = 用法错误
 
@@ -312,7 +314,34 @@ stateCopies.forEach((row, i) => {
   }
 });
 
-// ── 规则 7：渲染产物过期 warning（不阻塞） ──
+// ── 规则 7：内容形态（渲染层可呈现性） ──
+
+const typeLabel = designType === "terminal" ? "终态型" : designType === "evolution" ? "演进型" : null;
+if (typeLabel !== null && isFilled(meta?.typeRationale) && String(meta.typeRationale).trimStart().startsWith(typeLabel)) {
+  failures.push(
+    `[内容形态] meta.json typeRationale 以分型名「${typeLabel}」开头——渲染器在「设计分型」行已带「${typeLabel}（${designType}）——」前缀，理由再以分型名开头会在渲染产物中重复；删去理由开头的分型名后重跑`,
+  );
+}
+arr(s5?.units).forEach((u, i) => {
+  const uid = u?.id ?? "缺 id";
+  arr(u?.files).forEach((entry, j) => {
+    if (typeof entry !== "string") return;
+    for (const [open, close] of [
+      ["（", "）"],
+      ["(", ")"],
+    ]) {
+      const openCount = entry.split(open).length - 1;
+      const closeCount = entry.split(close).length - 1;
+      if (openCount !== closeCount) {
+        failures.push(
+          `[内容形态] s5-breakdown.json units[${i}]（${uid}）files[${j}] 的「${open}」${openCount} 个、「${close}」${closeCount} 个不配对——补齐说明括号，否则该文件的说明与后续文件条目粘连`,
+        );
+      }
+    }
+  });
+});
+
+// ── 规则 8：渲染产物过期 warning（不阻塞） ──
 
 const renderedName = `${basename(designDir)}.rendered.md`;
 try {
@@ -340,7 +369,7 @@ try {
 // ── 输出 ──
 
 if (failures.length === 0) {
-  process.stdout.write("六文件完整、meta 必填、id 唯一、导航对齐、跨章节引用存在、分型一致、产物表完备——七条规则全绿\n");
+  process.stdout.write("六文件完整、meta 必填、id 唯一、导航对齐、跨章节引用存在、分型一致、产物表完备、内容形态合法——八条规则全绿\n");
   for (const w of warnings) process.stdout.write(w + "\n");
   process.exit(0);
 }
