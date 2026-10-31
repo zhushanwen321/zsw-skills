@@ -1,11 +1,11 @@
 /* @pi-meta
 name: tech-review-loop
 description: >-
-  tech-design-wf 技能 W1 设计文档审查循环：方向审循环（patch 档打回在循环内派方向修复者改章节 JSON 后重审；rewrite 档/预算耗尽/must-fix 连续不降才停回 T1）后主审/影响面审/简洁审三维并行审查，文档修复者合并修复并产出处置表，循环至 converged、escalated、stuck 或 max-rounds，终态判定与覆盖校验全由脚本完成，不信任 agent 自报收敛
+  tech-design-wf 技能 W1 设计文档审查循环：方向审席与主审/影响面审/简洁审四席同轮并行（方向审 patch 档发现随当轮问题清单交文档修复者处置；rewrite 档整循环终止回 T1），文档修复者合并修复并产出处置表，循环至 converged、escalated、stuck 或 max-rounds，终态判定与覆盖校验全由脚本完成，不信任 agent 自报收敛
 when: >-
   tech-design-wf 技能 W1 阶段——技术设计文档（tech-design 产物）需要对抗式审查修复循环时调用，必传设计文档与项目根绝对路径
 notFor: 代码 review-fix 循环（用内置 review-fix-loop workflow）
-phases: ['校验审查环境并做方向审', '方向审打回修复', '三审并行聚焦复审', '修复设计文档并产出处置表', '落盘终态档案']
+phases: ['校验审查环境并四席发起', '四席并行聚焦复审', '修复设计文档并产出处置表', '落盘终态档案']
 parameters:
   type: object
   properties:
@@ -18,11 +18,7 @@ parameters:
     maxRounds:
       type: number
       default: 10
-      description: 审查-修复循环轮次上限（含首轮全面审）
-    maxDirectionRounds:
-      type: number
-      default: 6
-      description: 方向审循环轮次上限（每轮 = 方向审 + patch 档修复；rewrite 档打回/must-fix 连续不降提前停回 T1）
+      description: 审查-修复循环轮次上限（含首轮全面审；四席同轮并行）
     reviewers:
       type: array
       items: { type: string }
@@ -89,17 +85,21 @@ const SCHEMA_ProblemRef = {
 const SCHEMA_DirectionVerdict = {
   type: "object",
   properties: {
-    reportFile: { type: "string", description: "方向审报告文件路径（脚本按确定性位置校验，不以自报为准）" },
     mustFix: { type: "number", description: "must-fix 条数（与报告一致；脚本以 problems 清单派生计数为准，此字段做交叉校验）" },
+    fixScope: { type: "string", enum: ["patch", "rewrite"], description: "打回档位：patch = 全部发现属前提层/产物表/措辞级（进当轮问题清单由文档修复者处置）；rewrite = 问题定义/方案主干/分型被击穿（整循环立即终止回 T1）。mustFix = 0 时不消费" },
     problems: {
       type: "array",
       items: SCHEMA_ProblemRef,
       description: "逐条问题清单（打回判定与计数派生的唯一事实源；条目无 level 字段——唯一级别是 must-fix；条数合计须等于 mustFix）",
     },
-    fixScope: { type: "string", enum: ["patch", "rewrite"], description: "打回档位：patch = 全部发现属前提层/产物表/措辞级（循环内派修复者改章节 JSON 后重审）；rewrite = 问题定义/方案主干/分型被击穿（停回 T1 重做）。mustFix = 0 时不消费" },
+    reconciliation: {
+      type: "array",
+      items: SCHEMA_ReconEntry,
+      description: "R1 恒空数组；R2+ 对上轮处置表必对账集逐条申报（与三审同契约）",
+    },
     oneliner: { type: "string", description: "一句话方向判定（终态档案 oneliner 字段来源）" },
   },
-  required: ["reportFile", "mustFix", "fixScope", "problems", "oneliner"],
+  required: ["mustFix", "fixScope", "problems", "reconciliation", "oneliner"],
 };
 
 const SCHEMA_ReviewerVerdict = {
@@ -161,30 +161,6 @@ const SCHEMA_FixOutcome = {
   required: ["status", "dispositions", "revisionSummary"],
 };
 
-const SCHEMA_DirectionFixOutcome = {
-  type: "object",
-  properties: {
-    status: {
-      type: "string",
-      enum: ["done", "blocked"],
-      description:
-        '本轮结论声明（必填，二选一，判别键）："done" = 方向审 patch 档修复完成（返回体不得携带 blocked 字段）；"blocked" = 修复需动问题定义/方案主干/分型（超出 patch 档边界）——必须携带 blocked 字段',
-    },
-    fixedRefs: { type: "array", items: { type: "string" }, description: "本轮已处置的问题 ref 清单（必须覆盖方向审 problems 全部 ref，脚本按集合机器校验）" },
-    revisionSummary: { type: "string", description: "一段修订摘要：本轮改了设计文档哪些地方（注入下轮方向审，不算证据）" },
-    blocked: {
-      type: "object",
-      properties: {
-        items: { type: "array", items: { type: "string" } },
-        reason: { type: "string" },
-      },
-      required: ["items", "reason"],
-      description: '仅 status="blocked" 时携带：items=卡住的问题 ref 清单，reason=为什么需要用户裁决',
-    },
-  },
-  required: ["status", "fixedRefs", "revisionSummary"],
-};
-
 // wfAgent：公共体的 agent(name, persona).ask<T>(prompt) 的 pi 等价。构建管线把公共体
 // 调用点改写为 wfAgent(、泛型参数转为首个字符串参数（typeKey），这里查 SCHEMA_BY_KEY。
 // persona 拼 prompt 头（pi agent() 无 system 通道）；每次调用都是新 agent（pi 无续聊——
@@ -193,7 +169,6 @@ const SCHEMA_BY_KEY = {
   DirectionVerdict: SCHEMA_DirectionVerdict,
   ReviewerVerdict: SCHEMA_ReviewerVerdict,
   FixOutcome: SCHEMA_FixOutcome,
-  DirectionFixOutcome: SCHEMA_DirectionFixOutcome,
 };
 function wfAgent(name, persona) {
   return {

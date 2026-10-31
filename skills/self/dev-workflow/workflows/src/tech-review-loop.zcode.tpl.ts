@@ -1,9 +1,9 @@
 /* zcode-workflow
-description: tech-design-wf 技能 W1 设计文档审查循环：方向审循环（patch 档打回在
-  循环内派方向修复者改章节 JSON 后重审；rewrite 档 / 预算耗尽 / must-fix 连续不降
-  才停回 T1）→ 三维并行审查（主审/影响面审/简洁审，R1 全面审、R2+ 聚焦复审逐条对账）→
-  文档修复者单 agent 兼语义去重合并 + 修复 + 处置表产出（dispositions.json/md）→ 循环至
-  converged / escalated / stuck / max-rounds。审查读设计目录内章节 JSON 渲染出的
+description: tech-design-wf 技能 W1 设计文档审查循环：四席并行审查（方向审席 +
+  主审/影响面审/简洁审，R1 全面审、R2+ 聚焦复审逐条对账——方向审 patch 档发现随当轮
+  问题清单交文档修复者处置）→ 文档修复者单 agent 兼语义去重合并 + 修复 + 处置表产出
+  （dispositions.json/md）→ 循环至 converged / escalated / stuck / max-rounds；
+  方向审 rewrite 档（问题定义/方案主干/分型被击穿）整循环立即终止回 T1。审查读设计目录内章节 JSON 渲染出的
   rendered.md（setup 跑 check-design-doc.mjs 进场校验 + render-design-doc.mjs 刷新视图），
   修复者直接编辑章节 JSON 并在修改后重渲染。产物落
   ~/.agents/skill-data/tech-design/<project-slug>/<设计名>/（round-N[.attemptM]/ 子目录），
@@ -25,13 +25,8 @@ args:
     required: true
   maxRounds:
     type: number
-    description: 审查-修复循环轮次上限（含首轮全面审）
+    description: 审查-修复循环轮次上限（含首轮全面审；四席同轮并行）
     default: 10
-  maxDirectionRounds:
-    type: number
-    description: 方向审循环轮次上限（每轮 = 方向审 + patch 档修复；rewrite 档打回 /
-      must-fix 连续不降提前停回 T1）
-    default: 6
   reviewers:
     type: json
     description: 自定义 reviewer 模板绝对路径数组，按文件 basename 覆盖同名维度
@@ -49,16 +44,16 @@ args:
 // ── 结果与中间类型（JSDoc 作为字段描述注入子 agent） ──
 
 interface DirectionVerdict {
-  /** 方向审报告文件路径（脚本按确定性位置校验，不以自报为准） */
-  reportFile: string;
   /** must-fix 条数（与报告一致；脚本以 problems 清单派生计数为准，此字段做交叉校验） */
   mustFix: number;
-  /** 打回档位：patch = 全部发现属前提层/产物表/措辞级（循环内派修复者改章节 JSON 后重审）；
-   *  rewrite = 问题定义/方案主干/分型被击穿（停回 T1 重做）。mustFix = 0 时不消费 */
+  /** 打回档位：patch = 全部发现属前提层/产物表/措辞级（进当轮问题清单，由文档修复者处置）；
+   *  rewrite = 问题定义/方案主干/分型被击穿（整循环立即终止回 T1）。mustFix = 0 时不消费 */
   fixScope: "patch" | "rewrite";
   /** 逐条问题清单（打回判定与计数派生的唯一事实源；条目无 level 字段——唯一级别是
    *  must-fix；条数合计须等于 mustFix） */
   problems: ProblemRef[];
+  /** R1 恒空数组；R2+ 对上轮处置表必对账集逐条申报（与三审同契约） */
+  reconciliation: ReconEntry[];
   /** 一句话方向判定（终态档案 oneliner 字段来源） */
   oneliner: string;
 }
@@ -126,25 +121,13 @@ interface FixOutcome {
   blocked?: { items: string[]; reason: string };
 }
 
-interface DirectionFixOutcome {
-  /** 本轮结论声明（必填，二选一，判别键）：
-   *  "done" = 方向审 patch 档修复完成（返回体不得携带 blocked 字段）
-   *  "blocked" = 修复需动问题定义/方案主干/分型（超出 patch 档边界）——必须携带 blocked 字段 */
-  status: "done" | "blocked";
-  /** 本轮已处置的问题 ref 清单（必须覆盖方向审 problems 全部 ref，脚本按集合机器校验） */
-  fixedRefs: string[];
-  /** 一段修订摘要：本轮改了设计文档哪些地方（注入下轮方向审，不算证据） */
-  revisionSummary: string;
-  /** 仅 status="blocked" 时携带：items=卡住的问题 ref 清单，reason=为什么需要用户裁决 */
-  blocked?: { items: string[]; reason: string };
-}
 
 interface LoopResult {
   /** converged = 收敛；direction-rejected = 方向审打回；escalated = 方案性卡点停回用户；
    *  stuck = must-fix 连续多轮不降；max-rounds = 轮次上限耗尽；
    *  setup-failure / review-failure / fix-failure = 环节失败（message 含恢复动作） */
   terminated: "converged" | "direction-rejected" | "escalated" | "stuck" | "max-rounds" | "setup-failure" | "review-failure" | "fix-failure";
-  /** 实际执行的审查轮数（方向审不计轮；converged 记收敛轮） */
+  /** 实际执行的审查轮数（四席同轮并行，均计入轮次；converged 记收敛轮） */
   rounds: number;
   /** 审查产物根目录（绝对路径；setup-failure 早期可能为空串） */
   runDir: string;
@@ -177,8 +160,6 @@ interface NarrowedInputs {
   designDoc: string;
   projectRoot: string;
   maxRounds: number;
-  /** 方向审循环轮次上限（每轮 = 方向审 + patch 档修复） */
-  maxDirectionRounds: number;
   reviewers: string[];
   /** 用户显式传入的 attempt；null = 未传（启动时按 final.json 存在性自动判定） */
   attempt: number | null;

@@ -1,13 +1,13 @@
 # T2 审查循环流程
 
-> 两阶段审查（方向审先行 → 三 reviewer 并行）+ 多轮修复循环。执行体两形态：**zcode 环境优先发起 saved workflow `tech-review-loop`**（契约见 SKILL.md）；workflow 未就绪/发起失败按本文件手工路径执行（语义等价）。审查标准见 `review/rubric-design-doc.md`，agent 定义见 `agents/`。
+> 四席并行审查（方向审席 + 主审 / 影响面审 / 简洁审）+ 多轮修复循环（方向审 rewrite 档击穿时整循环终止回 T1）。执行体两形态：**zcode 环境优先发起 saved workflow `tech-review-loop`**（契约见 SKILL.md）；workflow 未就绪/发起失败按本文件手工路径执行（语义等价）。审查标准见 `review/rubric-design-doc.md`，agent 定义见 `agents/`。
 
 ## 产物路径约定 [MANDATORY]
 
 - runDir 即设计包目录 `~/.agents/skill-data/tech-design/<project-slug>/<name>/`（六个章节 JSON 权威源与渲染产物 `<name>.rendered.md` 所在；审查者读渲染视图，需核对结构化字段时读章节 JSON）
-- 方向审报告落 runDir 根 `review-direction.md`（方向审在轮次循环外——与 workflow 引擎落点一致）；三审报告落 `round-N/`：`review-<dimension>.md`（dimension = main / impact / simplicity）+ `dispositions.md`（当轮处置表）
+- 四席报告同落当轮 `round-N[.attemptM]/`：`review-direction.md`（方向审）+ `review-<dimension>.md`（dimension = main / impact / simplicity）+ `dispositions.md`（当轮处置表）
 - 重发起（direction-rejected 修完重来 / escalated 裁决后重跑）时新轮次目录带 attempt 后缀：`round-3.attempt2/`——不覆盖历史
-- 终态记录 `<name>/final.json`：`{ terminated, rounds, runDir, designDoc, oneliner, reportFile, mustFixTrajectory, remaining, blocked, message }`——oneliner = 方向审一句话判定；reportFile = runDir 根 review-direction.md 路径；designDoc = 设计目录绝对路径；设计包的审查证据（dev-flow-wf 入口判据读它）
+- 终态记录 `<name>/final.json`：`{ terminated, rounds, runDir, designDoc, oneliner, reportFile, mustFixTrajectory, remaining, blocked, message }`——oneliner = 方向审席一句话判定（取末轮）；reportFile = 末轮 `round-N/review-direction.md` 路径；designDoc = 设计目录绝对路径；设计包的审查证据（dev-flow-wf 入口判据读它）
 - 产物根 `~/.agents/skill-data/` 在 HOME 下天然不入 git；用户显式指定路径时以用户为准
 
 ## T2 进场门槛 [MANDATORY]
@@ -18,7 +18,7 @@
 
 ```
 CreateWorkflow saved: tech-review-loop
-args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workflow 内部归一为设计目录）>, projectRoot: <项目根绝对路径>, maxRounds?: 10, maxDirectionRounds?: 6, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件> }
+args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workflow 内部归一为设计目录）>, projectRoot: <项目根绝对路径>, maxRounds?: 10, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件> }
 终态: converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / fix-failure（环境失败族）
 ```
 
@@ -27,7 +27,7 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
 | 终态 | 主 agent 动作 |
 |------|--------------|
 | converged | **T2 确认点**：转述 oneliner（方向审一句话判定）+ 收敛轨迹 + 处置清单 → 默认等用户确认 → 进 T3（前期授权直接进） |
-| direction-rejected | workflow 形态只在三态到达：rewrite 档击穿（问题定义/方案主干/分型——回 T1 与用户对话重写，含 Step D 诊断期重做）/ patch 档 must-fix 连续 3 轮不降 / 方向审循环预算耗尽（maxDirectionRounds，默认 6）——后两态读 runDir 内 review-direction.md 与 review-direction.r*.md 归档呈报用户裁决；修完/裁决后重新发起（attempt+1，重过方向审） |
+| direction-rejected | 只在方向审席判 rewrite 档（问题定义/方案主干/分型被击穿）时到达：回 T1 与用户对话重写（含 Step D 诊断期重做）；修完重新发起（attempt+1，重过四席）。patch 档发现不触发本终态——进当轮问题清单由修复者处置，循环继续 |
 | escalated | 方案性意见需方向裁决——与用户对比新候选后改文档重新发起（一律停回用户裁决，不在轮内自行重跑方案对比） |
 | stuck / max-rounds | 呈报残余风险矩阵，用户裁决（stuck = 连续 3 轮 must-fix 不降） |
 | *-failure（环境/工具） | 读 runDir 日志排障后 resume 或重发起 |
@@ -36,14 +36,14 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
 
 从用户/上游拿到：设计目录路径（给出的是渲染 md 路径时取其所在目录）、一句话说明（这是什么设计）。报告路径按产物约定解析；进场门槛（机器项全绿）未过先回 T1。
 
-## 手工路径 Step 2：第一阶段——方向审（先于三 reviewer）
+## 手工路径 Step 2：并行派四席 reviewer（方向审席 + 三审）
 
 路径解析：本 skill 安装位置 = available_skills 里 `tech-design-wf` 的 `location` 字段。据此拼绝对路径：rubric = `<location>/review/rubric-design-doc.md`；原则层 = `<location>/references/principles.md`（七原则与产物表规格）。
 
 派 `tech-design-direction-review`（task 三段式）：
 
 ```text
-背景：对设计 <一句话说明> 做方向审（先于三 reviewer 的第一道门；设计包在 <设计目录绝对路径>）。
+背景：对设计 <一句话说明> 做方向审（四席之一，与三 reviewer 同轮并行；设计包在 <设计目录绝对路径>）。
 目标：
   1. read <rubric 绝对路径> 加载方向审判据（D 系列）+ <principles 绝对路径>
      加载原则层（产物表规格与触发条件——D2 攻击前提清单、D4 对账产物表都要用）
@@ -69,9 +69,9 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
         日志/探针/先收集数据）不占设计主体；问题定义不被现状实现污染
   5. 声称「击穿 / 填表不实」前必须 read 源码取证；机制正确性/影响面/机制必要
      性留给三 reviewer（标 INFO 交接）
-  6. 报告写到 <runDir>/review-direction.md
+  6. 报告写到 <runDir>/<round-N>/review-direction.md（当轮产物目录，与三审报告同目录；R2+ 另按聚焦复审对上轮处置逐条对账并重跑穷举断言登记的检索命令）
 验收：
-  - 返回 structured-output { reportFile, mustFix, fixScope, problems[], oneliner }——fixScope = patch（全部发现属前提层/产物表/措辞级，问题定义与方案主干不动）/ rewrite（问题定义/方案主干/分型被击穿）——
+  - 返回 structured-output { mustFix, fixScope, problems[], reconciliation[], oneliner }——fixScope = patch（全部发现属前提层/产物表/措辞级，问题定义与方案主干不动，发现进当轮问题清单由修复者处置）/ rewrite（问题定义/方案主干/分型被击穿，整循环终止）；reconciliation 与三审同契约（R1 空数组）——
     problems = 逐条问题清单，每条 { ref, title }（ref 即报告 Findings 行锚点
     review-direction#<序>；条目无 level 字段——唯一报告级别是 must-fix；条数
     须等于 mustFix）
@@ -79,13 +79,11 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
     must-fix 引用 D 系列编号 + 文档位置
 ```
 
-方向审判定按 problems 清单来：清单空 → Step 3。清单非空（计数以清单为准，自报数字只做交叉校验）看 fixScope——patch 档 = 前提层/产物表/措辞级（问题定义与方案主干不动），按报告「修复方向」列（可执行操作清单）派修复者直接改章节 JSON、重渲染 + check 至 exit 0 后重审方向，循环至清单空或熔断（连续 3 轮不降 / 预算耗尽，按终态表 direction-rejected 处理）；rewrite 档 = 问题定义/方案主干/分型被击穿，按终态表 direction-rejected 处理。
+方向审席与三审同轮返回：problems 清单计数以清单为准、自报数字只做交叉校验。fixScope = rewrite（问题定义/方案主干/分型被击穿）→ 整循环终止，按终态表 direction-rejected 处理；patch 档与清单空 → 发现并入当轮问题清单，走 Step 4 修复循环（「修复方向」列是修复者的操作清单）。
 
 **全托管模式附加声明**：task 末尾追加「全托管模式：禁止 AskUserQuestion / ask-user / 任何等待用户输入的操作；遇到决策点自行裁决，决策清单写入报告 INFO 节。」
 
-## 手工路径 Step 3：第二阶段——并行派三个 reviewer
-
-同一条消息并行派三个（subagent 独立加载，task 内路径全部绝对路径）。**不要自己审——审查与写作分离，避免确认偏差，主 agent 不自审**。方向审自带修复循环：workflow 形态 patch 档打回在方向审循环内派修复者改章节 JSON 后重审（maxDirectionRounds 预算 + 连续不降熔断），不外溢重发起；rewrite 档（问题定义/方案主干/分型被击穿）才停回 T1 重写、attempt+1 重新发起。轮内三席不含方向审。手工形态按 `flow/write.md` Step 8.3 把 rewrite 级修订送回方向审重审。
+三审（主审 / 影响面审 / 简洁审）与方向审席同一条消息并行派出（subagent 独立加载，task 内路径全部绝对路径；方向审 task 按 Step 2 模板）。**不要自己审——审查与写作分离，避免确认偏差，主 agent 不自审**。四席同轮并行、同一对账契约：方向审 patch 档发现与三审发现合并进当轮问题清单，由修复者一并处置（Step 4）；rewrite 档（问题定义/方案主干/分型被击穿）整循环终止按终态表 direction-rejected 处理。R2+ 四席均按聚焦复审（上轮处置对账 + 只审触及章节——方向审席另重跑穷举断言已登记的检索命令对账）。
 
 ```text
 agent: tech-design-review
