@@ -348,6 +348,10 @@ const NODE_RUN_CMD = [
 // 输出扫描用例名含 SKIP_ 字样的合法测试会误伤（权衡注释见 §6.1 对齐条目）。
 // skipped 计数只认非零：全过输出的「0 skipped, 0 failed」是正常证据行，命中即误报
 // （实测 perf-diff-harness 的 `19 run, 19 passed, 0 skipped, 0 failed` 曾被判 gate-a-failed）。
+// skipped 计数只认 vitest 计数行形态（竖线分隔 `| N skipped`）：被测代码的业务日志键值对
+// （taiji 实测 `[reattach] done: restored=1 skipped=0` / `imported=2 skipped=0`——原词边界把
+// 「restored=1 skipped」中的「1 skipped」误认）不构成跳过证据；vitest 文件级
+// `(N tests | M skipped)` 与汇总 `Tests  X passed | M skipped` 均含竖线形态，收紧不漏拦。
 const NODE_SKIP_SCAN = [
   "var fs = require('fs');",
   "try {",
@@ -356,7 +360,7 @@ const NODE_SKIP_SCAN = [
   "  var hits = [];",
   "  for (var i = 0; i < lines.length; i++) {",
   "    var l = lines[i];",
-  "    if (/\\b[1-9]\\d*\\s+skipped\\b/i.test(l) || l.indexOf('eslint-disable') >= 0) hits.push(l.trim());",
+  "    if (/\\|\\s*[1-9]\\d*\\s+skipped\\b/i.test(l) || l.indexOf('eslint-disable') >= 0) hits.push(l.trim());",
   "  }",
   "  console.log(JSON.stringify(hits.slice(0, 10)));",
   "} catch (e) { console.log(JSON.stringify({ error: String((e && e.message) || e) })); }",
