@@ -1,8 +1,10 @@
 /* zcode-workflow
 description: tech-design-wf 技能 W1 设计文档审查循环：四席并行审查（方向审席 +
   主审/影响面审/简洁审，R1 全面审、R2+ 聚焦复审逐条对账——方向审 patch 档发现随当轮
-  问题清单交文档修复者处置）→ 文档修复者单 agent 兼语义去重合并 + 修复 + 处置表产出
-  （dispositions.json/md）→ 循环至 converged / escalated / stuck / max-rounds；
+  问题清单进入聚合）→ 聚合裁决独立 phase（四席发现按同根因合并为去重权威清单
+  aggregated.md，refs 精确划分脚本 fail-closed 校验）→ 文档修复者单 agent 据聚合
+  清单修复 + 处置表产出（dispositions.json/md）→ 循环至
+  converged / escalated / stuck / max-rounds；
   方向审 rewrite 档（问题定义/方案主干/分型被击穿）整循环立即终止回 T1。审查读设计目录内章节 JSON 渲染出的
   rendered.md（setup 跑 check-design-doc.mjs 进场校验 + render-design-doc.mjs 刷新视图），
   修复者直接编辑章节 JSON 并在修改后重渲染。产物落
@@ -122,11 +124,25 @@ interface FixOutcome {
 }
 
 
+interface AggregatedItem {
+  /** 该聚合项覆盖的原始问题 ref（四席报告锚点，至少一个；全体聚合项的 refs 构成原始清单的精确划分） */
+  refs: string[];
+  /** 一句话根因标题 */
+  title: string;
+  /** 合并后的可执行修复操作清单（改哪个章节 JSON 哪个条目、补什么内容、跑什么检索） */
+  guidance: string;
+}
+
+interface AggregationOutcome {
+  /** 聚合项清单（去重后权威问题清单，脚本渲染为 aggregated.md） */
+  items: AggregatedItem[];
+}
+
 interface LoopResult {
-  /** converged = 收敛；direction-rejected = 方向审打回；escalated = 方案性卡点停回用户；
+  /** converged = 收敛；direction-rejected = 方向审 rewrite 档打回；escalated = 方案性卡点停回用户；
    *  stuck = must-fix 连续多轮不降；max-rounds = 轮次上限耗尽；
-   *  setup-failure / review-failure / fix-failure = 环节失败（message 含恢复动作） */
-  terminated: "converged" | "direction-rejected" | "escalated" | "stuck" | "max-rounds" | "setup-failure" | "review-failure" | "fix-failure";
+   *  setup-failure / review-failure / aggregator-failure / fix-failure = 环节失败（message 含恢复动作） */
+  terminated: "converged" | "direction-rejected" | "escalated" | "stuck" | "max-rounds" | "setup-failure" | "review-failure" | "aggregator-failure" | "fix-failure";
   /** 实际执行的审查轮数（四席同轮并行，均计入轮次；converged 记收敛轮） */
   rounds: number;
   /** 审查产物根目录（绝对路径；setup-failure 早期可能为空串） */
@@ -193,8 +209,10 @@ const HOST_PLATFORM = "zcode";
 //  - 维度固定四席（方向审席 + 三审同轮并行、同一对账契约——方向审 patch 档发现进
 //    当轮问题清单由文档修复者处置，审查-修改闭环收在 workflow 内），无 rfl 的批内
 //    慢快池调度（四席恒定并行，无分批收益）
-//  - 无独立聚合 phase：文档修复者单 agent 兼做语义去重合并（C2 核实：语义判断
-//    保留 agent）+ 修复 + 处置表产出
+//  - 聚合裁决是独立 phase（对齐 rfl 框架）：四席发现先经聚合裁决员合并为去重权威
+//    清单 aggregated.md（refs 对原始清单的精确划分由脚本 fail-closed 校验——漏报 /
+//    重叠 / 幻觉 ref 均打回重试）；修复保持单 agent（同一设计目录六个章节 JSON，
+//    并行写者互相覆盖——C2 单写者约束保留，语义去重已上收独立 phase）
 //  - 对账对象 = 上轮处置表（dispositions），非 rfl 的 issue 台账；deferred/archived
 //    条目的唯一复活入口 = reviewer reconciliation status="escalate" 结构化申报
 //  - 终态枚举按设计 §5.3：direction-rejected / converged / escalated / stuck /
@@ -508,6 +526,64 @@ function validateReviewerVerdict(v: unknown): Validated<ReviewerVerdict> {
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as ReviewerVerdict };
 }
 
+
+/** 聚合裁决返回校验（工厂形态——划分校验需要闭包原始 ref 集）：items 形态合法 +
+ *  refs 全体构成原始清单的精确划分（漏报 = 静默丢失、重叠 = 二次去重失准、
+ *  幻觉 ref = 无中生有，三者均 fail-closed 回喂重试，不静默修补） */
+function makeAggregationValidator(rawRefs: string[]): (v: unknown) => Validated<AggregationOutcome> {
+  const rawRefSet = new Set(rawRefs);
+  return (v: unknown): Validated<AggregationOutcome> => {
+    const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+    const errors: string[] = [];
+    if (!Array.isArray(o["items"])) {
+      return { ok: false, errors: ["items 须为数组（每条 { refs, title, guidance }）"] };
+    }
+    const seen = new Map<string, number>(); // ref -> 首次出现的聚合项序号
+    (o["items"] as unknown[]).forEach((item, i) => {
+      if (item === null || typeof item !== "object") {
+        errors.push(`items[${i}] 须为对象`);
+        return;
+      }
+      const it = item as Partial<AggregatedItem>;
+      if (!Array.isArray(it.refs) || it.refs.length === 0) {
+        errors.push(`items[${i}] refs 须为非空数组`);
+        return;
+      }
+      for (const r of it.refs) {
+        if (typeof r !== "string" || r.trim() === "") {
+          errors.push(`items[${i}] refs 含空串`);
+        } else if (!rawRefSet.has(r)) {
+          errors.push(`items[${i}] refs 含原始清单不存在的「${r}」（幻觉 ref——只能引用四席报告的既有锚点）`);
+        } else if (seen.has(r)) {
+          errors.push(`ref「${r}」同时出现在 items[${seen.get(r)}] 与 items[${i}]（每条原始 ref 恰好归属一条聚合项）`);
+        } else {
+          seen.set(r, i);
+        }
+      }
+      if (typeof it.title !== "string" || it.title.trim() === "") errors.push(`items[${i}] title 须非空`);
+      if (typeof it.guidance !== "string" || it.guidance.trim() === "") errors.push(`items[${i}] guidance 须非空（合并后的可执行修复操作清单）`);
+    });
+    const missing = rawRefs.filter((r) => !seen.has(r));
+    if (missing.length > 0) {
+      errors.push(`以下原始 ref 未被任何聚合项覆盖（禁止静默丢弃）：${missing.join("、")}`);
+    }
+    return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as AggregationOutcome };
+  };
+}
+
+/** 聚合清单 markdown 人读版（脚本从结构化数据确定性渲染，保证 json 与 md 一致；AG 序号脚本按序分配） */
+function renderAggregatedMd(round: number, items: AggregatedItem[]): string {
+  const lines: string[] = [`# 聚合清单（第 ${round} 轮）`, ""];
+  items.forEach((it, i) => {
+    lines.push(
+      `## AG-${i + 1} ${it.title}`,
+      `- 原始 ref：${it.refs.join("、")}`,
+      `- 修复指导：${it.guidance}`,
+      "",
+    );
+  });
+  return lines.join("\n");
+}
 
 /** 处置表台账合并：延续条目（id 命中）原位更新并按 action 重置复核状态；新条目入账 */
 function mergeRound(disps: Disposition[], round: number, ledger: LedgerEntry[]): void {
@@ -889,6 +965,9 @@ log(`审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttem
 // ── 审查-修复主循环 ──
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
 //（NO_ASK_RULE 定义在文件顶部常量区）
+const AGGREGATOR_PERSONA =
+  "你是审查聚合裁决员：把四席评审报告的发现合并为去重后的权威问题清单——同根因跨席位的发现合为一条（保留全部原始 ref，禁止静默丢弃任何一条），不同根因绝不合并；只读裁决，绝不修改任何文件；同根因判定依据是报告原文与设计文档原文，不是表面措辞相似；指令无法执行或有矛盾时如实说明，不伪造结论。" +
+  NO_ASK_RULE;
 const DIRECTION_PERSONA =
   "你是方向审评审员：攻击设计的前提层与终态层——分型是否正确、前提清单能否被写者侧反例击穿、公理是真不变量还是实现细节、产物表是否完整且真实、问题定义是否忠于真问题；只读评审，绝不修改任何文件；每个判定都要有你亲自读到的文档原文或源码依据；指令无法执行或有矛盾时如实说明，不伪造结论。" +
   NO_ASK_RULE;
@@ -1052,7 +1131,53 @@ for (let round = 1; round <= maxRounds; round++) {
     return await finish("review-failure", round, `问题清单落盘失败（${roundAbs}/problems.json，exit ${probWrite.exitCode}）：${probWrite.stderr.trim() || probWrite.stdout.trim()}。恢复动作：args.attempt 递增重新发起`);
   }
 
-  const roundMustFix = verdicts.reduce((s, v) => s + v.mustFix, 0);
+  // ── phase 2：聚合裁决（独立 phase——四席发现合并为去重权威清单；修复者据聚合清单处置） ──
+  let aggregatedItems: AggregatedItem[] | null = null;
+  if (roundProblems.length > 0) {
+    phase("聚合裁决");
+    const rawRefs = roundProblems.map((pp) => pp.ref);
+    let aggregation: AggregationOutcome | null;
+    try {
+      aggregation = await askValidated(
+        makeAggregationValidator(rawRefs),
+        (p2) => agent(`聚合裁决-r${round}`, AGGREGATOR_PERSONA).ask<AggregationOutcome>(p2),
+        [
+          `聚合裁决（第 ${round} 轮，产物目录 ${roundAbs}）——四席评审已并行完成，把它们的发现合并为一份去重权威清单。`,
+          "",
+          "第一步：Read 四份评审报告（证据与完整上下文）：",
+          ...TRIALS.map((tt) => `- ${roundAbs}/${tt.reportName}`),
+          `设计文档（判断同根因时的对照，渲染视图）：${renderedMd}`,
+          "",
+          "本轮原始问题清单（合并对象——聚合结果的 refs 全体必须与之精确划分相等）：",
+          wrapUntrusted(JSON.stringify(roundProblems)),
+          "",
+          "合并规则：",
+          "- 同根因 = 两条发现指向设计文档同一处失实 / 同一缺失 / 同一矛盾（不同席位对同一问题的不同视角表述）→ 合并为一条：refs 取并集，title 一句话根因，guidance 合并为一份可执行操作清单（保留各自的可执行细节——改哪个章节 JSON 哪个条目、补什么内容、跑什么检索）。",
+          "- 不同根因绝不合并；拿不准是否同根因 → 不合并（宁多勿并——错误合并会让修复漏掉一半）。",
+          "",
+          "完成后返回 JSON：items（聚合项数组，每条 { refs: string[]（该条覆盖的原始 ref，至少一个）, title, guidance }）。refs 全体构成原始清单的精确划分——每条原始 ref 恰好出现在一条聚合项里，不丢、不重、不造。",
+        ].join("\n"),
+      );
+    } catch (e) {
+      return await finish("aggregator-failure", round, `聚合裁决调用失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——上下文超限则拆分投喂）；args.attempt 递增重新发起`);
+    }
+    if (aggregation === null) {
+      return await finish(
+        "aggregator-failure",
+        round,
+        `聚合裁决结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规（refs 须构成原始清单的精确划分）。恢复动作：四份报告可读 ${roundAbs}，人工合并后把聚合清单落 ${roundAbs}/aggregated.md 再续；或 args.attempt 递增重新发起`,
+      );
+    }
+    aggregatedItems = aggregation.items;
+    const aggWrite = await world.run("node", ["-e", NODE_WRITE_FILE, `${roundAbs}/aggregated.md`, renderAggregatedMd(round, aggregatedItems)]);
+    if (aggWrite.exitCode !== 0) {
+      return await finish("aggregator-failure", round, `聚合清单落盘失败（${roundAbs}/aggregated.md，exit ${aggWrite.exitCode}）：${aggWrite.stderr.trim() || aggWrite.stdout.trim()}。恢复动作：args.attempt 递增重新发起`);
+    }
+    log(`第 ${round} 轮聚合完成：${rawRefs.length} 条原始发现 → ${aggregatedItems.length} 条聚合项（${roundAbs}/aggregated.md）`);
+  }
+
+  // 轨迹与对账以聚合后计数为准（去重后的真实工作负载；原始计数仅校验用）
+  const roundMustFix = aggregatedItems !== null ? aggregatedItems.length : 0;
   trajectory.push(roundMustFix);
   report({ round, mustFix: roundMustFix }, "trajectory");
 
@@ -1107,7 +1232,7 @@ for (let round = 1; round <= maxRounds; round++) {
     );
   }
 
-  // ── phase 3：文档修复者（兼语义去重合并 + 修复 + 处置表） ──
+  // ── phase 3：文档修复者（据聚合清单修复 + 处置表——语义去重已在聚合裁决 phase 完成） ──
   phase("修复设计文档并产出处置表");
   const outstandingBlock =
     outstanding.length > 0
@@ -1132,12 +1257,12 @@ for (let round = 1; round <= maxRounds; round++) {
   const baseFixInstructions = [
     `第 ${round} 轮设计文档修复（产物目录 ${roundAbs}）。`,
     "",
-    "第一步：Read 四份评审报告（含方向审）：",
+    `第一步：Read 聚合清单 ${roundAbs}/aggregated.md（聚合裁决产物——四席发现按同根因合并的权威清单，每条 AG 项含全部原始 ref 与合并修复指导，是你的操作清单）；需要完整证据时按 ref 回读对应席位的报告：`,
     ...TRIALS.map((t) => `- ${roundAbs}/${t.reportName}`),
     `审查对象：设计目录 ${designDoc}——权威源是目录内六个章节 JSON（meta / s1-context / s2-status / s3-solution / s4-accept / s5-breakdown），${renderedMd} 是渲染出的阅读视图（非权威，禁止手改）。直接编辑章节 JSON 文件完成修复（你有文件工具，逐文件小步修改）；字段规格见 ${schemaPath}。`,
     "",
     "任务：",
-    "1. 语义去重合并：同根因跨维度表述的问题合并为一条处置（source 记录该条覆盖的全部问题 ref）。",
+    "1. 按聚合清单逐条处置：每条 AG 项至少对应一条处置，source 填该 AG 项覆盖的全部原始 ref（聚合裁决已去重——跨 AG 项不再二次合并；发现两条 AG 项实为同根因时在 revisionSummary 登记提示，不自行吞并）。",
     "2. 逐条三选一处置全部问题：fixed（修复——默认处置，直接编辑章节 JSON 落实）/ deferred（登记不修，理由必须具体：涉及章节/机制/代价）/ archived（归档——已过时或不适用，理由必须具体）。判定存疑按 fixed 处理（滑坡防护）。",
     "3. 方案性意见（需要用户裁决的方向变化，如推翻问题定义、方案主干、最小形态）修不动 → 不要硬改：status 取 \"blocked\"，并在 blocked 里申报（items=卡住的问题清单，reason=为什么需要用户裁决）；其余可修的照常完成并产出处置表。无方案性卡点时 status 取 \"done\"，返回体不得含 blocked 字段——不要在 blocked 里填「无卡点」之类的说明（引擎只认 status，blocked 不是表态字段）。",
     outstandingBlock,

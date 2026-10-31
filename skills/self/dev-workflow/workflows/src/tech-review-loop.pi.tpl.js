@@ -1,11 +1,11 @@
 /* @pi-meta
 name: tech-review-loop
 description: >-
-  tech-design-wf 技能 W1 设计文档审查循环：方向审席与主审/影响面审/简洁审四席同轮并行（方向审 patch 档发现随当轮问题清单交文档修复者处置；rewrite 档整循环终止回 T1），文档修复者合并修复并产出处置表，循环至 converged、escalated、stuck 或 max-rounds，终态判定与覆盖校验全由脚本完成，不信任 agent 自报收敛
+  tech-design-wf 技能 W1 设计文档审查循环：方向审席与主审/影响面审/简洁审四席同轮并行（方向审 patch 档发现随当轮问题清单进入聚合；rewrite 档整循环终止回 T1），聚合裁决独立 phase 把四席发现按同根因合并为去重权威清单 aggregated.md（refs 精确划分脚本 fail-closed 校验），文档修复者据聚合清单修复并产出处置表，循环至 converged、escalated、stuck 或 max-rounds，终态判定与覆盖校验全由脚本完成，不信任 agent 自报收敛
 when: >-
   tech-design-wf 技能 W1 阶段——技术设计文档（tech-design 产物）需要对抗式审查修复循环时调用，必传设计文档与项目根绝对路径
 notFor: 代码 review-fix 循环（用内置 review-fix-loop workflow）
-phases: ['校验审查环境并四席发起', '四席并行聚焦复审', '修复设计文档并产出处置表', '落盘终态档案']
+phases: ['校验审查环境并四席发起', '四席并行聚焦复审', '聚合裁决', '修复设计文档并产出处置表', '落盘终态档案']
 parameters:
   type: object
   properties:
@@ -165,10 +165,29 @@ const SCHEMA_FixOutcome = {
 // 调用点改写为 wfAgent(、泛型参数转为首个字符串参数（typeKey），这里查 SCHEMA_BY_KEY。
 // persona 拼 prompt 头（pi agent() 无 system 通道）；每次调用都是新 agent（pi 无续聊——
 // 复用点靠 prompt 自包含，见 F 区前情补丁）。
+const SCHEMA_AggregatedItem = {
+  type: "object",
+  properties: {
+    refs: { type: "array", items: { type: "string" }, description: "该聚合项覆盖的原始问题 ref（四席报告锚点，至少一个；全体聚合项的 refs 构成原始清单的精确划分）" },
+    title: { type: "string", description: "一句话根因标题" },
+    guidance: { type: "string", description: "合并后的可执行修复操作清单（改哪个章节 JSON 哪个条目、补什么内容、跑什么检索）" },
+  },
+  required: ["refs", "title", "guidance"],
+};
+
+const SCHEMA_AggregationOutcome = {
+  type: "object",
+  properties: {
+    items: { type: "array", items: SCHEMA_AggregatedItem, description: "聚合项清单（去重后权威问题清单，脚本渲染为 aggregated.md）" },
+  },
+  required: ["items"],
+};
+
 const SCHEMA_BY_KEY = {
   DirectionVerdict: SCHEMA_DirectionVerdict,
   ReviewerVerdict: SCHEMA_ReviewerVerdict,
   FixOutcome: SCHEMA_FixOutcome,
+  AggregationOutcome: SCHEMA_AggregationOutcome,
 };
 function wfAgent(name, persona) {
   return {

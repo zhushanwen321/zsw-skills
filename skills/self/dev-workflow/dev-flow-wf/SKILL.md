@@ -35,7 +35,7 @@ description: >-
 |----|------|------|--------|
 | D0 编译 | 设计包 → exec-plan.json + 逐节点 promptFile + 初始 status.json + L0 前置 + 环境 smoke | 主 agent | `flow/compile.md` |
 | D1 开发循环 | 单元 DAG 流式并行（写码→核验→commit→解锁） | W2 wave-executor（手工路径 `flow/execute.md`） | 全节点 done 或 blocked |
-| D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 修复组并行 + Gate A 全量测试 | W3 dev-consistency-loop（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
+| D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组并行 + Gate A 全量测试 | W3 dev-consistency-loop（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
 | D3 端到端验收 | 验收计划表 L3/L4 编译成 verify/inspect 节点（核心先行 + 短路） | W2 第二实例化（手工路径 `flow/acceptance.md`） | 验收全绿 |
 | D4 收尾交付 | 交付汇总 + 功能分级登记 + 文档资产同步 + ADR 复审 + 最终 commit | 主 agent | `flow/acceptance.md` 收尾节 |
 | D5 终态同步 | 代码与设计双向校准：三向功能对照矩阵 + 越权三问 + 两级审查拓扑 | W4 design-code-sync-loop（手工路径 `flow/sync.md`） | 矩阵 0 must-fix |

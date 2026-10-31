@@ -10,12 +10,12 @@ args: { execPlan: "<path>.exec-plan.json" }
 终态: converged（unreasonable 清零 + Gate A 绿）/ stuck / gate-a-failed / review-failure / fix-failure
 ```
 
-引擎语义（无 LLM 聚合层——分区互斥契约下聚合退化为脚本操作）：
+引擎语义（聚合定性为独立 phase——每轮修复前先跑聚合裁决员）：
 
 - **projectRoot 由引擎消费**：exec-plan 内相对路径一律按 projectRoot 解析
 - **分区**：`git diff --name-only <基线>..HEAD` 文件清单的不相交划分（按顶层模块归组，一文件只属一段，无共享场景）——**脚本生成，文件集不相交是硬校验**
 - **R1**：分区 reviewer 并行（模板 `agents/consistency-reviewer.md`），三分类结构化返回
-- **脚本聚合**：分类计数 / 修复分组（= 分区边界）/ doc_errors 收集入文档修复组 · reasonable 收集回流——不派 LLM 聚合；跨区双报的 finding 文件锚点唯一归属一个分区，去重放弃（双修无害）
+- **脚本建档 + LLM 聚合定性**：脚本做分类计数 / id 分配 / 分区边界初始分组；每轮修复前派聚合定性（跨区同根因去重合并——文件互斥只保证无写冲突，不消灭同根因双报 / 定性复核改判 doc_errors / 按 expectedFiles 无交集分组 / 跨职责路由），聚合返回不合规回退分区机械分组；doc_errors 收集入文档修复组 · reasonable 收集回流
 - **必填字段分流**（引擎）：影响决策=否 且 影响交付=无 的 unreasonable 降级为登记项不进修复批次，随终态 deferredLedger 回流主 agent 登记残留风险
 - **修复组并行**：组间范围声明互斥（≤5），每组 fixer；组内核验过即 commit（组级一笔）
 - **R2+**：定向复审（只审上批修复影响面）——对上批待对账条目逐条 reconciliation 申报裁决（{prevId, status: fixed|not-fixed, evidence}，fixed 必须带 file:line 证据；仍存在的条目同时在 unreasonable 带 prevId 重新描述；新问题不带 prevId）；**清零判定唯一采信 reconciliation 的 fixed+证据申报，漏报/not-fixed 保持活跃下轮再核**（fail-closed，条目身份按引擎 U 编号对账，不按文本匹配）；另审修复引入新问题/新 diff 新偏差；复审目标 = 有改动/测试挂的组 ∪ 仍有活跃条目的组（防漏报条目零改动后失去再核机会）

@@ -5,7 +5,7 @@
 ## 产物路径约定 [MANDATORY]
 
 - runDir 即设计包目录 `~/.agents/skill-data/tech-design/<project-slug>/<name>/`（六个章节 JSON 权威源与渲染产物 `<name>.rendered.md` 所在；审查者读渲染视图，需核对结构化字段时读章节 JSON）
-- 四席报告同落当轮 `round-N[.attemptM]/`：`review-direction.md`（方向审）+ `review-<dimension>.md`（dimension = main / impact / simplicity）+ `dispositions.md`（当轮处置表）
+- 四席报告同落当轮 `round-N[.attemptM]/`：`review-direction.md`（方向审）+ `review-<dimension>.md`（dimension = main / impact / simplicity）+ `aggregated.md`（聚合清单——聚合裁决 phase 产物，四席发现按同根因合并的去重权威清单，修复者的操作清单）+ `dispositions.md`（当轮处置表）
 - 重发起（direction-rejected 修完重来 / escalated 裁决后重跑）时新轮次目录带 attempt 后缀：`round-3.attempt2/`——不覆盖历史
 - 终态记录 `<name>/final.json`：`{ terminated, rounds, runDir, designDoc, oneliner, reportFile, mustFixTrajectory, remaining, blocked, message }`——oneliner = 方向审席一句话判定（取末轮）；reportFile = 末轮 `round-N/review-direction.md` 路径；designDoc = 设计目录绝对路径；设计包的审查证据（dev-flow-wf 入口判据读它）
 - 产物根 `~/.agents/skill-data/` 在 HOME 下天然不入 git；用户显式指定路径时以用户为准
@@ -19,7 +19,7 @@
 ```
 CreateWorkflow saved: tech-review-loop
 args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workflow 内部归一为设计目录）>, projectRoot: <项目根绝对路径>, maxRounds?: 10, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件> }
-终态: converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / fix-failure（环境失败族）
+终态: converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族）
 ```
 
 终态处置（workflow 与手工路径同表）：
@@ -30,7 +30,8 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
 | direction-rejected | 只在方向审席判 rewrite 档（问题定义/方案主干/分型被击穿）时到达：回 T1 与用户对话重写（含 Step D 诊断期重做）；修完重新发起（attempt+1，重过四席）。patch 档发现不触发本终态——进当轮问题清单由修复者处置，循环继续 |
 | escalated | 方案性意见需方向裁决——与用户对比新候选后改文档重新发起（一律停回用户裁决，不在轮内自行重跑方案对比） |
 | stuck / max-rounds | 呈报残余风险矩阵，用户裁决（stuck = 连续 3 轮 must-fix 不降） |
-| *-failure（环境/工具） | 读 runDir 日志排障后 resume 或重发起 |
+| aggregator-failure | 聚合裁决结构化返回多次回喂仍不合规（refs 未构成原始清单的精确划分——漏报/重叠/幻觉 ref）——人工读四份报告合并后把聚合清单落当轮 `aggregated.md` 再续，或 attempt+1 重新发起 |
+| 其余 *-failure（环境/工具） | 读 runDir 日志排障后 resume 或重发起 |
 
 ## 手工路径 Step 1：确认审查对象
 
@@ -119,7 +120,7 @@ task:
 
 ## 手工路径 Step 4：修复轮（主 agent 亲为）
 
-1. 读三份结构化返回，合并去重（同根因跨维度表述合并）；三审 problems 清单合并落 `<runDir>/round-N/problems.json`（`{ round, problems: [...] }`，条目 `{ ref, title }`——无 level 字段）
+1. 聚合裁决（独立环节，先于修复）：把四席发现按同根因合并为去重权威清单——同根因跨席位表述合并为一条（保留全部原始 ref，禁止静默丢弃），不同根因绝不合并，每条给可执行修复指导；原始清单合并落 `<runDir>/round-N/problems.json`（`{ round, problems: [...] }`，条目 `{ ref, title }`——无 level 字段），聚合清单落 `<runDir>/round-N/aggregated.md`（每条 AG 项含全部原始 ref 与修复指导）。自检：聚合项 refs 全体 = 原始清单的精确划分（每条 ref 恰好归属一条 AG 项）
 2. 按 `flow/write.md` Step 8.1/8.2 修复全部 must-fix，不留尾巴。修复 = 编辑设计目录内章节 JSON（长文本是字段值；跨章节引用字段 gapRefs / unitRefs / axiomRefs / goalRefs / reviewNav.decisionId 与被引用数组的 id 同步更新），每轮修复后重跑 `node <skill 安装位置>/scripts/render-design-doc.mjs <设计目录>` 刷新渲染视图。每条问题处置三选一：**修复（fixed）** / **登记不修（deferred，记一句话理由）** / **归档（archived，记入章节 JSON 相应内容的待办或残留风险）**——判定存疑按修复处理（滑坡防护）
 3. 产出当轮处置表 `<runDir>/round-N/dispositions.md`（每条九字段：id（D-<轮>-<序>）/ title（一句话标题）/ source（数组，逐条引用 problems.json 的 ref）/ action（fixed|deferred|archived）/ location（修订位置）/ reenactment（反例重演）/ attackHints（攻击点建议）/ affectsDecision（影响决策）/ affectsDelivery（影响交付）），并同步落 `<runDir>/round-N/dispositions.json`（结构：`{ dispositions: [...] }`，字段同 workflow 路径）
 4. 处置表机器校验（与 workflow 路径同一校验器——双轨语义等价由此保证）：`node ~/.agents/skills/tech-design-wf/scripts/check-dispositions.mjs <runDir>/round-N/dispositions.json --problems <runDir>/round-N/problems.json`；exit 1 时按 stdout 校验报告（缺失 ref 清单）补正处置表后重跑，至 exit 0

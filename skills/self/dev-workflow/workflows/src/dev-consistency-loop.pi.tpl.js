@@ -4,7 +4,7 @@ description: >-
   dev-flow-wf W3 一致性审查循环：R1 分区全面审后修复组并行修复并定向复审，Gate A 全量测试零容忍绕过，循环至 converged 或 stuck，终态判定与顽固条目追踪全由脚本完成，不信任 agent 自报收敛
 when: >-
   dev-flow-wf 主流程 D2 阶段——W2 开发循环终态后由主 agent 发起，输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/环节失败由主 agent 接力处理
-phases: ['生成分区并全面审查', '并行修复与定向复审', '产物类并行预备', '跑全量测试 Gate A']
+phases: ['生成分区并全面审查', '聚合定性', '并行修复与定向复审', '产物类并行预备', '跑全量测试 Gate A']
 parameters:
   type: object
   properties:

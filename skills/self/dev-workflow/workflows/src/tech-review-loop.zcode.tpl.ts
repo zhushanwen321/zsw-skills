@@ -1,8 +1,10 @@
 /* zcode-workflow
 description: tech-design-wf 技能 W1 设计文档审查循环：四席并行审查（方向审席 +
   主审/影响面审/简洁审，R1 全面审、R2+ 聚焦复审逐条对账——方向审 patch 档发现随当轮
-  问题清单交文档修复者处置）→ 文档修复者单 agent 兼语义去重合并 + 修复 + 处置表产出
-  （dispositions.json/md）→ 循环至 converged / escalated / stuck / max-rounds；
+  问题清单进入聚合）→ 聚合裁决独立 phase（四席发现按同根因合并为去重权威清单
+  aggregated.md，refs 精确划分脚本 fail-closed 校验）→ 文档修复者单 agent 据聚合
+  清单修复 + 处置表产出（dispositions.json/md）→ 循环至
+  converged / escalated / stuck / max-rounds；
   方向审 rewrite 档（问题定义/方案主干/分型被击穿）整循环立即终止回 T1。审查读设计目录内章节 JSON 渲染出的
   rendered.md（setup 跑 check-design-doc.mjs 进场校验 + render-design-doc.mjs 刷新视图），
   修复者直接编辑章节 JSON 并在修改后重渲染。产物落
@@ -122,11 +124,25 @@ interface FixOutcome {
 }
 
 
+interface AggregatedItem {
+  /** 该聚合项覆盖的原始问题 ref（四席报告锚点，至少一个；全体聚合项的 refs 构成原始清单的精确划分） */
+  refs: string[];
+  /** 一句话根因标题 */
+  title: string;
+  /** 合并后的可执行修复操作清单（改哪个章节 JSON 哪个条目、补什么内容、跑什么检索） */
+  guidance: string;
+}
+
+interface AggregationOutcome {
+  /** 聚合项清单（去重后权威问题清单，脚本渲染为 aggregated.md） */
+  items: AggregatedItem[];
+}
+
 interface LoopResult {
-  /** converged = 收敛；direction-rejected = 方向审打回；escalated = 方案性卡点停回用户；
+  /** converged = 收敛；direction-rejected = 方向审 rewrite 档打回；escalated = 方案性卡点停回用户；
    *  stuck = must-fix 连续多轮不降；max-rounds = 轮次上限耗尽；
-   *  setup-failure / review-failure / fix-failure = 环节失败（message 含恢复动作） */
-  terminated: "converged" | "direction-rejected" | "escalated" | "stuck" | "max-rounds" | "setup-failure" | "review-failure" | "fix-failure";
+   *  setup-failure / review-failure / aggregator-failure / fix-failure = 环节失败（message 含恢复动作） */
+  terminated: "converged" | "direction-rejected" | "escalated" | "stuck" | "max-rounds" | "setup-failure" | "review-failure" | "aggregator-failure" | "fix-failure";
   /** 实际执行的审查轮数（四席同轮并行，均计入轮次；converged 记收敛轮） */
   rounds: number;
   /** 审查产物根目录（绝对路径；setup-failure 早期可能为空串） */

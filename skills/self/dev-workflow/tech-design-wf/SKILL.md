@@ -18,7 +18,7 @@ description: >-
 T1 设计文档（Step 0 问题定义 → Step D 诊断期 → Step 1-5 写作 → Step 6 自检 → Step 7 用例走查）
    │ 确认
    ▼
-T2 审查循环（方向审席 + 三审四席并行 → 修复循环至收敛；rewrite 档击穿整循环终止）
+T2 审查循环（四席并行审查 → 聚合裁决独立 phase → 修复循环至收敛；方向审 rewrite 档击穿整循环终止）
    │ 确认
    ▼
 T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
@@ -70,7 +70,7 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 | zcode | 会话可见 CreateWorkflow 工具 / saved workflows | saved workflow `tech-review-loop`（`CreateWorkflow saved` 发起） |
 | pi（subagent-workflow extension） | 宿主为 pi coding agent、workflow 工具可用 | 本 skill 安装位置上级的 `../workflows/pi/tech-review-loop.js`——复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run tech-review-loop --args designDoc=<路径> projectRoot=<路径> maxRounds=<N>`（数组型参数 reviewers 不支持——--args 值全字符串，用缺省四件模板） |
 
-**两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers? }`——designDoc = 设计目录绝对路径（或其渲染 md 路径，workflow 内部归一为设计目录；reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件 = 方向审 `tech-design-direction-review` + 三审 `tech-design-review` / `tech-design-impact-review` / `tech-design-simplicity-review`）；终态：converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 终态处置表）。
+**两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers? }`——designDoc = 设计目录绝对路径（或其渲染 md 路径，workflow 内部归一为设计目录；reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件 = 方向审 `tech-design-direction-review` + 三审 `tech-design-review` / `tech-design-impact-review` / `tech-design-simplicity-review`）；终态：converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 终态处置表）。
 
 ## 核心红线（14 条，详解见 references/design-principles.md 与 references/principles.md）
 
@@ -97,7 +97,7 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 
 ## 审查：四席并行（方向审席 + 三 reviewer）
 
-四席并行审查（T2）：`tech-design-direction-review` 方向审席与三 reviewer 同轮并行、同一对账契约，判据 D1-D5（D1 分型正确 / D2 前提可击穿：否定性断言找写者侧反例、穷举断言按登记的检索命令重跑对账、✅ 条目抽样复核实 / D3 终态有效：公理是真不变量、差距表无漏项、波次不制造新差距 / D4 产物表完整且真实：漏行与行级填表不实都算 / D5 问题定义忠于真问题）；发现分档：patch 档（前提层/产物表/措辞级——问题定义与方案主干不动）进当轮问题清单由文档修复者随三审发现一并处置，rewrite 档（问题定义/方案主干/分型被击穿）**整循环立即终止**回 T1 重做（含 Step D 诊断期重跑）。三 reviewer（`tech-design-review` 主审：方案级判据 + 断言-红灯映射表核对 / `tech-design-impact-review` 影响面审：写入点穷举与代价量化 / `tech-design-simplicity-review` 简洁审：机制必要性与概念数净增；agent 定义在 `agents/`，分工判据在 `review/rubric-design-doc.md`）。审查与修复分离：agent 只报告不代改；修复按 `flow/write.md` Step 8 循环协议。**轮次唯一形态：每轮 = 四席审 + 修复（R1 全面、R2+ 只审上轮处置表 + 攻击点——方向审席另重跑穷举断言登记的检索命令对账），不存在全面审+聚焦审双重派发**。
+四席并行审查（T2）：`tech-design-direction-review` 方向审席与三 reviewer 同轮并行、同一对账契约，判据 D1-D5（D1 分型正确 / D2 前提可击穿：否定性断言找写者侧反例、穷举断言按登记的检索命令重跑对账、✅ 条目抽样复核实 / D3 终态有效：公理是真不变量、差距表无漏项、波次不制造新差距 / D4 产物表完整且真实：漏行与行级填表不实都算 / D5 问题定义忠于真问题）；发现分档：patch 档（前提层/产物表/措辞级——问题定义与方案主干不动）进当轮问题清单由文档修复者随三审发现一并处置，rewrite 档（问题定义/方案主干/分型被击穿）**整循环立即终止**回 T1 重做（含 Step D 诊断期重跑）。三 reviewer（`tech-design-review` 主审：方案级判据 + 断言-红灯映射表核对 / `tech-design-impact-review` 影响面审：写入点穷举与代价量化 / `tech-design-simplicity-review` 简洁审：机制必要性与概念数净增；agent 定义在 `agents/`，分工判据在 `review/rubric-design-doc.md`）。审查与修复分离：agent 只报告不代改。**聚合裁决是独立 phase**：四席返回后先派聚合裁决员把发现按同根因合并为去重权威清单（`round-N/aggregated.md`；refs 对原始清单的精确划分由脚本 fail-closed 校验——漏报/重叠/幻觉 ref 均打回），修复者据聚合清单处置，语义去重不落在修复者身上。修复按 `flow/write.md` Step 8 循环协议。**轮次唯一形态：每轮 = 四席审 + 修复（R1 全面、R2+ 只审上轮处置表 + 攻击点——方向审席另重跑穷举断言登记的检索命令对账），不存在全面审+聚焦审双重派发**。
 
 ## 标记说明
 

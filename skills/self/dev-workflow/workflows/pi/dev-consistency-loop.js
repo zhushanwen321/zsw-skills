@@ -4,7 +4,7 @@ description: >-
   dev-flow-wf W3 一致性审查循环：R1 分区全面审后修复组并行修复并定向复审，Gate A 全量测试零容忍绕过，循环至 converged 或 stuck，终态判定与顽固条目追踪全由脚本完成，不信任 agent 自报收敛
 when: >-
   dev-flow-wf 主流程 D2 阶段——W2 开发循环终态后由主 agent 发起，输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/环节失败由主 agent 接力处理
-phases: ['生成分区并全面审查', '并行修复与定向复审', '产物类并行预备', '跑全量测试 Gate A']
+phases: ['生成分区并全面审查', '聚合定性', '并行修复与定向复审', '产物类并行预备', '跑全量测试 Gate A']
 parameters:
   type: object
   properties:
@@ -223,9 +223,11 @@ const HOST_PLATFORM = "pi";
 // W3 dev-consistency-loop — dev-flow-wf D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：
-//  - 无 LLM 聚合层：rfl 是 8 维 reviewer 共看同一 diff 需要去重合并裁决；W3 分区
-//    各看互斥文件，聚合退化为脚本操作（计数 / 分组=分区边界 / 门控），去重放弃
-//    （跨区双报的 finding 文件锚点唯一归属一个分区，双修无害）。
+//  - 聚合定性是独立 phase（每轮修复前先跑，四职责一次完成：①跨区同根因去重合并
+//    ②定性复核（unreasonable/doc_errors 改判）③按 expectedFiles 无交集分组
+//    ④跨职责路由；文件互斥只保证无写冲突，不消灭同根因双报与定性错误）。审查
+//    发现的机械建档（计数 / id 分配 / 分区边界初始分组）仍为脚本操作，聚合定性
+//    在其上裁决；聚合返回不合规回退分区机械分组，不阻塞主流程。
 //  - 修复分组不来自 LLM 自报：rfl 的 reconcileGroups 校验的是聚合 LLM 的分组输出；
 //    W3 分组来源是脚本（条目 location → 所属分区），天然互斥，仅保留「文件不得
 //    属两个分区」的显式断言（分区生成处）+「修复改动 ⊆ 全体组申报文件并集」的
@@ -1240,7 +1242,7 @@ let stuckPendingReason = null;
 // Gate A 本轮结果（finish 的 events 回写判据：stuck 终态也按结果写 gate-a 一笔）
 let gateOutcome = null;
 for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRound++) {
-    phase("并行修复与定向复审");
+    phase("聚合定性");
     reviewRound = fixRound + 1;
     const roundActiveAll = activeItems();
     // 必填字段分流（老一致性纪律保留）：影响决策=否 且 影响交付=无 → 降级登记项，
@@ -1358,6 +1360,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
             }
         }
     }
+    phase("并行修复与定向复审");
     // 组划分：聚合路由后的组归属（无聚合时 it.group 保持入池的分区边界——回退语义不变）
     const groupMap = new Map();
     for (const it of roundActive) {
