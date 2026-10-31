@@ -3,15 +3,18 @@
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
 // 改动任一侧循环骨架时评估另一侧是否需要同步）。语义权威源 = tech-design-wf
 // 设计文档 §5（轮次形态唯一定义 / 停机线 / 终态与停回通道）。与 rfl 的结构差异：
-//  - 维度固定四席（方向审 gate + 三审并行），无 rfl 的批内慢快池调度（三审恒定
-//    并行，无分批收益）
+//  - 维度固定四席（方向审循环 + 三审并行——方向审 patch 档打回在循环内派修复者改
+//    章节 JSON 后重审，审查-修改闭环收在 workflow 内，不外溢重发起），无 rfl 的批内
+//    慢快池调度（三审恒定并行，无分批收益）
 //  - 无独立聚合 phase：文档修复者单 agent 兼做语义去重合并（C2 核实：语义判断
 //    保留 agent）+ 修复 + 处置表产出
 //  - 对账对象 = 上轮处置表（dispositions），非 rfl 的 issue 台账；deferred/archived
 //    条目的唯一复活入口 = reviewer reconciliation status="escalate" 结构化申报
 //  - 终态枚举按设计 §5.3：direction-rejected / converged / escalated / stuck /
 //    max-rounds（+ 环节失败三态）；escalated 一律停回用户裁决，不轮内自行重跑
-//    方案对比（F18：方向裁决权上收）
+//    方案对比（F18：方向裁决权上收）；direction-rejected 只在 rewrite 档击穿
+//    （问题定义/方案主干/分型）、patch 档 must-fix 连续不降、方向审循环预算耗尽三态
+//    到达——patch 档常规打回在循环内闭环，不外溢
 //  - runDir 命名按 F22：~/.agents/skill-data/tech-design/<project-slug>/<设计目录
 //    basename>/（project-slug = realpath(projectRoot) basename + sha256 前 8 位，六域
 //    对账同一组固定向量），重发起轮次目录带 attempt 后缀（round-3.attempt2），不覆盖历史
@@ -29,6 +32,7 @@
 
 // ── 常量（控制流专用，不内插进任何 ask 文本） ──
 const DEFAULT_MAX_ROUNDS = 10;
+const DEFAULT_MAX_DIRECTION_ROUNDS = 6;
 const STUCK_THRESHOLD = 3;
 const FIX_RETRY_MAX = 3; // 修复者结构化返回校验失败的重试上限（初始 1 次 + 回喂重试 3 次，与其他 agent 的 STRUCTURED_RETRY_MAX 对齐）
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
@@ -36,7 +40,7 @@ const FIX_RETRY_MAX = 3; // 修复者结构化返回校验失败的重试上限�
 const NO_ASK_RULE =
   "禁止向用户提问（无 AskUserQuestion / ask-user / 任何等待用户输入的操作）——workflow 内没有用户交互位；" +
   "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
-const VALID_ARG_KEYS = new Set(["designDoc", "projectRoot", "maxRounds", "reviewers", "attempt"]);
+const VALID_ARG_KEYS = new Set(["designDoc", "projectRoot", "maxRounds", "maxDirectionRounds", "reviewers", "attempt"]);
 
 // node -e 通道（argv 传参，无 shell 注入面；node 代码不受脚本 facade 限制）
 const NODE_WRITE_FILE =
@@ -44,6 +48,9 @@ const NODE_WRITE_FILE =
 const NODE_CHECK_EXISTS =
   "const fs=require('fs');const missing=process.argv.slice(1).filter(p=>!fs.existsSync(p));if(missing.length>0){process.stdout.write(missing.join(' | '));process.exit(1)}";
 const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
+// best-effort 归档（源不存在或失败均静默——归档只是审计轨迹，报告本体由方向审每轮覆写）
+const NODE_ARCHIVE_IF_EXISTS =
+  "var fs=require('fs');try{fs.copyFileSync(process.argv[1],process.argv[2])}catch(e){}";
 // project-slug 探针：输出 basename-realhash8（realpath + sha256 前 8 位十六进制小写；
 // impl-spec §1 全域唯一算法，与 skill-data-dir.mjs / 各循环实现对同一组固定向量一致）
 const NODE_PROJECT_SLUG =
@@ -132,6 +139,10 @@ function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
     typeof raw.maxRounds === "number" && Number.isFinite(raw.maxRounds) && raw.maxRounds >= 1
       ? Math.floor(raw.maxRounds)
       : DEFAULT_MAX_ROUNDS;
+  const maxDirectionRounds =
+    typeof raw.maxDirectionRounds === "number" && Number.isFinite(raw.maxDirectionRounds) && raw.maxDirectionRounds >= 1
+      ? Math.floor(raw.maxDirectionRounds)
+      : DEFAULT_MAX_DIRECTION_ROUNDS;
   const reviewers = Array.isArray(raw.reviewers)
     ? raw.reviewers.filter((x): x is string => typeof x === "string" && x.trim() !== "").map((s) => s.trim())
     : [];
@@ -139,7 +150,7 @@ function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
     typeof raw.attempt === "number" && Number.isFinite(raw.attempt) && raw.attempt >= 1
       ? Math.floor(raw.attempt)
       : null;
-  return { designDoc, projectRoot, maxRounds, reviewers, attempt, problems };
+  return { designDoc, projectRoot, maxRounds, maxDirectionRounds, reviewers, attempt, problems };
 }
 
 // ── 纯函数 ──
@@ -269,11 +280,14 @@ async function askValidated<T>(
   return fin.ok ? fin.value : null;
 }
 
-/** 方向审返回校验：计数非负整数 + 文本字段为字符串 + problems 清单逐条形态合法（ref/title） */
+/** 方向审返回校验：计数非负整数 + 打回档位枚举 + 文本字段为字符串 + problems 清单逐条形态合法（ref/title） */
 function validateDirectionVerdict(v: unknown): Validated<DirectionVerdict> {
   const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
   const errors: string[] = [];
   if (sanitizeCount(o["mustFix"]) === null) errors.push("mustFix 须为非负整数（与报告一致）");
+  if (o["fixScope"] !== "patch" && o["fixScope"] !== "rewrite") {
+    errors.push('fixScope 须为 "patch"（全部发现属前提层/产物表/措辞级，问题定义与方案主干不动）或 "rewrite"（问题定义/方案主干/分型被击穿）；mustFix=0 时填 "patch"');
+  }
   if (typeof o["oneliner"] !== "string") errors.push("oneliner 须为字符串");
   if (typeof o["reportFile"] !== "string") errors.push("reportFile 须为字符串");
   const rawProblems = o["problems"];
@@ -404,7 +418,7 @@ if (inputs.problems.length > 0) {
     message: `参数校验失败：${inputs.problems.join("；")}。恢复动作：${HINT_RELAUNCH_WITH_ARGS}`,
   };
 }
-const { designDoc, projectRoot, maxRounds } = inputs;
+const { designDoc, projectRoot, maxRounds, maxDirectionRounds } = inputs;
 
 // ── 环境准备（home 展开 / runDir / attempt / 模板探针） ──
 phase("校验审查环境并做方向审");
@@ -687,84 +701,222 @@ artifact.chart("trajectory", {
   y: { field: "mustFix", label: "must-fix 总和" },
 });
 
-// ── phase 1：方向审 gate ──
+// ── phase 1：方向审循环 ──
+// patch 档打回（前提层/产物表/措辞级——问题定义与方案主干不动）在循环内派方向修复者
+// 改章节 JSON 后重审，审查-修改闭环收在本 workflow 内；rewrite 档（问题定义/方案主干/
+// 分型被击穿）、patch 档 must-fix 连续不降、循环预算耗尽三态才走 direction-rejected 停回
 const directionReportAbs = `${runDir}/review-direction.md`;
+const directionTrajectory: number[] = [];
+let dPrevMustFix = 0;
+let dStreak = 0;
+let directionPassed = false;
 log(`审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttemptMax > 0 ? `（检测到历史 attempt 后缀至 ${prevAttemptMax}，历史产物不覆盖）` : ""}）；方向审先行`);
 
-let directionVerdict: DirectionVerdict | null;
-try {
-  directionVerdict = await askValidated(
-    validateDirectionVerdict,
-    (p) =>
-      agent(
-        "方向审",
-        "你是方向审评审员：攻击设计的前提层与终态层——分型是否正确、前提清单能否被写者侧反例击穿、公理是真不变量还是实现细节、产物表是否完整且真实、问题定义是否忠于真问题；只读评审，绝不修改任何文件；每个判定都要有你亲自读到的文档原文或源码依据；指令无法执行或有矛盾时如实说明，不伪造结论。" +
-          NO_ASK_RULE,
-      ).ask<DirectionVerdict>(p),
-    [
-      "方向审（先于三审的第一道门）。",
-      "",
-      `第一步：Read 方向审模板 ${templates.get("direction") ?? ""}——其中是你的攻击方法与完整评审基准（D1-D5 判据），按它执行。`,
-      `评审 rubric（D 系列判据来源，先读）：${rubricPath}`,
-      `原则层（产物表规格与触发条件——D2 攻击前提清单、D4 对账产物表都要用）：${principlesPath}`,
-      `审查对象（渲染视图——读它）：${renderedMd}`,
-      `章节 JSON（需核对产物表等结构化字段原文时读，如 s2-status.json 的 artifactTables）：设计目录 ${designDoc}（meta / s1-context / s2-status / s3-solution / s4-accept / s5-breakdown 六个 json，字段规格见 ${schemaPath}）。`,
-      `项目上下文（存在则读，攻击「状态副本清单 / 上游依赖」以项目自己的架构事实为依据，不凭偏好）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
-      "只读评审：禁止修改设计文档与项目内任何文件。",
-      "",
-      "五大方向逐项攻击（判据 D1-D5，每项先找反例，找不到反例才判通过）：",
-      "① 分型（D1）：终态型有无触发依据（用户显式要求 / 修复史判定表「未修到」/ 架构级设计对象）；演进型的「为什么不需要终态视角」辩护是否被修复史判定表支撑。",
-      "② 前提清单（D2，增强版，落文档 §2 末）：否定性断言逐条攻击——先枚举「谁可能在写、谁可能在持有」（跨包跨进程、含写者侧）再找写者侧反例，只查读侧不算核实；✅ 条目抽样复核实（亲自 read 它声称的核实位置，验证核实动作真实发生）；⏳ 待裁决项逐条判「是否影响方向」——动摇方案主干所依赖的现状理解的，升级 must-fix 要求先行裁决。",
-      "③ 终态层（D3，终态型专用、演进型跳过）：公理清单逐条判「真不变量还是实现细节」（假设推翻重建，该陈述还必须成立吗）；终态-现状差距表逐维对照现状查漏项；迁移波次查是否制造新差距。",
-      "④ 产物表（D4）：触发的产物表存在且无漏行（状态副本清单漏持有者、信号-蕴涵漏信号、上游依赖漏接触点均算漏行）+ 行级真实性抽样（随机挑行 read 源码验证行内容与代码一致）。",
-      "⑤ 问题定义（D5）：§1 定义的是现象还是根因、有无未识别的深层问题；探明手段（加日志/探针/先收集数据）不占设计主体；问题定义不被现状实现污染。",
-      "声称「击穿 / 填表不实」前必须 read 源码取证；机制正确性 / 影响面 / 机制必要性留给三审（标 INFO 交接，不计数、不进 problems）。",
-      `报告落盘：${directionReportAbs}（绝对路径；需要时先创建目录）。内容：Summary（must-fix 数量）+ 方向判定（一句话）+ Findings 表（每行：锚点编号 review-direction#<序>、优先级 MUST_FIX、位置、维度、描述、影响决策、影响交付、修复方向——每个 must-fix 引用 D 系列编号 + 文档位置；报告小节/行标题必须带锚点）。这份报告是方向打回时的唯一证据。`,
-      "完成后返回 JSON：reportFile、mustFix（must-fix 条数，与报告一致）、problems（逐条问题清单，每条 {ref, title}——ref 即报告 Findings 行锚点（review-direction#<序>，行序即序号）、title 一句话；条目无 level 字段——唯一报告级别是 must-fix；条数合计须等于 mustFix）、oneliner（一句话方向判定）。",
-    ].join("\n"),
-  );
-} catch (e) {
-  return await finish("review-failure", 0, `方向审调用失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——结构化校验不过 / 上下文超限则拆分投喂精简模板 / IO 失败）；args.attempt 递增重新发起（历史产物不覆盖）`);
-}
-if (directionVerdict === null) {
-  return await finish(
-    "review-failure",
-    0,
-    `方向审结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规。恢复动作：报告若已写好，读 ${directionReportAbs} 人工核对后重新发起`,
-  );
-}
-// 计数从 problems 清单派生（单一事实源）；自报计数只做交叉校验——自报非零但清单
-// 缺失/全畸形时派生归零会假放行，fail-fast（与三审同构防线）
-const dProblems = sanitizeProblems(directionVerdict.problems);
-const dSelfMf = sanitizeCount(directionVerdict.mustFix) ?? 0;
-if (dSelfMf > 0 && dProblems.length === 0) {
-  return await finish(
-    "review-failure",
-    0,
-    `方向审自报计数（must-fix ${dSelfMf}）非零但 problems 清单缺失或全畸形——打回判定无对账锚点，报告可读 ${directionReportAbs} 人工核对。恢复动作：args.attempt 递增重新发起`,
-  );
-}
-if (dProblems.length !== dSelfMf) {
-  log(`方向审自报计数（${dSelfMf}）与 problems 清单派生（${dProblems.length}）不一致，以清单为准`);
-}
-directionOneliner = directionVerdict.oneliner;
-if (directionVerdict.reportFile !== directionReportAbs) {
-  log(`方向审自报 reportFile（${JSON.stringify(directionVerdict.reportFile)}）与确定性位置不一致，回退采用 ${directionReportAbs}`);
-}
-const dChk = await world.run("node", ["-e", NODE_CHECK_EXISTS, directionReportAbs]);
-if (dChk.exitCode !== 0) {
-  return await finish("review-failure", 0, `方向审报告未落盘（${directionReportAbs}）——报告是下游唯一证据，缺失即失败。恢复动作：重新发起（args.attempt 递增）`);
-}
-directionReportFile = directionReportAbs;
+for (let dRound = 1; dRound <= maxDirectionRounds; dRound++) {
+  // 归档上一轮报告（best-effort 审计轨迹；报告本体每轮覆写于确定性位置）
+  if (dRound > 1) {
+    await world.run("node", ["-e", NODE_ARCHIVE_IF_EXISTS, directionReportAbs, `${runDir}/review-direction.r${dRound - 1}.md`]);
+  }
 
-if (dProblems.length > 0) {
+  let directionVerdict: DirectionVerdict | null;
+  try {
+    directionVerdict = await askValidated(
+      validateDirectionVerdict,
+      (p) =>
+        agent(
+          `方向审-d${dRound}`,
+          "你是方向审评审员：攻击设计的前提层与终态层——分型是否正确、前提清单能否被写者侧反例击穿、公理是真不变量还是实现细节、产物表是否完整且真实、问题定义是否忠于真问题；只读评审，绝不修改任何文件；每个判定都要有你亲自读到的文档原文或源码依据；指令无法执行或有矛盾时如实说明，不伪造结论。" +
+            NO_ASK_RULE,
+        ).ask<DirectionVerdict>(p),
+      [
+        `方向审（先于三审的第一道门，第 ${dRound} 轮${dRound > 1 ? "——修复后复审" : ""}）。`,
+        "",
+        `第一步：Read 方向审模板 ${templates.get("direction") ?? ""}——其中是你的攻击方法与完整评审基准（D1-D5 判据），按它执行。`,
+        `评审 rubric（D 系列判据来源，先读）：${rubricPath}`,
+        `原则层（产物表规格与触发条件——D2 攻击前提清单、D4 对账产物表都要用）：${principlesPath}`,
+        ...(dRound > 1
+          ? [
+              `本轮为修复后复审：先逐条核实上一轮 must-fix 的修复真实落地（上一轮报告归档在 ${runDir}/review-direction.r${dRound - 1}.md，报告附「上轮修复核实」节——声称修复而未落地的按本轮 must-fix 重新计数），再做独立全面攻击（D1-D5 全项——修复可能引入新问题，穷举断言可能仍有未枚举完的来源）。`,
+            ]
+          : []),
+        `审查对象（渲染视图——读它）：${renderedMd}`,
+        `章节 JSON（需核对产物表等结构化字段原文时读，如 s2-status.json 的 artifactTables）：设计目录 ${designDoc}（meta / s1-context / s2-status / s3-solution / s4-accept / s5-breakdown 六个 json，字段规格见 ${schemaPath}）。`,
+        `项目上下文（存在则读，攻击「状态副本清单 / 上游依赖」以项目自己的架构事实为依据，不凭偏好）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
+        "只读评审：禁止修改设计文档与项目内任何文件。",
+        "",
+        "五大方向逐项攻击（判据 D1-D5，每项先找反例，找不到反例才判通过）：",
+        "① 分型（D1）：终态型有无触发依据（用户显式要求 / 修复史判定表「未修到」/ 架构级设计对象）；演进型的「为什么不需要终态视角」辩护是否被修复史判定表支撑。",
+        "② 前提清单（D2，增强版，落文档 §2 末）：否定性断言逐条攻击——先枚举「谁可能在写、谁可能在持有」（跨包跨进程、含写者侧）再找写者侧反例，只查读侧不算核实；穷举断言（「唯一 / 限于 / 全集」措辞）优先核对同行检索命令与命中清单——登记了的重跑同一命令对账（清单外写者即反例），未登记的直接 must-fix（修复 = 补检索命令与命中清单，属 patch 档）；✅ 条目抽样复核实（亲自 read 它声称的核实位置，验证核实动作真实发生）；⏳ 待裁决项逐条判「是否影响方向」——动摇方案主干所依赖的现状理解的，升级 must-fix 要求先行裁决。",
+        "③ 终态层（D3，终态型专用、演进型跳过）：公理清单逐条判「真不变量还是实现细节」（假设推翻重建，该陈述还必须成立吗）；终态-现状差距表逐维对照现状查漏项；迁移波次查是否制造新差距。",
+        "④ 产物表（D4）：触发的产物表存在且无漏行（状态副本清单漏持有者、信号-蕴涵漏信号、上游依赖漏接触点均算漏行）+ 行级真实性抽样（随机挑行 read 源码验证行内容与代码一致）。",
+        "⑤ 问题定义（D5）：§1 定义的是现象还是根因、有无未识别的深层问题；探明手段（加日志/探针/先收集数据）不占设计主体；问题定义不被现状实现污染。",
+        "声称「击穿 / 填表不实」前必须 read 源码取证；机制正确性 / 影响面 / 机制必要性留给三审（标 INFO 交接，不计数、不进 problems）。",
+        `报告落盘：${directionReportAbs}（绝对路径；需要时先创建目录）。内容：Summary（must-fix 数量）+ 方向判定（一句话）+ Findings 表（每行：锚点编号 review-direction#<序>、优先级 MUST_FIX、位置、维度、描述、影响决策、影响交付、修复方向——每个 must-fix 引用 D 系列编号 + 文档位置；报告小节/行标题必须带锚点）。修复方向列必须可执行：写清改哪个章节 JSON 的哪个条目、补什么内容、跑什么检索——它是 patch 档修复者的操作清单，patch 档 finding 不许只写「回 T1 重做」类无操作内容（rewrite 档才允许且必须说明击穿了什么）。这份报告是方向打回时的唯一证据。`,
+        "完成后返回 JSON：reportFile、mustFix（must-fix 条数，与报告一致）、fixScope（patch = 全部发现属前提层/产物表/措辞级、问题定义与方案主干不动；rewrite = 问题定义/方案主干/分型被击穿——任一 finding 击穿这三者即整份判 rewrite；mustFix=0 时填 patch）、problems（逐条问题清单，每条 {ref, title}——ref 即报告 Findings 行锚点（review-direction#<序>，行序即序号）、title 一句话；条目无 level 字段——唯一报告级别是 must-fix；条数合计须等于 mustFix）、oneliner（一句话方向判定）。",
+      ].join("\n"),
+    );
+  } catch (e) {
+    return await finish("review-failure", 0, `方向审调用失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——结构化校验不过 / 上下文超限则拆分投喂精简模板 / IO 失败）；args.attempt 递增重新发起（历史产物不覆盖）`);
+  }
+  if (directionVerdict === null) {
+    return await finish(
+      "review-failure",
+      0,
+      `方向审结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规。恢复动作：报告若已写好，读 ${directionReportAbs} 人工核对后重新发起`,
+    );
+  }
+  // 计数从 problems 清单派生（单一事实源）；自报计数只做交叉校验——自报非零但清单
+  // 缺失/全畸形时派生归零会假放行，fail-fast（与三审同构防线）
+  const dProblems = sanitizeProblems(directionVerdict.problems);
+  const dSelfMf = sanitizeCount(directionVerdict.mustFix) ?? 0;
+  if (dSelfMf > 0 && dProblems.length === 0) {
+    return await finish(
+      "review-failure",
+      0,
+      `方向审自报计数（must-fix ${dSelfMf}）非零但 problems 清单缺失或全畸形——打回判定无对账锚点，报告可读 ${directionReportAbs} 人工核对。恢复动作：args.attempt 递增重新发起`,
+    );
+  }
+  if (dProblems.length !== dSelfMf) {
+    log(`方向审自报计数（${dSelfMf}）与 problems 清单派生（${dProblems.length}）不一致，以清单为准`);
+  }
+  directionOneliner = directionVerdict.oneliner;
+  if (directionVerdict.reportFile !== directionReportAbs) {
+    log(`方向审自报 reportFile（${JSON.stringify(directionVerdict.reportFile)}）与确定性位置不一致，回退采用 ${directionReportAbs}`);
+  }
+  const dChk = await world.run("node", ["-e", NODE_CHECK_EXISTS, directionReportAbs]);
+  if (dChk.exitCode !== 0) {
+    return await finish("review-failure", 0, `方向审报告未落盘（${directionReportAbs}）——报告是下游唯一证据，缺失即失败。恢复动作：重新发起（args.attempt 递增）`);
+  }
+  directionReportFile = directionReportAbs;
+  directionTrajectory.push(dProblems.length);
+
+  if (dProblems.length === 0) {
+    directionPassed = true;
+    log(`方向审通过（must-fix 0，第 ${dRound} 轮）：${directionOneliner}`);
+    break;
+  }
+
+  if (directionVerdict.fixScope === "rewrite") {
+    return await finish(
+      "direction-rejected",
+      0,
+      `方向审打回（rewrite 档，must-fix ${dProblems.length} 条——问题定义/方案主干/分型被击穿）：${directionOneliner}。停回通道：回 T1 对话重写——按报告修复方向重写（含 Step D 诊断期重做），修完 attempt+1 重新发起（重过方向审）；报告见 ${directionReportAbs}`,
+    );
+  }
+
+  // patch 档连续不降熔断（与三审 stuck 同构；计数判定归脚本，不信任 agent 自报收敛）
+  if (dProblems.length >= dPrevMustFix) dStreak += 1;
+  else dStreak = 0;
+  dPrevMustFix = dProblems.length;
+  if (dStreak >= STUCK_THRESHOLD) {
+    return await finish(
+      "direction-rejected",
+      0,
+      `方向审 must-fix 连续 ${STUCK_THRESHOLD} 轮未下降（轨迹 ${directionTrajectory.join(" → ")}）——循环内修复已不收敛。停回通道：呈报用户裁决——读 ${directionReportAbs} 与归档 review-direction.r*.md 后人工接管修复，或 attempt+1 重新发起`,
+    );
+  }
+
+  // ── phase 2：方向审 patch 档修复（循环内闭环——审查意见经报告「修复方向」列传回修复者） ──
+  phase("方向审打回修复");
+  let dFixPassed = false;
+  let dCheckReport = "";
+  for (let dAttempt = 1; dAttempt <= FIX_RETRY_MAX && !dFixPassed; dAttempt++) {
+    const dBaseInstructions = [
+      `方向审第 ${dRound} 轮打回的 patch 档修复（产物目录 ${runDir}）。`,
+      "",
+      `第一步：Read 方向审报告 ${directionReportAbs}——Findings 表每行的「修复方向」列是给你的操作清单（含改哪个章节 JSON 的哪个条目、补什么内容）；报告内「上轮修复核实」节（如有）是历史轮次的落地核对。`,
+      `审查对象：设计目录 ${designDoc}——权威源是目录内六个章节 JSON（meta / s1-context / s2-status / s3-solution / s4-accept / s5-breakdown），${renderedMd} 是渲染出的阅读视图（非权威，禁止手改）。你有文件工具，直接编辑章节 JSON 完成修复（逐文件小步修改）；字段规格见 ${schemaPath}。`,
+      "",
+      "本轮问题清单（必须逐条处置，ref 与报告 Findings 行锚点对应）：",
+      wrapUntrusted(JSON.stringify(dProblems)),
+      "",
+      "修复纪律：",
+      "- 只做 patch 档修复：前提层枚举补全 / 产物表行修正 / 公理措辞重述 / 穷举断言补检索命令——不改问题定义、方案主干、分型（发现修复必须动这三者 = 超出 patch 档，status 置 \"blocked\" 并申报，不硬改、不静默绕过）。",
+      "- 穷举断言（「唯一 / 限于 / 全集」措辞）：修复 = 亲自跑检索（grep / ripgrep，含路径范围），把命令与命中清单登记进对应行的 evidence / exclusionEvidence / exclusionNote——登记后断言可复算，下轮复审重跑同一命令对账。",
+      "- 每处修改先核实再写（读源码取证）；写入的断言标核实状态——✅ 仅用于本会话亲自核实的陈述，设计期无法核实的写 ⏳ 前提并指向实施期探针；联动同步关联章节与跨章节引用字段（gapRefs / unitRefs / axiomRefs / goalRefs / reviewNav.decisionId——改 id 同步全部引用处），不留前后矛盾。",
+      `- 完成后运行 node ${renderCliAbs} ${designDoc} 刷新渲染视图（引擎会再幂等重跑一次），并确认 node ${checkDesignCliAbs} ${designDoc} 为 exit 0（八条规则，stdout 有逐项失败原因时按其修复）。`,
+      "",
+      "返回 JSON：status（\"done\" | \"blocked\"）、fixedRefs（本轮已处置的问题 ref 数组，须覆盖问题清单全部 ref）、revisionSummary（一句话修订摘要）；仅 status=\"blocked\" 时加 blocked { items: 卡住的问题 ref 清单, reason: 为什么需要用户裁决 }。",
+    ].join("\n");
+
+    const dInstructions: string =
+      dAttempt === 1
+        ? dBaseInstructions
+        : [
+            "你上一轮的结构化返回或修复后机器门未通过，错误清单：",
+            dCheckReport,
+            "",
+            "已做的文档修订保留在磁盘上，不要重复修改；按错误清单修正（fixedRefs 缺 ref → 补处置并把修复落实进章节 JSON；机器门未过 → 按其 stdout 逐项失败原因修复章节 JSON）后，重新返回完整 JSON（全量重新给出，不是增量补丁）。",
+          ].join("\n");
+
+    let dFix: DirectionFixOutcome;
+    try {
+      dFix = await agent(
+        `方向修复者-d${dRound}`,
+        "你是设计文档修复者（方向审 patch 档）：直接编辑设计目录内的章节 JSON（六个 json 是权威源，渲染视图由脚本生成、不手改）；先核实再修改、修改后重跑渲染脚本；方案性卡点如实置 status=\"blocked\" 申报，不硬改、不静默跳过。" + NO_ASK_RULE,
+      ).ask<DirectionFixOutcome>(dInstructions);
+    } catch (e) {
+      return await finish("fix-failure", 0, `方向修复者调用失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——上下文超限则拆分投喂）；在途编辑已留磁盘，接管前先盘点 ${designDoc}；args.attempt 递增重新发起`);
+    }
+
+    const dStatus: "done" | "blocked" = dFix.status === "blocked" ? "blocked" : "done";
+    const dBlocked = dStatus === "blocked" ? sanitizeBlocked(dFix.blocked) : null;
+    if (dStatus === "blocked" && dBlocked === null) {
+      dCheckReport =
+        'status="blocked" 但 blocked 字段缺失或全空。二选一修正：有卡点 → 补全 blocked { items: 至少一条卡住的问题 ref, reason: 为什么需要用户裁决 }；无卡点 → status 改为 "done" 且返回体不含 blocked 字段。';
+      continue;
+    }
+    if (dBlocked !== null) {
+      // 修复需动问题定义/方案主干/分型（超出 patch 边界），停回用户裁决
+      return await finish(
+        "escalated",
+        0,
+        `方向审 patch 档修不动：${dBlocked.reason}——修复需动问题定义/方案主干/分型。停回通道：用户裁决后回 T1 重写再重新发起（重过方向审）；方向审报告见 ${directionReportAbs}`,
+        dBlocked,
+      );
+    }
+
+    // 覆盖校验：fixedRefs ⊇ 本轮 problems.ref（集合机器判定，漏报即回喂）
+    const dFixedRefs = Array.isArray(dFix.fixedRefs)
+      ? dFix.fixedRefs.filter((r): r is string => typeof r === "string")
+      : [];
+    const wantRefs = new Set(dProblems.map((p) => p.ref));
+    const gotRefs = new Set(dFixedRefs);
+    const missingRefs = [...wantRefs].filter((r) => !gotRefs.has(r));
+    if (missingRefs.length > 0) {
+      dCheckReport = `- [覆盖] 以下问题 ref 未出现在 fixedRefs：${missingRefs.join("、")}——每条必须处置（修复落实进章节 JSON 且列入 fixedRefs）`;
+    } else {
+      // 修复后机器门：渲染幂等刷新（防修复者漏跑）+ 八条规则 exit 0
+      await world.run("node", [renderCliAbs, designDoc]);
+      const dGate = await world.run("node", [checkDesignCliAbs, designDoc]);
+      if (dGate.exitCode === 0) {
+        dFixPassed = true;
+        break;
+      }
+      dCheckReport = `- [机器门] check-design-doc.mjs exit ${dGate.exitCode}：${dGate.stdout.trim() || dGate.stderr.trim()}——按逐项失败原因修复章节 JSON（渲染视图引擎已重跑）`;
+    }
+    // 失败留档：原始返回 + 校验报告（终态后接管者可对账）
+    const rawArchive = { dRound, dAttempt, returned: dFix, checkReport: dCheckReport };
+    await world.run("node", ["-e", NODE_WRITE_FILE, `${runDir}/raw-direction-fix-${dRound}-${dAttempt}.json`, JSON.stringify(rawArchive, null, 2)]);
+    log(`WARN: 方向修复者第 ${dRound} 轮第 ${dAttempt} 次未过校验${dAttempt < FIX_RETRY_MAX ? "，回喂重试" : "，重试预算耗尽"}`);
+  }
+  if (!dFixPassed) {
+    return await finish(
+      "fix-failure",
+      0,
+      `方向修复者校验 ${FIX_RETRY_MAX} 次未通过：\n${dCheckReport}\n原始返回与校验报告已留档 ${runDir}/raw-direction-fix-*.json；文档修订已留磁盘（修复内容通常有效，仅结构化返回/机器门不合规）。恢复动作：人工按校验报告补正后 attempt+1 重新发起`,
+    );
+  }
+  log(`方向审第 ${dRound} 轮 patch 修复完成（处置 ${dProblems.length} 条），进入第 ${dRound + 1} 轮复审`);
+}
+
+if (!directionPassed) {
   return await finish(
     "direction-rejected",
     0,
-    `方向审打回（must-fix ${dProblems.length} 条）：${directionOneliner}。停回通道：回 T1 对话重写——问题定义/方案主干/前提层按报告修复方向重写（含 Step D 诊断期重做），修完 attempt+1 重新发起（重过方向审）；报告见 ${directionReportAbs}`,
+    `方向审循环预算耗尽（${maxDirectionRounds} 轮，must-fix 轨迹 ${directionTrajectory.join(" → ")}）——最后一轮修复已落盘但未复审。停回通道：人工读 ${directionReportAbs} 与归档 review-direction.r*.md 裁决——attempt+1 重新发起（重过方向审，attempt 目录不覆盖历史）或人工接管`,
   );
 }
-log(`方向审通过（must-fix 0）：${directionOneliner}`);
 
 // ── 审查-修复主循环 ──
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
@@ -835,7 +987,7 @@ for (let round = 1; round <= maxRounds; round++) {
         ? "（简洁审一律执行——设计 B8 裁决无跳过通道）若本设计属纯文案/参数调整类记录（无结构、方案主干、验收形态变化），照常逐项过 checklist，在报告开头说明该分类并给出简洁面结论（零发现就写「简洁面零发现」）。"
         : "",
       "",
-      `报告落盘：${roundAbs}/${t.reportName}（绝对路径；需要时先创建目录）。每条问题一节：锚点编号（${t.reportName.replace(".md", "")}#<序>，如 ${t.reportName.replace(".md", "")}#2，报告小节标题必须带此锚点）+ 所在章节 + 描述 + 原文依据（你读到的原句）+ 修复方向。唯一报告级别是 must-fix（无 suggestion 级——不影响决策的表述偏好不报）。报告是修复者的唯一输入。`,
+      `报告落盘：${roundAbs}/${t.reportName}（绝对路径；需要时先创建目录）。每条问题一节：锚点编号（${t.reportName.replace(".md", "")}#<序>，如 ${t.reportName.replace(".md", "")}#2，报告小节标题必须带此锚点）+ 所在章节 + 描述 + 原文依据（你读到的原句）+ 修复方向（可执行——指明改哪个章节 JSON 的哪个条目、补什么内容；它是修复者的操作清单）。唯一报告级别是 must-fix（无 suggestion 级——不影响决策的表述偏好不报）。报告是修复者的唯一输入。`,
       `完成后返回 JSON：mustFix（must-fix 条数，与报告一致）、problems（逐条问题清单，每条 {ref, title}——ref 即报告小节锚点（${t.reportName.replace(".md", "")}#<序>）、title 一句话；条目无 level 字段；条数合计须等于 mustFix）、reconciliation（${round === 1 ? "本轮返回空数组 []" : "对上方必对账集逐条申报"}）。`,
     ]
       .filter(Boolean)

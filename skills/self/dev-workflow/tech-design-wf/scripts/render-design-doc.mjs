@@ -215,6 +215,17 @@ if (assumptions.length > 0) {
     "",
   );
 }
+const assumptionExclusions = arr(s2.assumptionExclusions);
+if (assumptionExclusions.length > 0) {
+  section("#### 否定性断言排除记录");
+  out.push(
+    table(
+      ["断言", "候选写者", "排除证据"],
+      assumptionExclusions.map((x) => [x?.assertion, x?.candidateWriters, x?.exclusionEvidence]),
+    ),
+    "",
+  );
+}
 
 const at = s2.artifactTables ?? {};
 const stateCopies = arr(at.stateCopies);

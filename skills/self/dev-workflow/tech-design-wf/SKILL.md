@@ -18,7 +18,7 @@ description: >-
 T1 设计文档（Step 0 问题定义 → Step D 诊断期 → Step 1-5 写作 → Step 6 自检 → Step 7 用例走查）
    │ 确认
    ▼
-T2 审查循环（方向审先行 → 三审并行 → 三态修复循环至收敛）
+T2 审查循环（方向审循环：patch 档打回轮内修复重审 → 三审并行 → 三态修复循环至收敛）
    │ 确认
    ▼
 T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
@@ -42,7 +42,7 @@ T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
 | `<name>/`（设计文档目录：六章节 JSON `meta.json` / `s1-context.json` / `s2-status.json` / `s3-solution.json` / `s4-accept.json` / `s5-breakdown.json`——权威源，字段规格见 `references/design-doc-schema.md`）+ `<name>.rendered.md`（渲染视图，`scripts/render-design-doc.mjs` 生成，非权威） | T1 | `scripts/check-design-doc.mjs` 对设计目录 exit 0 |
 | `<name>.impl-plan.md` + `<name>.impl-plan.json`（双格式） | T3 | 两文件存在且单元 id 集一致 |
 | `<name>.symbol-watchlist.json`（符号词表） | T3 | 文件存在且 scan ∪ skip 词集 = 设计文档+impl-plan.md 反引号词全集（design-code-sync 发起时机器复验） |
-| `<name>/` 内审查产物（根 `review-direction.md` 方向审报告 + `round-N/` 三审报告与处置表）+ `<name>/final.json`（终态记录，designDoc 字段 = 设计目录） | T2 | 目录存在且 final.json.terminated == "converged" |
+| `<name>/` 内审查产物（根 `review-direction.md` 方向审报告 + `review-direction.r<N>.md` 历史轮归档 + `round-N/` 三审报告与处置表）+ `<name>/final.json`（终态记录，designDoc 字段 = 设计目录） | T2 | 目录存在且 final.json.terminated == "converged" |
 | `<name>.plan-review.md`（并行度复审） | T3 | 触发门槛（关键路径深度 ≥3 或单元 ≥4）时必须存在；未触发缺省合法 |
 
 ## 意图路由
@@ -97,7 +97,7 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 
 ## 审查：方向审先行 + 三 reviewer 并行
 
-两阶段审查（T2）：`tech-design-direction-review` 方向审先行——第一道门，判据 D1-D5（D1 分型正确 / D2 前提可击穿：否定性断言找写者侧反例、✅ 条目抽样复核实 / D3 终态有效：公理是真不变量、差距表无漏项、波次不制造新差距 / D4 产物表完整且真实：漏行与行级填表不实都算 / D5 问题定义忠于真问题）——must-fix > 0 打回 T1 重做（含 Step D 诊断期重跑）**不派三审**；通过后三 reviewer 并行（`tech-design-review` 主审：方案级判据 + 断言-红灯映射表核对 / `tech-design-impact-review` 影响面审：写入点穷举与代价量化 / `tech-design-simplicity-review` 简洁审：机制必要性与概念数净增；agent 定义在 `agents/`，分工判据在 `review/rubric-design-doc.md`）。审查与修复分离：agent 只报告不代改；修复按 `flow/write.md` Step 8 循环协议。**轮次唯一形态：每轮 = 聚焦审 + 修复（R1 全面、R2+ 只审上轮处置表 + 攻击点），不存在全面审+聚焦审双重派发**。
+两阶段审查（T2）：`tech-design-direction-review` 方向审先行——第一道门，判据 D1-D5（D1 分型正确 / D2 前提可击穿：否定性断言找写者侧反例、✅ 条目抽样复核实 / D3 终态有效：公理是真不变量、差距表无漏项、波次不制造新差距 / D4 产物表完整且真实：漏行与行级填表不实都算 / D5 问题定义忠于真问题）——must-fix > 0 分档：patch 档（前提层/产物表/措辞级，问题定义与方案主干不动）在方向审循环内派修复者改章节 JSON 后重审，rewrite 档（问题定义/方案主干/分型被击穿）打回 T1 重做（含 Step D 诊断期重跑）**不派三审**；通过后三 reviewer 并行（`tech-design-review` 主审：方案级判据 + 断言-红灯映射表核对 / `tech-design-impact-review` 影响面审：写入点穷举与代价量化 / `tech-design-simplicity-review` 简洁审：机制必要性与概念数净增；agent 定义在 `agents/`，分工判据在 `review/rubric-design-doc.md`）。审查与修复分离：agent 只报告不代改；修复按 `flow/write.md` Step 8 循环协议。**轮次唯一形态：每轮 = 聚焦审 + 修复（R1 全面、R2+ 只审上轮处置表 + 攻击点），不存在全面审+聚焦审双重派发**。
 
 ## 标记说明
 

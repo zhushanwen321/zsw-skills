@@ -91,7 +91,7 @@ SCQA 开篇 + 系统是什么 + 设计目标（从使用者体验倒推）+ in/o
 
 使用者视角现状（真实例子，**取自代码不编造**）+ **端到端大流程图**（§2 开头，全文坐标系）+ 真实失败模式 + 根因分析 + **前提清单节**（「本设计默认为真」的假设逐条列，增强版规格见下方产物表落字段段）。问题点条目以「**环节**：<大流程> → <环节名>」开头锚定。禁止上来讲"哪个文件哪个函数怎么改"。本章产出写 `s2-status.json`：currentBehaviour / flowDiagram（长文本字段值）/ problems（stage 字段做环节锚定）/ assumptions / artifactTables——字段规格见 `references/design-doc-schema.md` §5。
 
-**Step D 产物表落字段 [MANDATORY]**：Step D 触发生成的产物表写入本章对应字段——修复史判定表 → `artifactTables.repairHistory`、状态副本清单 → `artifactTables.stateCopies`、信号-蕴涵表 → `artifactTables.signalImplications`（列级规格见 `references/principles.md`、字段定义见 `references/design-doc-schema.md`；触发了才有行，未触发的表为空数组、不补空表行）。前提清单用 **assumptions 字段**（**前提清单（增强版）**形态，P5 产物）：每条前提标注分类（事实 / 推断 / 知识 / 决策）与状态——✅ **必须附核实动作**（读了什么文件的什么位置、跑了什么探针；留空 = 未核实，未核实的推断不得作为设计依据）；⏳ 待裁决附「若不成立的影响」；**否定性断言**（「无 X」「没有任何 Y」形态）另附排除记录：先枚举「谁可能在写、谁可能持有」（跨包跨进程、含写者侧），再逐个排除留档——只查读侧不算核实。
+**Step D 产物表落字段 [MANDATORY]**：Step D 触发生成的产物表写入本章对应字段——修复史判定表 → `artifactTables.repairHistory`、状态副本清单 → `artifactTables.stateCopies`、信号-蕴涵表 → `artifactTables.signalImplications`（列级规格见 `references/principles.md`、字段定义见 `references/design-doc-schema.md`；触发了才有行，未触发的表为空数组、不补空表行）。前提清单用 **assumptions 字段**（**前提清单（增强版）**形态，P5 产物）：每条前提标注分类（事实 / 推断 / 知识 / 决策）与状态——✅ **必须附核实动作**（读了什么文件的什么位置、跑了什么探针；留空 = 未核实，未核实的推断不得作为设计依据）；⏳ 待裁决附「若不成立的影响」；**否定性断言**（「无 X」「没有任何 Y」形态）另附排除记录：先枚举「谁可能在写、谁可能持有」（跨包跨进程、含写者侧），再逐个排除留档——只查读侧不算核实；排除记录落 `assumptionExclusions` 字段（断言 / 候选写者 / 排除证据三列，字段规格见 `references/design-doc-schema.md`）。**穷举断言可复算**：断言含「唯一 / 限于 / 全集」类穷举措辞时，同行登记取得该断言的检索命令（含路径范围）与命中清单——缺检索命令的穷举行被 check-design-doc.mjs 判 warning（规则 8，不阻塞），方向审按 must-fix 处置。
 
 **领域与架构现状加载 [MANDATORY]**：本 Step 动笔前加载 architecture-clean-domain-design（zcode 用 Skill 工具；pi / 无 Skill 工具环境直接 Read `~/.agents/skills/architecture-clean-domain-design/SKILL.md` 及其 references）——该技能以 DDD 与六边形为**分析视角**（不改项目结构）：按其领域建模协议梳理现状的领域模型（统一语言、上下文边界、聚合不变量），按六边形性质判定产出圈层性质映射（现状逻辑的性质与依赖方向，映射到项目现有分层）；梳理结果作为 §2 现状素材与 §3 方案的领域/分层依据，**不得据此输出改名、目录重组等结构改造建议**（确需整体改造属 §3 方案设计，须用户裁决）。项目已有 `docs/domain-model.md` 与 `CONTEXT.md` 登记时先消费再增补（登记优先于现场重建）；本次改动不触及领域模型与模块归属时（纯流程/配置类改动）可跳过并在 Step 6 自检记一句跳过理由。
 
@@ -226,7 +226,7 @@ Step 6 完成后进 Step 7 业务用例走查（T1 确认点前的最后一环�
 
 ## Step 8：审查-修复循环协议（T2 各轮的修复规则）
 
-设计文档过 T1 确认点 → 先派方向审（T2 第一道门，攻击前提层与终态层；派发见 `flow/review.md`）→ must-fix 打回按其攻击结论处理：前提 / 终态 / 分型被击穿 → 回 Step D 重做诊断再修文；问题定义 / 方案主干被击穿 → 按修复方向重写，修完重过方向审 → 通过后三 reviewer（主审 / 影响面审 / 简洁审）并行 → 多轮修复循环至全部报告 0 must-fix。**不要自己审——审查与写作分离，避免确认偏差；主 agent 不自审。**
+设计文档过 T1 确认点 → 先派方向审（T2 第一道门，攻击前提层与终态层；派发见 `flow/review.md`）→ must-fix 打回分档：patch 档（前提层/产物表/措辞级——问题定义与方案主干不动）由方向审循环内修复者按报告「修复方向」列直接改章节 JSON 后重审（预算与熔断见 review.md）；问题定义 / 方案主干 / 分型被击穿（rewrite 档）→ 按修复方向回 Step D 重做诊断再重写，修完重过方向审 → 通过后三 reviewer（主审 / 影响面审 / 简洁审）并行 → 多轮修复循环至全部报告 0 must-fix。**不要自己审——审查与写作分离，避免确认偏差；主 agent 不自审。**
 
 **轮次唯一形态**：每轮 = 聚焦审 + 修复。R1 = 全面审；R2+ = 聚焦复审——reviewer 只审（a）上轮 must-fix 修复是否成立（fixed 须实证）、（b）修复是否引入新问题（只扫修复触及的章节）、（c）上轮登记不修项的上下文是否被改变（结构化申报复活）。**不做全面重扫，不存在"全面审 + 聚焦审"双重派发**。converged 判定读当轮（聚焦）报告。
 

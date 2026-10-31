@@ -15,7 +15,12 @@
 //      excluded=false 行 sync 非空、excluded=true 行 exclusionNote 必填
 //   7. 内容形态：typeRationale 不以分型名开头（渲染器已带「终态型（terminal）——」前缀，重复即冗余）；
 //      s5 units files 条目全/半角括号配对（不配对的说明括号使条目与后续文件粘连）
-//   8. warning（不阻塞）：rendered.md 缺失或早于任一 json 修改时间
+//   8. warning（不阻塞）：穷举断言可复算——assumptions.statement / assumptionExclusions /
+//      stateCopies.exclusionNote 含「唯一 / 全集 / 限于」措辞的行同行无检索命令标记
+//      （grep / rg / 检索式）。warning 级是过渡分层：在途设计存量行未带检索命令，
+//      阻塞会使 T2 进场门槛批量 setup-failure；义务执行靠方向审按 must-fix 处置（模板
+//      D2 规定动作），存量清偿后可升级为阻塞
+//   9. warning（不阻塞）：rendered.md 缺失或早于任一 json 修改时间
 //
 // 用法：
 //   node check-design-doc.mjs <设计目录>
@@ -341,7 +346,39 @@ arr(s5?.units).forEach((u, i) => {
   });
 });
 
-// ── 规则 8：渲染产物过期 warning（不阻塞） ──
+// ── 规则 8：穷举断言可复算 warning（不阻塞；义务执行靠方向审 D2 按 must-fix 处置） ──
+// 历次方向审打回的主形态即「唯一 / 限于 / 全集」断言被逐轮反例击穿（写者侧未穷举）；
+// 断言附检索命令后审查从「重新发现」降为「重跑对账」
+const EXHAUSTIVE_RE = /唯一|全集|限于/;
+const SEARCH_CMD_RE = /\bgrep\b|\brg\b|ripgrep|检索命令|检索式/;
+const rowText = (o) =>
+  Object.values(o ?? {})
+    .filter((v) => typeof v === "string")
+    .join(" ");
+arr(s2?.assumptions).forEach((a, i) => {
+  if (EXHAUSTIVE_RE.test(String(a?.statement ?? "")) && !SEARCH_CMD_RE.test(rowText(a))) {
+    warnings.push(
+      `[穷举可复算] s2-status.json assumptions[${i}]（${a?.id ?? "缺 id"}）statement 含「唯一 / 全集 / 限于」穷举措辞但整行无检索命令——在 evidence 登记取得该断言的检索命令（含路径范围）与命中清单，使审查可重跑对账（不阻塞，方向审按 must-fix 处置）`,
+    );
+  }
+});
+arr(s2?.assumptionExclusions).forEach((x, i) => {
+  const text = rowText(x);
+  if (EXHAUSTIVE_RE.test(text) && !SEARCH_CMD_RE.test(text)) {
+    warnings.push(
+      `[穷举可复算] s2-status.json assumptionExclusions[${i}] 含穷举措辞但整行无检索命令——在 exclusionEvidence 登记检索命令（含路径范围）与命中清单（不阻塞，方向审按 must-fix 处置）`,
+    );
+  }
+});
+arr(s2?.artifactTables?.stateCopies).forEach((row, i) => {
+  if (EXHAUSTIVE_RE.test(String(row?.exclusionNote ?? "")) && !SEARCH_CMD_RE.test(rowText(row))) {
+    warnings.push(
+      `[穷举可复算] s2-status.json artifactTables.stateCopies[${i}]（${row?.id ?? "缺 id"}）exclusionNote 含穷举措辞但整行无检索命令——在 exclusionNote 登记检索命令与命中清单（不阻塞，方向审按 must-fix 处置）`,
+    );
+  }
+});
+
+// ── 规则 9：渲染产物过期 warning（不阻塞） ──
 
 const renderedName = `${basename(designDir)}.rendered.md`;
 try {

@@ -86,6 +86,7 @@
 | flowDiagram | string（长文本） | 必填 | 端到端大流程图（ASCII）。本设计涉及的主链路从源头到终点，使用者看得懂的物理粒度——这是全文坐标系，问题点与决策都用它的环节名锚定 |
 | problems | object 数组 | 必填 | 真实失败模式清单，不是想象中的；每条从症状挖到根因 |
 | assumptions | object 数组 | 必填 | 前提清单（增强版，全量强制）：设计当作输入而未在本设计中论证的假设逐条列出 |
+| assumptionExclusions | object 数组 | 可选（默认空数组） | 否定性断言排除记录（「无 X / 没有任何 Y」形态前提的专项产物，P5 执行步骤 2）：有否定性断言时逐条登记，无则空数组（见 §5.3b） |
 | artifactTables | object | 必填 | 四张产物表（见 5.2–5.5），未触发的表为空数组 |
 
 ### 5.2 problems 行内字段
@@ -104,8 +105,18 @@
 | id | string | 必填 | 前提 id（建议 `AS` 前缀） |
 | statement | string | 必填 | 前提陈述 |
 | status | string 枚举 | 必填 | `verified`（已核实）/ `pending`（待核实） |
-| evidence | string | verified 时必填 | 核实动作：读了什么位置（file:line / 探针 / 排除记录）。否定性断言（「无 X」形态）的核实范围必须覆盖全部写入方与持有方，只查读侧不算核实 |
+| evidence | string | verified 时必填 | 核实动作：读了什么位置（file:line / 探针 / 排除记录）。否定性断言（「无 X」形态）的核实范围必须覆盖全部写入方与持有方，只查读侧不算核实；statement 含「唯一 / 限于 / 全集」穷举措辞时本行须含检索命令与命中清单（穷举断言可复算；缺失时 check-design-doc.mjs 规则 8 warning + 方向审 must-fix） |
 | impactIfFalse | string | 必填 | 该前提不成立时的影响 |
+
+### 5.3b assumptionExclusions 行内字段 —— 否定性断言排除记录
+
+否定性断言（「无 X」「没有任何 Y」形态）的专项排除记录（P5 执行步骤 2：先枚举「谁可能在写、谁可能持有」，再逐个排除留档）。渲染为 §2.4 前提清单下的「否定性断言排除记录」小节（空数组不渲染）。
+
+| 字段 | 类型 | 必填 | 填写要求 |
+|---|---|---|---|
+| assertion | string | 必填 | 被排除登记的否定性断言原文（与 assumptions 中对应条目的陈述呼应） |
+| candidateWriters | string | 必填 | 候选写者 / 持有者枚举：谁可能写入或持有 X——跨包跨进程、含写者侧，先枚举再排除 |
+| exclusionEvidence | string | 必填 | 逐个候选的排除依据（读了哪里、确认什么），全部排除完才允许断言成立；含「唯一 / 限于 / 全集」措辞时须含检索命令（含路径范围）与命中清单（穷举断言可复算；缺失时 check-design-doc.mjs 规则 8 warning + 方向审 must-fix） |
 
 ### 5.4 artifactTables.stateCopies —— 状态副本清单
 
@@ -123,7 +134,7 @@ P2 权威唯一原则的产物表（触发条件：设计涉及持久化状态�
 | nature | string 枚举 | 必填 | `authority`（权威）/ `projection`（派生视图）/ `cache`（缓存）。每份状态必须恰好一行权威；出现两行权威、或多行互相对齐 = 多份权威，设计未完成。排除行（excluded=true）同样必填枚举值 |
 | sync | string | excluded=false 时必填 | 该副本靠什么跟随权威（单读源 / 事件订阅 / 重建）；靠对齐代码维持一致的必须单独标注并给出追查结论 |
 | excluded | boolean | 必填 | 该候选位置是否存在副本：false = 存在，true = 不存在（排除记录行） |
-| exclusionNote | string | excluded=true 时必填 | 排除依据一句话（覆盖全部写入方的检索结论） |
+| exclusionNote | string | excluded=true 时必填 | 排除依据一句话（覆盖全部写入方的检索结论）；含「唯一 / 限于 / 全集」措辞时须含检索命令与命中清单（穷举断言可复算；缺失时 check-design-doc.mjs 规则 8 warning + 方向审 must-fix） |
 
 ### 5.5 artifactTables.signalImplications —— 信号-蕴涵表
 

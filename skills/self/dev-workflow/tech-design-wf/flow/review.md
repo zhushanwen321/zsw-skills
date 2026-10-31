@@ -18,7 +18,7 @@
 
 ```
 CreateWorkflow saved: tech-review-loop
-args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workflow 内部归一为设计目录）>, projectRoot: <项目根绝对路径>, maxRounds?: 10, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件> }
+args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workflow 内部归一为设计目录）>, projectRoot: <项目根绝对路径>, maxRounds?: 10, maxDirectionRounds?: 6, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件> }
 终态: converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / fix-failure（环境失败族）
 ```
 
@@ -27,7 +27,7 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
 | 终态 | 主 agent 动作 |
 |------|--------------|
 | converged | **T2 确认点**：转述 oneliner（方向审一句话判定）+ 收敛轨迹 + 处置清单 → 默认等用户确认 → 进 T3（前期授权直接进） |
-| direction-rejected | 按方向审修复方向回 T1 与用户对话重写问题定义/方案主干/前提层，含 Step D 诊断期重做；修完重新发起（attempt+1，重过方向审） |
+| direction-rejected | workflow 形态只在三态到达：rewrite 档击穿（问题定义/方案主干/分型——回 T1 与用户对话重写，含 Step D 诊断期重做）/ patch 档 must-fix 连续 3 轮不降 / 方向审循环预算耗尽（maxDirectionRounds，默认 6）——后两态读 runDir 内 review-direction.md 与 review-direction.r*.md 归档呈报用户裁决；修完/裁决后重新发起（attempt+1，重过方向审） |
 | escalated | 方案性意见需方向裁决——与用户对比新候选后改文档重新发起（一律停回用户裁决，不在轮内自行重跑方案对比） |
 | stuck / max-rounds | 呈报残余风险矩阵，用户裁决（stuck = 连续 3 轮 must-fix 不降） |
 | *-failure（环境/工具） | 读 runDir 日志排障后 resume 或重发起 |
@@ -56,8 +56,10 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
         架构级设计对象）；演进型的「为什么不需要终态视角」辩护是否被修复史
         判定表支撑
      ② 前提清单（增强版）：否定性断言逐条攻击——先枚举「谁可能在写、谁可能
-        在持有」再找写者侧反例；✅ 条目抽样复核实（亲自 read 它声称的核实
-        位置，验证核实动作真实发生）；⏳ 待裁决项逐条判「是否影响方向」
+        在持有」再找写者侧反例；穷举断言（「唯一 / 限于 / 全集」措辞）优先核对
+        同行检索命令与命中清单——登记了的重跑对账，未登记的直接 must-fix；
+        ✅ 条目抽样复核实（亲自 read 它声称的核实位置，验证核实动作真实发生）；
+        ⏳ 待裁决项逐条判「是否影响方向」
      ③ 终态层（终态型）：公理逐条判「真不变量还是实现细节」（假设推翻重建，
         该陈述还必须成立吗）；差距表逐维对照现状查漏项；迁移波次查是否制造
         新差距
@@ -69,7 +71,7 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
      性留给三 reviewer（标 INFO 交接）
   6. 报告写到 <runDir>/review-direction.md
 验收：
-  - 返回 structured-output { reportFile, mustFix, problems[], oneliner }——
+  - 返回 structured-output { reportFile, mustFix, fixScope, problems[], oneliner }——fixScope = patch（全部发现属前提层/产物表/措辞级，问题定义与方案主干不动）/ rewrite（问题定义/方案主干/分型被击穿）——
     problems = 逐条问题清单，每条 { ref, title }（ref 即报告 Findings 行锚点
     review-direction#<序>；条目无 level 字段——唯一报告级别是 must-fix；条数
     须等于 mustFix）
@@ -77,13 +79,13 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
     must-fix 引用 D 系列编号 + 文档位置
 ```
 
-方向审判定按 problems 清单来：清单非空（计数以清单为准，自报数字只做交叉校验）→ 停（按终态表 direction-rejected 处理）。清单空 → Step 3。
+方向审判定按 problems 清单来：清单空 → Step 3。清单非空（计数以清单为准，自报数字只做交叉校验）看 fixScope——patch 档 = 前提层/产物表/措辞级（问题定义与方案主干不动），按报告「修复方向」列（可执行操作清单）派修复者直接改章节 JSON、重渲染 + check 至 exit 0 后重审方向，循环至清单空或熔断（连续 3 轮不降 / 预算耗尽，按终态表 direction-rejected 处理）；rewrite 档 = 问题定义/方案主干/分型被击穿，按终态表 direction-rejected 处理。
 
 **全托管模式附加声明**：task 末尾追加「全托管模式：禁止 AskUserQuestion / ask-user / 任何等待用户输入的操作；遇到决策点自行裁决，决策清单写入报告 INFO 节。」
 
 ## 手工路径 Step 3：第二阶段——并行派三个 reviewer
 
-同一条消息并行派三个（subagent 独立加载，task 内路径全部绝对路径）。**不要自己审——审查与写作分离，避免确认偏差，主 agent 不自审**。方向审在轮次循环外：workflow 形态方向审只在发起时过一次，轮内三席不含方向审；修订重写了问题定义/方案主干/前提层 → 触发卡断重发起（direction-rejected 语义，attempt+1 重过方向审），不在轮内重派。手工形态按 `flow/write.md` Step 8.3 把此类修订送回方向审重审。
+同一条消息并行派三个（subagent 独立加载，task 内路径全部绝对路径）。**不要自己审——审查与写作分离，避免确认偏差，主 agent 不自审**。方向审自带修复循环：workflow 形态 patch 档打回在方向审循环内派修复者改章节 JSON 后重审（maxDirectionRounds 预算 + 连续不降熔断），不外溢重发起；rewrite 档（问题定义/方案主干/分型被击穿）才停回 T1 重写、attempt+1 重新发起。轮内三席不含方向审。手工形态按 `flow/write.md` Step 8.3 把 rewrite 级修订送回方向审重审。
 
 ```text
 agent: tech-design-review
