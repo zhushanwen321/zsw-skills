@@ -101,3 +101,5 @@ DAG 含 worktree 单元（node.cwd ≠ projectRoot）且存在跨 cwd 依赖边�
 ## 完成判据
 
 exec-plan schema 完整（nodes 非空、每节点 promptFile 存在、testCommand 可执行）+ status.json 初始态落盘 + L0 基线绿。呈现编译摘要（单元数/wave 分组/验收节点数）后进 D1（发起 W2 或走 `flow/execute.md` 手工路径）。
+
+**阶段事件观测（SKILL「阶段事件观测」节）**：D0 开始时分配 `task_id`（建议 = 设计包 `<name>`，D1-D6 全段共用）并经 `~/.agents/scripts/workflow-observe.mjs` 记 `--stage D0 --step compile` 的 start，编译完成后记 end；进 D1 时发起 W2 传同一 `taskId` + 新 `executionId`（建议 `D1-<发起时点短时间戳>`）。

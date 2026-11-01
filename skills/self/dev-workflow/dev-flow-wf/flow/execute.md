@@ -6,7 +6,8 @@
 
 ```
 CreateWorkflow saved: wave-executor
-args: { execPlan: "~/.agents/skill-data/dev-flow/<project-slug>/<name>.exec-plan.json" }
+args: { execPlan: "~/.agents/skill-data/dev-flow/<project-slug>/<name>.exec-plan.json",
+        taskId: "<D0 分配的任务标识>", executionId: "D1-<发起时点短时间戳>" }   // 观测参数可选——两参同时传即启用阶段事件观测（SKILL「阶段事件观测」节）；不传业务照常
 ```
 
 引擎内循环（每节点四节拍，全部确定性代码 + 一次 agent 会话）：

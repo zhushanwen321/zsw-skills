@@ -19,7 +19,13 @@
 //   由 D0 编译负责排布合并（合并节点或手工段）。
 
 // ── args 窄化（未知键 fail-fast：拼错键静默忽略比报错危险） ──
-const VALID_ARG_KEYS = new Set(["execPlan"]);
+const VALID_ARG_KEYS = new Set([
+  "execPlan",
+  // 观测（O 区，可选）：taskId+executionId 同时提供才启用（sampleType 默认 production）
+  "taskId",
+  "executionId",
+  "sampleType",
+]);
 for (const key of Object.keys(args)) {
   // `_` 前缀 = 宿主运行时私有键（如 taiji/pi 宿主注入的 _runId），不属于脚本契约，跳过白名单（2026-10-03 实测缺陷修复）
   if (!VALID_ARG_KEYS.has(key) && !key.startsWith("_")) {
@@ -196,27 +202,38 @@ const RUN_IN_CWD =
 const GIT_DIFF_STAT =
   "try{const o=require('child_process').execFileSync('git',['diff','--stat'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});process.stdout.write(o)}catch(e){process.stdout.write('(diff 不可用)')}";
 
-// argv: [statusPath, projectRoot, commitTemplate, runId, ...devEntries] → 双向对账（§4.5 崩溃裁决，git 为准）：
+// argv 双布局：status 已存在路径 = [statusPath, projectRoot, commitTemplate, runId, ...devEntries]
+//   （布局与语义均不变）；初始态恢复路径 = [statusPath, projectRoot, commitTemplate, runId,
+//   "claimAnyRunId", ...devEntries]（旗标在 runId 与条目之间，条目起点随之右移一位——
+//   脚本按旗标有无选择 slice 起点，旧布局不受影响）→ 双向对账（§4.5 崩溃裁决，git 为准）：
 //   devEntries 条目 = `<id>`（主仓节点）或 `<id>@<仓根绝对路径>`（跨仓节点，如子模块）——
 //   commit 存在性校验与 git log 反查都必须在 commit 所在仓执行：单 projectRoot 口径曾把
 //   子模块 commit 判「不在对象库」致已交付单元全部回 pending 重跑（实测 compute-asr
 //   run 二次发起时 U1/U3/U6b 空重跑）。
+//   claimAnyRunId = 字面量 "claimAnyRunId" 时反查不校验 Run-Id trailer（status.json 曾缺失
+//   的初始态恢复路径专用——该路径先生成全新 runId 写入初始 status 再反查，旧交付 commit
+//   带旧 Run-Id，trailer 精确匹配恒落空，已交付单元会被整节点重做）。认领语义 = subject
+//   前缀 + 词边界命中即认领，同一单元多个候选 commit 取 baseline..HEAD 中最新可达的一个
+//   （git log 新 commit 在前，find 首个命中即最新）。旗标缺省（status 已存在的双向对账
+//   路径）保持 Run-Id trailer 精确匹配语义。
 //   ①status=done 的节点：commit 不在其仓 git 对象库 → 回 pending；
 //   ②status≠done 的 dev 节点：git log 反查补写 done（commit 哈希 + 证据）。反查命中条件
 //     三重锚定：a) 时间窗 = baseline..HEAD——无 baseline 时反查禁用（不回退扫 HEAD 起
 //     500 条：跨 run 同模板同单元编号的历史 commit 会撞名误配，正是 431b898 修复的事故
 //     形态；禁用后未记录单元保持 pending 重跑，由引擎提交的幂等分支兜住，方向安全。
 //     baseline 固化（status.json 初建必写）后该分支只对旧格式 status.json 可达；
-//     b) Run-Id trailer 精确匹配 = commit trailer 的 Run-Id === 本 run 标识（构造性唯一：
-//     引擎渲染 message 时统一追加，AI 自由文本经单行化净化无法伪造 trailer 段）。本 run
-//     的 commit 恒带 trailer，无 trailer 且前缀匹配的历史 commit 在 runId 在场时不认；
+//     b) Run-Id 锚定，三态：默认（旗标缺省）= commit trailer 的 Run-Id === 本 run 标识
+//     （构造性唯一：引擎渲染 message 时统一追加，AI 自由文本经单行化净化无法伪造 trailer
+//     段），本 run 的 commit 恒带 trailer，无 trailer 且前缀匹配的历史 commit 在 runId
+//     在场时不认；claimAnyRunId 认领语义 = 跳过该锚（见上）；status 无 runId（旧格式引擎
+//     写的）→ 兼容路径：只认无 trailer + 前缀 + 词边界（旧引擎 commit 恰好无 trailer，
+//     自洽）；
 //     c) subject 前缀锚定 = commitTemplate 按 {unitId} 切出的静态前段 + <id>，且 <id> 后继
 //     字符非字母数字连字符（模板缺失时退化为 <id> 前缀 + 同一边界检查）——区分 run 内
-//     不同单元。status 无 runId（旧格式引擎写的）→ 兼容路径：只认无 trailer + 前缀 +
-//     词边界（旧引擎 commit 恰好无 trailer，自洽）。stdout = 对账后的完整 status.json
+//     不同单元。stdout = 对账后的完整 status.json
 //     （保留 schema 外顶层字段；runId 缺失时以 argv 传入值补写，保证输出恒含）
 const RECONCILE_STATUS =
-  "try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',ents=process.argv.slice(5).map(function(s){var i=s.indexOf('@');return i<0?{id:s,cwd:root}:{id:s.slice(0,i),cwd:s.slice(i+1)};});" +
+  "try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',claimAny=process.argv[5]==='claimAnyRunId',ents=process.argv.slice(claimAny?6:5).map(function(s){var i=s.indexOf('@');return i<0?{id:s,cwd:root}:{id:s.slice(0,i),cwd:s.slice(i+1)};});" +
   "const x=require('child_process').execFileSync;const st=JSON.parse(fs.readFileSync(sp,'utf8'));const nodes={};" +
   "for(const k of Object.keys(st.nodes||{}))nodes[k]=st.nodes[k];const events=(st.events||[]).slice();" +
   "const range=typeof st.baseline==='string'&&st.baseline?st.baseline+'..HEAD':null;" +
@@ -234,8 +251,8 @@ const RECONCILE_STATUS =
   "const hit=logOf(cwd).split('\\n').find((l)=>{const seg=l.split('\\x1f');if(seg.length<2)return false;const s=seg[1]||'';const t=(seg[2]||'').trim();" +
   "const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));" +
   "if(!subj)return false;" +
-  "return runId!==null?(t===runId):(t==='')});" +
-  "if(hit){const h=hit.slice(0,hit.indexOf('\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（Run-Id '+(runId!==null?'精确匹配':'兼容路径：前缀+词边界（status 无 runId）')+'，status 未记，按 git 为准补写 done）'};" +
+  "return claimAny?true:(runId!==null?(t===runId):(t===''))});" +
+  "if(hit){const h=hit.slice(0,hit.indexOf('\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（'+(claimAny?'前缀+词边界认领（status 曾缺失，不校验 Run-Id）':'Run-Id '+(runId!==null?'精确匹配':'兼容路径：前缀+词边界（status 无 runId）'))+'，status 未记，按 git 为准补写 done）'};" +
   "events.push({seq:events.length+1,node:id,event:'reconcile-done',detail:'status 未记但 git log 有本单元 commit，按 git 为准补写 done'})}}}" +
   "const out={};for(const k of Object.keys(st))if(k!=='nodes'&&k!=='events')out[k]=st[k];out.baseline=st.baseline||null;out.runId=st.runId||runIdArg||null;out.nodes=nodes;out.events=events;" +
   "process.stdout.write(JSON.stringify(out))}" +
@@ -260,6 +277,13 @@ function invalidRet(message: string, statusFile: string): WaveExecutorOutcome {
     deferredCommits: [],
     residualFiles: [],
   };
+}
+
+/** 观测启用后的启动校验失败出口：先补记观测执行结束事件（outcome=blocked）再走
+ *  failed-as-return 载体——execution start 之后的所有 invalidRet 调用点经此离开 */
+async function invalidObs(message: string, statusFile: string): Promise<WaveExecutorOutcome> {
+  await obsCloseExecution("blocked");
+  return invalidRet(message, statusFile);
 }
 
 function isRec(x: unknown): x is Record<string, unknown> {
@@ -1062,21 +1086,23 @@ async function verifyDevNode(node: PlanNode, result: NodeResult, attempts: numbe
 // ── 三类节点执行体 ──
 
 /** agent ask 的接替包装（设计 §6.2 F15 第一等路径）：结构化返回不合规（3 次回喂重试后）
- *  或会话异常 → 接替 actor + 前任证据包 + 当前 git diff --stat，令其先核验现状再续作，禁止
- *  盲目重做；接替者仍不合规 / 再异常才返回 null（调用方 blocked）。注意 actor 引用在
- *  executeDevNode 开头一次性创建——同名续聊 = 单 actor 多次 ask，每次 ask 都调 agent(name)
- *  会创建同名新 actor，run 直接炸（冒烟实测） */
+ *  或会话异常 → 第二顺位 actor + 前任证据包 + 当前 git diff --stat，令其先核验现状再续作，禁止
+ *  盲目重做；第二顺位仍不合规 / 再异常才返回 null（调用方 blocked）。两参只承载顺位语义：
+ *  返回值 byBackup = 结果由第二顺位（接替路径）产出，调用方据此交换后续轮顺位（接替者持有
+ *  本轮修复上下文，打回轮先回到它）。注意 actor 引用在 executeDevNode 开头一次性创建——
+ *  同名续聊 = 单 actor 多次 ask，每次 ask 都调 agent(name) 会创建同名新 actor，run 直接炸
+ *  （冒烟实测） */
 async function askWithSuccession(
-  primary: Agent,
-  successor: Agent,
+  lead: Agent,
+  backup: Agent,
   prompt: string,
   node: PlanNode,
   lastResult: NodeResult | null,
-): Promise<NodeResult | null> {
+): Promise<{ result: NodeResult; byBackup: boolean } | null> {
   let failReason = "";
   try {
-    const r = await askValidated(validateNodeResult, (p) => primary.ask<NodeResult>(p), prompt);
-    if (r !== null) return r;
+    const r = await askValidated(validateNodeResult, (p) => lead.ask<NodeResult>(p), prompt);
+    if (r !== null) return { result: r, byBackup: false };
     failReason = `结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`;
   } catch (e) {
     failReason = errText(e);
@@ -1096,25 +1122,27 @@ async function askWithSuccession(
     prompt,
   ].join("\n");
   log(`节点 ${node.id} agent 会话异常或返回不合规（${failReason}），启动接替程序`);
-  return await askValidated(validateNodeResult, (p) => successor.ask<NodeResult>(p), pack);
+  const r2 = await askValidated(validateNodeResult, (p) => backup.ask<NodeResult>(p), pack);
+  return r2 === null ? null : { result: r2, byBackup: true };
 }
 
 async function executeDevNode(node: PlanNode): Promise<void> {
   await beginNode(node.id);
   // 同名续聊承载打回：actor 一次性创建、多次 ask（同一 subagent 队列天然保持会话上下文）；
-  // 接替 actor 预创建（仅异常时使用——创建即占名，名字唯一性由节点 id 保证）
+  // 接替 actor 预创建（仅异常时使用——创建即占名，名字唯一性由节点 id 保证）。
+  // agent( 只在创建处调用、向下传引用——zcode GUI 泳道按字面 agent( 调用点做静态分析，
+  // 包装函数会遮蔽调用点使泳道失明
   const primaryAgent = agent(`node-${node.id}`, DEV_PERSONA);
   const succAgent = agent(`接替-${node.id}`, DEV_PERSONA);
+  // 当前活跃顺位：第一顺位初始 = 原名 agent；某轮结果由接替者产出后交换——接替者持有本轮
+  // 修复上下文，后续打回轮先回到它，原 primary 退居接替路径（否则打回轮回到没有接替者
+  // 上下文的原名 agent，上下文回退）
+  let leadAgent = primaryAgent;
+  let backupAgent = succAgent;
   // 首轮指令提为变量，供打回轮前情拼接（pi 侧 withPrevContext 消费——zcode 同名续聊天然承载）
   const initialPrompt = `读取任务书 ${node.promptFile}（绝对路径）并按其完整执行，返回该文件末尾定义的 JSON 契约（status / files_changed / test_evidence / deviations / blockers，可含 summary）。files_changed 用相对工作区 git 仓库根的路径（git status 风格）。`;
-  let result = await askWithSuccession(
-    primaryAgent,
-    succAgent,
-    initialPrompt,
-    node,
-    null,
-  );
-  if (result === null) {
+  let ask = await askWithSuccession(leadAgent, backupAgent, initialPrompt, node, null);
+  if (ask === null) {
     await markNodeBlockedOrFailed(
       node.id,
       "blocked",
@@ -1124,13 +1152,20 @@ async function executeDevNode(node: PlanNode): Promise<void> {
     );
     return;
   }
+  let result = ask.result;
+  if (ask.byBackup) {
+    const t = leadAgent;
+    leadAgent = backupAgent;
+    backupAgent = t;
+    log(`节点 ${node.id} 本轮结果由接替者产出，后续轮以接替者为第一顺位（原 primary 退为接替路径）`);
+  }
   let attempts = 1;
   let verdict = await verifyDevNode(node, result, attempts);
   while (verdict.outcome === "retry" && attempts <= MAX_REJECT_ROUNDS) {
     log(`节点 ${node.id} 核验未过（${verdict.reason}），打回定向修`);
-    result = await askWithSuccession(
-      primaryAgent,
-      succAgent,
+    ask = await askWithSuccession(
+      leadAgent,
+      backupAgent,
       withPrevContext(
         initialPrompt,
         result,
@@ -1139,7 +1174,7 @@ async function executeDevNode(node: PlanNode): Promise<void> {
       node,
       result,
     );
-    if (result === null) {
+    if (ask === null) {
       await markNodeBlockedOrFailed(
         node.id,
         "blocked",
@@ -1148,6 +1183,13 @@ async function executeDevNode(node: PlanNode): Promise<void> {
         attempts,
       );
       return;
+    }
+    result = ask.result;
+    if (ask.byBackup) {
+      const t = leadAgent;
+      leadAgent = backupAgent;
+      backupAgent = t;
+      log(`节点 ${node.id} 本轮结果由接替者产出，后续轮以接替者为第一顺位（原 primary 退为接替路径）`);
     }
     attempts += 1;
     await statusUpdate(node.id, { status: "in-progress", attempts }, "reject-round", verdict.reason);
@@ -1484,6 +1526,17 @@ if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
 }
 const skillDataDir = `${homeRes.stdout.trim()}/.agents/skill-data/dev-flow/${slugRes.stdout.trim()}`;
 
+// ── 观测启用（O 区）：stage 按 exec-plan mode 区分——mode=dev 即 D1 开发执行，
+// mode=acceptance 即 D3 端到端验收。attempt 无独立参数（run 级恒 1）。execution start
+// 从 plan 校验通过后起记；此前失败的启动校验（文件/schema/依赖环）无观测覆盖，属已
+// 声明边界。此后启动失败经 invalidObs 离开（先补记观测执行结束事件）──
+obsCtx = initObservation("dev-flow-wf", plan.mode === "dev" ? "D1" : "D3", 1);
+if (obsCtx !== null) {
+  obsAttachHome(homeRes.stdout.trim());
+  await obsEmit("execution", null, "start", null);
+  await obsBegin("setup", null);
+}
+
 // run manifest startedAt（循环启动时记录；探针失败 = 防覆盖判据不可用，终态时放弃写
 // run.json 只告警——终态数据以 status.json 与返回值为准）
 const startedAtRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
@@ -1491,13 +1544,13 @@ const runStartedAt =
   startedAtRes.exitCode === 0 && startedAtRes.stdout.trim() !== "" ? startedAtRes.stdout.trim() : null;
 for (const n of plan.nodes) {
   if (n.promptFile !== "" && !(await existsViaNode(n.promptFile))) {
-    return invalidRet(`节点 ${n.id} 的 promptFile 不存在：${n.promptFile}`, plan.statusPath);
+    return await invalidObs(`节点 ${n.id} 的 promptFile 不存在：${n.promptFile}`, plan.statusPath);
   }
   if (n.kind === "verify" && !(await existsViaNode(n.script))) {
-    return invalidRet(`verify 节点 ${n.id} 的 script 不存在：${n.script}`, plan.statusPath);
+    return await invalidObs(`verify 节点 ${n.id} 的 script 不存在：${n.script}`, plan.statusPath);
   }
   if (n.kind === "verify" && !VERIFY_SCRIPT_EXTS.has(n.script.slice(n.script.lastIndexOf(".")))) {
-    return invalidRet(
+    return await invalidObs(
       `verify 节点 ${n.id} 的 script 扩展名不受支持：${n.script}（合法：${[...VERIFY_SCRIPT_EXTS].join(" / ")}；解释器分派 = .sh→bash、其余→node）`,
       plan.statusPath,
     );
@@ -1516,18 +1569,18 @@ for (const c of allCwds) {
   // 口径断言：cwd 须为其所在 git 仓库根（projectRoot / worktree 根均满足；仓库子目录拒绝）
   const top = await gitToplevelViaNode(c);
   if (top === null) {
-    return invalidRet(`git rev-parse 无法在 ${c} 执行（须为有效 git 仓库根）`, plan.statusPath);
+    return await invalidObs(`git rev-parse 无法在 ${c} 执行（须为有效 git 仓库根）`, plan.statusPath);
   }
   if (top !== c) {
     const ids = plan.nodes.filter((n) => n.cwd === c).map((n) => n.id).join("、");
-    return invalidRet(
+    return await invalidObs(
       `节点 ${ids} 的 cwd ${c} 不是其所在 git 仓库根（rev-parse --show-toplevel = ${top}）——cwd 只能为 projectRoot 或 worktree 绝对路径：porcelain 输出相对 cwd、territory 相对仓库根，子目录会使两基准全链错位（声明恒判越界、提交被拒）。恢复动作：exec-plan 中该节点 cwd 改为仓库根后重发`,
       plan.statusPath,
     );
   }
   const st = await gitPorcelainViaNode(c);
   if (st === null) {
-    return invalidRet(`git status 无法在 ${c} 执行（须为有效 git 仓库）`, plan.statusPath);
+    return await invalidObs(`git status 无法在 ${c} 执行（须为有效 git 仓库）`, plan.statusPath);
   }
   const dirty = parsePorcelain(st).filter((f) => !isTmpArtifact(f));
   if (dirty.length > 0) {
@@ -1541,8 +1594,10 @@ for (const c of allCwds) {
 // status.json：不存在 → 创建初始态（全 pending）；存在 → 只保留 done（dev done 须 commit 在 git，
 // 不在则回 pending——§4.5 崩溃裁决以 git 为准），其余一律回 pending 重执行
 const existingStatus = await readStatusFile();
-// 运行唯一标识（commit trailer Run-Id 的反查锚）：初建时生成；恢复时沿用磁盘值（旧格式
-// 无 runId → 生成新值，旧 commit 因 trailer 不匹配不再被反查认领，重跑由幂等核验兜住）
+// 运行唯一标识（本 run 新 commit 恒带的 trailer 锚）：初建时生成——初始态反查走 claimAny
+// 认领语义不校验它（见 RECONCILE_STATUS 注释）；恢复时沿用磁盘值，status 已存在的双向
+// 对账路径按它精确匹配（旧格式无 runId → 生成新值，旧 commit 因 trailer 不匹配不再被
+// 反查认领，重跑由幂等核验兜住）
 const genRunId = async (): Promise<string> => {
   // workflow 沙箱禁 Date.now/Math.random（重放一致性——每次执行值不同会对不上账），
   // 随机量须经 world.run 在沙箱外的 node 子进程产生，结果作为值拿回
@@ -1583,15 +1638,18 @@ if (existingStatus === null) {
       JSON.stringify({ baseline: baselineVal, runId: activeRunId, nodes: initialNodes, events: [] }, null, 2),
     );
   } catch (e) {
-    return invalidRet(`status.json 初始态创建失败（${plan.statusPath}）：${errText(e)}`, plan.statusPath);
+    return await invalidObs(`status.json 初始态创建失败（${plan.statusPath}）：${errText(e)}`, plan.statusPath);
   }
   log(`status.json 不存在，已创建初始态（${plan.nodes.length} 个节点全 pending，baseline 固化 ${baselineVal ?? "(HEAD 获取失败——反查将被禁用)"}，runId ${activeRunId}）：${plan.statusPath}`);
   for (const n of plan.nodes) state.set(n.id, { status: "pending", attempts: 0 });
-  // 初始态同样走双向对账（§4.5 崩溃裁决不留人工方向）：status.json 曾被删但 commit 在 git——
-  // 非 done 的 dev 节点按 git log 反查补写 done，避免重跑已交付单元
+  // 初始态反查走 claimAny 认领语义（§4.5 崩溃裁决不留人工方向）：status.json 曾被删但
+  // commit 在 git——非 done 的 dev 节点按「前缀+词边界」反查补写 done，避免重跑已交付
+  // 单元。此刻 status 里的 runId 是本 run 新生成的，旧交付 commit 带旧 Run-Id，trailer
+  // 精确匹配恒落空，故此路径不校验 Run-Id；status 已存在的双向对账路径（else 分支）仍走
+  // 精确匹配，语义不变
   const freshDevIds = plan.nodes.filter((n) => n.kind === "dev").map((n) => n.id);
   if (freshDevIds.length > 0) {
-    const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, ...freshDevIds.map(devEntry)]);
+    const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, "claimAnyRunId", ...freshDevIds.map(devEntry)]);
     if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
       try {
         const parsed = JSON.parse(rec.stdout) as unknown;
@@ -1730,17 +1788,18 @@ for (const n of plan.nodes) {
 
 // ══════════════ 阶段 2：并行执行（循环体单 phase，不按轮拆） ══════════════
 
+await obsEnd("setup", null);
 if (plan.mode === "dev") {
   phase("并行执行开发节点");
-  await runSchedulingLoop();
 } else {
   phase("并行执行验收节点");
-  await runSchedulingLoop();
 }
+await withStage("execute", null, () => runSchedulingLoop());
 
 // ══════════════ 阶段 3：收尾汇总 ══════════════
 
 phase("收尾汇总");
+await obsBegin("finalize", null);
 
 const doneIds = plan.nodes.filter((n) => nodeState(n.id) === "done").map((n) => n.id);
 const badNodes = plan.nodes.filter((n) => nodeState(n.id) === "blocked" || nodeState(n.id) === "failed");
@@ -1865,13 +1924,16 @@ if (runStartedAt !== null) {
     rounds: 1, // 单轮流式并行调度（打回/自愈是节点内重试，不产生新调度轮）
     mustFixTrajectory: null,
   });
-} else {
-  log("WARN: run.json 未落盘（startedAt 探针失败，防覆盖判据不可用）——终态数据以 status.json 与返回值为准");
-}
+  } else {
+    log("WARN: run.json 未落盘（startedAt 探针失败，防覆盖判据不可用）——终态数据以 status.json 与返回值为准");
+  }
 
-return {
-  terminated,
-  done: doneIds,
+  // 观测终态统一补记（O 区）：给 finalize 补记 end + execution end（outcome=本次终态词）
+  await obsCloseExecution(terminated);
+
+  return {
+    terminated,
+    done: doneIds,
   blocked: blockedOut,
   skipped: skippedIds,
   statusFile: plan.statusPath,

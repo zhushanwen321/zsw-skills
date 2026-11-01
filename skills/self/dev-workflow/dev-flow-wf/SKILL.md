@@ -67,13 +67,64 @@ description: >-
 - 主 agent 处置熔断终态（各 flow 终态处置表任一行）与用户裁决落地时，append 处置记录到 ledger
 - 档案交付后默认保留（HOME 下天然不入 git），仅用户指示时清理（D4 第 8 条）
 
+## 阶段事件观测
+
+阶段事件观测回答「一次任务的开发执行各阶段何时开始、何时结束、归哪个任务」，只记归属与边界（不记 token、不记内容）。事件逐行追加到本次执行的 JSONL 文件：
+
+```
+~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl
+```
+
+每行一个 JSON 对象，契约固定（构建器按三源同步机器检查——观测层单一构建输入 `workflows/src/observability.shared.ts` / `scripts/build-workflows.mjs` 的 OBS_EVENT_FIELDS / `scripts/workflow-observe.mjs`）：
+
+| 字段 | 含义 |
+|------|------|
+| `task_id` / `execution_id` | 任务标识 / 单次执行标识（同时是落盘目录名与文件名主干；命名规则：字母或数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」——防路径穿越，非法即告警并关闭观测） |
+| `skill` / `stage` / `step` | 所属技能的 canonical 名（tech-design-wf / dev-flow-wf——统计按它过滤，禁止写 workflow 脚本名）/ 流程阶段编号（D0-D6、T2）/ 阶段内步骤（execution / setup / review / aggregate / fix / execute / finalize / gate-a，外部步骤自定） |
+| `round` / `attempt` | 循环轮次 / 重发起序号（无则 null；attempt 在启动早期自动检测未完成时也为 null，检测确定后其后的事件带值） |
+| `event` / `timestamp` / `sample_type` | start 或 end / ISO8601 / production（真实执行，缺省）或 selftest（测试执行） |
+| `outcome`（可选） | 仅出现在终态统一补记的 end 上，值 = 本次执行的终态词（如 completed / converged / blocked / setup-failure） |
+
+**生成与传递**：`task_id` 由主 agent 在 D0 编译时分配（建议 = 设计包 `<name>`），同一任务的 D0/D1/D2/D3/D4/D6 全段共用；`execution_id` 每次发起一个新的执行时分配（建议 = `<段名>-<发起时点短时间戳>`），同一 execution_id 的多次重发起共用（attempt 字段区分轮次）。W2（D1/D3）与 W3（D2）已内建：发起时 args 同时传 `taskId` 与 `executionId` 即启用，stage 自动记录（D1/D3 按 exec-plan 的 mode 区分，D2 恒 D2），每轮循环的 review/aggregate/fix/gate-a 步骤边界由引擎写入。
+
+**可选兼容**：两参都不传 = 观测关闭、业务照常（存量调用不受影响）；只传其一 = 告警（含恢复动作）并关闭，不猜测意图；观测写失败 = 告警（同一文件只告警一次）不改业务终态——观测是辅助功能，故障不拖垮主流程。
+
+**workflow 外步骤（D0/D4/D6 与 W4 的 D5）由主 agent 用观测命令记录边界**，契约与内建观测完全一致。统一运行入口 = `~/.agents/scripts/workflow-observe.mjs`（dev-flow-wf 可在任意项目运行，禁止写仓库相对路径 `scripts/workflow-observe.mjs`——那会解析到当前业务项目）：
+
+```bash
+node ~/.agents/scripts/workflow-observe.mjs start --task-id <task-id> --execution-id <exec-id> --skill dev-flow-wf --stage D0 --step compile
+node ~/.agents/scripts/workflow-observe.mjs end   --task-id <task-id> --execution-id <exec-id> --skill dev-flow-wf --stage D0 --step execution --outcome completed
+```
+
+**安装说明**：运行入口是 zsw-skills 仓 `scripts/workflow-observe.mjs` 的安装 symlink；同目录另有一个 symlink `~/.agents/scripts/workflow-observability.shared.ts` → 本仓 `skills/self/dev-workflow/workflows/src/observability.shared.ts`（观测层单一构建输入，供其他构建器把同一观测层拼进自己的 workflow 产物）。安装命令（本仓检出版图内执行）：
+
+```bash
+ln -sf <zsw-skills 检出根>/scripts/workflow-observe.mjs ~/.agents/scripts/workflow-observe.mjs
+ln -sf <zsw-skills 检出根>/skills/self/dev-workflow/workflows/src/observability.shared.ts ~/.agents/scripts/workflow-observability.shared.ts
+```
+
+用法错误 exit 2（stderr 含恢复动作）、写失败 exit 1。一次外部步骤 = 一对 start/end；整个执行结束时再记一对 `step=execution` 的 start/end（end 带 `--outcome <终态词>`）。
+
+**统计入口**：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs` 汇总 tech-design-wf / dev-flow-wf / dev-merge / pr-cr-fix 四技能的耗时与 token（双平台数据经 `pi-session-reader usage` CLI 采集——zcode `--db`、pi `--agent-dir`；观测事件直读观测根 JSONL，此外不直连任何数据库或会话文件）：
+
+```bash
+node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --skill dev-flow-wf --since 2026-10-01   # 单技能 + 时间窗（table 输出）
+node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --format json --output /tmp/stats.json   # 全技能完整 JSON 报告
+node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taiji/agent --group stage --group model  # 追加 pi 数据目录与分组维度
+```
+
+- 选项：`--skill`（四技能或 all，可重复）、`--since`/`--until`（透传 usage CLI）、`--format table|json`、`--group stage|step|role|model|status`（可重复）、`--pi-agent-dir`（可重复，给出即替换缺省 `~/.pi/agent`；zcode 恒参与）、`--include-selftest`（缺省只算 production）、`--output <路径>`。未知参数与非法值 exit 2（含恢复动作），帮助 `--help`。
+- 归因口径恒分开报：`observed` = run 带 `executionId` 且与观测 JSONL 精确关联（阶段/步骤窗口由事件 start/end 配对，actor/node 按时间重叠归窗）；`estimated` = 历史 run 按 run 名 + args（designDoc/execPlan/implPlan/base 等）+ actor 名称归类——精度低于 observed，两者不得相加视为同精度。认不出的进 unclassified 计数与明细。
+- token 用 usage CLI 重算值（不读 spent_tokens / tokensReported 自报值）；时间双口径分开报：经历（证据区间并集=日历实际经过）与耗时相加（run duration 累加）。手工段（D0/D4/D6 只有事件没有模型用量）耗时照报、token 记 unknown 不写 0。坏 JSONL、未配对 start/end、声明 executionId 但缺观测文件等数据质量问题在 `dataQuality` 显式计数，不静默。
+- 按 taskId 跨技能/跨 attempt 汇总在报告 `byTask` 节（observed/arg/legacy 词干来源分开标注）。
+
 ## Workflow 契约（执行体按宿主环境选择）
 
 | workflow | 段 | args | 终态 |
 |----------|----|------|------|
-| W2 `wave-executor`（saved） | D1 / D3（两实例化） | `{ execPlan: "<path>.exec-plan.json" }` | completed / blocked / core-failed |
-| W3 `dev-consistency-loop`（saved） | D2 | `{ execPlan, maxRounds?, reviewerTemplate?, attempt? }` | converged / stuck / gate-a-failed / review-failure / fix-failure（终态回写 status.json events：consistency 终态一笔恒写 + gate-a 笔仅在 converged/gate-a-failed 时写；必填字段双无条目降级登记项——deferredLedger 回流；attempt>1 时 Gate A 日志带 .attemptM 后缀） |
-| W4 `design-code-sync-loop`（saved） | D5 | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath?, plannerTemplate?, reviewerTemplate?, attempt? }` | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（模板路径与 attempt 缺省自动处理，attempt>1 历史产物不覆盖；终态含 overdesignCandidates——越权候选卡呈报） |
+| W2 `wave-executor`（saved） | D1 / D3（两实例化） | `{ execPlan, taskId?, executionId?, sampleType? }` | completed / blocked / core-failed |
+| W3 `dev-consistency-loop`（saved） | D2 | `{ execPlan, maxRounds?, reviewerTemplate?, attempt?, taskId?, executionId?, sampleType? }` | converged / stuck / gate-a-failed / review-failure / fix-failure（终态回写 status.json events：consistency 终态一笔恒写 + gate-a 笔仅在 converged/gate-a-failed 时写；必填字段双无条目降级登记项——deferredLedger 回流；attempt>1 时 Gate A 日志带 .attemptM 后缀） |
+| W4 `design-code-sync-loop`（saved） | D5 | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath?, plannerTemplate?, reviewerTemplate?, attempt? }`（未接入阶段事件观测——D5 边界由主 agent 经观测命令自记，见「阶段事件观测」节） | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（模板路径与 attempt 缺省自动处理，attempt>1 历史产物不覆盖；终态含 overdesignCandidates——越权候选卡呈报） |
 
 执行体按宿主环境选择：**zcode**（会话可见 CreateWorkflow 工具 / saved workflows）→ 上表 saved workflow 经 `CreateWorkflow saved` 发起；**pi**（subagent-workflow extension、workflow 工具可用）→ 本 skill 安装位置上级的 `../workflows/pi/<name>.js`（四件：wave-executor / dev-consistency-loop / design-code-sync-loop）复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run <name> --args k=v`——两版脚本业务逻辑逐行一致，仅 agent 调用层与文件头不同；--args 值全字符串，数字参数脚本内自动归一，数组型不支持。两版均未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：zcode workflow 用 ResumeWorkflowRun/AmendWorkflow，pi 重新 run（attempt 递增防产物覆盖），手工路径以 status.json + git log 对账，冲突以 git 为准）。
 

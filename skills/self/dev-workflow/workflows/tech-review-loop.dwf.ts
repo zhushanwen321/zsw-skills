@@ -41,6 +41,18 @@ args:
       缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取
       已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）
     default: 1
+  taskId:
+    type: string
+    description: 观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其
+      一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，只含字母、数字、点、
+      连字符、下划线，≤128 字符，禁「..」
+  executionId:
+    type: string
+    description: 本次执行标识（可选；与 taskId 同时提供才启用阶段事件观测）。同时是观测
+      JSONL 文件名主干（<executionId>.jsonl）——命名规则同 taskId
+  sampleType:
+    type: string
+    description: 观测样本类型（可选）——production = 真实执行（缺省）／selftest = 测试执行
 */
 
 // ── 结果与中间类型（JSDoc 作为字段描述注入子 agent） ──
@@ -201,6 +213,241 @@ function withRetryContext(firstInstructions: string, firstReturn: { dispositions
 // 硬编码，两壳各持常量）──
 const HOST_PLATFORM = "zcode";
 
+// ── O 区观测平台钩子：写通道 = world.run journal 语义（resume 重放回放首次记录值，
+// 时间戳与事件序列跨 resume 稳定）。shared 观测层调用 obsNow/obsAppend；换平台只换
+// 钩子实现，事件契约在 shared ──
+const OBS_PROBE_NOW = "process.stdout.write(new Date().toISOString())";
+const OBS_APPEND_LINE =
+  "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});" +
+  "require('fs').appendFileSync(process.argv[1],process.argv[2]+'\\n')";
+async function obsNow(): Promise<string | null> {
+  try {
+    const r = await world.run("node", ["-e", OBS_PROBE_NOW]);
+    const t = r.exitCode === 0 ? r.stdout.trim() : "";
+    return t !== "" ? t : null;
+  } catch {
+    // 执行器故障（spawn 失败/超时）：观测降级为不记录该事件，业务不受影响
+    return null;
+  }
+}
+async function obsAppend(filePath: string, line: string): Promise<string | null> {
+  try {
+    const r = await world.run("node", ["-e", OBS_APPEND_LINE, filePath, line]);
+    return r.exitCode === 0 ? null : `exit ${r.exitCode}：${r.stderr.trim() || r.stdout.trim()}`;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+// ============================================================================
+// observability.shared.ts — workflow 阶段事件观测层（单一构建输入）
+// 已接入观测的 workflow（正文含 initObservation 调用点）由 scripts/build-workflows.mjs
+// 把本文件全文拼进其两侧产物（先于业务正文——obsCtx 为 let，业务顶层赋值依赖声明在前）；
+// 未接入的 workflow 不拼。本文件与业务 shared 一起过词法改写与 TS 剥离管线，无 import。
+//
+// 事件契约（改字段须同步 scripts/build-workflows.mjs 的 OBS_EVENT_FIELDS 与
+// scripts/workflow-observe.mjs）：
+//   {execution_id, task_id, skill, stage, step, round, attempt, event, timestamp,
+//    sample_type[, outcome]}
+// 落点 ~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl——
+// 每次执行独立文件，并发执行互不干扰。
+// 启用条件 = args.taskId 与 args.executionId 同时提供；都不传 = 观测关闭（可选兼容，
+// 业务照常）；只传其一 / ID 含路径不安全字符 / sampleType 非法 → 告警并关闭（错误可
+// 操作，不静默吞）；写失败 → 告警（同文件只告警一次）不改业务终态——观测是辅助功能，
+// 故障不拖垮主流程。观测只记归属与边界，不采集 token。
+// IO 通道经壳的 obsNow/obsAppend 平台钩子（zcode = world.run journal 语义，resume 重放
+// 回放首次记录值；pi = world.run，其 shim 内为 spawnSync，无 journal 重放语义，每次
+// run 实写）。
+// attempt 字段语义 = 事件发生时点的重发起序号：启动早期（自动检测未完成）为 null，
+// 检测确定后由调用方回填 obsCtx.attempt，其后的事件带值。
+// ============================================================================
+
+interface ObsCtx {
+  executionId: string;
+  taskId: string;
+  skill: string;
+  stage: string;
+  attempt: number | null;
+  sampleType: "production" | "selftest";
+  /** JSONL 落盘绝对路径；home 探针完成前为空串（obsEmit 遇空串告警并跳过该条） */
+  filePath: string;
+  /** 已开始未结束的 step（obsBegin 与 obsEnd/obsCloseExecution 之间的打开窗口） */
+  openStep: { step: string; round: number | null } | null;
+  /** 同一文件的写失败只告警一次（多轮循环不刷屏） */
+  warnedWrite: boolean;
+}
+let obsCtx: ObsCtx | null = null;
+
+/** ID 路径安全窄化：task-id 是观测根下的目录名、execution-id 是文件名主干——仅放行
+ *  字母数字开头、只含字母/数字/点/连字符/下划线、≤128 字符、无连续点与结尾点的值，
+ *  路径穿越形态（..、分隔符、空白、引号）一律拒绝 */
+function obsSafeId(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(s) && !s.includes("..") && !s.endsWith(".") ? s : null;
+}
+
+/** 观测启用（形态层，纯同步，不依赖 home）：参数形态校验 + 上下文组装。先于业务参数
+ *  窄化调用，保证已传合法观测 ID 的执行（含后续参数校验失败早退）都有 execution 边界。
+ *  返回 null = 本次关闭（合法关闭不告警，告警关闭经 log 输出恢复动作——关闭本身不静默）。
+ *  attempt 未知时传 null，检测确定后回填 obsCtx.attempt */
+function initObservation(skill: string, stage: string, attempt: number | null): ObsCtx | null {
+  const hasTask = typeof args.taskId === "string" && args.taskId.trim() !== "";
+  const hasExec = typeof args.executionId === "string" && args.executionId.trim() !== "";
+  if (!hasTask && !hasExec) return null;
+  if (hasTask !== hasExec) {
+    log(
+      `WARN: 观测参数不完整（taskId=${hasTask ? "已传" : "缺"}、executionId=${hasExec ? "已传" : "缺"}）——两参须同时提供才记录观测，本次不写观测事件。恢复动作：同时传 taskId 与 executionId，或都不传`,
+    );
+    return null;
+  }
+  const taskId = obsSafeId(args.taskId);
+  const executionId = obsSafeId(args.executionId);
+  if (taskId === null || executionId === null) {
+    log(
+      `WARN: 观测参数含路径不安全字符（taskId=${JSON.stringify(args.taskId)}、executionId=${JSON.stringify(args.executionId)}——合法形态：字母/数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」与结尾点）——本次不写观测事件。恢复动作：改用安全 ID 后重新发起`,
+    );
+    return null;
+  }
+  const rawSampleType = typeof args.sampleType === "string" ? args.sampleType.trim() : "";
+  if (rawSampleType !== "" && rawSampleType !== "production" && rawSampleType !== "selftest") {
+    log(
+      `WARN: 观测参数 sampleType=${JSON.stringify(args.sampleType)} 非法（合法值：production / selftest）——本次不写观测事件。恢复动作：修正 sampleType 后重新发起`,
+    );
+    return null;
+  }
+  const sampleType: "production" | "selftest" = rawSampleType === "selftest" ? "selftest" : "production";
+  return {
+    executionId,
+    taskId,
+    skill,
+    stage,
+    attempt,
+    sampleType,
+    filePath: "",
+    openStep: null,
+    warnedWrite: false,
+  };
+}
+
+/** 观测落盘路径装配（home 探针成功后调用一次）；obsCtx 关闭时无操作 */
+function obsAttachHome(home: string): void {
+  const c = obsCtx;
+  if (c === null) return;
+  c.filePath = `${home}/.agents/skill-data/workflow-observability/${c.taskId}/${c.executionId}.jsonl`;
+}
+
+/** 写一条观测事件。时间戳经壳钩子取（zcode journal 语义下跨 resume 确定性回放）；
+ *  时间戳探针失败、落盘路径未装配（home 未就绪）或写入失败只告警（写失败同文件一次），
+ *  不改变业务终态 */
+async function obsEmit(step: string, round: number | null, event: "start" | "end", outcome: string | null): Promise<void> {
+  const c = obsCtx;
+  if (c === null) return;
+  if (c.filePath === "") {
+    log("WARN: 观测落盘路径未装配（home 探针未完成或失败）——本条观测事件未记录，业务不受影响。恢复动作：确认 node 可执行后重跑");
+    return;
+  }
+  const timestamp = await obsNow();
+  if (timestamp === null) {
+    log("WARN: 观测时间戳探针失败（node 子进程无输出）——本条观测事件未记录，业务不受影响。恢复动作：确认 node 可执行后重跑");
+    return;
+  }
+  const rec: Record<string, unknown> = {
+    execution_id: c.executionId,
+    task_id: c.taskId,
+    skill: c.skill,
+    stage: c.stage,
+    step,
+    round,
+    attempt: c.attempt,
+    event,
+    timestamp,
+    sample_type: c.sampleType,
+  };
+  if (outcome !== null) rec.outcome = outcome;
+  const err = await obsAppend(c.filePath, JSON.stringify(rec));
+  if (err !== null && !c.warnedWrite) {
+    c.warnedWrite = true;
+    log(`WARN: 观测事件写入失败（${c.filePath}）：${err}——同类失败不再重复告警，业务不受影响。恢复动作：确认该路径父目录可写（或换 executionId）后重跑`);
+  }
+}
+
+/** 阶段边界：串行阶段开始记 start（同一时刻至多一个打开 step）。上一阶段尚未结束即
+ *  开新阶段 = 观测序列异常：显式告警并给前一阶段补记 end（outcome=abandoned），不静默
+ *  覆盖——业务流程不受影响，事件序列仍完整可对账 */
+async function obsBegin(step: string, round: number | null): Promise<void> {
+  const c = obsCtx;
+  if (c === null) return;
+  if (c.openStep !== null) {
+    const prev = c.openStep;
+    c.openStep = null;
+    log(
+      `WARN: 观测阶段重叠：step「${prev.step}」尚未结束即开始「${step}」——已给前一阶段补记 end（outcome=abandoned），业务不受影响。恢复动作：检查前一阶段的 obsEnd 配对（提前离开的路径是否漏补记）`,
+    );
+    await obsEmit(prev.step, prev.round, "end", "abandoned");
+  }
+  c.openStep = { step, round };
+  await obsEmit(step, round, "start", null);
+}
+
+/** 阶段边界：自然完成记 end（无 outcome——outcome 只出现在终态统一补记或异常补记的
+ *  end 上，值 = 本次执行的 terminated 词或 abandoned/script-error）。
+ *  配对检查：step/round 与打开阶段不符，或当前无打开阶段时——显式告警（可操作恢复
+ *  动作）；无打开阶段不写任何事件（无 start 不伪造 end），阶段错位给实际打开阶段补
+ *  abandoned end（收到的错名 end 不落盘）。业务流程不受影响 */
+async function obsEnd(step: string, round: number | null): Promise<void> {
+  const c = obsCtx;
+  if (c === null) return;
+  if (c.openStep === null) {
+    log(
+      `WARN: 观测配对异常：收到 step「${step}」（round=${round}）的 obsEnd，但当前无打开中的阶段——未写 end 事件（无 start 不伪造 end），业务不受影响。恢复动作：检查该 step 的 obsBegin/obsEnd 配对（是否重复调用或 start 路径提前离开）`,
+    );
+    return;
+  }
+  if (c.openStep.step !== step || c.openStep.round !== round) {
+    const open = c.openStep;
+    c.openStep = null;
+    log(
+      `WARN: 观测配对异常：收到 step「${step}」（round=${round}）的 obsEnd，但当前打开的是「${open.step}」（round=${open.round}）——已给实际打开阶段补记 end（outcome=abandoned），收到的 end 未写（无对应 start 不伪造），业务不受影响。恢复动作：检查两处调用的 step/round 实参是否写反或错位`,
+    );
+    await obsEmit(open.step, open.round, "end", "abandoned");
+    return;
+  }
+  c.openStep = null;
+  await obsEmit(step, round, "end", null);
+}
+
+/** withStage：串行阶段包装器（obsBegin → fn → obsEnd）。fn 内经收尾出口提前离开时
+ *  openStep 已被 obsCloseExecution 清空（end 已由终态统一补记），finally 不重复补
+ *  end；fn 抛异常且 step 仍打开 = 脚本级中断，finally 补 end（outcome=script-error） */
+async function withStage<T>(step: string, round: number | null, fn: () => Promise<T>): Promise<T> {
+  await obsBegin(step, round);
+  let didThrow = false;
+  try {
+    return await fn();
+  } catch (e) {
+    didThrow = true;
+    throw e;
+  } finally {
+    const c = obsCtx;
+    if (c !== null && c.openStep !== null && c.openStep.step === step) {
+      c.openStep = null;
+      await obsEmit(step, round, "end", didThrow ? "script-error" : null);
+    }
+  }
+}
+
+/** 终态统一补记：给打开中的 step 补记 end（带 outcome=本次执行终态）+ 写 execution
+ *  end。由终态统一出口调用（各 workflow 的 finish / 收尾段 / 启动期失败离开点） */
+async function obsCloseExecution(outcome: string): Promise<void> {
+  const c = obsCtx;
+  if (c === null) return;
+  const open = c.openStep;
+  c.openStep = null;
+  if (open !== null) await obsEmit(open.step, open.round, "end", outcome);
+  await obsEmit("execution", null, "end", outcome);
+}
+
 // ============================================================================
 // tech-review-loop — tech-design-wf 技能 W1 审查循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
@@ -243,7 +490,17 @@ const FIX_RETRY_MAX = 3; // 修复者结构化返回校验失败的重试上限�
 const NO_ASK_RULE =
   "禁止向用户提问（无 AskUserQuestion / ask-user / 任何等待用户输入的操作）——workflow 内没有用户交互位；" +
   "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
-const VALID_ARG_KEYS = new Set(["designDoc", "projectRoot", "maxRounds", "reviewers", "attempt"]);
+const VALID_ARG_KEYS = new Set([
+  "designDoc",
+  "projectRoot",
+  "maxRounds",
+  "reviewers",
+  "attempt",
+  // 观测（O 区，可选）：taskId+executionId 同时提供才启用（sampleType 默认 production）
+  "taskId",
+  "executionId",
+  "sampleType",
+]);
 
 // node -e 通道（argv 传参，无 shell 注入面；node 代码不受脚本 facade 限制）
 const NODE_WRITE_FILE =
@@ -657,9 +914,40 @@ function renderFinalMd(r: LoopResult): string {
   return lines.join("\n");
 }
 
+// ── 观测启用（O 区形态层）：先于参数窄化——已传合法观测 ID 的执行（含参数校验失败
+// 早退）都有 execution 边界；attempt 自动检测未完成时为 null，检测确定后回填。落盘
+// 路径依赖 home，探针通过后装配 ──
+obsCtx = initObservation("tech-design-wf", "T2", null);
+
+// home 探针（先于参数窄化：观测落盘路径装配与模板 ~ 展开共同依赖）
+const homeRes = await world.run("node", ["-e", "process.stdout.write(require('os').homedir())"]);
+if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
+  await obsCloseExecution("setup-failure");
+  return {
+    terminated: "setup-failure",
+    rounds: 0,
+    runDir: "",
+    designDoc: "",
+    directionOneliner: "",
+    mustFixTrajectory: [],
+    remaining: [],
+    blocked: null,
+    message: `无法解析用户 home 目录（node os.homedir 探针失败，exit ${homeRes.exitCode}）：${homeRes.stderr.trim()}。恢复动作：确认 node 可执行后重新发起`,
+  };
+}
+const home = homeRes.stdout.trim();
+const expandTilde = (p: string): string => (p.startsWith("~/") ? `${home}/${p.slice(2)}` : p);
+
+if (obsCtx !== null) {
+  obsAttachHome(home);
+  await obsEmit("execution", null, "start", null);
+  await obsBegin("setup", null);
+}
+
 // ── 参数窄化执行 + 早期失败（failed-as-return，不 throw） ──
 const inputs = deriveInputs(args);
 if (inputs.problems.length > 0) {
+  await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
     rounds: 0,
@@ -674,26 +962,8 @@ if (inputs.problems.length > 0) {
 }
 const { designDoc, projectRoot, maxRounds } = inputs;
 
-// ── 环境准备（home 展开 / runDir / attempt / 模板探针） ──
+// ── 环境准备（runDir / attempt / 模板探针） ──
 phase("校验审查环境并做方向审");
-
-// home 展开：模板/rubric 的 ~ 前缀运行时解析（脚本无 node API，经 node -e 通道）
-const homeRes = await world.run("node", ["-e", "process.stdout.write(require('os').homedir())"]);
-if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
-  return {
-    terminated: "setup-failure",
-    rounds: 0,
-    runDir: "",
-    designDoc,
-    directionOneliner: "",
-    mustFixTrajectory: [],
-    remaining: [],
-    blocked: null,
-    message: `无法解析用户 home 目录（node os.homedir 探针失败，exit ${homeRes.exitCode}）：${homeRes.stderr.trim()}。恢复动作：确认 node 可执行后重新发起`,
-  };
-}
-const home = homeRes.stdout.trim();
-const expandTilde = (p: string): string => (p.startsWith("~/") ? `${home}/${p.slice(2)}` : p);
 
 // runDir 命名（F22）：~/.agents/skill-data/tech-design/<project-slug>/<设计目录 basename>/
 //（designDoc 已归一为设计目录，basename 即设计名；runDir 与设计包目录语义上同位）
@@ -702,6 +972,7 @@ const docName = docBase.replace(/\.[^.]+$/, "");
 // project-slug 探针（realpath + sha256 前 8 位）：realpath 失败 = projectRoot 不存在，setup-failure
 const slugRes = await world.run("node", ["-e", NODE_PROJECT_SLUG, projectRoot]);
 if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
+  await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
     rounds: 0,
@@ -762,6 +1033,10 @@ const prevAttemptMax =
 const attempt = inputs.attempt !== null ? inputs.attempt : prevAttemptMax > 0 ? prevAttemptMax + 1 : 1;
 const roundDirName = (n: number): string => (attempt > 1 ? `round-${n}.attempt${attempt}` : `round-${n}`);
 
+// attempt 检测确定后回填观测上下文（execution/setup start 事件时点尚未检测，记 null；
+// 其后的事件带值——attempt 字段语义见观测层头注）
+if (obsCtx !== null) obsCtx.attempt = attempt;
+
 // 默认 reviewer 模板（脚本内字面量，~ 运行时展开）；args.reviewers 按 basename 覆盖同名维度
 const TEMPLATE_BASENAMES: { dim: string; file: string }[] = [
   { dim: "direction", file: "tech-design-direction-review.md" },
@@ -819,6 +1094,7 @@ const TRIALS: { dim: "direction" | "main" | "impact" | "simplicity"; label: stri
 const requiredPaths = [designDoc, checkCliAbs, checkDesignCliAbs, renderCliAbs, ...TEMPLATE_BASENAMES.map((t) => templates.get(t.dim) ?? "")].filter((p) => p !== "");
 const probe = await world.run("node", ["-e", NODE_CHECK_EXISTS, ...requiredPaths]);
 if (probe.exitCode !== 0) {
+  await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
     rounds: 0,
@@ -837,6 +1113,7 @@ if (probe.exitCode !== 0) {
 // 原因（md 输入则是迁移指引原文）——原样透传进 message，恢复动作可循
 const designChk = await world.run("node", [checkDesignCliAbs, designDoc]);
 if (designChk.exitCode !== 0) {
+  await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
     rounds: 0,
@@ -853,6 +1130,7 @@ if (designChk.exitCode !== 0) {
 // 保证方向审 / 三审读到的 rendered.md 与章节 JSON 一致（缺失则生成）
 const designRender = await world.run("node", [renderCliAbs, designDoc]);
 if (designRender.exitCode !== 0) {
+  await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
     rounds: 0,
@@ -946,6 +1224,8 @@ async function finish(
   } catch {
     log("WARN: 终态 markdown 发布失败（内容超限或发布通道异常）——终态详情见 final.json 与返回值");
   }
+  // 观测终态统一补记（O 区）：给打开中的 step 补记 end + execution end（outcome=本次终态词）
+  await obsCloseExecution(terminated);
   return result;
 }
 
@@ -965,6 +1245,7 @@ log(`审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttem
 // ── 审查-修复主循环 ──
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
 //（NO_ASK_RULE 定义在文件顶部常量区）
+if (obsCtx !== null) await obsEnd("setup", null);
 const AGGREGATOR_PERSONA =
   "你是审查聚合裁决员：把四席评审报告的发现合并为去重后的权威问题清单——同根因跨席位的发现合为一条（保留全部原始 ref，禁止静默丢弃任何一条），不同根因绝不合并；只读裁决，绝不修改任何文件；同根因判定依据是报告原文与设计文档原文，不是表面措辞相似；指令无法执行或有矛盾时如实说明，不伪造结论。" +
   NO_ASK_RULE;
@@ -986,6 +1267,7 @@ let streak = 0;
 for (let round = 1; round <= maxRounds; round++) {
   phase("四席并行聚焦复审");
   const roundAbs = `${runDir}/${roundDirName(round)}`;
+  await obsBegin("review", round);
 
   // 必对账集 = 上轮处置表全部条目（fixed 的核修复成立性；deferred/archived 的核登记
   // 是否仍成立）；登记监视集 = action≠fixed（escalate 唯一复活通道的申报对象面，
@@ -1130,11 +1412,13 @@ for (let round = 1; round <= maxRounds; round++) {
   if (probWrite.exitCode !== 0) {
     return await finish("review-failure", round, `问题清单落盘失败（${roundAbs}/problems.json，exit ${probWrite.exitCode}）：${probWrite.stderr.trim() || probWrite.stdout.trim()}。恢复动作：args.attempt 递增重新发起`);
   }
+  await obsEnd("review", round);
 
   // ── phase 2：聚合裁决（独立 phase——四席发现合并为去重权威清单；修复者据聚合清单处置） ──
   let aggregatedItems: AggregatedItem[] | null = null;
   if (roundProblems.length > 0) {
     phase("聚合裁决");
+    await obsBegin("aggregate", round);
     const rawRefs = roundProblems.map((pp) => pp.ref);
     let aggregation: AggregationOutcome | null;
     try {
@@ -1174,6 +1458,7 @@ for (let round = 1; round <= maxRounds; round++) {
       return await finish("aggregator-failure", round, `聚合清单落盘失败（${roundAbs}/aggregated.md，exit ${aggWrite.exitCode}）：${aggWrite.stderr.trim() || aggWrite.stdout.trim()}。恢复动作：args.attempt 递增重新发起`);
     }
     log(`第 ${round} 轮聚合完成：${rawRefs.length} 条原始发现 → ${aggregatedItems.length} 条聚合项（${roundAbs}/aggregated.md）`);
+    await obsEnd("aggregate", round);
   }
 
   // 轨迹与对账以聚合后计数为准（去重后的真实工作负载；原始计数仅校验用）
@@ -1234,6 +1519,7 @@ for (let round = 1; round <= maxRounds; round++) {
 
   // ── phase 3：文档修复者（据聚合清单修复 + 处置表——语义去重已在聚合裁决 phase 完成） ──
   phase("修复设计文档并产出处置表");
+  await obsBegin("fix", round);
   const outstandingBlock =
     outstanding.length > 0
       ? [
@@ -1407,10 +1693,12 @@ for (let round = 1; round <= maxRounds; round++) {
   const deferredCount = dispositions.filter((d) => d.action === "deferred").length;
   const archivedCount = dispositions.filter((d) => d.action === "archived").length;
   log(`第 ${round} 轮修复完成：处置 ${dispositions.length} 条（修复 ${fixedCount} / 登记 ${deferredCount} / 归档 ${archivedCount}），处置表 ${roundAbs}/dispositions.md`);
+  await obsEnd("fix", round);
 }
 
 // ── 轮次耗尽收尾 ──
 phase("落盘终态档案");
+await obsBegin("finalize", null);
 return await finish(
   "max-rounds",
   maxRounds,

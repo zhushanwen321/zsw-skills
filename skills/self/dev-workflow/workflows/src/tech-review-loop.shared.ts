@@ -40,7 +40,17 @@ const FIX_RETRY_MAX = 3; // 修复者结构化返回校验失败的重试上限�
 const NO_ASK_RULE =
   "禁止向用户提问（无 AskUserQuestion / ask-user / 任何等待用户输入的操作）——workflow 内没有用户交互位；" +
   "无法自决的事项按职责内默认规则处置，并在产出中记录待裁决事项（随终态呈报主 agent / 用户）。";
-const VALID_ARG_KEYS = new Set(["designDoc", "projectRoot", "maxRounds", "reviewers", "attempt"]);
+const VALID_ARG_KEYS = new Set([
+  "designDoc",
+  "projectRoot",
+  "maxRounds",
+  "reviewers",
+  "attempt",
+  // 观测（O 区，可选）：taskId+executionId 同时提供才启用（sampleType 默认 production）
+  "taskId",
+  "executionId",
+  "sampleType",
+]);
 
 // node -e 通道（argv 传参，无 shell 注入面；node 代码不受脚本 facade 限制）
 const NODE_WRITE_FILE =
@@ -454,9 +464,40 @@ function renderFinalMd(r: LoopResult): string {
   return lines.join("\n");
 }
 
+// ── 观测启用（O 区形态层）：先于参数窄化——已传合法观测 ID 的执行（含参数校验失败
+// 早退）都有 execution 边界；attempt 自动检测未完成时为 null，检测确定后回填。落盘
+// 路径依赖 home，探针通过后装配 ──
+obsCtx = initObservation("tech-design-wf", "T2", null);
+
+// home 探针（先于参数窄化：观测落盘路径装配与模板 ~ 展开共同依赖）
+const homeRes = await world.run("node", ["-e", "process.stdout.write(require('os').homedir())"]);
+if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
+  await obsCloseExecution("setup-failure");
+  return {
+    terminated: "setup-failure",
+    rounds: 0,
+    runDir: "",
+    designDoc: "",
+    directionOneliner: "",
+    mustFixTrajectory: [],
+    remaining: [],
+    blocked: null,
+    message: `无法解析用户 home 目录（node os.homedir 探针失败，exit ${homeRes.exitCode}）：${homeRes.stderr.trim()}。恢复动作：确认 node 可执行后重新发起`,
+  };
+}
+const home = homeRes.stdout.trim();
+const expandTilde = (p: string): string => (p.startsWith("~/") ? `${home}/${p.slice(2)}` : p);
+
+if (obsCtx !== null) {
+  obsAttachHome(home);
+  await obsEmit("execution", null, "start", null);
+  await obsBegin("setup", null);
+}
+
 // ── 参数窄化执行 + 早期失败（failed-as-return，不 throw） ──
 const inputs = deriveInputs(args);
 if (inputs.problems.length > 0) {
+  await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
     rounds: 0,
@@ -471,26 +512,8 @@ if (inputs.problems.length > 0) {
 }
 const { designDoc, projectRoot, maxRounds } = inputs;
 
-// ── 环境准备（home 展开 / runDir / attempt / 模板探针） ──
+// ── 环境准备（runDir / attempt / 模板探针） ──
 phase("校验审查环境并做方向审");
-
-// home 展开：模板/rubric 的 ~ 前缀运行时解析（脚本无 node API，经 node -e 通道）
-const homeRes = await world.run("node", ["-e", "process.stdout.write(require('os').homedir())"]);
-if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
-  return {
-    terminated: "setup-failure",
-    rounds: 0,
-    runDir: "",
-    designDoc,
-    directionOneliner: "",
-    mustFixTrajectory: [],
-    remaining: [],
-    blocked: null,
-    message: `无法解析用户 home 目录（node os.homedir 探针失败，exit ${homeRes.exitCode}）：${homeRes.stderr.trim()}。恢复动作：确认 node 可执行后重新发起`,
-  };
-}
-const home = homeRes.stdout.trim();
-const expandTilde = (p: string): string => (p.startsWith("~/") ? `${home}/${p.slice(2)}` : p);
 
 // runDir 命名（F22）：~/.agents/skill-data/tech-design/<project-slug>/<设计目录 basename>/
 //（designDoc 已归一为设计目录，basename 即设计名；runDir 与设计包目录语义上同位）
@@ -499,6 +522,7 @@ const docName = docBase.replace(/\.[^.]+$/, "");
 // project-slug 探针（realpath + sha256 前 8 位）：realpath 失败 = projectRoot 不存在，setup-failure
 const slugRes = await world.run("node", ["-e", NODE_PROJECT_SLUG, projectRoot]);
 if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
+  await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
     rounds: 0,
@@ -559,6 +583,10 @@ const prevAttemptMax =
 const attempt = inputs.attempt !== null ? inputs.attempt : prevAttemptMax > 0 ? prevAttemptMax + 1 : 1;
 const roundDirName = (n: number): string => (attempt > 1 ? `round-${n}.attempt${attempt}` : `round-${n}`);
 
+// attempt 检测确定后回填观测上下文（execution/setup start 事件时点尚未检测，记 null；
+// 其后的事件带值——attempt 字段语义见观测层头注）
+if (obsCtx !== null) obsCtx.attempt = attempt;
+
 // 默认 reviewer 模板（脚本内字面量，~ 运行时展开）；args.reviewers 按 basename 覆盖同名维度
 const TEMPLATE_BASENAMES: { dim: string; file: string }[] = [
   { dim: "direction", file: "tech-design-direction-review.md" },
@@ -616,6 +644,7 @@ const TRIALS: { dim: "direction" | "main" | "impact" | "simplicity"; label: stri
 const requiredPaths = [designDoc, checkCliAbs, checkDesignCliAbs, renderCliAbs, ...TEMPLATE_BASENAMES.map((t) => templates.get(t.dim) ?? "")].filter((p) => p !== "");
 const probe = await world.run("node", ["-e", NODE_CHECK_EXISTS, ...requiredPaths]);
 if (probe.exitCode !== 0) {
+  await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
     rounds: 0,
@@ -634,6 +663,7 @@ if (probe.exitCode !== 0) {
 // 原因（md 输入则是迁移指引原文）——原样透传进 message，恢复动作可循
 const designChk = await world.run("node", [checkDesignCliAbs, designDoc]);
 if (designChk.exitCode !== 0) {
+  await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
     rounds: 0,
@@ -650,6 +680,7 @@ if (designChk.exitCode !== 0) {
 // 保证方向审 / 三审读到的 rendered.md 与章节 JSON 一致（缺失则生成）
 const designRender = await world.run("node", [renderCliAbs, designDoc]);
 if (designRender.exitCode !== 0) {
+  await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
     rounds: 0,
@@ -743,6 +774,8 @@ async function finish(
   } catch {
     log("WARN: 终态 markdown 发布失败（内容超限或发布通道异常）——终态详情见 final.json 与返回值");
   }
+  // 观测终态统一补记（O 区）：给打开中的 step 补记 end + execution end（outcome=本次终态词）
+  await obsCloseExecution(terminated);
   return result;
 }
 
@@ -762,6 +795,7 @@ log(`审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttem
 // ── 审查-修复主循环 ──
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
 //（NO_ASK_RULE 定义在文件顶部常量区）
+if (obsCtx !== null) await obsEnd("setup", null);
 const AGGREGATOR_PERSONA =
   "你是审查聚合裁决员：把四席评审报告的发现合并为去重后的权威问题清单——同根因跨席位的发现合为一条（保留全部原始 ref，禁止静默丢弃任何一条），不同根因绝不合并；只读裁决，绝不修改任何文件；同根因判定依据是报告原文与设计文档原文，不是表面措辞相似；指令无法执行或有矛盾时如实说明，不伪造结论。" +
   NO_ASK_RULE;
@@ -783,6 +817,7 @@ let streak = 0;
 for (let round = 1; round <= maxRounds; round++) {
   phase("四席并行聚焦复审");
   const roundAbs = `${runDir}/${roundDirName(round)}`;
+  await obsBegin("review", round);
 
   // 必对账集 = 上轮处置表全部条目（fixed 的核修复成立性；deferred/archived 的核登记
   // 是否仍成立）；登记监视集 = action≠fixed（escalate 唯一复活通道的申报对象面，
@@ -927,11 +962,13 @@ for (let round = 1; round <= maxRounds; round++) {
   if (probWrite.exitCode !== 0) {
     return await finish("review-failure", round, `问题清单落盘失败（${roundAbs}/problems.json，exit ${probWrite.exitCode}）：${probWrite.stderr.trim() || probWrite.stdout.trim()}。恢复动作：args.attempt 递增重新发起`);
   }
+  await obsEnd("review", round);
 
   // ── phase 2：聚合裁决（独立 phase——四席发现合并为去重权威清单；修复者据聚合清单处置） ──
   let aggregatedItems: AggregatedItem[] | null = null;
   if (roundProblems.length > 0) {
     phase("聚合裁决");
+    await obsBegin("aggregate", round);
     const rawRefs = roundProblems.map((pp) => pp.ref);
     let aggregation: AggregationOutcome | null;
     try {
@@ -971,6 +1008,7 @@ for (let round = 1; round <= maxRounds; round++) {
       return await finish("aggregator-failure", round, `聚合清单落盘失败（${roundAbs}/aggregated.md，exit ${aggWrite.exitCode}）：${aggWrite.stderr.trim() || aggWrite.stdout.trim()}。恢复动作：args.attempt 递增重新发起`);
     }
     log(`第 ${round} 轮聚合完成：${rawRefs.length} 条原始发现 → ${aggregatedItems.length} 条聚合项（${roundAbs}/aggregated.md）`);
+    await obsEnd("aggregate", round);
   }
 
   // 轨迹与对账以聚合后计数为准（去重后的真实工作负载；原始计数仅校验用）
@@ -1031,6 +1069,7 @@ for (let round = 1; round <= maxRounds; round++) {
 
   // ── phase 3：文档修复者（据聚合清单修复 + 处置表——语义去重已在聚合裁决 phase 完成） ──
   phase("修复设计文档并产出处置表");
+  await obsBegin("fix", round);
   const outstandingBlock =
     outstanding.length > 0
       ? [
@@ -1204,10 +1243,12 @@ for (let round = 1; round <= maxRounds; round++) {
   const deferredCount = dispositions.filter((d) => d.action === "deferred").length;
   const archivedCount = dispositions.filter((d) => d.action === "archived").length;
   log(`第 ${round} 轮修复完成：处置 ${dispositions.length} 条（修复 ${fixedCount} / 登记 ${deferredCount} / 归档 ${archivedCount}），处置表 ${roundAbs}/dispositions.md`);
+  await obsEnd("fix", round);
 }
 
 // ── 轮次耗尽收尾 ──
 phase("落盘终态档案");
+await obsBegin("finalize", null);
 return await finish(
   "max-rounds",
   maxRounds,

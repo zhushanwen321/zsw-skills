@@ -30,6 +30,18 @@ args:
     description: 重发起序号（status.json events 追加保留历史不覆盖；attempt > 1 时
       Gate A 日志命名带 .attemptM 后缀防覆盖上轮日志）
     default: 1
+  taskId:
+    type: string
+    description: 观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其
+      一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，只含字母、数字、点、
+      连字符、下划线，≤128 字符，禁「..」
+  executionId:
+    type: string
+    description: 本次执行标识（可选；与 taskId 同时提供才启用阶段事件观测）。同时是观测
+      JSONL 文件名主干（<executionId>.jsonl）——命名规则同 taskId
+  sampleType:
+    type: string
+    description: 观测样本类型（可选）——production = 真实执行（缺省）／selftest = 测试执行
 */
 
 // ── 结果与中间类型（JSDoc 会作为字段描述注入子 agent）──
@@ -222,6 +234,241 @@ const HINT_R1_FAILED = "读 run 日志定位失败分区，AmendWorkflow 修订�
 // 硬编码，两壳各持常量）──
 const HOST_PLATFORM = "zcode";
 
+// ── O 区观测平台钩子：写通道 = world.run journal 语义（resume 重放回放首次记录值，
+// 时间戳与事件序列跨 resume 稳定）。shared 观测层调用 obsNow/obsAppend；换平台只换
+// 钩子实现，事件契约在 shared ──
+const OBS_PROBE_NOW = "process.stdout.write(new Date().toISOString())";
+const OBS_APPEND_LINE =
+  "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});" +
+  "require('fs').appendFileSync(process.argv[1],process.argv[2]+'\\n')";
+async function obsNow(): Promise<string | null> {
+  try {
+    const r = await world.run("node", ["-e", OBS_PROBE_NOW]);
+    const t = r.exitCode === 0 ? r.stdout.trim() : "";
+    return t !== "" ? t : null;
+  } catch {
+    // 执行器故障（spawn 失败/超时）：观测降级为不记录该事件，业务不受影响
+    return null;
+  }
+}
+async function obsAppend(filePath: string, line: string): Promise<string | null> {
+  try {
+    const r = await world.run("node", ["-e", OBS_APPEND_LINE, filePath, line]);
+    return r.exitCode === 0 ? null : `exit ${r.exitCode}：${r.stderr.trim() || r.stdout.trim()}`;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+// ============================================================================
+// observability.shared.ts — workflow 阶段事件观测层（单一构建输入）
+// 已接入观测的 workflow（正文含 initObservation 调用点）由 scripts/build-workflows.mjs
+// 把本文件全文拼进其两侧产物（先于业务正文——obsCtx 为 let，业务顶层赋值依赖声明在前）；
+// 未接入的 workflow 不拼。本文件与业务 shared 一起过词法改写与 TS 剥离管线，无 import。
+//
+// 事件契约（改字段须同步 scripts/build-workflows.mjs 的 OBS_EVENT_FIELDS 与
+// scripts/workflow-observe.mjs）：
+//   {execution_id, task_id, skill, stage, step, round, attempt, event, timestamp,
+//    sample_type[, outcome]}
+// 落点 ~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl——
+// 每次执行独立文件，并发执行互不干扰。
+// 启用条件 = args.taskId 与 args.executionId 同时提供；都不传 = 观测关闭（可选兼容，
+// 业务照常）；只传其一 / ID 含路径不安全字符 / sampleType 非法 → 告警并关闭（错误可
+// 操作，不静默吞）；写失败 → 告警（同文件只告警一次）不改业务终态——观测是辅助功能，
+// 故障不拖垮主流程。观测只记归属与边界，不采集 token。
+// IO 通道经壳的 obsNow/obsAppend 平台钩子（zcode = world.run journal 语义，resume 重放
+// 回放首次记录值；pi = world.run，其 shim 内为 spawnSync，无 journal 重放语义，每次
+// run 实写）。
+// attempt 字段语义 = 事件发生时点的重发起序号：启动早期（自动检测未完成）为 null，
+// 检测确定后由调用方回填 obsCtx.attempt，其后的事件带值。
+// ============================================================================
+
+interface ObsCtx {
+  executionId: string;
+  taskId: string;
+  skill: string;
+  stage: string;
+  attempt: number | null;
+  sampleType: "production" | "selftest";
+  /** JSONL 落盘绝对路径；home 探针完成前为空串（obsEmit 遇空串告警并跳过该条） */
+  filePath: string;
+  /** 已开始未结束的 step（obsBegin 与 obsEnd/obsCloseExecution 之间的打开窗口） */
+  openStep: { step: string; round: number | null } | null;
+  /** 同一文件的写失败只告警一次（多轮循环不刷屏） */
+  warnedWrite: boolean;
+}
+let obsCtx: ObsCtx | null = null;
+
+/** ID 路径安全窄化：task-id 是观测根下的目录名、execution-id 是文件名主干——仅放行
+ *  字母数字开头、只含字母/数字/点/连字符/下划线、≤128 字符、无连续点与结尾点的值，
+ *  路径穿越形态（..、分隔符、空白、引号）一律拒绝 */
+function obsSafeId(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(s) && !s.includes("..") && !s.endsWith(".") ? s : null;
+}
+
+/** 观测启用（形态层，纯同步，不依赖 home）：参数形态校验 + 上下文组装。先于业务参数
+ *  窄化调用，保证已传合法观测 ID 的执行（含后续参数校验失败早退）都有 execution 边界。
+ *  返回 null = 本次关闭（合法关闭不告警，告警关闭经 log 输出恢复动作——关闭本身不静默）。
+ *  attempt 未知时传 null，检测确定后回填 obsCtx.attempt */
+function initObservation(skill: string, stage: string, attempt: number | null): ObsCtx | null {
+  const hasTask = typeof args.taskId === "string" && args.taskId.trim() !== "";
+  const hasExec = typeof args.executionId === "string" && args.executionId.trim() !== "";
+  if (!hasTask && !hasExec) return null;
+  if (hasTask !== hasExec) {
+    log(
+      `WARN: 观测参数不完整（taskId=${hasTask ? "已传" : "缺"}、executionId=${hasExec ? "已传" : "缺"}）——两参须同时提供才记录观测，本次不写观测事件。恢复动作：同时传 taskId 与 executionId，或都不传`,
+    );
+    return null;
+  }
+  const taskId = obsSafeId(args.taskId);
+  const executionId = obsSafeId(args.executionId);
+  if (taskId === null || executionId === null) {
+    log(
+      `WARN: 观测参数含路径不安全字符（taskId=${JSON.stringify(args.taskId)}、executionId=${JSON.stringify(args.executionId)}——合法形态：字母/数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」与结尾点）——本次不写观测事件。恢复动作：改用安全 ID 后重新发起`,
+    );
+    return null;
+  }
+  const rawSampleType = typeof args.sampleType === "string" ? args.sampleType.trim() : "";
+  if (rawSampleType !== "" && rawSampleType !== "production" && rawSampleType !== "selftest") {
+    log(
+      `WARN: 观测参数 sampleType=${JSON.stringify(args.sampleType)} 非法（合法值：production / selftest）——本次不写观测事件。恢复动作：修正 sampleType 后重新发起`,
+    );
+    return null;
+  }
+  const sampleType: "production" | "selftest" = rawSampleType === "selftest" ? "selftest" : "production";
+  return {
+    executionId,
+    taskId,
+    skill,
+    stage,
+    attempt,
+    sampleType,
+    filePath: "",
+    openStep: null,
+    warnedWrite: false,
+  };
+}
+
+/** 观测落盘路径装配（home 探针成功后调用一次）；obsCtx 关闭时无操作 */
+function obsAttachHome(home: string): void {
+  const c = obsCtx;
+  if (c === null) return;
+  c.filePath = `${home}/.agents/skill-data/workflow-observability/${c.taskId}/${c.executionId}.jsonl`;
+}
+
+/** 写一条观测事件。时间戳经壳钩子取（zcode journal 语义下跨 resume 确定性回放）；
+ *  时间戳探针失败、落盘路径未装配（home 未就绪）或写入失败只告警（写失败同文件一次），
+ *  不改变业务终态 */
+async function obsEmit(step: string, round: number | null, event: "start" | "end", outcome: string | null): Promise<void> {
+  const c = obsCtx;
+  if (c === null) return;
+  if (c.filePath === "") {
+    log("WARN: 观测落盘路径未装配（home 探针未完成或失败）——本条观测事件未记录，业务不受影响。恢复动作：确认 node 可执行后重跑");
+    return;
+  }
+  const timestamp = await obsNow();
+  if (timestamp === null) {
+    log("WARN: 观测时间戳探针失败（node 子进程无输出）——本条观测事件未记录，业务不受影响。恢复动作：确认 node 可执行后重跑");
+    return;
+  }
+  const rec: Record<string, unknown> = {
+    execution_id: c.executionId,
+    task_id: c.taskId,
+    skill: c.skill,
+    stage: c.stage,
+    step,
+    round,
+    attempt: c.attempt,
+    event,
+    timestamp,
+    sample_type: c.sampleType,
+  };
+  if (outcome !== null) rec.outcome = outcome;
+  const err = await obsAppend(c.filePath, JSON.stringify(rec));
+  if (err !== null && !c.warnedWrite) {
+    c.warnedWrite = true;
+    log(`WARN: 观测事件写入失败（${c.filePath}）：${err}——同类失败不再重复告警，业务不受影响。恢复动作：确认该路径父目录可写（或换 executionId）后重跑`);
+  }
+}
+
+/** 阶段边界：串行阶段开始记 start（同一时刻至多一个打开 step）。上一阶段尚未结束即
+ *  开新阶段 = 观测序列异常：显式告警并给前一阶段补记 end（outcome=abandoned），不静默
+ *  覆盖——业务流程不受影响，事件序列仍完整可对账 */
+async function obsBegin(step: string, round: number | null): Promise<void> {
+  const c = obsCtx;
+  if (c === null) return;
+  if (c.openStep !== null) {
+    const prev = c.openStep;
+    c.openStep = null;
+    log(
+      `WARN: 观测阶段重叠：step「${prev.step}」尚未结束即开始「${step}」——已给前一阶段补记 end（outcome=abandoned），业务不受影响。恢复动作：检查前一阶段的 obsEnd 配对（提前离开的路径是否漏补记）`,
+    );
+    await obsEmit(prev.step, prev.round, "end", "abandoned");
+  }
+  c.openStep = { step, round };
+  await obsEmit(step, round, "start", null);
+}
+
+/** 阶段边界：自然完成记 end（无 outcome——outcome 只出现在终态统一补记或异常补记的
+ *  end 上，值 = 本次执行的 terminated 词或 abandoned/script-error）。
+ *  配对检查：step/round 与打开阶段不符，或当前无打开阶段时——显式告警（可操作恢复
+ *  动作）；无打开阶段不写任何事件（无 start 不伪造 end），阶段错位给实际打开阶段补
+ *  abandoned end（收到的错名 end 不落盘）。业务流程不受影响 */
+async function obsEnd(step: string, round: number | null): Promise<void> {
+  const c = obsCtx;
+  if (c === null) return;
+  if (c.openStep === null) {
+    log(
+      `WARN: 观测配对异常：收到 step「${step}」（round=${round}）的 obsEnd，但当前无打开中的阶段——未写 end 事件（无 start 不伪造 end），业务不受影响。恢复动作：检查该 step 的 obsBegin/obsEnd 配对（是否重复调用或 start 路径提前离开）`,
+    );
+    return;
+  }
+  if (c.openStep.step !== step || c.openStep.round !== round) {
+    const open = c.openStep;
+    c.openStep = null;
+    log(
+      `WARN: 观测配对异常：收到 step「${step}」（round=${round}）的 obsEnd，但当前打开的是「${open.step}」（round=${open.round}）——已给实际打开阶段补记 end（outcome=abandoned），收到的 end 未写（无对应 start 不伪造），业务不受影响。恢复动作：检查两处调用的 step/round 实参是否写反或错位`,
+    );
+    await obsEmit(open.step, open.round, "end", "abandoned");
+    return;
+  }
+  c.openStep = null;
+  await obsEmit(step, round, "end", null);
+}
+
+/** withStage：串行阶段包装器（obsBegin → fn → obsEnd）。fn 内经收尾出口提前离开时
+ *  openStep 已被 obsCloseExecution 清空（end 已由终态统一补记），finally 不重复补
+ *  end；fn 抛异常且 step 仍打开 = 脚本级中断，finally 补 end（outcome=script-error） */
+async function withStage<T>(step: string, round: number | null, fn: () => Promise<T>): Promise<T> {
+  await obsBegin(step, round);
+  let didThrow = false;
+  try {
+    return await fn();
+  } catch (e) {
+    didThrow = true;
+    throw e;
+  } finally {
+    const c = obsCtx;
+    if (c !== null && c.openStep !== null && c.openStep.step === step) {
+      c.openStep = null;
+      await obsEmit(step, round, "end", didThrow ? "script-error" : null);
+    }
+  }
+}
+
+/** 终态统一补记：给打开中的 step 补记 end（带 outcome=本次执行终态）+ 写 execution
+ *  end。由终态统一出口调用（各 workflow 的 finish / 收尾段 / 启动期失败离开点） */
+async function obsCloseExecution(outcome: string): Promise<void> {
+  const c = obsCtx;
+  if (c === null) return;
+  const open = c.openStep;
+  c.openStep = null;
+  if (open !== null) await obsEmit(open.step, open.round, "end", outcome);
+  await obsEmit("execution", null, "end", outcome);
+}
+
 // W3 dev-consistency-loop — dev-flow-wf D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：
@@ -246,7 +493,16 @@ const HOST_PLATFORM = "zcode";
 // 环境变量（node -e 执行器只透传 argv）——绕过通道在结构上不存在。
 
 // ── 参数窄化与白名单 ──
-const VALID_ARG_KEYS = new Set(["execPlan", "maxRounds", "reviewerTemplate", "attempt"]);
+const VALID_ARG_KEYS = new Set([
+  "execPlan",
+  "maxRounds",
+  "reviewerTemplate",
+  "attempt",
+  // 观测（O 区，可选）：taskId+executionId 同时提供才启用（sampleType 默认 production）
+  "taskId",
+  "executionId",
+  "sampleType",
+]);
 for (const key of Object.keys(args)) {
   // `_` 前缀 = 宿主运行时私有键（如 taiji/pi 宿主注入的 _runId），不属于脚本契约，跳过白名单（2026-10-03 实测缺陷修复）
   if (!VALID_ARG_KEYS.has(key) && !key.startsWith("_")) {
@@ -779,9 +1035,33 @@ function normalizeFix(raw: unknown, source: string): FixReport {
 // ── 状态 ──
 let info: PrepInfo;
 const items: ItemRecord[] = [];
+// doc_errors 回流池：键 = 引擎分配的稳定编号（DE1、DE2…，与 unreasonable 的 U 编号同法、
+// 独立计数不串号），location/gap/申报理由全部作为 value 字段可更新。不用 `${location}||${gap}`
+// 文本串当键——聚合改判与 fixer skipped 转入会给 gap 加前缀（值变键不变），之后按值拼键
+// 删除永远落空，已修条目删不掉、下轮重复进修复组
 const docErrorPool = new Map<string, GapEntry>();
 const reasonablePool = new Map<string, ReasonableEntry>();
 let seq = 0;
+// doc_errors 编号计数（与 U 编号的 seq 分立，两套编号体系不串）
+let docSeq = 0;
+/** doc_errors 池唯一建档入口：分配稳定编号并落池，返回该编号。
+ *  同 location + 同 gap（压空白）视为同一条——刷新既有编号的 value 而非另开新号
+ *  （对齐旧文本键 set() 的覆盖去重语义：R1 跨分区重复申报、代码组转入与池内既有
+ *  条目同文时不重复建档，避免同一问题占两个 DE 号重复进修复组） */
+const addDocError = (e: GapEntry): string => {
+  const normGap = e.gap.replace(/\s+/g, " ").trim();
+  const hit = [...docErrorPool.entries()].find(
+    ([, d]) => d.location === e.location && d.gap.replace(/\s+/g, " ").trim() === normGap,
+  );
+  if (hit !== undefined) {
+    docErrorPool.set(hit[0], e);
+    return hit[0];
+  }
+  docSeq += 1;
+  const id = `DE${docSeq}`;
+  docErrorPool.set(id, e);
+  return id;
+};
 let reviewRound = 1;
 let gateALogPath: string | null = null;
 let foreignNote = ""; // 上轮越界改动说明（注入下轮全部修复组 prompt）
@@ -989,6 +1269,8 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
   } else {
     log("WARN: run.json 未落盘（startedAt 探针失败，防覆盖判据不可用）——终态数据以 status.json 与返回值为准");
   }
+  // 观测终态统一补记（O 区）：给打开中的 step（含 gate-a）补记 end + execution end（outcome=本次终态词）
+  await obsCloseExecution(terminated);
   return result;
 }
 
@@ -1018,6 +1300,15 @@ if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
 }
 const skillDataDir = `${homeRes.stdout.trim()}/.agents/skill-data/dev-flow/${slugRes.stdout.trim()}`;
 
+// ── 观测启用（O 区）：stage = D2（W3 一致性审查循环在 dev-flow 流程的阶段编号）。
+// execution start 从 home/slug 探针通过后起记；此前的启动期 throw 无观测覆盖，属已
+// 声明边界。启用后的启动期 throw（PREP 失败）先补记观测执行结束事件 ──
+obsCtx = initObservation("dev-flow-wf", "D2", attempt);
+if (obsCtx !== null) {
+  obsAttachHome(homeRes.stdout.trim());
+  await obsEmit("execution", null, "start", null);
+}
+
 // run manifest startedAt（循环启动时记录；探针失败 = 防覆盖判据不可用，终态时放弃写
 // run.json 只告警——终态数据以 status.json 与返回值为准）
 const startedAtRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
@@ -1026,6 +1317,7 @@ const runStartedAt =
 
 const prepRes = await world.run("node", ["-e", NODE_PREP_CODE, execPlanArg, reviewerTemplate, String(attempt), skillDataDir]);
 if (prepRes.exitCode !== 0) {
+  await obsCloseExecution("script-error");
   throw new Error(
     `exec-plan 解析 / 分区生成失败（exit ${prepRes.exitCode}）：${prepRes.stderr.trim() || prepRes.stdout.trim()}` +
       "——恢复动作：核对 execPlan 路径与必填字段（baseline / planPath / designDocPath / statusPath / testPlan.fullSuite），" +
@@ -1035,6 +1327,7 @@ if (prepRes.exitCode !== 0) {
 try {
   info = JSON.parse(prepRes.stdout) as PrepInfo;
 } catch {
+  await obsCloseExecution("script-error");
   throw new Error("PREP 输出非 JSON（不应发生）——请检查 node -e 执行环境");
 }
 toRel = makeToRel(info.projectRoot);
@@ -1255,6 +1548,7 @@ log(
 );
 
 let r1Norm: ReviewResult[];
+await obsBegin("review", 1);
 try {
   const r1Raw = await mapBatch(
     info.partitions,
@@ -1282,10 +1576,11 @@ try {
 }
 
 // ── 脚本聚合（无 LLM）：计数三分类 / unreasonable 建档（按分区边界成组）/
-// doc_errors·reasonable 收集回流池（key 去重，重复覆盖保最新表述）──
+// doc_errors·reasonable 收集回流池（reasonable 以文本键去重、重复覆盖保最新表述；
+// doc_errors 走 addDocError 稳定编号，见池定义处注释）──
 for (const v of r1Norm) {
   for (const e of v.reasonable) reasonablePool.set(`${e.location}||${e.summary}`, e);
-  for (const e of v.docErrors) docErrorPool.set(`${e.location}||${e.gap}`, e);
+  for (const e of v.docErrors) addDocError(e);
   for (const u of v.unreasonable) {
     const key = itemKey(u);
     // 跨区双报建档去重（设计「去重放弃」指不做跨区仲裁——同一身份键只建一条台账，
@@ -1312,6 +1607,7 @@ for (const v of r1Norm) {
 log(
   `R1 全面审查完成：unreasonable ${items.length} 条，doc_errors ${docErrorPool.size} 条，reasonable ${reasonablePool.size} 条`,
 );
+await obsEnd("review", 1);
 report({
   round: 1,
   active: items.length,
@@ -1350,6 +1646,7 @@ let gateOutcome: "pass" | "fail" | null = null;
 
 for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRound++) {
   phase("聚合定性");
+  await obsBegin("aggregate", fixRound);
   reviewRound = fixRound + 1;
   const roundActiveAll = activeItems();
   // 必填字段分流（老一致性纪律保留）：影响决策=否 且 影响交付=无 → 降级登记项，
@@ -1441,7 +1738,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
         }
       } else if (a.action === "reclassify-doc-error") {
         it.active = false;
-        docErrorPool.set(`${it.location}||${it.gap}`, {
+        addDocError({
           location: it.location,
           gap: `聚合定性改判 doc_error（${a.reason ?? ""}）：${it.gap}`,
           affectsDecision: it.affectsDecision,
@@ -1466,7 +1763,9 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     }
   }
 
+  await obsEnd("aggregate", fixRound);
   phase("并行修复与定向复审");
+  await obsBegin("fix", fixRound);
   // 组划分：聚合路由后的组归属（无聚合时 it.group 保持入池的分区边界——回退语义不变）
   const groupMap = new Map<string, ItemRecord[]>();
   for (const it of roundActive) {
@@ -1517,8 +1816,10 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
   //    = 修文档侧；方向两可的条目不满足该定义，走 fixer skipped 回流。此前整体回流主
   //    agent 的设计曾致已知条目跨阶段转手丢失：6 条 docErrors 移交终态同步后 planner
   //    漏扫，主 agent 手修兜底）──
-  const docEntries = [...docErrorPool.values()];
-  const docIds = new Map<string, GapEntry>();
+  // 池键即稳定编号（DE1…），prompt 清单直接用池键当条目 id——fixer 申报的 id 原样对应
+  // 池条目，修复成功删除/skipped 更新都按 id 操作（docIds 承担申报 id 有效性校验）
+  const docEntries = [...docErrorPool.entries()];
+  const docIds = new Set<string>(docErrorPool.keys());
   let docPrompt: string | null = null;
   if (docEntries.length > 0) {
     docPrompt = [
@@ -1528,11 +1829,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
       "",
       "待修条目清单：",
       docEntries
-        .map((d, i) => {
-          const id = `DE-${i + 1}`;
-          docIds.set(id, d);
-          return `- ${id} ${d.location}\n  差距：${d.gap}${d.fixHint ? `\n  修复提示：${d.fixHint}` : ""}`;
-        })
+        .map(([id, d]) => `- ${id} ${d.location}\n  差距：${d.gap}${d.fixHint ? `\n  修复提示：${d.fixHint}` : ""}`)
         .join("\n"),
       "",
       "约束：",
@@ -1613,21 +1910,22 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     } else {
       const fixedDocIds = new Set(docFix.fixes.map((f) => f.id));
       let fixedCount = 0;
-      for (const [id, d] of docIds) {
+      // 修复成功按稳定编号删除（申报 id 即池键）——文本拼键在 gap 被改写过时（聚合改判/
+      // fixer 申报理由前缀）恒落空，已修条目会重复进修复组
+      for (const id of docIds) {
         if (!fixedDocIds.has(id)) continue;
-        docErrorPool.delete(`${d.location}||${d.gap}`);
+        docErrorPool.delete(id);
         fixedCount += 1;
       }
-      // skipped 申报（fixer 核实方向两可 / 实现侧错误）：留池回流，gap 前缀承载申报理由
+      // skipped 申报（fixer 核实方向两可 / 实现侧错误）：留池回流，理由写进 value 的 gap
+      // 前缀（编号不动——键是稳定 id，value 字段可更新；下轮 prompt 渲染 values 时理由可见）。
+      // 重复 skipped 只保留最新一次理由（剥掉旧前缀再套新的——逐轮嵌套会让 gap 无限膨胀）
       for (const s of docFix.skipped) {
-        const d = docIds.get(s.id);
-        if (d === undefined) continue;
-        const key = `${d.location}||${d.gap}`;
-        const entry = docErrorPool.get(key);
-        if (entry !== undefined) {
-          docErrorPool.delete(key);
-          docErrorPool.set(`${d.location}||fixer 申报留回流（${s.reason}）：${d.gap}`, entry);
-        }
+        if (!docIds.has(s.id)) continue;
+        const entry = docErrorPool.get(s.id);
+        if (entry === undefined) continue;
+        const bareGap = entry.gap.replace(/^fixer 申报留回流（[^）]*）：/, "");
+        docErrorPool.set(s.id, { ...entry, gap: `fixer 申报留回流（${s.reason}）：${bareGap}` });
       }
       if (fixedCount > 0) fixesByGroup.push({ name: `文档修复-r${fixRound}`, fix: docFix });
       log(`文档修复组：当场修复 ${fixedCount} 条，留池回流 ${docIds.size - fixedCount} 条（方向两可 / 实现侧错误）`);
@@ -1637,14 +1935,15 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
   // ── 阶段 B：轮级核验（需要全体组申报——合法汇聚点）→ 逐组增量测试 → 逐组 commit ──
   // skipped 消费（fixerPrompt 纪律 2 的契约闭环）：fixer 申报「设计文档自身错误、不改
   // 代码」的条目 → 台账置不活跃（否则永远 active 空转烧轮次直到 stuck）+ 转 docErrorPool
-  // 随终态回流主 agent 亲修文档；复审若不同意（再报同 key）会按重开语义复活，闭环不受损
+  // 随终态回流主 agent 亲修文档；复审若不同意（实现确有问题）在 unreasonable 带 prevId
+  // 重报即重开该条目，闭环不受损
   for (const f of fixesByGroup) {
     for (const s of f.fix.skipped) {
       const it = items.find((i) => i.id === s.id && i.active);
       if (it === undefined) continue;
       it.active = false;
       it.fixHistory.push(`第${fixRound}轮 fixer 申报 skipped：${s.reason}——转 doc_errors 回流主 agent`);
-      docErrorPool.set(`${it.location}||${it.gap}`, {
+      addDocError({
         location: it.location,
         gap: `fixer 申报 skipped（${s.reason}）：${it.gap}`,
         affectsDecision: it.affectsDecision,
@@ -2054,7 +2353,14 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           newReports.push(u);
         }
       }
-      for (const e of g.review.docErrors) docErrorPool.set(`${e.location}||${e.gap}`, e);
+      // doc_errors 按 location 匹配已有池条目：同位置再报映射到既有编号刷新内容（最新
+      // 表述覆盖），不新开编号；池中无此位置（已修删除 / 首报）= 新建编号——复审不同意
+      // 转报后再报同位置，条目经此回到修复队列，闭环与旧文本键语义等价
+      for (const e of g.review.docErrors) {
+        const hit = [...docErrorPool.entries()].find(([, d]) => d.location === e.location);
+        if (hit !== undefined) docErrorPool.set(hit[0], e);
+        else addDocError(e);
+      }
       for (const e of g.review.reasonable) reasonablePool.set(`${e.location}||${e.summary}`, e);
     }
     for (const u of newReports) {
@@ -2105,9 +2411,12 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${contentActive.length}${processActiveCount > 0 ? `，已排除 ${processActiveCount} 条 [process] 流程类` : ""}）`
           : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${contentActive.length} 条${processActiveCount > 0 ? `，另有 ${processActiveCount} 条 [process] 流程类` : ""}）`;
       stuckPendingReason = `计数停机线触发：${why}${stubborn.length > 0 ? `；顽固条目（≥2 轮修复未清，优先人工裁决）：${stubborn.map((i) => `${i.id}（${i.location}，${i.uncleanRounds} 轮）`).join("、")}` : ""}——残留清单见 remaining / 顽固清单见 escalated 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`;
+      // break 跳过循环体尾的观测补记——此处显式补记本步 end 再跳出
+      await obsEnd("fix", fixRound);
       break;
     }
     prevActiveCount = contentActive.length;
+    await obsEnd("fix", fixRound);
   }
 }
 
@@ -2126,6 +2435,9 @@ const finishGateA = (gateFailNote: string): Promise<Awaited<ReturnType<typeof fi
     ? finish("stuck", reviewRound, `${stuckPendingReason}；Gate A 未能通过：${gateFailNote}`)
     : finish("gate-a-failed", reviewRound, gateFailNote);
 };
+
+// Gate A 无自然 end（结果直接进终态）——start 后由 finish 的观测统一补记（outcome=终态词）
+await obsBegin("gate-a", null);
 
 // 产物类并行预备（§6.1 条目 3）：Gate A 起始时并行启动全部产物类命令，禁止按清单顺序
 // 现用现建（2026-09-19 实测教训：real 轨首跑因磁盘产物过期被 launch 探针拒绝，重跑付一次全轮成本）

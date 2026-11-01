@@ -22,7 +22,16 @@
 // 环境变量（node -e 执行器只透传 argv）——绕过通道在结构上不存在。
 
 // ── 参数窄化与白名单 ──
-const VALID_ARG_KEYS = new Set(["execPlan", "maxRounds", "reviewerTemplate", "attempt"]);
+const VALID_ARG_KEYS = new Set([
+  "execPlan",
+  "maxRounds",
+  "reviewerTemplate",
+  "attempt",
+  // 观测（O 区，可选）：taskId+executionId 同时提供才启用（sampleType 默认 production）
+  "taskId",
+  "executionId",
+  "sampleType",
+]);
 for (const key of Object.keys(args)) {
   // `_` 前缀 = 宿主运行时私有键（如 taiji/pi 宿主注入的 _runId），不属于脚本契约，跳过白名单（2026-10-03 实测缺陷修复）
   if (!VALID_ARG_KEYS.has(key) && !key.startsWith("_")) {
@@ -555,9 +564,33 @@ function normalizeFix(raw: unknown, source: string): FixReport {
 // ── 状态 ──
 let info: PrepInfo;
 const items: ItemRecord[] = [];
+// doc_errors 回流池：键 = 引擎分配的稳定编号（DE1、DE2…，与 unreasonable 的 U 编号同法、
+// 独立计数不串号），location/gap/申报理由全部作为 value 字段可更新。不用 `${location}||${gap}`
+// 文本串当键——聚合改判与 fixer skipped 转入会给 gap 加前缀（值变键不变），之后按值拼键
+// 删除永远落空，已修条目删不掉、下轮重复进修复组
 const docErrorPool = new Map<string, GapEntry>();
 const reasonablePool = new Map<string, ReasonableEntry>();
 let seq = 0;
+// doc_errors 编号计数（与 U 编号的 seq 分立，两套编号体系不串）
+let docSeq = 0;
+/** doc_errors 池唯一建档入口：分配稳定编号并落池，返回该编号。
+ *  同 location + 同 gap（压空白）视为同一条——刷新既有编号的 value 而非另开新号
+ *  （对齐旧文本键 set() 的覆盖去重语义：R1 跨分区重复申报、代码组转入与池内既有
+ *  条目同文时不重复建档，避免同一问题占两个 DE 号重复进修复组） */
+const addDocError = (e: GapEntry): string => {
+  const normGap = e.gap.replace(/\s+/g, " ").trim();
+  const hit = [...docErrorPool.entries()].find(
+    ([, d]) => d.location === e.location && d.gap.replace(/\s+/g, " ").trim() === normGap,
+  );
+  if (hit !== undefined) {
+    docErrorPool.set(hit[0], e);
+    return hit[0];
+  }
+  docSeq += 1;
+  const id = `DE${docSeq}`;
+  docErrorPool.set(id, e);
+  return id;
+};
 let reviewRound = 1;
 let gateALogPath: string | null = null;
 let foreignNote = ""; // 上轮越界改动说明（注入下轮全部修复组 prompt）
@@ -765,6 +798,8 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
   } else {
     log("WARN: run.json 未落盘（startedAt 探针失败，防覆盖判据不可用）——终态数据以 status.json 与返回值为准");
   }
+  // 观测终态统一补记（O 区）：给打开中的 step（含 gate-a）补记 end + execution end（outcome=本次终态词）
+  await obsCloseExecution(terminated);
   return result;
 }
 
@@ -794,6 +829,15 @@ if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
 }
 const skillDataDir = `${homeRes.stdout.trim()}/.agents/skill-data/dev-flow/${slugRes.stdout.trim()}`;
 
+// ── 观测启用（O 区）：stage = D2（W3 一致性审查循环在 dev-flow 流程的阶段编号）。
+// execution start 从 home/slug 探针通过后起记；此前的启动期 throw 无观测覆盖，属已
+// 声明边界。启用后的启动期 throw（PREP 失败）先补记观测执行结束事件 ──
+obsCtx = initObservation("dev-flow-wf", "D2", attempt);
+if (obsCtx !== null) {
+  obsAttachHome(homeRes.stdout.trim());
+  await obsEmit("execution", null, "start", null);
+}
+
 // run manifest startedAt（循环启动时记录；探针失败 = 防覆盖判据不可用，终态时放弃写
 // run.json 只告警——终态数据以 status.json 与返回值为准）
 const startedAtRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
@@ -802,6 +846,7 @@ const runStartedAt =
 
 const prepRes = await world.run("node", ["-e", NODE_PREP_CODE, execPlanArg, reviewerTemplate, String(attempt), skillDataDir]);
 if (prepRes.exitCode !== 0) {
+  await obsCloseExecution("script-error");
   throw new Error(
     `exec-plan 解析 / 分区生成失败（exit ${prepRes.exitCode}）：${prepRes.stderr.trim() || prepRes.stdout.trim()}` +
       "——恢复动作：核对 execPlan 路径与必填字段（baseline / planPath / designDocPath / statusPath / testPlan.fullSuite），" +
@@ -811,6 +856,7 @@ if (prepRes.exitCode !== 0) {
 try {
   info = JSON.parse(prepRes.stdout) as PrepInfo;
 } catch {
+  await obsCloseExecution("script-error");
   throw new Error("PREP 输出非 JSON（不应发生）——请检查 node -e 执行环境");
 }
 toRel = makeToRel(info.projectRoot);
@@ -1031,6 +1077,7 @@ log(
 );
 
 let r1Norm: ReviewResult[];
+await obsBegin("review", 1);
 try {
   const r1Raw = await mapBatch(
     info.partitions,
@@ -1058,10 +1105,11 @@ try {
 }
 
 // ── 脚本聚合（无 LLM）：计数三分类 / unreasonable 建档（按分区边界成组）/
-// doc_errors·reasonable 收集回流池（key 去重，重复覆盖保最新表述）──
+// doc_errors·reasonable 收集回流池（reasonable 以文本键去重、重复覆盖保最新表述；
+// doc_errors 走 addDocError 稳定编号，见池定义处注释）──
 for (const v of r1Norm) {
   for (const e of v.reasonable) reasonablePool.set(`${e.location}||${e.summary}`, e);
-  for (const e of v.docErrors) docErrorPool.set(`${e.location}||${e.gap}`, e);
+  for (const e of v.docErrors) addDocError(e);
   for (const u of v.unreasonable) {
     const key = itemKey(u);
     // 跨区双报建档去重（设计「去重放弃」指不做跨区仲裁——同一身份键只建一条台账，
@@ -1088,6 +1136,7 @@ for (const v of r1Norm) {
 log(
   `R1 全面审查完成：unreasonable ${items.length} 条，doc_errors ${docErrorPool.size} 条，reasonable ${reasonablePool.size} 条`,
 );
+await obsEnd("review", 1);
 report({
   round: 1,
   active: items.length,
@@ -1126,6 +1175,7 @@ let gateOutcome: "pass" | "fail" | null = null;
 
 for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRound++) {
   phase("聚合定性");
+  await obsBegin("aggregate", fixRound);
   reviewRound = fixRound + 1;
   const roundActiveAll = activeItems();
   // 必填字段分流（老一致性纪律保留）：影响决策=否 且 影响交付=无 → 降级登记项，
@@ -1217,7 +1267,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
         }
       } else if (a.action === "reclassify-doc-error") {
         it.active = false;
-        docErrorPool.set(`${it.location}||${it.gap}`, {
+        addDocError({
           location: it.location,
           gap: `聚合定性改判 doc_error（${a.reason ?? ""}）：${it.gap}`,
           affectsDecision: it.affectsDecision,
@@ -1242,7 +1292,9 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     }
   }
 
+  await obsEnd("aggregate", fixRound);
   phase("并行修复与定向复审");
+  await obsBegin("fix", fixRound);
   // 组划分：聚合路由后的组归属（无聚合时 it.group 保持入池的分区边界——回退语义不变）
   const groupMap = new Map<string, ItemRecord[]>();
   for (const it of roundActive) {
@@ -1293,8 +1345,10 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
   //    = 修文档侧；方向两可的条目不满足该定义，走 fixer skipped 回流。此前整体回流主
   //    agent 的设计曾致已知条目跨阶段转手丢失：6 条 docErrors 移交终态同步后 planner
   //    漏扫，主 agent 手修兜底）──
-  const docEntries = [...docErrorPool.values()];
-  const docIds = new Map<string, GapEntry>();
+  // 池键即稳定编号（DE1…），prompt 清单直接用池键当条目 id——fixer 申报的 id 原样对应
+  // 池条目，修复成功删除/skipped 更新都按 id 操作（docIds 承担申报 id 有效性校验）
+  const docEntries = [...docErrorPool.entries()];
+  const docIds = new Set<string>(docErrorPool.keys());
   let docPrompt: string | null = null;
   if (docEntries.length > 0) {
     docPrompt = [
@@ -1304,11 +1358,7 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
       "",
       "待修条目清单：",
       docEntries
-        .map((d, i) => {
-          const id = `DE-${i + 1}`;
-          docIds.set(id, d);
-          return `- ${id} ${d.location}\n  差距：${d.gap}${d.fixHint ? `\n  修复提示：${d.fixHint}` : ""}`;
-        })
+        .map(([id, d]) => `- ${id} ${d.location}\n  差距：${d.gap}${d.fixHint ? `\n  修复提示：${d.fixHint}` : ""}`)
         .join("\n"),
       "",
       "约束：",
@@ -1389,21 +1439,22 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
     } else {
       const fixedDocIds = new Set(docFix.fixes.map((f) => f.id));
       let fixedCount = 0;
-      for (const [id, d] of docIds) {
+      // 修复成功按稳定编号删除（申报 id 即池键）——文本拼键在 gap 被改写过时（聚合改判/
+      // fixer 申报理由前缀）恒落空，已修条目会重复进修复组
+      for (const id of docIds) {
         if (!fixedDocIds.has(id)) continue;
-        docErrorPool.delete(`${d.location}||${d.gap}`);
+        docErrorPool.delete(id);
         fixedCount += 1;
       }
-      // skipped 申报（fixer 核实方向两可 / 实现侧错误）：留池回流，gap 前缀承载申报理由
+      // skipped 申报（fixer 核实方向两可 / 实现侧错误）：留池回流，理由写进 value 的 gap
+      // 前缀（编号不动——键是稳定 id，value 字段可更新；下轮 prompt 渲染 values 时理由可见）。
+      // 重复 skipped 只保留最新一次理由（剥掉旧前缀再套新的——逐轮嵌套会让 gap 无限膨胀）
       for (const s of docFix.skipped) {
-        const d = docIds.get(s.id);
-        if (d === undefined) continue;
-        const key = `${d.location}||${d.gap}`;
-        const entry = docErrorPool.get(key);
-        if (entry !== undefined) {
-          docErrorPool.delete(key);
-          docErrorPool.set(`${d.location}||fixer 申报留回流（${s.reason}）：${d.gap}`, entry);
-        }
+        if (!docIds.has(s.id)) continue;
+        const entry = docErrorPool.get(s.id);
+        if (entry === undefined) continue;
+        const bareGap = entry.gap.replace(/^fixer 申报留回流（[^）]*）：/, "");
+        docErrorPool.set(s.id, { ...entry, gap: `fixer 申报留回流（${s.reason}）：${bareGap}` });
       }
       if (fixedCount > 0) fixesByGroup.push({ name: `文档修复-r${fixRound}`, fix: docFix });
       log(`文档修复组：当场修复 ${fixedCount} 条，留池回流 ${docIds.size - fixedCount} 条（方向两可 / 实现侧错误）`);
@@ -1413,14 +1464,15 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
   // ── 阶段 B：轮级核验（需要全体组申报——合法汇聚点）→ 逐组增量测试 → 逐组 commit ──
   // skipped 消费（fixerPrompt 纪律 2 的契约闭环）：fixer 申报「设计文档自身错误、不改
   // 代码」的条目 → 台账置不活跃（否则永远 active 空转烧轮次直到 stuck）+ 转 docErrorPool
-  // 随终态回流主 agent 亲修文档；复审若不同意（再报同 key）会按重开语义复活，闭环不受损
+  // 随终态回流主 agent 亲修文档；复审若不同意（实现确有问题）在 unreasonable 带 prevId
+  // 重报即重开该条目，闭环不受损
   for (const f of fixesByGroup) {
     for (const s of f.fix.skipped) {
       const it = items.find((i) => i.id === s.id && i.active);
       if (it === undefined) continue;
       it.active = false;
       it.fixHistory.push(`第${fixRound}轮 fixer 申报 skipped：${s.reason}——转 doc_errors 回流主 agent`);
-      docErrorPool.set(`${it.location}||${it.gap}`, {
+      addDocError({
         location: it.location,
         gap: `fixer 申报 skipped（${s.reason}）：${it.gap}`,
         affectsDecision: it.affectsDecision,
@@ -1830,7 +1882,14 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           newReports.push(u);
         }
       }
-      for (const e of g.review.docErrors) docErrorPool.set(`${e.location}||${e.gap}`, e);
+      // doc_errors 按 location 匹配已有池条目：同位置再报映射到既有编号刷新内容（最新
+      // 表述覆盖），不新开编号；池中无此位置（已修删除 / 首报）= 新建编号——复审不同意
+      // 转报后再报同位置，条目经此回到修复队列，闭环与旧文本键语义等价
+      for (const e of g.review.docErrors) {
+        const hit = [...docErrorPool.entries()].find(([, d]) => d.location === e.location);
+        if (hit !== undefined) docErrorPool.set(hit[0], e);
+        else addDocError(e);
+      }
       for (const e of g.review.reasonable) reasonablePool.set(`${e.location}||${e.summary}`, e);
     }
     for (const u of newReports) {
@@ -1881,9 +1940,12 @@ for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRou
           ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${contentActive.length}${processActiveCount > 0 ? `，已排除 ${processActiveCount} 条 [process] 流程类` : ""}）`
           : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${contentActive.length} 条${processActiveCount > 0 ? `，另有 ${processActiveCount} 条 [process] 流程类` : ""}）`;
       stuckPendingReason = `计数停机线触发：${why}${stubborn.length > 0 ? `；顽固条目（≥2 轮修复未清，优先人工裁决）：${stubborn.map((i) => `${i.id}（${i.location}，${i.uncleanRounds} 轮）`).join("、")}` : ""}——残留清单见 remaining / 顽固清单见 escalated 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`;
+      // break 跳过循环体尾的观测补记——此处显式补记本步 end 再跳出
+      await obsEnd("fix", fixRound);
       break;
     }
     prevActiveCount = contentActive.length;
+    await obsEnd("fix", fixRound);
   }
 }
 
@@ -1902,6 +1964,9 @@ const finishGateA = (gateFailNote: string): Promise<Awaited<ReturnType<typeof fi
     ? finish("stuck", reviewRound, `${stuckPendingReason}；Gate A 未能通过：${gateFailNote}`)
     : finish("gate-a-failed", reviewRound, gateFailNote);
 };
+
+// Gate A 无自然 end（结果直接进终态）——start 后由 finish 的观测统一补记（outcome=终态词）
+await obsBegin("gate-a", null);
 
 // 产物类并行预备（§6.1 条目 3）：Gate A 起始时并行启动全部产物类命令，禁止按清单顺序
 // 现用现建（2026-09-19 实测教训：real 轨首跑因磁盘产物过期被 launch 探针拒绝，重跑付一次全轮成本）

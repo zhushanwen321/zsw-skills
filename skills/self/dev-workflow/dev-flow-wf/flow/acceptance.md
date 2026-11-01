@@ -17,7 +17,7 @@
 
 ## 执行形态
 
-**W2 第二实例化（zcode 默认）**：`CreateWorkflow saved: wave-executor, args: { execPlan }`（mode=acceptance——节点 = verify/inspect，D0 已编译）。verify 节点 fail → **run 内自愈循环**（设计 §8.7，主 agent 零介入）：归因（spec-bug / product-bug / environment）→ spec-bug 由 fixer 修复验收资产后重跑该节点；product-bug **不修**，按依赖可达性判定——fail 节点的 DAG 后继闭包非空（卡住后续验收）→ 立即停止派发熔断上报，闭包为空（不卡）→ 记录跳过、其余节点跑完统一上报；environment 重试一次。自愈不收敛（maxRounds=10）同闭包判定。主 agent 只裁决与重发起；workflow 内任何 agent 禁止向用户提问（T9）。
+**W2 第二实例化（zcode 默认）**：`CreateWorkflow saved: wave-executor, args: { execPlan, taskId, executionId }`（mode=acceptance——节点 = verify/inspect，D0 已编译；观测参数同 D1，executionId 建议用 `D3-<发起时点短时间戳>` 区分两实例化，SKILL「阶段事件观测」节）。verify 节点 fail → **run 内自愈循环**（设计 §8.7，主 agent 零介入）：归因（spec-bug / product-bug / environment）→ spec-bug 由 fixer 修复验收资产后重跑该节点；product-bug **不修**，按依赖可达性判定——fail 节点的 DAG 后继闭包非空（卡住后续验收）→ 立即停止派发熔断上报，闭包为空（不卡）→ 记录跳过、其余节点跑完统一上报；environment 重试一次。自愈不收敛（maxRounds=10）同闭包判定。主 agent 只裁决与重发起；workflow 内任何 agent 禁止向用户提问（T9）。
 
 **手工路径**：场景按 DAG 派发——L3 脚本（预编译剧本：操作 + 断言 + 全页截图 + console 抓取，产物落 `<name>.acceptance/<场景id>/`；项目有 verification skill 时剧本 = 其场景库资产，跑其 wrapper（D0 生成，见 compile.md §6）或 runner 直跑；剧本按 compile.md「每步汇总落盘」规范向 `<artifactsDir>/summary.jsonl` 追加逐步结果）并行跑；L4 判断型（任务书附确定性产物指针 + 逐节点 summary.jsonl 汇总路径——核对以汇总为准、仅异常步骤读全文日志）依赖其前驱；核心组先行（组内依赖拓扑 + 无共享状态并行 ≤5），核心全绿后非核心解锁；混合行已拆行（编译期）。
 
@@ -41,6 +41,7 @@
 7. **运行档案分流（SKILL「运行记录」节）**：read `<name>.runlog/` 全部文件与 `<name>.ledger.md`——ledger 未清项逐条分流到既有登记处（合理偏差 → impl-plan §5、残留风险 → impl-plan 残留风险节、决策 → ADR）或标注处置完成/记录丢弃理由，禁止档案与登记处双登记并存；runlog 有价值的过程发现（踩坑根因/方案取舍）择要进交付汇总作复盘素材；零未清项注明「档案已清」
 8. [OPTIONAL] 用户指示时产物清理（运行档案默认保留）
 9. **自动衔接 D5**：最终 commit 落地后进 `flow/sync.md`（仅用户明示跳过可免，跳过须记录）
+10. **阶段事件观测终态记录（SKILL「阶段事件观测」节）**：D4 开始时经 `~/.agents/scripts/workflow-observe.mjs` 记 `--stage D4 --step finalize` 的 start，本步收尾后记 end；随后记 `step=execution` 的 start/end 对结束本次执行（end 带 `--outcome <终态词>`）。D0/D6 同理（stage=D0 / D6）；W4 的 D5 未内建观测，其边界也按此方式由主 agent 记录
 
 ## 失败状态的可视边界
 

@@ -18,9 +18,11 @@
 
 ```
 CreateWorkflow saved: tech-review-loop
-args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workflow 内部归一为设计目录）>, projectRoot: <项目根绝对路径>, maxRounds?: 10, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件> }
+args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workflow 内部归一为设计目录）>, projectRoot: <项目根绝对路径>, maxRounds?: 10, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件>, taskId?: <设计包任务标识，建议 = 设计包 <name>>, executionId?: "T2-<发起时点短时间戳>" }
 终态: converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族）
 ```
+
+观测参数（taskId + executionId）同时传入即启用阶段事件观测（stage 恒 T2，落点与可选兼容语义见 SKILL「W1 workflow 契约」节）；不传业务照常。进 dev-flow-wf 执行时同一 task_id 延续共用，execution_id 换新段。
 
 终态处置（workflow 与手工路径同表）：
 

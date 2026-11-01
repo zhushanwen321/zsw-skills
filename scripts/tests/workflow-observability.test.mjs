@@ -1,0 +1,598 @@
+// workflow-observability.test.mjs — 观测机制独立局部测试
+//
+// 覆盖（对应实现：workflows/src/observability.shared.ts 单一观测层 + 两壳 O 区钩子 +
+// scripts/workflow-observe.mjs + scripts/build-workflows.mjs 观测契约检查与观测层拼接）：
+//   1. 双平台真实产物执行：zcode（transpile 后 vm 执行）与 pi（vm + require 注入）
+//      跑 tech-review-loop，断言 JSONL 事件序列（start/end、异常终态 outcome、字段契约）
+//   2. 可选观测兼容：不传观测参数不落盘；只传其一带可操作告警且不落盘；观测 ID 合法但
+//      业务参数缺失仍完整记录 execution 边界
+//   3. JSONL 路径安全：../ 形态 taskId 拒绝落盘
+//   4. 并发执行：不同 executionId 各写各文件互不串扰
+//   5. 观测层单元行为（单一源 + 壳钩子拼接执行）：正常 end / fn 抛异常补 script-error /
+//      阶段重叠披露 abandoned / obsCloseExecution 终态统一补记
+//   6. workflow-observe.mjs：start/end 契约、参数校验（含未知 flag 与超大整数）、
+//      --help 入口、outcome 约束、selftest
+//   7. 构建器：全量 --check 不漏检、--only 过滤
+//
+// 运行：node --test scripts/tests/workflow-observability.test.mjs
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import vm from "node:vm";
+import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const WF = join(ROOT, "skills/self/dev-workflow/workflows");
+const ts = require("typescript");
+
+const transpile = (code) =>
+  ts.transpileModule(code, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText;
+
+const tmpHome = () => mkdtempSync(join(tmpdir(), "wf-obs-test-"));
+
+/** 构造 tech-review-loop 走到「必读文件探针失败」（setup-failure）或更远所需的最小环境 */
+function makeSkillScaffold(home, withFakeSkill) {
+  const designDoc = join(home, "design");
+  const projectRoot = join(home, "proj");
+  mkdirSync(designDoc, { recursive: true });
+  mkdirSync(projectRoot, { recursive: true });
+  if (withFakeSkill) {
+    const agents = join(home, ".agents/skills/tech-design-wf/agents");
+    const refs = join(home, ".agents/skills/tech-design-wf/references");
+    const review = join(home, ".agents/skills/tech-design-wf/review");
+    const scripts = join(home, ".agents/skills/tech-design-wf/scripts");
+    for (const d of [agents, refs, review, scripts]) mkdirSync(d, { recursive: true });
+    for (const f of [
+      "tech-design-direction-review.md",
+      "tech-design-review.md",
+      "tech-design-impact-review.md",
+      "tech-design-simplicity-review.md",
+    ]) {
+      writeFileSync(join(agents, f), "# template\n");
+    }
+    writeFileSync(join(review, "rubric-design-doc.md"), "# rubric\n");
+    writeFileSync(join(refs, "principles.md"), "# principles\n");
+    writeFileSync(join(refs, "design-doc-schema.md"), "# schema\n");
+    // 假 CLI：exit 0 / 空输出（check-design-doc / render-design-doc / check-dispositions）
+    for (const f of ["check-design-doc.mjs", "render-design-doc.mjs", "check-dispositions.mjs"]) {
+      writeFileSync(join(scripts, f), "process.exit(0);\n");
+    }
+  }
+  return { designDoc, projectRoot };
+}
+
+const obsArgs = (taskId, executionId, extra = {}) => ({
+  taskId,
+  executionId,
+  ...(extra.sampleType !== undefined ? { sampleType: extra.sampleType } : {}),
+});
+
+/** zcode 产物执行器：transpile + vm，facade 全部由参数注入；world.run 真实 spawn（HOME 指向 home） */
+async function runZcodeArtifact(home, argsValue, agentImpl) {
+  const raw = readFileSync(join(WF, "tech-review-loop.dwf.ts"), "utf8");
+  const js = transpile(raw);
+  const logs = [];
+  const world = {
+    run: async (cmd, a, opts) => {
+      const r = spawnSync(cmd, a ?? [], {
+        encoding: "utf8",
+        cwd: home,
+        env: { ...process.env, HOME: home },
+        timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000,
+      });
+      return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+    },
+  };
+  const agent = agentImpl ?? (() => { throw new Error("测试场景不应派发 agent"); });
+  const fn = new vm.Script(`(async function __main__(args, world, log, phase, report, artifact, agent) {\n${js}\n})`)
+    .runInNewContext({});
+  const result = await fn(
+    argsValue,
+    world,
+    (m) => logs.push(String(m)),
+    () => {},
+    () => {},
+    { chart: () => {}, board: () => {}, markdown: async () => ({}), file: async () => ({}) },
+    agent,
+  );
+  return { result, logs };
+}
+
+/** pi 产物执行器：vm + require/$ARGS/$WORKSPACE 注入（pi 宿主注入形态） */
+async function runPiArtifact(home, argsValue, agentImpl) {
+  const raw = readFileSync(join(WF, "pi/tech-review-loop.js"), "utf8");
+  const logs = [];
+  const context = {
+    require,
+    console,
+    process: { env: { ...process.env, HOME: home }, cwd: () => home, stdout: process.stdout, stderr: process.stderr },
+    $ARGS: { ...argsValue },
+    $WORKSPACE: home,
+    agent: agentImpl ?? (() => { throw new Error("测试场景不应派发 agent"); }),
+    log: (m) => logs.push(String(m)),
+    phase: () => {},
+    report: () => {},
+    artifact: { chart: () => {}, board: () => {}, markdown: async () => ({}), file: async () => ({}) },
+  };
+  context.globalThis = context;
+  // pi 宿主以 `const args = $ARGS` 注入（产物不声明 args）——wrapper 里补该声明
+  const fn = new vm.Script(
+    `(async function __main__() {\nconst args = $ARGS;\n${raw}\n})`,
+  ).runInNewContext(context);
+  const result = await fn();
+  return { result, logs };
+}
+
+const readJsonl = (home, taskId, executionId) =>
+  readFileSync(join(home, ".agents/skill-data/workflow-observability", taskId, `${executionId}.jsonl`), "utf8")
+    .split("\n")
+    .filter((l) => l.trim() !== "")
+    .map((l) => JSON.parse(l));
+
+const obsFileExists = (home, taskId, executionId) =>
+  existsSync(join(home, ".agents/skill-data/workflow-observability", taskId, `${executionId}.jsonl`));
+
+const NINE_FIELDS = [
+  "execution_id", "task_id", "skill", "stage", "step", "round", "attempt", "event", "timestamp", "sample_type",
+];
+
+function assertContract(rec, overrides = {}) {
+  for (const f of NINE_FIELDS) assert.ok(f in rec, `事件缺契约字段 ${f}: ${JSON.stringify(rec)}`);
+  assert.ok(rec.event === "start" || rec.event === "end");
+  assert.ok(!Number.isNaN(Date.parse(rec.timestamp)), `timestamp 非 ISO8601: ${rec.timestamp}`);
+  assert.ok(rec.sample_type === "production" || rec.sample_type === "selftest");
+  for (const [k, v] of Object.entries(overrides)) assert.equal(rec[k], v, `字段 ${k} 期望 ${JSON.stringify(v)}，实际 ${JSON.stringify(rec[k])}`);
+}
+
+// ── 1. 双平台真实产物：setup-failure 异常终态（必读文件缺失）──
+
+const setupFailureExpect = (taskId) => [
+  { event: "start", step: "execution" },
+  { event: "start", step: "setup" },
+  { event: "end", step: "setup", outcome: "setup-failure" },
+  { event: "end", step: "execution", outcome: "setup-failure" },
+];
+
+test("zcode 产物：setup-failure 终态的观测事件序列与字段契约", async () => {
+  const home = tmpHome();
+  try {
+    const { designDoc, projectRoot } = makeSkillScaffold(home, false);
+    const { result } = await runZcodeArtifact(home, {
+      designDoc, projectRoot, ...obsArgs("t-zc", "e-sf", { sampleType: "selftest" }),
+    });
+    assert.equal(result.terminated, "setup-failure");
+    const lines = readJsonl(home, "t-zc", "e-sf");
+    assert.equal(lines.length, 4);
+    lines.forEach((rec, i) => {
+      const want = setupFailureExpect()[i];
+      assert.equal(rec.event, want.event, `行 ${i} event`);
+      assert.equal(rec.step, want.step, `行 ${i} step`);
+      if (want.outcome !== undefined) assert.equal(rec.outcome, want.outcome, `行 ${i} outcome`);
+      else assert.ok(!("outcome" in rec), `行 ${i} 不应带 outcome`);
+      assertContract(rec, {
+        task_id: "t-zc", execution_id: "e-sf", skill: "tech-design-wf", stage: "T2",
+        sample_type: "selftest",
+        round: want.step === "review" ? 1 : null,
+      });
+      // attempt 字段语义 = 事件时点的重发起序号：start 事件先于 attempt 自动检测（null），
+      // end 事件由终态统一补记（attempt 已回填 = 1）
+      assert.equal(rec.attempt, want.event === "end" ? 1 : null, `行 ${i} attempt`);
+    });
+    assert.ok(!("outcome" in lines[0] || "outcome" in lines[1]), "start 事件不带 outcome");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("pi 产物：setup-failure 终态的观测事件序列与 zcode 对拍一致", async () => {
+  const home = tmpHome();
+  const prevHome = process.env.HOME;
+  process.env.HOME = home; // pi 壳 world.run 走 spawnSync 继承进程 env
+  try {
+    const { designDoc, projectRoot } = makeSkillScaffold(home, false);
+    const { result } = await runPiArtifact(home, {
+      designDoc, projectRoot, ...obsArgs("t-pi", "e-sf"),
+    });
+    assert.equal(result.terminated, "setup-failure");
+    const zcHome = tmpHome();
+    try {
+      const scaffold = makeSkillScaffold(zcHome, false);
+      await runZcodeArtifact(zcHome, { designDoc: scaffold.designDoc, projectRoot: scaffold.projectRoot, ...obsArgs("t-pi", "e-sf") });
+      const piLines = readJsonl(home, "t-pi", "e-sf").map(({ timestamp, ...rest }) => rest);
+      const zcLines = readJsonl(zcHome, "t-pi", "e-sf").map(({ timestamp, ...rest }) => rest);
+      assert.deepEqual(piLines, zcLines, "双平台事件（除 timestamp）应逐字段一致");
+    } finally {
+      rmSync(zcHome, { recursive: true, force: true });
+    }
+  } finally {
+    process.env.HOME = prevHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ── 2. 自然 end 与中断 end 并存：假 skill 走到四席审查（stub agent 不写报告 → review-failure）──
+
+test("zcode 产物：setup 自然 end（无 outcome）+ review 由终态统一补记（outcome=review-failure）", async () => {
+  const home = tmpHome();
+  try {
+    const { designDoc, projectRoot } = makeSkillScaffold(home, true);
+    const reviewerReturn = { mustFix: 0, fixScope: "patch", problems: [], reconciliation: [], oneliner: "smoke" };
+    const agent = (name) => ({ ask: async () => ({ ...reviewerReturn }) });
+    const { result } = await runZcodeArtifact(home, {
+      designDoc, projectRoot, ...obsArgs("t-zc", "e-rv"),
+    }, agent);
+    assert.equal(result.terminated, "review-failure");
+    const lines = readJsonl(home, "t-zc", "e-rv");
+    assert.deepEqual(
+      lines.map((l) => ({ event: l.event, step: l.step, round: l.round, outcome: l.outcome })),
+      [
+        { event: "start", step: "execution", round: null, outcome: undefined },
+        { event: "start", step: "setup", round: null, outcome: undefined },
+        { event: "end", step: "setup", round: null, outcome: undefined },
+        { event: "start", step: "review", round: 1, outcome: undefined },
+        { event: "end", step: "review", round: 1, outcome: "review-failure" },
+        { event: "end", step: "execution", round: null, outcome: "review-failure" },
+      ],
+    );
+    assert.ok(lines[2].outcome === undefined, "自然完成的 setup end 不带 outcome");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ── 3. 可选观测兼容 ──
+
+test("观测 ID 合法但业务参数缺失：execution 边界完整（参数失败早退不漏记）", async () => {
+  const home = tmpHome();
+  try {
+    const { projectRoot } = makeSkillScaffold(home, false);
+    // designDoc 缺失 → deriveInputs 参数校验失败早退（早于常规业务阶段）；
+    // 观测形态层先于参数窄化启用——仍须有完整 execution start/end
+    const { result, logs } = await runZcodeArtifact(home, {
+      projectRoot, ...obsArgs("t-parm", "e-parm"),
+    });
+    assert.equal(result.terminated, "setup-failure");
+    assert.ok(result.message.includes("参数校验失败"), "业务终态应保留参数校验失败原因");
+    const lines = readJsonl(home, "t-parm", "e-parm");
+    assert.deepEqual(
+      lines.map((l) => ({ event: l.event, step: l.step, outcome: l.outcome })),
+      [
+        { event: "start", step: "execution", outcome: undefined },
+        { event: "start", step: "setup", outcome: undefined },
+        { event: "end", step: "setup", outcome: "setup-failure" },
+        { event: "end", step: "execution", outcome: "setup-failure" },
+      ],
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("projectRoot 不存在：slug 探针失败早退仍有 4 行完整事件（真实 run dwfrun-e3741b98 漏记回归）", async () => {
+  const home = tmpHome();
+  try {
+    const { designDoc } = makeSkillScaffold(home, false);
+    const missingRoot = join(home, "no-such-root");
+    const { result } = await runZcodeArtifact(home, {
+      designDoc, projectRoot: missingRoot, ...obsArgs("t-slug", "e-slug"),
+    });
+    assert.equal(result.terminated, "setup-failure");
+    assert.ok(result.message.includes("projectRoot 无法解析为项目 slug"), result.message);
+    const lines = readJsonl(home, "t-slug", "e-slug");
+    assert.deepEqual(
+      lines.map((l) => ({ event: l.event, step: l.step, outcome: l.outcome })),
+      [
+        { event: "start", step: "execution", outcome: undefined },
+        { event: "start", step: "setup", outcome: undefined },
+        { event: "end", step: "setup", outcome: "setup-failure" },
+        { event: "end", step: "execution", outcome: "setup-failure" },
+      ],
+    );
+    // slug 探针先于 attempt 自动检测——全部事件 attempt=null（字段语义 = 事件时点值）
+    assert.ok(lines.every((l) => l.attempt === null), `attempt 应全为 null：${JSON.stringify(lines.map((l) => l.attempt))}`);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("不传观测参数：业务照常（setup-failure）且不产生观测文件", async () => {
+  const home = tmpHome();
+  try {
+    const { designDoc, projectRoot } = makeSkillScaffold(home, false);
+    const { result, logs } = await runZcodeArtifact(home, { designDoc, projectRoot });
+    assert.equal(result.terminated, "setup-failure");
+    const obsRoot = join(home, ".agents/skill-data/workflow-observability");
+    assert.ok(!existsSync(obsRoot), "不应创建观测根目录");
+    assert.ok(!logs.some((l) => l.includes("WARN: 观测")), "合法关闭不告警");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("只传 taskId：可操作告警且不落盘", async () => {
+  const home = tmpHome();
+  try {
+    const { designDoc, projectRoot } = makeSkillScaffold(home, false);
+    const { result, logs } = await runZcodeArtifact(home, {
+      designDoc, projectRoot, taskId: "t-only",
+    });
+    assert.equal(result.terminated, "setup-failure", "观测参数缺失不改变业务终态");
+    assert.ok(logs.some((l) => l.includes("观测参数不完整") && l.includes("恢复动作")), `告警应含原因与恢复动作：${logs.join("\n")}`);
+    assert.ok(!existsSync(join(home, ".agents/skill-data/workflow-observability")));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("路径穿越形态 taskId（../evil）：拒绝落盘且观测根外无写入", async () => {
+  const home = tmpHome();
+  try {
+    const { designDoc, projectRoot } = makeSkillScaffold(home, false);
+    const { result, logs } = await runZcodeArtifact(home, {
+      designDoc, projectRoot, ...obsArgs("../evil", "e-x"),
+    });
+    assert.equal(result.terminated, "setup-failure");
+    assert.ok(logs.some((l) => l.includes("路径不安全字符") && l.includes("恢复动作")));
+    assert.ok(!existsSync(join(home, ".agents/skill-data/workflow-observability")));
+    assert.ok(!existsSync(join(home, "evil")), "穿越目标目录不得被创建");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("sampleType 非法：告警并关闭观测", async () => {
+  const home = tmpHome();
+  try {
+    const { designDoc, projectRoot } = makeSkillScaffold(home, false);
+    const { logs } = await runZcodeArtifact(home, {
+      designDoc, projectRoot, ...obsArgs("t-bad", "e-bad", { sampleType: "staging" }),
+    });
+    assert.ok(logs.some((l) => l.includes("sampleType") && l.includes("恢复动作")));
+    assert.ok(!existsSync(join(home, ".agents/skill-data/workflow-observability")));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ── 4. 并发执行不同文件 ──
+
+test("并发两次执行（不同 executionId）：各自 JSONL 完整互不串扰", async () => {
+  const home = tmpHome();
+  try {
+    const { designDoc, projectRoot } = makeSkillScaffold(home, false);
+    const run = (exec) => runZcodeArtifact(home, { designDoc, projectRoot, ...obsArgs("t-par", exec) });
+    await Promise.all([run("e-a"), run("e-b"), run("e-c")]);
+    for (const exec of ["e-a", "e-b", "e-c"]) {
+      const lines = readJsonl(home, "t-par", exec);
+      assert.equal(lines.length, 4, `${exec} 应有完整 4 条事件`);
+      assert.ok(lines.every((l) => l.execution_id === exec));
+    }
+    assert.equal(readdirSync(join(home, ".agents/skill-data/workflow-observability/t-par")).length, 3);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ── 5. 观测层单元行为（单一构建输入 observability.shared.ts + 壳钩子拼接执行）──
+
+test("withStage/obsBegin/obsCloseExecution：正常 end、fn 抛异常补 script-error、阶段重叠披露 abandoned、终态统一补记", async () => {
+  const home = tmpHome();
+  try {
+    // 直接消费单一构建输入全文（与产物同一份文本，非测试内复制）
+    const layerSrc = readFileSync(join(WF, "src/observability.shared.ts"), "utf8");
+    const shellSrc = readFileSync(join(WF, "src/tech-review-loop.zcode.tpl.ts"), "utf8");
+    const hookStart = shellSrc.indexOf("// ── O 区观测平台钩子");
+    const hookEnd = shellSrc.indexOf("@@STITCH@@");
+    assert.ok(hookStart > 0 && hookEnd > hookStart, "壳 O 区锚点定位失败");
+    const code = transpile(`${shellSrc.slice(hookStart, hookEnd)}\n${layerSrc}`);
+    const logs = [];
+    const world = {
+      run: async (cmd, a) => {
+        const r = spawnSync(cmd, a ?? [], { encoding: "utf8", env: { ...process.env, HOME: home } });
+        return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+      },
+    };
+    const ctx = { args: { taskId: "t-ws", executionId: "e-ws" } };
+    const fn = new vm.Script(
+      `(async function __main__(args, world, log) {\n${code}\n
+       obsCtx = initObservation("tech-design-wf", "T2", null);
+       obsAttachHome(${JSON.stringify(home)});
+       await obsEmit("execution", null, "start", null);
+       // withStage 正常路径
+       await withStage("setup", null, async () => "ok");
+       // withStage 抛异常路径（end 带 script-error）
+       await withStage("review", 1, async () => { throw new Error("boom"); }).then(
+         () => { throw new Error("withStage 应向调用方传播异常"); },
+         () => {},
+       );
+       // 阶段重叠：fix 未结束即开 gate-a → 前一阶段补记 end（outcome=abandoned）+ 告警
+       await obsBegin("fix", 2);
+       await obsBegin("gate-a", null);
+       // 打开 step 不关闭 → 终态统一补记 end（带 outcome）
+       await obsCloseExecution("converged");
+       })`,
+    ).runInNewContext(ctx);
+    await fn(ctx.args, world, (m) => logs.push(String(m)));
+    const lines = readJsonl(home, "t-ws", "e-ws");
+    assert.deepEqual(
+      lines.map((l) => ({ event: l.event, step: l.step, round: l.round, outcome: l.outcome })),
+      [
+        { event: "start", step: "execution", round: null, outcome: undefined },
+        { event: "start", step: "setup", round: null, outcome: undefined },
+        { event: "end", step: "setup", round: null, outcome: undefined },
+        { event: "start", step: "review", round: 1, outcome: undefined },
+        { event: "end", step: "review", round: 1, outcome: "script-error" },
+        { event: "start", step: "fix", round: 2, outcome: undefined },
+        { event: "end", step: "fix", round: 2, outcome: "abandoned" },
+        { event: "start", step: "gate-a", round: null, outcome: undefined },
+        { event: "end", step: "gate-a", round: null, outcome: "converged" },
+        { event: "end", step: "execution", round: null, outcome: "converged" },
+      ],
+    );
+    assert.ok(
+      logs.some((l) => l.includes("观测阶段重叠") && l.includes("abandoned") && l.includes("恢复动作")),
+      `阶段重叠须显式披露且含恢复动作：${logs.join("\n")}`,
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("obsEnd 配对检查：错名/round 错位给实际打开阶段补 abandoned、重复 end 不伪造事件", async () => {
+  const home = tmpHome();
+  try {
+    const layerSrc = readFileSync(join(WF, "src/observability.shared.ts"), "utf8");
+    const shellSrc = readFileSync(join(WF, "src/tech-review-loop.zcode.tpl.ts"), "utf8");
+    const hookStart = shellSrc.indexOf("// ── O 区观测平台钩子");
+    const hookEnd = shellSrc.indexOf("@@STITCH@@");
+    const code = transpile(`${shellSrc.slice(hookStart, hookEnd)}\n${layerSrc}`);
+    const logs = [];
+    const world = {
+      run: async (cmd, a) => {
+        const r = spawnSync(cmd, a ?? [], { encoding: "utf8", env: { ...process.env, HOME: home } });
+        return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+      },
+    };
+    const ctx = { args: { taskId: "t-pair", executionId: "e-pair" } };
+    const fn = new vm.Script(
+      `(async function __main__(args, world, log) {\n${code}\n
+       obsCtx = initObservation("tech-design-wf", "T2", null);
+       obsAttachHome(${JSON.stringify(home)});
+       await obsEmit("execution", null, "start", null);
+       // 错名 + round 错位：实际打开 fix(2)，收到 review(1) 的 end
+       await obsBegin("fix", 2);
+       await obsEnd("review", 1);
+       // 无打开阶段：重复 end
+       await obsEnd("review", 1);
+       // 正常配对（对照：自然 end 语义不变）
+       await obsBegin("fix", 3);
+       await obsEnd("fix", 3);
+       await obsEnd("fix", 3);
+       await obsCloseExecution("converged");
+       })`,
+    ).runInNewContext(ctx);
+    await fn(ctx.args, world, (m) => logs.push(String(m)));
+    const lines = readJsonl(home, "t-pair", "e-pair");
+    assert.deepEqual(
+      lines.map((l) => ({ event: l.event, step: l.step, round: l.round, outcome: l.outcome })),
+      [
+        { event: "start", step: "execution", round: null, outcome: undefined },
+        { event: "start", step: "fix", round: 2, outcome: undefined },
+        { event: "end", step: "fix", round: 2, outcome: "abandoned" },
+        { event: "start", step: "fix", round: 3, outcome: undefined },
+        { event: "end", step: "fix", round: 3, outcome: undefined },
+        { event: "end", step: "execution", round: null, outcome: "converged" },
+      ],
+    );
+    const mismatchWarn = logs.find((l) => l.includes("观测配对异常") && l.includes("当前打开的是"));
+    const dupWarn = logs.find((l) => l.includes("观测配对异常") && l.includes("无打开中的阶段"));
+    assert.ok(mismatchWarn && mismatchWarn.includes("恢复动作"), `错名 end 须披露且含恢复动作：${logs.join("\n")}`);
+    assert.ok(dupWarn && dupWarn.includes("恢复动作"), `重复 end 须披露且含恢复动作：${logs.join("\n")}`);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ── 6. workflow-observe.mjs ──
+
+const runObserve = (home, args) =>
+  spawnSync(process.execPath, [join(ROOT, "scripts/workflow-observe.mjs"), ...args], {
+    encoding: "utf8",
+    env: { ...process.env, HOME: home },
+  });
+
+test("workflow-observe.mjs：start/end 写同一 JSONL、契约字段与 workflow 内建一致", () => {
+  const home = tmpHome();
+  try {
+    const base = ["--task-id", "t-cli", "--execution-id", "e-cli", "--skill", "dev-flow-wf", "--stage", "D0", "--step", "compile"];
+    let r = runObserve(home, ["start", ...base, "--attempt", "1", "--sample-type", "selftest"]);
+    assert.equal(r.status, 0, r.stderr);
+    r = runObserve(home, ["end", ...base, "--attempt", "1", "--sample-type", "selftest", "--outcome", "completed"]);
+    assert.equal(r.status, 0, r.stderr);
+    const lines = readJsonl(home, "t-cli", "e-cli");
+    assert.equal(lines.length, 2);
+    assert.deepEqual(
+      lines.map((l) => ({ event: l.event, step: l.step, outcome: l.outcome })),
+      [
+        { event: "start", step: "compile", outcome: undefined },
+        { event: "end", step: "compile", outcome: "completed" },
+      ],
+    );
+    lines.forEach((l) => assertContract(l, { task_id: "t-cli", execution_id: "e-cli", skill: "dev-flow-wf", stage: "D0", sample_type: "selftest", attempt: 1, round: null }));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("workflow-observe.mjs：用法错误 exit 2 且不落盘（非法 ID / start 带 outcome / 缺必填 / 坏 round）", () => {
+  const home = tmpHome();
+  try {
+    const cases = [
+      ["start", "--task-id", "../evil", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P"],
+      ["start", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P", "--outcome", "x"],
+      ["start", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G"],
+      ["start", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P", "--round", "abc"],
+      ["start", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P", "--round", "99999999999999999999"],
+      ["start", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P", "--unknown-flag", "v"],
+      ["restart", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P"],
+      ["end", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P", "--sample-type", "staging"],
+    ];
+    for (const c of cases) {
+      const r = runObserve(home, c);
+      assert.equal(r.status, 2, `应 exit 2：${c.join(" ")}\nstdout=${r.stdout}\nstderr=${r.stderr}`);
+      assert.ok(r.stderr.includes("恢复动作"), `错误信息应含恢复动作：${r.stderr}`);
+    }
+    assert.ok(!existsSync(join(home, ".agents/skill-data/workflow-observability")));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("workflow-observe.mjs：裸 --help / -h 打印用法 exit 0（先于子命令校验）", () => {
+  const home = tmpHome();
+  try {
+    for (const flag of ["--help", "-h"]) {
+      const r = runObserve(home, [flag]);
+      assert.equal(r.status, 0, `--help 应 exit 0：${flag}\nstderr=${r.stderr}`);
+      assert.ok(r.stdout.includes("用法"), r.stdout);
+    }
+    assert.ok(!existsSync(join(home, ".agents/skill-data/workflow-observability")));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ── 7. 构建器 ──
+
+test("构建器：全量 --check 不漏检（四个 workflow 全部出现在校验输出，三安全产物一致）", () => {
+  // 断言口径：全量 --check 必须覆盖全部四个 workflow（不悄悄漏检禁碰文件）且三个安全
+  // workflow 产物一致。design-code-sync-loop 的整体 exit code 不在此断言——其 shared 存在
+  // 非本测试管辖的在途改动，产物可能处于过期状态（由该改动的维护方构建），本测试只验证
+  // 检查行为本身不漏检
+  const r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
+  for (const name of ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop"]) {
+    assert.ok(r.stdout.includes(name), `全量 --check 输出须覆盖 ${name}（不得漏检）`);
+  }
+  for (const name of ["tech-review-loop", "wave-executor", "dev-consistency-loop"]) {
+    assert.ok(r.stdout.includes(`${name}.dwf.ts（一致）`), `${name} 产物应一致：\n${r.stdout}\n${r.stderr}`);
+  }
+  assert.ok(r.stdout.includes("未接入观测"), "未接入观测的 workflow 应显式说明而非静默跳过");
+});
+
+test("构建器：--only 未知名报错 exit 2；--only 三个安全 workflow 构建绿", () => {
+  let r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "no-such"], { encoding: "utf8" });
+  assert.equal(r.status, 2);
+  assert.ok(r.stderr.includes("未知 workflow 名"), r.stderr);
+  r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "tech-review-loop,wave-executor,dev-consistency-loop"], { encoding: "utf8" });
+  assert.equal(r.status, 0, `--only 构建应绿：\n${r.stdout}\n${r.stderr}`);
+  assert.ok(r.stdout.includes("--only 生效"), r.stdout);
+  assert.ok(r.stdout.includes("观测契约"), "构建应输出观测契约核对结果");
+});

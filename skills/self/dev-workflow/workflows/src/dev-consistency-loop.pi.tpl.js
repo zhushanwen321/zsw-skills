@@ -23,6 +23,15 @@ parameters:
       type: number
       default: 1
       description: "重发起序号（status.json events 追加保留历史不覆盖；attempt > 1 时 Gate A 日志命名带 .attemptM 后缀防覆盖上轮日志）"
+    taskId:
+      type: string
+      description: "观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」"
+    executionId:
+      type: string
+      description: "本次执行标识（可选；与 taskId 同时提供才启用阶段事件观测）。同时是观测 JSONL 文件名主干（<executionId>.jsonl）——命名规则同 taskId"
+    sampleType:
+      type: string
+      description: "观测样本类型（可选）——production = 真实执行（缺省）/ selftest = 测试执行"
   required: [execPlan]
 */
 
@@ -219,5 +228,30 @@ const HINT_R1_FAILED = "读 run 日志定位失败分区，修订脚本后重发
 // ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
 // 硬编码，两壳各持常量）──
 const HOST_PLATFORM = "pi";
+
+// ── O 区观测平台钩子：写通道 = world.run（shim 内 spawnSync；无 journal 重放语义，每次 run 实写）。
+// shared 观测层调用 obsNow/obsAppend；换平台只换钩子实现，事件契约在 shared ──
+const OBS_PROBE_NOW = "process.stdout.write(new Date().toISOString())";
+const OBS_APPEND_LINE =
+  "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});" +
+  "require('fs').appendFileSync(process.argv[1],process.argv[2]+'\\n')";
+async function obsNow() {
+  try {
+    const r = await world.run("node", ["-e", OBS_PROBE_NOW]);
+    const t = r.exitCode === 0 ? r.stdout.trim() : "";
+    return t !== "" ? t : null;
+  } catch (e) {
+    // 执行器故障（spawn 失败/超时）：观测降级为不记录该事件，业务不受影响
+    return null;
+  }
+}
+async function obsAppend(filePath, line) {
+  try {
+    const r = await world.run("node", ["-e", OBS_APPEND_LINE, filePath, line]);
+    return r.exitCode === 0 ? null : `exit ${r.exitCode}：${r.stderr.trim() || r.stdout.trim()}`;
+  } catch (e) {
+    return (e && e.message) || String(e);
+  }
+}
 
 @@STITCH@@
