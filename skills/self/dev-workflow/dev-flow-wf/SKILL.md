@@ -80,16 +80,16 @@ description: >-
 | 字段 | 含义 |
 |------|------|
 | `task_id` / `execution_id` | 任务标识 / 单次执行标识（同时是落盘目录名与文件名主干；命名规则：字母或数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」——防路径穿越，非法即告警并关闭观测） |
-| `skill` / `stage` / `step` | 所属技能的 canonical 名（tech-design-wf / dev-flow-wf——统计按它过滤，禁止写 workflow 脚本名）/ 流程阶段编号（D0-D6、T2）/ 阶段内步骤（execution / setup / review / aggregate / fix / execute / finalize / gate-a，外部步骤自定） |
+| `skill` / `stage` / `step` | 所属技能的 canonical 名（tech-design-wf / dev-flow-wf——统计按它过滤，禁止写 workflow 脚本名）/ 流程阶段编号（D0-D6、T2）/ 阶段内步骤（execution / setup / review / aggregate / fix / execute / finalize / gate-a / retire，外部步骤自定） |
 | `round` / `attempt` | 循环轮次 / 重发起序号（无则 null；attempt 在启动早期自动检测未完成时也为 null，检测确定后其后的事件带值） |
 | `event` / `timestamp` / `sample_type` | start 或 end / ISO8601 / production（真实执行，缺省）或 selftest（测试执行） |
 | `outcome`（可选） | 仅出现在终态统一补记的 end 上，值 = 本次执行的终态词（如 completed / converged / blocked / setup-failure） |
 
-**生成与传递**：`task_id` 由主 agent 在 D0 编译时分配（建议 = 设计包 `<name>`），同一任务的 D0/D1/D2/D3/D4/D6 全段共用；`execution_id` 每次发起一个新的执行时分配（建议 = `<段名>-<发起时点短时间戳>`），同一 execution_id 的多次重发起共用（attempt 字段区分轮次）。W2（D1/D3）与 W3（D2）已内建：发起时 args 同时传 `taskId` 与 `executionId` 即启用，stage 自动记录（D1/D3 按 exec-plan 的 mode 区分，D2 恒 D2），每轮循环的 review/aggregate/fix/gate-a 步骤边界由引擎写入。
+**生成与传递**：`task_id` 由主 agent 在 D0 编译时分配（建议 = 设计包 `<name>`），同一任务的 D0/D1/D2/D3/D4/D6 全段共用；`execution_id` 每次发起一个新的执行时分配（建议 = `<段名>-<发起时点短时间戳>`），同一 execution_id 的多次重发起共用（attempt 字段区分轮次）。W2（D1/D3）、W3（D2）与 W4（D5）已内建：发起时 args 同时传 `taskId` 与 `executionId` 即启用，stage 自动记录（D1/D3 按 exec-plan 的 mode 区分，D2 恒 D2，D5 恒 D5），步骤边界由引擎写入——W2 的 setup/finalize、W3 每轮的 review/aggregate/fix/gate-a、W4 的 setup（环境校验/矩阵初始化/框架对照规划）/review（机械信号扫描 + 并行模块审查，R2+ 含聚焦复审）/fix（并行修复）/retire（退役判定）/finalize（轮次耗尽收尾）。
 
 **可选兼容**：两参都不传 = 观测关闭、业务照常（存量调用不受影响）；只传其一 = 告警（含恢复动作）并关闭，不猜测意图；观测写失败 = 告警（同一文件只告警一次）不改业务终态——观测是辅助功能，故障不拖垮主流程。
 
-**workflow 外步骤（D0/D4/D6 与 W4 的 D5）由主 agent 用观测命令记录边界**，契约与内建观测完全一致。统一运行入口 = `~/.agents/scripts/workflow-observe.mjs`（dev-flow-wf 可在任意项目运行，禁止写仓库相对路径 `scripts/workflow-observe.mjs`——那会解析到当前业务项目）：
+**workflow 外步骤（D0/D4/D6）由主 agent 用观测命令记录边界**，契约与内建观测完全一致。统一运行入口 = `~/.agents/scripts/workflow-observe.mjs`（dev-flow-wf 可在任意项目运行，禁止写仓库相对路径 `scripts/workflow-observe.mjs`——那会解析到当前业务项目）：
 
 ```bash
 node ~/.agents/scripts/workflow-observe.mjs start --task-id <task-id> --execution-id <exec-id> --skill dev-flow-wf --stage D0 --step compile
@@ -124,7 +124,7 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 |----------|----|------|------|
 | W2 `wave-executor`（saved） | D1 / D3（两实例化） | `{ execPlan, taskId?, executionId?, sampleType? }` | completed / blocked / core-failed |
 | W3 `dev-consistency-loop`（saved） | D2 | `{ execPlan, maxRounds?, reviewerTemplate?, attempt?, taskId?, executionId?, sampleType? }` | converged / stuck / gate-a-failed / review-failure / fix-failure（终态回写 status.json events：consistency 终态一笔恒写 + gate-a 笔仅在 converged/gate-a-failed 时写；必填字段双无条目降级登记项——deferredLedger 回流；attempt>1 时 Gate A 日志带 .attemptM 后缀） |
-| W4 `design-code-sync-loop`（saved） | D5 | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath?, plannerTemplate?, reviewerTemplate?, attempt? }`（未接入阶段事件观测——D5 边界由主 agent 经观测命令自记，见「阶段事件观测」节） | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（模板路径与 attempt 缺省自动处理，attempt>1 历史产物不覆盖；终态含 overdesignCandidates——越权候选卡呈报） |
+| W4 `design-code-sync-loop`（saved） | D5 | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath?, plannerTemplate?, reviewerTemplate?, attempt?, taskId?, executionId?, sampleType? }` | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（模板路径与 attempt 缺省自动处理，attempt>1 历史产物不覆盖；终态含 overdesignCandidates——越权候选卡呈报） |
 
 执行体按宿主环境选择：**zcode**（会话可见 CreateWorkflow 工具 / saved workflows）→ 上表 saved workflow 经 `CreateWorkflow saved` 发起；**pi**（subagent-workflow extension、workflow 工具可用）→ 本 skill 安装位置上级的 `../workflows/pi/<name>.js`（四件：wave-executor / dev-consistency-loop / design-code-sync-loop）复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run <name> --args k=v`——两版脚本业务逻辑逐行一致，仅 agent 调用层与文件头不同；--args 值全字符串，数字参数脚本内自动归一，数组型不支持。两版均未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：zcode workflow 用 ResumeWorkflowRun/AmendWorkflow，pi 重新 run（attempt 递增防产物覆盖），手工路径以 status.json + git log 对账，冲突以 git 为准）。
 

@@ -6,12 +6,16 @@
 
 ```
 CreateWorkflow saved: design-code-sync-loop
-args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath?, watchlist? }
+args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath?, watchlist?, taskId?, executionId?, sampleType? }
 // statusPath = status.json 绝对路径——planner 职责②进度核对数据源；未传时降级单侧核对并在 frameworkFindings 的 note 注明
 // watchlist = 符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）——机械信号步唯一扫描词源；
 //   未传时机械步跳过并在日志注明（不回退文档反引号抓取——该路径依赖「反引号 = 本项目符号」隐式约定，已废除）
+// taskId + executionId 同时传即启用阶段事件观测（SKILL「阶段事件观测」节）：taskId = D0 分配的任务标识（全段共用），
+//   executionId 建议 "D5-<发起时点短时间戳>"；不传业务照常。sampleType 可选（production 缺省 / selftest 测试执行）
 终态: converged / contested / stuck + setup/planner/review/fix/retire/io-failure
 ```
+
+**阶段事件观测步骤边界**（stage=D5，引擎写入；SKILL「阶段事件观测」节）：setup = 环境校验 / 矩阵初始化 / 框架对照规划（planner 失败随 setup 窗口补终态）；review = 机械信号扫描 + 并行模块审查（R1）或机械/清理对账 + 聚焦复审（R2+），round = 轮次；fix = 并行修复与组级 commit；retire = 退役判定（转清理条目回下轮修复时自然结束，converged / retire-failure 的 end 随终态统一补记）；finalize 仅在轮次耗尽兜底路径出现。
 
 引擎语义（两级审查拓扑 + 轮次收敛）：
 
@@ -44,7 +48,7 @@ phase 3+ 修复循环：双向修复 → 聚焦复审 →（轮）→ 退役判�
 ```markdown
 | # | 设计声明（§N 锚点） | 代码实现（file:line 锚点） | 判向 | 说明 |
 |---|--------------------|---------------------------|------|------|
-| 1 | 步骤可见性合并投影 | projection.ts:88 | 一致 | 语义核对通过 |
+| 1 | 步骤可见性合并视图 | projection.ts:88 | 一致 | 语义核对通过 |
 | 2 | §3.2 水位终态计数 | （未找到实现） | 漏实现 | design 有 code 无 |
 | 3 | （设计未声明） | throttle.ts:12 节流器 | 越权实现 | → 见三问评估 |
 ```

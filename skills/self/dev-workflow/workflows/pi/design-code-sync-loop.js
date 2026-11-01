@@ -39,6 +39,15 @@ parameters:
       type: number
       default: 1
       description: "重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）"
+    taskId:
+      type: string
+      description: "观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」"
+    executionId:
+      type: string
+      description: "本次执行标识（可选；与 taskId 同时提供才启用阶段事件观测）。同时是观测 JSONL 文件名主干（<executionId>.jsonl）——命名规则同 taskId"
+    sampleType:
+      type: string
+      description: "观测样本类型（可选）——production = 真实执行（缺省）/ selftest = 测试执行"
   required: [designDoc, implPlan, projectRoot]
 */
 
@@ -335,6 +344,215 @@ const HINT_RETIRE_INVALID = "修订脚本退役 prompt 后重跑";
 // 硬编码，两壳各持常量）──
 const HOST_PLATFORM = "pi";
 
+// ── O 区观测平台钩子：写通道 = world.run（shim 内 spawnSync；无 journal 重放语义，每次 run 实写）。
+// shared 观测层调用 obsNow/obsAppend；换平台只换钩子实现，事件契约在 shared ──
+const OBS_PROBE_NOW = "process.stdout.write(new Date().toISOString())";
+const OBS_APPEND_LINE =
+  "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});" +
+  "require('fs').appendFileSync(process.argv[1],process.argv[2]+'\\n')";
+async function obsNow() {
+  try {
+    const r = await world.run("node", ["-e", OBS_PROBE_NOW]);
+    const t = r.exitCode === 0 ? r.stdout.trim() : "";
+    return t !== "" ? t : null;
+  } catch (e) {
+    // 执行器故障（spawn 失败/超时）：观测降级为不记录该事件，业务不受影响
+    return null;
+  }
+}
+async function obsAppend(filePath, line) {
+  try {
+    const r = await world.run("node", ["-e", OBS_APPEND_LINE, filePath, line]);
+    return r.exitCode === 0 ? null : `exit ${r.exitCode}：${r.stderr.trim() || r.stdout.trim()}`;
+  } catch (e) {
+    return (e && e.message) || String(e);
+  }
+}
+
+// ============================================================================
+// observability.shared.ts — workflow 阶段事件观测层（单一构建输入）
+// 已接入观测的 workflow（正文含 initObservation 调用点）由 scripts/build-workflows.mjs
+// 把本文件全文拼进其两侧产物（先于业务正文——obsCtx 为 let，业务顶层赋值依赖声明在前）；
+// 未接入的 workflow 不拼。本文件与业务 shared 一起过词法改写与 TS 剥离管线，无 import。
+//
+// 事件契约（改字段须同步 scripts/build-workflows.mjs 的 OBS_EVENT_FIELDS 与
+// scripts/workflow-observe.mjs）：
+//   {execution_id, task_id, skill, stage, step, round, attempt, event, timestamp,
+//    sample_type[, outcome]}
+// 落点 ~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl——
+// 每次执行独立文件，并发执行互不干扰。
+// 启用条件 = args.taskId 与 args.executionId 同时提供；都不传 = 观测关闭（可选兼容，
+// 业务照常）；只传其一 / ID 含路径不安全字符 / sampleType 非法 → 告警并关闭（错误可
+// 操作，不静默吞）；写失败 → 告警（同文件只告警一次）不改业务终态——观测是辅助功能，
+// 故障不拖垮主流程。观测只记归属与边界，不采集 token。
+// IO 通道经壳的 obsNow/obsAppend 平台钩子（zcode = world.run journal 语义，resume 重放
+// 回放首次记录值；pi = world.run，其 shim 内为 spawnSync，无 journal 重放语义，每次
+// run 实写）。
+// attempt 字段语义 = 事件发生时点的重发起序号：启动早期（自动检测未完成）为 null，
+// 检测确定后由调用方回填 obsCtx.attempt，其后的事件带值。
+// ============================================================================
+let obsCtx = null;
+/** ID 路径安全窄化：task-id 是观测根下的目录名、execution-id 是文件名主干——仅放行
+ *  字母数字开头、只含字母/数字/点/连字符/下划线、≤128 字符、无连续点与结尾点的值，
+ *  路径穿越形态（..、分隔符、空白、引号）一律拒绝 */
+function obsSafeId(v) {
+    if (typeof v !== "string")
+        return null;
+    const s = v.trim();
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(s) && !s.includes("..") && !s.endsWith(".") ? s : null;
+}
+/** 观测启用（形态层，纯同步，不依赖 home）：参数形态校验 + 上下文组装。先于业务参数
+ *  窄化调用，保证已传合法观测 ID 的执行（含后续参数校验失败早退）都有 execution 边界。
+ *  返回 null = 本次关闭（合法关闭不告警，告警关闭经 log 输出恢复动作——关闭本身不静默）。
+ *  attempt 未知时传 null，检测确定后回填 obsCtx.attempt */
+function initObservation(skill, stage, attempt) {
+    const hasTask = typeof args.taskId === "string" && args.taskId.trim() !== "";
+    const hasExec = typeof args.executionId === "string" && args.executionId.trim() !== "";
+    if (!hasTask && !hasExec)
+        return null;
+    if (hasTask !== hasExec) {
+        log(`WARN: 观测参数不完整（taskId=${hasTask ? "已传" : "缺"}、executionId=${hasExec ? "已传" : "缺"}）——两参须同时提供才记录观测，本次不写观测事件。恢复动作：同时传 taskId 与 executionId，或都不传`);
+        return null;
+    }
+    const taskId = obsSafeId(args.taskId);
+    const executionId = obsSafeId(args.executionId);
+    if (taskId === null || executionId === null) {
+        log(`WARN: 观测参数含路径不安全字符（taskId=${JSON.stringify(args.taskId)}、executionId=${JSON.stringify(args.executionId)}——合法形态：字母/数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」与结尾点）——本次不写观测事件。恢复动作：改用安全 ID 后重新发起`);
+        return null;
+    }
+    const rawSampleType = typeof args.sampleType === "string" ? args.sampleType.trim() : "";
+    if (rawSampleType !== "" && rawSampleType !== "production" && rawSampleType !== "selftest") {
+        log(`WARN: 观测参数 sampleType=${JSON.stringify(args.sampleType)} 非法（合法值：production / selftest）——本次不写观测事件。恢复动作：修正 sampleType 后重新发起`);
+        return null;
+    }
+    const sampleType = rawSampleType === "selftest" ? "selftest" : "production";
+    return {
+        executionId,
+        taskId,
+        skill,
+        stage,
+        attempt,
+        sampleType,
+        filePath: "",
+        openStep: null,
+        warnedWrite: false,
+    };
+}
+/** 观测落盘路径装配（home 探针成功后调用一次）；obsCtx 关闭时无操作 */
+function obsAttachHome(home) {
+    const c = obsCtx;
+    if (c === null)
+        return;
+    c.filePath = `${home}/.agents/skill-data/workflow-observability/${c.taskId}/${c.executionId}.jsonl`;
+}
+/** 写一条观测事件。时间戳经壳钩子取（zcode journal 语义下跨 resume 确定性回放）；
+ *  时间戳探针失败、落盘路径未装配（home 未就绪）或写入失败只告警（写失败同文件一次），
+ *  不改变业务终态 */
+async function obsEmit(step, round, event, outcome) {
+    const c = obsCtx;
+    if (c === null)
+        return;
+    if (c.filePath === "") {
+        log("WARN: 观测落盘路径未装配（home 探针未完成或失败）——本条观测事件未记录，业务不受影响。恢复动作：确认 node 可执行后重跑");
+        return;
+    }
+    const timestamp = await obsNow();
+    if (timestamp === null) {
+        log("WARN: 观测时间戳探针失败（node 子进程无输出）——本条观测事件未记录，业务不受影响。恢复动作：确认 node 可执行后重跑");
+        return;
+    }
+    const rec = {
+        execution_id: c.executionId,
+        task_id: c.taskId,
+        skill: c.skill,
+        stage: c.stage,
+        step,
+        round,
+        attempt: c.attempt,
+        event,
+        timestamp,
+        sample_type: c.sampleType,
+    };
+    if (outcome !== null)
+        rec.outcome = outcome;
+    const err = await obsAppend(c.filePath, JSON.stringify(rec));
+    if (err !== null && !c.warnedWrite) {
+        c.warnedWrite = true;
+        log(`WARN: 观测事件写入失败（${c.filePath}）：${err}——同类失败不再重复告警，业务不受影响。恢复动作：确认该路径父目录可写（或换 executionId）后重跑`);
+    }
+}
+/** 阶段边界：串行阶段开始记 start（同一时刻至多一个打开 step）。上一阶段尚未结束即
+ *  开新阶段 = 观测序列异常：显式告警并给前一阶段补记 end（outcome=abandoned），不静默
+ *  覆盖——业务流程不受影响，事件序列仍完整可对账 */
+async function obsBegin(step, round) {
+    const c = obsCtx;
+    if (c === null)
+        return;
+    if (c.openStep !== null) {
+        const prev = c.openStep;
+        c.openStep = null;
+        log(`WARN: 观测阶段重叠：step「${prev.step}」尚未结束即开始「${step}」——已给前一阶段补记 end（outcome=abandoned），业务不受影响。恢复动作：检查前一阶段的 obsEnd 配对（提前离开的路径是否漏补记）`);
+        await obsEmit(prev.step, prev.round, "end", "abandoned");
+    }
+    c.openStep = { step, round };
+    await obsEmit(step, round, "start", null);
+}
+/** 阶段边界：自然完成记 end（无 outcome——outcome 只出现在终态统一补记或异常补记的
+ *  end 上，值 = 本次执行的 terminated 词或 abandoned/script-error）。
+ *  配对检查：step/round 与打开阶段不符，或当前无打开阶段时——显式告警（可操作恢复
+ *  动作）；无打开阶段不写任何事件（无 start 不伪造 end），阶段错位给实际打开阶段补
+ *  abandoned end（收到的错名 end 不落盘）。业务流程不受影响 */
+async function obsEnd(step, round) {
+    const c = obsCtx;
+    if (c === null)
+        return;
+    if (c.openStep === null) {
+        log(`WARN: 观测配对异常：收到 step「${step}」（round=${round}）的 obsEnd，但当前无打开中的阶段——未写 end 事件（无 start 不伪造 end），业务不受影响。恢复动作：检查该 step 的 obsBegin/obsEnd 配对（是否重复调用或 start 路径提前离开）`);
+        return;
+    }
+    if (c.openStep.step !== step || c.openStep.round !== round) {
+        const open = c.openStep;
+        c.openStep = null;
+        log(`WARN: 观测配对异常：收到 step「${step}」（round=${round}）的 obsEnd，但当前打开的是「${open.step}」（round=${open.round}）——已给实际打开阶段补记 end（outcome=abandoned），收到的 end 未写（无对应 start 不伪造），业务不受影响。恢复动作：检查两处调用的 step/round 实参是否写反或错位`);
+        await obsEmit(open.step, open.round, "end", "abandoned");
+        return;
+    }
+    c.openStep = null;
+    await obsEmit(step, round, "end", null);
+}
+/** withStage：串行阶段包装器（obsBegin → fn → obsEnd）。fn 内经收尾出口提前离开时
+ *  openStep 已被 obsCloseExecution 清空（end 已由终态统一补记），finally 不重复补
+ *  end；fn 抛异常且 step 仍打开 = 脚本级中断，finally 补 end（outcome=script-error） */
+async function withStage(step, round, fn) {
+    await obsBegin(step, round);
+    let didThrow = false;
+    try {
+        return await fn();
+    }
+    catch (e) {
+        didThrow = true;
+        throw e;
+    }
+    finally {
+        const c = obsCtx;
+        if (c !== null && c.openStep !== null && c.openStep.step === step) {
+            c.openStep = null;
+            await obsEmit(step, round, "end", didThrow ? "script-error" : null);
+        }
+    }
+}
+/** 终态统一补记：给打开中的 step 补记 end（带 outcome=本次执行终态）+ 写 execution
+ *  end。由终态统一出口调用（各 workflow 的 finish / 收尾段 / 启动期失败离开点） */
+async function obsCloseExecution(outcome) {
+    const c = obsCtx;
+    if (c === null)
+        return;
+    const open = c.openStep;
+    c.openStep = null;
+    if (open !== null)
+        await obsEmit(open.step, open.round, "end", outcome);
+    await obsEmit("execution", null, "end", outcome);
+}
 // ============================================================================
 // design-code-sync-loop — dev-flow-wf 技能 W4 终态同步循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts 与 tech-review-loop.dwf.ts（多脚本循环骨架
@@ -344,6 +562,13 @@ const HOST_PLATFORM = "pi";
 // 与 rfl 的结构差异：
 //  - 无 LLM 聚合层：矩阵行 = 脚本 concat（planner 框架行 + 各模块 reviewer 行结构化
 //    返回），跨模块 findings 不去重（文件锚点唯一归属）
+//  - matrix 每轮从内存结构化记录全量重渲染（矩阵表行 + findings 五字段）——fixer 直接
+//    写进 finding 区块的订正/注记追加行不在结构化记录里，历代随再生丢失（F6-1：实测
+//    三代丢失、R6 再生第三次丢失）；故写盘前经 NODE_EXTRACT_FINDING_EXTRAS 按 finding
+//    id 提取旧矩阵非五字段追加行、渲染时插回对应区块 fix-hint 行后（保留合并，块内
+//    精确重复去重），探针/解析故障 fail-soft 不炸轮（保留是增强不是前提）。finding
+//    字段与矩阵表行仍由结构化记录重渲染——fixer 对它们的直接编辑不保留，那类修订走
+//    追加行形态
 //  - 审查对象 = HEAD 终态全量（非 diff 区间）；两级拓扑 R1 一次，R2+ 同 agent 续聊聚焦复审
 //  - 修复分组输入 = 模块 files 并集（脚本确定性构造候选组）+ reconcileGroups 机器校验
 //    （照搬 rfl：无效组过滤 / 覆盖兜底 / 组间 files 相交传递闭包合并 / 重编 G1..Gn——
@@ -389,6 +614,10 @@ const VALID_ARG_KEYS = new Set([
     "plannerTemplate",
     "reviewerTemplate",
     "attempt",
+    // 观测（O 区，可选）：taskId+executionId 同时提供才启用（sampleType 默认 production）
+    "taskId",
+    "executionId",
+    "sampleType",
 ]);
 const TILDE_PLANNER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/sync-planner.md";
 const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/sync-reviewer.md";
@@ -447,6 +676,33 @@ const NODE_CHECK_EXISTS = "const fs=require('fs');const missing=process.argv.sli
 const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
 const NODE_RENAME_FILE = "require('fs').mkdirSync(require('path').dirname(process.argv[2]),{recursive:true});require('fs').renameSync(process.argv[1],process.argv[2])";
 const NODE_PROBE_HOME = "process.stdout.write(require('os').homedir())";
+// matrix 再生保留通道（F6-1，2026-10-25）：argv: [matrixPath] → stdout = JSON
+// {findingId: [追加行...]}。matrix.md 每轮由 renderMatrix 从内存结构化记录全量重渲染，
+// fixer 直接写进 finding 区块的订正/注记行不在结构化记录里、历代随再生丢失（实测
+// R2-G4/F2-19 订正行三代丢失、R6 再生第三次丢失）。本通道在写盘前提取旧 matrix 各
+// finding 区块内「非五字段」的 `- ` 行（五字段 = location/gap/impact/rationale/
+// fix-hint，由结构化记录重渲染；追加行才是 fixer 产物），按 finding id 归集，渲染时
+// 插回对应区块 fix-hint 行之后（保留合并）。区块边界 = `### <id>` 头起、下一个 `### ` /
+// `## ` 头止（文件头 `- 仓库：` 等在任一区块前，不归集）；块内精确重复行去重（防
+// fixer 未察觉在位而重复补写）。文件不存在/读取失败 → {}（首轮无旧矩阵，无保留面）。
+const NODE_EXTRACT_FINDING_EXTRAS = [
+    "var fs=require('fs');var out=function(o){process.stdout.write(JSON.stringify(o))};",
+    "var res={};",
+    "try{var t=fs.readFileSync(process.argv[1],'utf8')}catch(e){out(res);process.exit(0)}",
+    "var std=['- location:','- gap:','- impact:','- rationale:','- fix-hint:'];",
+    "var cur=null,seen=null;",
+    "for(var ln of t.split('\\n')){",
+    "  var h=/^### (\\S+)/.exec(ln);",
+    "  if(h){cur=h[1];if(!res[cur])res[cur]=[];seen=new Set();continue}",
+    "  if(/^## /.test(ln)){cur=null;continue}",
+    "  if(cur===null||ln.slice(0,2)!=='- ')continue;",
+    "  var isStd=false;for(var s of std){if(ln.indexOf(s)===0){isStd=true;break}}",
+    "  if(isStd)continue;",
+    "  if(seen.has(ln))continue;",
+    "  seen.add(ln);res[cur].push(ln);",
+    "}",
+    "out(res);",
+].join("\n");
 // project-slug 探针：输出 basename-realhash8（realpath + sha256 前 8 位十六进制小写；
 // impl-spec §1 全域唯一算法，与 skill-data-dir.mjs / 各循环实现对同一组固定向量一致）
 const NODE_PROJECT_SLUG = "const p=require('fs').realpathSync(process.argv[1]);" +
@@ -822,9 +1078,39 @@ function anchorPath(location) {
 function mdEscape(s) {
     return s.replace(/\|/g, "\\|").replace(/\n/g, " ");
 }
+// ── 观测启用（O 区形态层）：先于参数窄化——已传合法观测 ID 的执行（含参数校验失败
+// 早退）都有 execution 边界；attempt 自动检测未完成时为 null，检测确定后回填。落盘
+// 路径依赖 home，探针通过后装配 ──
+obsCtx = initObservation("dev-flow-wf", "D5", null);
+// home 展开：模板 ~ 前缀运行时解析（脚本无 node API，经 node -e 通道）。探针先于
+// 参数窄化：观测落盘路径装配与模板 ~ 展开共同依赖（W1 同序）
+const homeRes = await world.run("node", ["-e", NODE_PROBE_HOME]);
+if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
+    await obsCloseExecution("setup-failure");
+    return {
+        terminated: "setup-failure",
+        rounds: 0,
+        runDir: "",
+        designDoc: "",
+        matrixFile: "",
+        directionStats: { docRight: 0, codeRight: 0, contested: 0 },
+        retirement: { retired: [], kept: [] },
+        contestedList: [],
+        overdesignCandidates: [],
+        remaining: [],
+        message: `无法解析用户 home 目录（node 探针失败，exit ${homeRes.exitCode}）：${homeRes.stderr.trim()}。恢复动作：确认 node 可执行后重新发起`,
+    };
+}
+const homeDir = homeRes.stdout.trim();
+if (obsCtx !== null) {
+    obsAttachHome(homeDir);
+    await obsEmit("execution", null, "start", null);
+    await obsBegin("setup", null);
+}
 // ── 参数窄化执行 + 早期失败（failed-as-return，不 throw） ──
 const inputs = deriveInputs(args);
 if (inputs.problems.length > 0) {
+    await obsCloseExecution("setup-failure");
     return {
         terminated: "setup-failure",
         rounds: 0,
@@ -840,32 +1126,15 @@ if (inputs.problems.length > 0) {
     };
 }
 const { designDoc, implPlan, projectRoot, statusPath: statusPathArg, watchlist, maxRounds } = inputs;
-// ── 环境准备（home 展开 / runDir / attempt / 模板探针 / 基线 HEAD） ──
+// ── 环境准备（runDir / attempt / 模板探针 / 基线 HEAD） ──
 phase("框架对照与模块规划");
-// home 展开：模板 ~ 前缀运行时解析（脚本无 node API，经 node -e 通道）
-const homeRes = await world.run("node", ["-e", NODE_PROBE_HOME]);
-if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
-    return {
-        terminated: "setup-failure",
-        rounds: 0,
-        runDir: "",
-        designDoc,
-        matrixFile: "",
-        directionStats: { docRight: 0, codeRight: 0, contested: 0 },
-        retirement: { retired: [], kept: [] },
-        contestedList: [],
-        overdesignCandidates: [],
-        remaining: [],
-        message: `无法解析用户 home 目录（node 探针失败，exit ${homeRes.exitCode}）：${homeRes.stderr.trim()}。恢复动作：确认 node 可执行后重新发起`,
-    };
-}
-const homeDir = homeRes.stdout.trim();
 const expandTilde = (p) => (p.startsWith("~/") ? `${homeDir}/${p.slice(2)}` : p);
 const plannerTplAbs = expandTilde(inputs.plannerTemplate);
 const reviewerTplAbs = expandTilde(inputs.reviewerTemplate);
 // 必读文件存在性探针：设计文档 / impl-plan / 两模板
 const probe = await world.run("node", ["-e", NODE_CHECK_EXISTS, designDoc, implPlan, plannerTplAbs, reviewerTplAbs]);
 if (probe.exitCode !== 0) {
+    await obsCloseExecution("setup-failure");
     return {
         terminated: "setup-failure",
         rounds: 0,
@@ -883,6 +1152,7 @@ if (probe.exitCode !== 0) {
 // impl-plan 必须是合法 JSON（设计包入口门在 skill 侧已查存在性，此处补内容合法性）
 const planParse = await world.run("node", ["-e", "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))", implPlan]);
 if (planParse.exitCode !== 0) {
+    await obsCloseExecution("setup-failure");
     return {
         terminated: "setup-failure",
         rounds: 0,
@@ -902,6 +1172,7 @@ if (planParse.exitCode !== 0) {
 // projectRoot 不存在，setup-failure
 const slugRes = await world.run("node", ["-e", NODE_PROJECT_SLUG, projectRoot]);
 if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
+    await obsCloseExecution("setup-failure");
     return {
         terminated: "setup-failure",
         rounds: 0,
@@ -967,6 +1238,10 @@ const attemptProbe = await world.run("node", ["-e", ATTEMPT_SCAN, runDir]);
 const prevAttemptMax = attemptProbe.exitCode === 0 && /^\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;
 const attempt = inputs.attempt !== null ? inputs.attempt : prevAttemptMax > 0 ? prevAttemptMax + 1 : 1;
 const roundDirName = (n) => (attempt > 1 ? `round-${n}.attempt${attempt}` : `round-${n}`);
+// attempt 检测确定后回填观测上下文（execution/setup start 事件时点尚未检测，记 null；
+// 其后的事件带值——attempt 字段语义见观测层头注）
+if (obsCtx !== null)
+    obsCtx.attempt = attempt;
 // runlog 目录确保（幂等；prompt 注入的过程记录落点——手工路径 D0 已建，此处覆盖引擎直发形态）
 const NODE_ENSURE_DIR = "try{require('fs').mkdirSync(process.argv[1],{recursive:true})}catch(e){process.stderr.write(String(e.message||e));process.exit(1)}";
 {
@@ -977,6 +1252,7 @@ const NODE_ENSURE_DIR = "try{require('fs').mkdirSync(process.argv[1],{recursive:
 // 基线 HEAD 锁定（审查对象 = HEAD 终态全量；记录进矩阵供事后核对）
 const headRes = await world.run("git", ["-C", projectRoot, "rev-parse", "HEAD"]);
 if (headRes.exitCode !== 0 || headRes.stdout.trim() === "") {
+    await obsCloseExecution("setup-failure");
     return {
         terminated: "setup-failure",
         rounds: 0,
@@ -1163,7 +1439,30 @@ function buildCandidateGroups(active) {
     }
     return raw;
 }
-function renderMatrix() {
+/** matrix 再生保留面（F6-1）：读旧 matrix.md，按 finding id 提取 fixer 追加行
+ *  （订正/注记等非五字段行）——renderMatrix 重渲染时插回对应区块，防历代丢失。
+ *  任一步故障（探针失败 / JSON 畸形）fail-soft 返回空 Map：矩阵主体由结构化记录重渲染、
+ *  正确性不依赖追加行，保留是增强不是前提，不因保留失败炸轮。 */
+async function loadFindingExtras() {
+    const r = await world.run("node", ["-e", NODE_EXTRACT_FINDING_EXTRAS, matrixFile]);
+    if (r.exitCode !== 0)
+        return new Map();
+    try {
+        const raw = JSON.parse(r.stdout);
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+            return new Map();
+        const m = new Map();
+        for (const [k, v] of Object.entries(raw)) {
+            if (Array.isArray(v))
+                m.set(k, v.filter((x) => typeof x === "string"));
+        }
+        return m;
+    }
+    catch {
+        return new Map();
+    }
+}
+function renderMatrix(extras = new Map()) {
     const ds = {
         docRight: ledger.filter((f) => f.direction === "doc-right").length,
         codeRight: ledger.filter((f) => f.direction === "code-right").length,
@@ -1219,6 +1518,12 @@ function renderMatrix() {
         L.push(`- impact: ${f.impact}`);
         L.push(`- rationale: ${f.rationale}`);
         L.push(`- fix-hint: ${f.fixHint}`);
+        // fixer 追加行（订正/注记）按 finding id 插回——区块内追加内容不随结构化记录再生
+        // 丢失（F6-1：旧行为每轮重渲染即丢，实测三次丢失 R3/R5/R6、本轮第四次写入；
+        // 五字段由上方结构化记录重渲染，不在此列）
+        const kept = extras.get(f.id);
+        if (kept !== undefined && kept.length > 0)
+            L.push(...kept);
     }
     L.push("");
     return L.join("\n");
@@ -1236,14 +1541,24 @@ function renderTrajectory() {
     return L.join("\n");
 }
 async function persistArtifacts() {
-    const okM = await writeArtifact(matrixFile, renderMatrix());
+    // 先提取旧矩阵的 fixer 追加行（F6-1 保留合并）再整体重渲染——提取失败只丢保留面，
+    // 不阻断写盘（loadFindingExtras 内部已 fail-soft）
+    const extras = await loadFindingExtras();
+    const okM = await writeArtifact(matrixFile, renderMatrix(extras));
     const okT = await writeArtifact(trajectoryFile, renderTrajectory());
     if (!okM || !okT) {
         throw new Error(`矩阵/轨迹写盘失败（matrix ok=${okM}，trajectory ok=${okT}）。恢复动作：检查 ${runDir} 可写性后 attempt 递增重新发起`);
     }
 }
-// 初始落盘（保证任一终态返回时 matrixFile 都真实存在）
-await persistArtifacts();
+// 初始落盘（保证任一终态返回时 matrixFile 都真实存在；异常路径先补观测终态再原样
+// 上抛——W3 启动期 throw 同型处理，业务行为不变仍是 errored run）
+try {
+    await persistArtifacts();
+}
+catch (e) {
+    await obsCloseExecution("script-error");
+    throw e;
+}
 // ── 终态构造 ──
 function finish(terminated, round, message) {
     return {
@@ -1252,6 +1567,9 @@ function finish(terminated, round, message) {
         runDir,
         designDoc,
         matrixFile,
+        // 机械步终态观测（null = 步骤未被执行到，如 planner 阶段即失败——字段缺省而非空串，
+        // 「没跑」与「跑了被跳过」在终态可区分）
+        ...(mechanicalScanStatus !== null ? { mechanicalScan: mechanicalScanStatus } : {}),
         directionStats: {
             docRight: ledger.filter((f) => f.direction === "doc-right").length,
             codeRight: ledger.filter((f) => f.direction === "code-right").length,
@@ -1310,6 +1628,41 @@ function isStrArr(v) {
 }
 function isObjArr(v) {
     return Array.isArray(v) && v.every((x) => typeof x === "object" && x !== null && !Array.isArray(x));
+}
+/** 机械信号步共用执行器（R1 立项与 R2+ 对账同源，2026-11 修复）：argv 拼装 + NODE_BACKTICK_GREP
+ *  两种返回形状（{ok:true,missing} / {ok:false,reason}）的统一解析。
+ *  返回三态——
+ *  - ran：扫描成功，missing = 词表符号在代码库零命中清单（可空）
+ *  - skipped：扫描器显式拒扫（词表不可读/缺数组/与文档反引号集不一致等 ok:false 路径），
+ *    或未传 watchlist——属「本轮无有效机械信号」，不是执行故障
+ *  - failed：node 执行失败或输出不可解析——调用方必须 fail-closed（R2+ 对账一律不对账、
+ *    条目保留 open；空 missing 集会被误读成「全部已清」，失败路径绝不允许映射成 ran）
+ *  watchlist 与 R1 同源（args 窄化后的闭包变量）；未传词表三态归 skipped，R1 调用点的
+ *  「整步跳过 + 恢复指引」语义不变，R2+ 侧该形态下无机械条目可对账（防御性保留）。 */
+async function runMechanicalScan() {
+    if (watchlist === "") {
+        return { kind: "skipped", reason: "未传 watchlist（符号词表）" };
+    }
+    // impl-plan 双格式联动：机械步扫设计文档 + impl-plan.md 的反引号集（.json 无反引号叙事）
+    const implMdPath = implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md");
+    const res = await world.run("node", ["-e", NODE_BACKTICK_GREP, projectRoot, watchlist, designDoc, implMdPath]);
+    if (res.exitCode !== 0) {
+        return { kind: "failed", reason: `node 执行失败（exit ${res.exitCode}）：${res.stderr.trim().slice(0, 200)}` };
+    }
+    try {
+        const parsed = JSON.parse(res.stdout);
+        const rec = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+        if (rec["ok"] === true && isStrArr(rec["missing"])) {
+            return { kind: "ran", missing: rec["missing"] };
+        }
+        if (rec["ok"] === false && typeof rec["reason"] === "string" && rec["reason"] !== "") {
+            return { kind: "skipped", reason: rec["reason"] };
+        }
+        return { kind: "failed", reason: "输出不可解析（非 {ok,missing}/{ok,reason} 形状）" };
+    }
+    catch {
+        return { kind: "failed", reason: "输出不可解析（非合法 JSON）" };
+    }
 }
 /** planner 返回校验：两数组结构 + normPlanner 归一后 modules 非空（归一结果即返回值） */
 function validatePlannerResult(v) {
@@ -1443,6 +1796,14 @@ function fixerPrompt(g, byId) {
             L.push(`  rationale: ${f.rationale}`);
         if (f.fixHint !== "")
             L.push(`  fix-hint: ${f.fixHint}`);
+        // 修复史回流（复审 not-fixed/regressed 证据，见对账消费处）：只注入最近 2 条防长循环
+        // prompt 膨胀；点明「勿重复同款修法」——复审判未修的证据是下轮修复最贵的输入
+        const hist = Array.isArray(f.fixHistory) ? f.fixHistory : [];
+        if (hist.length > 0) {
+            const recent = hist.slice(-2);
+            const more = hist.length - recent.length;
+            L.push(wrapUntrusted(`  历史修复记录（复审判未修/复发，勿重复同款修法——换思路或修正归因）：${recent.join("；")}${more > 0 ? `（更早 ${more} 条从略）` : ""}`));
+        }
     }
     L.push("");
     L.push("方向语义（权威，勿反）：");
@@ -1503,6 +1864,7 @@ const retireCleanupTargets = new Map();
  *  保留）执行移动 + 退役 commit + README 索引，并构造 converged 终态。 */
 async function retireClosure(round, seqStart) {
     phase("伴生产物退役判定");
+    await obsBegin("retire", round);
     const retireAgent = wfAgent("伴生产物判定", RETIRE_PERSONA);
     let verdict = null;
     let rErr = "";
@@ -1641,6 +2003,9 @@ async function retireClosure(round, seqStart) {
             seq += 1;
         }
         log(`第 ${round} 轮收敛，但 ${cleanups.length} 个退役候选仍有引用——转清理条目（${findings.map((f) => f.id).join("、")}）进下轮修复，清零后执行移动`);
+        // 清理路径回修复循环（下轮 review），retire 自然结束（end 无 outcome）；done/failure
+        // 路径保持打开，end 由终态统一补记（outcome=converged / retire-failure）
+        await obsEnd("retire", round);
         return { kind: "cleanup", findings, next: seq };
     }
     if (movedTracked) {
@@ -1748,6 +2113,9 @@ log(`design-code-sync-loop 启动：runDir=${runDir}（attempt=${attempt}），�
 // 循环外顶层声明保证跨轮引用）
 const plannerAgent = wfAgent("框架对照规划", PLANNER_PERSONA);
 let finalResult = null;
+// 机械信号步终态观测（随 finish 进 result.mechanicalScan）：历史上该步无词表时整步静默
+// 跳过、主 agent 无从分辨「没跑/跑了没信号/跑失败」，终态出声后可判词表参数是否遗漏
+let mechanicalScanStatus = null;
 let prevActiveMust = 0;
 let stallStreak = 0;
 for (let round = 1; round <= maxRounds && finalResult === null; round++) {
@@ -1826,54 +2194,46 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
             });
             seq += 1;
         }
+        // 观测边界（O 区）：setup（环境校验 / 矩阵初始化 / 框架对照规划）到此自然结束，
+        // review（机械信号扫描 + 并行模块审查）开始——planner 失败路径不经过此处，setup
+        // 保持打开，end 由终态统一补记（带 outcome）
+        await obsEnd("setup", null);
+        await obsBegin("review", round);
         // ── phase 1.5：机械信号步（§7.1 符号词表 grep，R1 一次；机器产确定性信号，
         //    severity/direction 语义判级归后续复核——机械对账见 R2+ 分支）──
         // 词源 = T3 符号词表（watchlist，语义甄别在词表产出时完成）；未传词表 → 整步跳过，
         // 不回退文档反引号抓取（旧抓取依赖「反引号 = 本项目符号」隐式约定，2026-09-27 废除）
         if (round === 1) {
             if (watchlist === "") {
+                mechanicalScanStatus = "skipped: 未传 watchlist（符号词表），悬空引用防线未生效";
                 log("WARN: 未传 watchlist（符号词表）——机械信号步跳过，悬空引用防线本轮不生效。恢复动作：按 tech-design-wf flow/plan.md「符号词表」节产出 <basename>.symbol-watchlist.json 后，携 watchlist 参数重新发起");
             }
             else {
                 phase("机械信号扫描");
-                const implMdPath = implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md");
-                const mechRes = await world.run("node", ["-e", NODE_BACKTICK_GREP, projectRoot, watchlist, designDoc, implMdPath]);
-                if (mechRes.exitCode === 0) {
-                    try {
-                        const parsed = JSON.parse(mechRes.stdout);
-                        const rec = typeof parsed === "object" && parsed !== null ? parsed : {};
-                        if (rec["ok"] === true && isStrArr(rec["missing"])) {
-                            for (const sym of rec["missing"]) {
-                                ledger.push({
-                                    id: `F${round}-${seq}`,
-                                    owner: "mechanical",
-                                    location: `${designDoc}（词表符号 ${sym}）`,
-                                    gap: `词表符号 ${sym} 在代码库零命中（git grep）——文档引用悬空`,
-                                    direction: "code-right",
-                                    severity: "suggestion",
-                                    impact: "悬空引用误导后来者按图索骥找不到目标（[HISTORICAL] 事故防线）",
-                                    rationale: "机械信号：词表收录的符号在代码库不存在，默认实现期删改未回写文档",
-                                    fixHint: `核实 ${sym} 是否被删/改名——改文档引用到现存符号；若确认应补实现，改按 doc-right 处理；若核实为不该扫描的词（如上游包符号），申报 exempt 豁免`,
-                                    firstSeen: round,
-                                    status: "open",
-                                });
-                                seq += 1;
-                            }
-                            log(`机械信号：词表符号零命中 ${rec["missing"].length} 条立项（owner=mechanical，severity 默认 suggestion 待复核）`);
-                        }
-                        else if (rec["ok"] === false && typeof rec["reason"] === "string" && rec["reason"] !== "") {
-                            log(`WARN: 机械信号步跳过——${rec["reason"]}`);
-                        }
-                        else {
-                            log("WARN: 机械信号步输出解析失败——跳过机械立项（LLM 审查通道不受影响）");
-                        }
+                const mech = await runMechanicalScan();
+                if (mech.kind === "ran") {
+                    mechanicalScanStatus = `ran: 零命中 ${mech.missing.length} 条`;
+                    for (const sym of mech.missing) {
+                        ledger.push({
+                            id: `F${round}-${seq}`,
+                            owner: "mechanical",
+                            location: `${designDoc}（词表符号 ${sym}）`,
+                            gap: `词表符号 ${sym} 在代码库零命中（git grep）——文档引用悬空`,
+                            direction: "code-right",
+                            severity: "suggestion",
+                            impact: "悬空引用误导后来者按图索骥找不到目标（[HISTORICAL] 事故防线）",
+                            rationale: "机械信号：词表收录的符号在代码库不存在，默认实现期删改未回写文档",
+                            fixHint: `核实 ${sym} 是否被删/改名——改文档引用到现存符号；若确认应补实现，改按 doc-right 处理；若核实为不该扫描的词（如上游包符号），申报 exempt 豁免`,
+                            firstSeen: round,
+                            status: "open",
+                        });
+                        seq += 1;
                     }
-                    catch {
-                        log("WARN: 机械信号步输出解析失败——跳过机械立项（LLM 审查通道不受影响）");
-                    }
+                    log(`机械信号：词表符号零命中 ${mech.missing.length} 条立项（owner=mechanical，severity 默认 suggestion 待复核）`);
                 }
                 else {
-                    log(`WARN: 机械信号步执行失败（exit ${mechRes.exitCode}）——跳过，不阻断循环：${mechRes.stderr.trim().slice(0, 200)}`);
+                    mechanicalScanStatus = `${mech.kind}: ${mech.reason}`;
+                    log(`WARN: 机械信号步${mech.kind === "skipped" ? "跳过" : "失败"}——${mech.reason}${mech.kind === "failed" ? "——跳过机械立项（LLM 审查通道不受影响）" : ""}`);
                 }
             }
         }
@@ -1919,27 +2279,20 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     else {
         // ── R2+：聚焦复审（同 agent 续聊，只审上轮修复影响面）──
         phase("聚焦复审");
+        await obsBegin("review", round);
         // 机械条目（owner=mechanical）不走 LLM 复审——引擎机械对账：重跑机械步，
         // 上轮机械条目的符号已不在悬空清单 = 修好（fixed）；仍悬空 = 保留 open 进下轮修复组
         const mechPrev = lastDispatchedIds
             .map((id) => ledgerById(id))
             .filter((f) => f !== undefined && f.owner === "mechanical" && f.status === "open");
         if (mechPrev.length > 0) {
-            const implMdRe = implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md");
-            const mv = await world.run("node", ["-e", NODE_BACKTICK_GREP, projectRoot, designDoc, implMdRe]);
-            let stillMissing = null; // null = 机械步失败/输出不可解析 → 本轮不对账
-            if (mv.exitCode === 0) {
-                try {
-                    const arr = JSON.parse(mv.stdout);
-                    if (Array.isArray(arr))
-                        stillMissing = new Set(arr.filter((x) => typeof x === "string"));
-                }
-                catch {
-                    // 输出不可解析 → 保持 null，整批保留 open 下轮再验（空集会让全部条目被误判 fixed——
-                    // 审查 P0 修正：失败路径绝不假清账）
-                }
-            }
-            if (stillMissing !== null) {
+            // 2026-11 修复：此前此处自带调用漏传 watchlist 参数位（argv[2] 误填 designDoc，扫描器
+            // 读词表必失败）且按 JSON 数组解析 {ok,missing} 对象——stillMissing 恒 null，机械条目
+            // 永不对账、保持 open 反复重派。现与 R1 同走 runMechanicalScan（参数同源、形状同解析）
+            const mech = await runMechanicalScan();
+            if (mech.kind === "ran") {
+                mechanicalScanStatus = `ran: 零命中 ${mech.missing.length} 条`;
+                const stillMissing = new Set(mech.missing);
                 for (const f of mechPrev) {
                     const mSym = /词表符号 (\S+) 在代码库/.exec(f.gap);
                     const sym = mSym?.[1] ?? "";
@@ -1951,7 +2304,10 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
                 log(`机械条目对账：${mechPrev.length} 条中 ${mechPrev.filter((f) => f.status === "fixed").length} 条已清（重跑机械步验证）`);
             }
             else {
-                log(`WARN: 机械步重跑失败/输出不可解析——${mechPrev.length} 条机械条目本轮不对账，全部保留 open 下轮再验`);
+                // fail-closed：skipped/failed 一律不对账、条目保留 open 下轮再验（空 missing 集会让
+                // 全部条目被误判 fixed——失败路径绝不虚假清零）
+                mechanicalScanStatus = `${mech.kind}: ${mech.reason}`;
+                log(`WARN: 机械步重跑未成功（${mech.reason}）——${mechPrev.length} 条机械条目本轮不对账，全部保留 open 下轮再验`);
             }
         }
         // 退役引用清理条目（owner=retire-cleanup）不走 LLM 复审——引擎机械对账（同 mechanical
@@ -2023,10 +2379,26 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
             // 对账套用：fixed 须有实证（verify-first）；not-fixed/regressed 保持 open（停机线承接）
             for (const r of normRecon(res.reconciliation)) {
                 const f = ledgerById(r.prevId);
-                if (f && f.owner === owner && r.status === "fixed" && r.evidence.trim() !== "") {
+                if (!f || f.owner !== owner)
+                    continue;
+                if (r.status === "fixed" && r.evidence.trim() !== "") {
                     f.status = "fixed";
                     f.fixedRound = round;
                     confirmed += 1;
+                    continue;
+                }
+                // not-fixed/regressed 证据回流：复审已核实的「为什么没修好/为何复发」此前无任何
+                // 留存，下轮 fixer 盲修——同款修法重复失败直到停机线。一句一条追加修复史，随
+                // fixerPrompt 回流；证据压成单行截断防无限膨胀。fixed 但无实证 ≠ not-fixed：
+                // 不写史（条目留 open 待重核，不虚构「修复失败」归因），也不判已清（上方 fixed
+                // 判定条件不变）
+                if (r.status !== "fixed") {
+                    const ev = r.evidence.replace(/\s+/g, " ").trim();
+                    const brief = ev === "" ? "复审未给证据" : ev.length > 120 ? `${ev.slice(0, 120)}…` : ev;
+                    const verdictNote = r.status === "regressed" ? "regressed（复发或修复引入新问题）" : "not-fixed（仍存在）";
+                    if (!Array.isArray(f.fixHistory))
+                        f.fixHistory = [];
+                    f.fixHistory.push(`第${round}轮复审判${verdictNote}：${brief}`);
                 }
             }
             const rows = normMatrixRows(res.matrixRows, owner === "planner" ? "框架（planner）" : `模块 ${owner}`, round);
@@ -2039,6 +2411,10 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         }
         log(`第 ${round} 轮聚焦复审：确认修复 ${confirmed} 条，新立项 ${ledger.length - findingsBefore} 条`);
     }
+    // 观测边界（O 区）：review 自然结束（R1 = 机械信号 + 模块审查；R2+ = 机械/清理对账 +
+    // 聚焦复审）。review-failure 路径在分支内 break，不经过此处——review 保持打开，end
+    // 由终态统一补记（带 outcome）
+    await obsEnd("review", round);
     if (finalResult !== null)
         break;
     // ── 矩阵合并落盘（脚本 concat，无 LLM 聚合层；contested 分流前保证矩阵已落盘）──
@@ -2159,6 +2535,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     }
     // ── 修复：分组（模块 files 并集候选组 → reconcileGroups 机器校验）→ 并行双向修复 →
     //     范围声明核验 → 组级一笔 commit ──
+    await obsBegin("fix", round);
     phase("并行修复与复审");
     const groups = reconcileGroups(buildCandidateGroups(active), active.map((f) => ({ id: f.id, files: findingEditFiles(f) })));
     log(`第 ${round} 轮修复分 ${groups.length} 组：${groups.map((g) => `${g.id}(${g.issueIds.length}条)`).join("、")}`);
@@ -2390,9 +2767,13 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         contestedActive: active.filter((f) => f.direction === "contested").length,
         fixGroups: groups.length,
     });
+    // 观测边界（O 区）：fix 自然结束（fix-failure 路径在 catch 内 break，保持打开由终态
+    // 统一补记，end 带 outcome）
+    await obsEnd("fix", round);
 }
 // ── 轮次耗尽兜底（未收敛也未触发停机线；含退役清理轮把轮次烧尽的形态）──
 if (finalResult === null) {
+    await obsBegin("finalize", null);
     finalNote = `stuck：轮次上限耗尽（${maxRounds} 轮）`;
     finalResult = finish("stuck", maxRounds, `轮次上限耗尽（${maxRounds} 轮）仍未收敛——残余差距矩阵见 ${matrixFile}，呈报用户裁决`);
 }
@@ -2466,5 +2847,9 @@ if (finalResult === null) {
     // 不可达分支防御：所有路径都应已设置终态——保持「return 结构化对象」契约密闭
     finalResult = finish("io-failure", 0, "内部错误：终态未被设置（不可达分支防御）。恢复动作：附 runDir 留档重新发起");
 }
+// 观测终态统一补记（O 区）：给打开中的 step（planner/review/fix/retire 各失败态与
+// retire-done/converged、轮次耗尽的 finalize）补记 end（outcome=本次终态词）+ 写
+// execution end——全部终态路径在此统一补记，早退路径各自在 return 前补记
+await obsCloseExecution(finalResult.terminated);
 return finalResult;
 

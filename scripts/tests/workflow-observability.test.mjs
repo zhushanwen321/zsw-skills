@@ -76,8 +76,8 @@ const obsArgs = (taskId, executionId, extra = {}) => ({
 });
 
 /** zcode 产物执行器：transpile + vm，facade 全部由参数注入；world.run 真实 spawn（HOME 指向 home） */
-async function runZcodeArtifact(home, argsValue, agentImpl) {
-  const raw = readFileSync(join(WF, "tech-review-loop.dwf.ts"), "utf8");
+async function runZcodeArtifact(home, argsValue, agentImpl, name = "tech-review-loop") {
+  const raw = readFileSync(join(WF, `${name}.dwf.ts`), "utf8");
   const js = transpile(raw);
   const logs = [];
   const world = {
@@ -107,8 +107,8 @@ async function runZcodeArtifact(home, argsValue, agentImpl) {
 }
 
 /** pi 产物执行器：vm + require/$ARGS/$WORKSPACE 注入（pi 宿主注入形态） */
-async function runPiArtifact(home, argsValue, agentImpl) {
-  const raw = readFileSync(join(WF, "pi/tech-review-loop.js"), "utf8");
+async function runPiArtifact(home, argsValue, agentImpl, name = "tech-review-loop") {
+  const raw = readFileSync(join(WF, "pi", `${name}.js`), "utf8");
   const logs = [];
   const context = {
     require,
@@ -572,27 +572,291 @@ test("workflow-observe.mjs：裸 --help / -h 打印用法 exit 0（先于子命�
 
 // ── 7. 构建器 ──
 
-test("构建器：全量 --check 不漏检（四个 workflow 全部出现在校验输出，三安全产物一致）", () => {
-  // 断言口径：全量 --check 必须覆盖全部四个 workflow（不悄悄漏检禁碰文件）且三个安全
-  // workflow 产物一致。design-code-sync-loop 的整体 exit code 不在此断言——其 shared 存在
-  // 非本测试管辖的在途改动，产物可能处于过期状态（由该改动的维护方构建），本测试只验证
-  // 检查行为本身不漏检
+test("构建器：全量 --check 不漏检（四个 workflow 全部接入观测且三平台产物一致）", () => {
+  // 断言口径：全量 --check 必须覆盖全部四个 workflow（不悄悄漏检禁碰文件）且四份产物
+  // 在三个落点（仓内双平台 + ~/.zcode/workflows saved 副本）全部一致
   const r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
+  assert.equal(r.status, 0, `全量 --check 应全绿：\n${r.stdout}\n${r.stderr}`);
   for (const name of ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop"]) {
     assert.ok(r.stdout.includes(name), `全量 --check 输出须覆盖 ${name}（不得漏检）`);
-  }
-  for (const name of ["tech-review-loop", "wave-executor", "dev-consistency-loop"]) {
     assert.ok(r.stdout.includes(`${name}.dwf.ts（一致）`), `${name} 产物应一致：\n${r.stdout}\n${r.stderr}`);
   }
-  assert.ok(r.stdout.includes("未接入观测"), "未接入观测的 workflow 应显式说明而非静默跳过");
+  assert.ok(!r.stdout.includes("未接入观测"), "四个 workflow 均已接入观测，不应再出现未接入分支");
+  assert.ok(r.stdout.includes("stage=D5"), "design-code-sync-loop 应输出 D5 观测契约行");
 });
 
-test("构建器：--only 未知名报错 exit 2；--only 三个安全 workflow 构建绿", () => {
+test("构建器：--only 未知名报错 exit 2；--only 全部 workflow 构建绿", () => {
   let r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "no-such"], { encoding: "utf8" });
   assert.equal(r.status, 2);
   assert.ok(r.stderr.includes("未知 workflow 名"), r.stderr);
-  r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "tech-review-loop,wave-executor,dev-consistency-loop"], { encoding: "utf8" });
+  r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "tech-review-loop,wave-executor,dev-consistency-loop,design-code-sync-loop"], { encoding: "utf8" });
   assert.equal(r.status, 0, `--only 构建应绿：\n${r.stdout}\n${r.stderr}`);
   assert.ok(r.stdout.includes("--only 生效"), r.stdout);
   assert.ok(r.stdout.includes("观测契约"), "构建应输出观测契约核对结果");
+});
+
+// ── 8. design-code-sync-loop（D5）双平台真实产物 ──
+
+/** 构造 D5 走到目标阶段所需的最小环境：git 仓库（HEAD 探针 / 组级 commit / 退役扫描
+ *  都要真 git）+ 设计文档 + impl-plan JSON + 两 agent 模板（经 args 传绝对路径，
+ *  不依赖 skill 安装位） */
+function makeSyncScaffold(home) {
+  const projectRoot = join(home, "proj");
+  mkdirSync(join(projectRoot, "pkg"), { recursive: true });
+  const git = (a) => {
+    const r = spawnSync("git", a, { cwd: projectRoot, encoding: "utf8" });
+    assert.equal(r.status, 0, `git ${a.join(" ")} 失败：${r.stderr}`);
+  };
+  git(["init", "-q"]);
+  git(["config", "user.email", "test@example.com"]);
+  git(["config", "user.name", "test"]);
+  const codeFile = join(projectRoot, "pkg", "mod.ts");
+  writeFileSync(codeFile, "export const value = 1;\n");
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "init"]);
+  const designDoc = join(home, "design.md");
+  writeFileSync(designDoc, "# 设计\n");
+  const implPlan = join(home, "design.impl-plan.json");
+  writeFileSync(implPlan, JSON.stringify({ units: [] }));
+  const tplDir = join(home, "tpl");
+  mkdirSync(tplDir, { recursive: true });
+  const plannerTemplate = join(tplDir, "planner.md");
+  const reviewerTemplate = join(tplDir, "reviewer.md");
+  writeFileSync(plannerTemplate, "# planner\n");
+  writeFileSync(reviewerTemplate, "# reviewer\n");
+  return { designDoc, implPlan, projectRoot, plannerTemplate, reviewerTemplate, codeFile };
+}
+
+const syncBaseArgs = (s) => ({
+  designDoc: s.designDoc,
+  implPlan: s.implPlan,
+  projectRoot: s.projectRoot,
+  plannerTemplate: s.plannerTemplate,
+  reviewerTemplate: s.reviewerTemplate,
+});
+
+/** D5 双平台通用 agent 桩：按实例名（前缀匹配）返回结构化结果。两平台调用形态不同——
+ *  zcode facade 收 (name, persona) 返回 { ask }；pi 收 { prompt, schema, description }
+ *  直接返回原始值——按首参形态自适应 */
+function syncAgentStub(map) {
+  return (...a) => {
+    const name = typeof a[0] === "string" ? a[0] : String(a[0]?.description ?? "");
+    const hit = Object.keys(map).find((k) => name === k || name.startsWith(k));
+    assert.ok(hit !== undefined, `未预期的 agent 实例：${name}`);
+    const value = typeof map[hit] === "function" ? map[hit](name) : map[hit];
+    return typeof a[0] === "string" ? { ask: async () => value } : value;
+  };
+}
+
+/** 全清快乐路径返回桩：planner 单模块零框架发现 + reviewer 零发现 + retire 零候选 */
+const convergeStubMap = (s) => ({
+  "框架对照规划": {
+    frameworkFindings: [],
+    modules: [{ id: "m1", module: "pkg/mod.ts", files: [s.codeFile], focus: "对照 §1" }],
+  },
+  "模块审查-m1": { matrixRows: [], findings: [], moduleNoFinding: "在 pkg/mod.ts 未发现" },
+  "伴生产物判定": { candidates: [], kept: [{ path: s.designDoc, reason: "合规放置" }] },
+});
+
+test("D5 zcode：全清 converged 路径——setup/review 自然 end（无 outcome），retire 保持打开由终态统一补记（outcome=converged）", async () => {
+  const home = tmpHome();
+  try {
+    const s = makeSyncScaffold(home);
+    const { result } = await runZcodeArtifact(
+      home,
+      { ...syncBaseArgs(s), ...obsArgs("t-d5", "e-conv", { sampleType: "selftest" }) },
+      syncAgentStub(convergeStubMap(s)),
+      "design-code-sync-loop",
+    );
+    assert.equal(result.terminated, "converged");
+    assert.ok(result.message.includes("终态同步收敛"), result.message);
+    const lines = readJsonl(home, "t-d5", "e-conv");
+    assert.deepEqual(
+      lines.map((l) => ({ event: l.event, step: l.step, round: l.round, outcome: l.outcome, attempt: l.attempt })),
+      [
+        { event: "start", step: "execution", round: null, outcome: undefined, attempt: null },
+        { event: "start", step: "setup", round: null, outcome: undefined, attempt: null },
+        { event: "end", step: "setup", round: null, outcome: undefined, attempt: 1 },
+        { event: "start", step: "review", round: 1, outcome: undefined, attempt: 1 },
+        { event: "end", step: "review", round: 1, outcome: undefined, attempt: 1 },
+        { event: "start", step: "retire", round: 1, outcome: undefined, attempt: 1 },
+        { event: "end", step: "retire", round: 1, outcome: "converged", attempt: 1 },
+        { event: "end", step: "execution", round: null, outcome: "converged", attempt: 1 },
+      ],
+    );
+    lines.forEach((l) =>
+      assertContract(l, { task_id: "t-d5", execution_id: "e-conv", skill: "dev-flow-wf", stage: "D5", sample_type: "selftest" }),
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("D5 zcode：setup-failure（必读模板缺失）早退补终态——4 行完整事件且 attempt 全 null（失败早于检测）", async () => {
+  const home = tmpHome();
+  try {
+    const s = makeSyncScaffold(home);
+    const { result } = await runZcodeArtifact(
+      home,
+      { ...syncBaseArgs(s), reviewerTemplate: join(home, "no-such-template.md"), ...obsArgs("t-d5", "e-sf") },
+      undefined,
+      "design-code-sync-loop",
+    );
+    assert.equal(result.terminated, "setup-failure");
+    assert.ok(result.message.includes("必读文件缺失"), result.message);
+    const lines = readJsonl(home, "t-d5", "e-sf");
+    assert.deepEqual(
+      lines.map((l) => ({ event: l.event, step: l.step, outcome: l.outcome })),
+      [
+        { event: "start", step: "execution", outcome: undefined },
+        { event: "start", step: "setup", outcome: undefined },
+        { event: "end", step: "setup", outcome: "setup-failure" },
+        { event: "end", step: "execution", outcome: "setup-failure" },
+      ],
+    );
+    assert.ok(lines.every((l) => l.attempt === null), `attempt 应全 null：${JSON.stringify(lines.map((l) => l.attempt))}`);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("D5 zcode：planner 调用失败——setup 保持打开由终态补记（outcome=planner-failure，attempt 已回填）", async () => {
+  const home = tmpHome();
+  try {
+    const s = makeSyncScaffold(home);
+    const agent = (name) => {
+      assert.ok(String(name).includes("框架对照规划"), `未预期的 agent 实例：${name}`);
+      return { ask: async () => { throw new Error("planner ask 失败（测试桩）"); } };
+    };
+    const { result } = await runZcodeArtifact(
+      home,
+      { ...syncBaseArgs(s), ...obsArgs("t-d5", "e-pf") },
+      agent,
+      "design-code-sync-loop",
+    );
+    assert.equal(result.terminated, "planner-failure");
+    const lines = readJsonl(home, "t-d5", "e-pf");
+    assert.deepEqual(
+      lines.map((l) => ({ event: l.event, step: l.step, outcome: l.outcome, attempt: l.attempt })),
+      [
+        { event: "start", step: "execution", outcome: undefined, attempt: null },
+        { event: "start", step: "setup", outcome: undefined, attempt: null },
+        { event: "end", step: "setup", outcome: "planner-failure", attempt: 1 },
+        { event: "end", step: "execution", outcome: "planner-failure", attempt: 1 },
+      ],
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("D5 zcode：must-fix 修复轮（maxRounds=1）——fix 自然 end + 轮次耗尽 finalize 补记（outcome=stuck）", async () => {
+  const home = tmpHome();
+  try {
+    const s = makeSyncScaffold(home);
+    const agent = syncAgentStub({
+      "框架对照规划": {
+        frameworkFindings: [],
+        modules: [{ id: "m1", module: "pkg/mod.ts", files: [s.codeFile], focus: "对照 §1" }],
+      },
+      "模块审查-m1": {
+        matrixRows: [{ claim: "§1 值为 1", impl: "pkg/mod.ts:1", verdict: "一致", note: "核对通过" }],
+        findings: [{
+          id: "F1",
+          location: "pkg/mod.ts:1",
+          gap: "导出常量与设计声明不符",
+          direction: "doc-right",
+          severity: "must-fix",
+          impact: "误导交付判断",
+          rationale: "文档更合理",
+          fixHint: "补常量",
+        }],
+        moduleNoFinding: "",
+      },
+      "同步修复-R1-G1": {
+        fixes: [{ issueId: "F1-1", description: "按 fix-hint 修复", selfCheck: "grep 断言通过" }],
+        affectedFiles: [],
+        deferred: [],
+        exempt: [],
+        delegated: [],
+      },
+    });
+    const { result } = await runZcodeArtifact(
+      home,
+      { ...syncBaseArgs(s), maxRounds: 1, ...obsArgs("t-d5", "e-fix") },
+      agent,
+      "design-code-sync-loop",
+    );
+    assert.equal(result.terminated, "stuck");
+    const lines = readJsonl(home, "t-d5", "e-fix");
+    assert.deepEqual(
+      lines.map((l) => ({ event: l.event, step: l.step, round: l.round, outcome: l.outcome })),
+      [
+        { event: "start", step: "execution", round: null, outcome: undefined },
+        { event: "start", step: "setup", round: null, outcome: undefined },
+        { event: "end", step: "setup", round: null, outcome: undefined },
+        { event: "start", step: "review", round: 1, outcome: undefined },
+        { event: "end", step: "review", round: 1, outcome: undefined },
+        { event: "start", step: "fix", round: 1, outcome: undefined },
+        { event: "end", step: "fix", round: 1, outcome: undefined },
+        { event: "start", step: "finalize", round: null, outcome: undefined },
+        { event: "end", step: "finalize", round: null, outcome: "stuck" },
+        { event: "end", step: "execution", round: null, outcome: "stuck" },
+      ],
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("D5 zcode：不传观测参数——业务照常 converged 且无观测文件无告警", async () => {
+  const home = tmpHome();
+  try {
+    const s = makeSyncScaffold(home);
+    const { result, logs } = await runZcodeArtifact(
+      home,
+      syncBaseArgs(s),
+      syncAgentStub(convergeStubMap(s)),
+      "design-code-sync-loop",
+    );
+    assert.equal(result.terminated, "converged");
+    assert.ok(!existsSync(join(home, ".agents/skill-data/workflow-observability")), "不应创建观测根目录");
+    assert.ok(!logs.some((l) => l.includes("WARN: 观测")), "合法关闭不告警");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("D5 pi：converged 事件序列与 zcode 对拍一致（除 timestamp）", async () => {
+  const home = tmpHome();
+  const prevHome = process.env.HOME;
+  process.env.HOME = home; // pi 壳 world.run 走 spawnSync 继承进程 env
+  try {
+    const s = makeSyncScaffold(home);
+    const { result } = await runPiArtifact(
+      home,
+      { ...syncBaseArgs(s), ...obsArgs("t-d5", "e-pi") },
+      syncAgentStub(convergeStubMap(s)),
+      "design-code-sync-loop",
+    );
+    assert.equal(result.terminated, "converged");
+    const zcHome = tmpHome();
+    try {
+      const zs = makeSyncScaffold(zcHome);
+      await runZcodeArtifact(
+        zcHome,
+        { ...syncBaseArgs(zs), ...obsArgs("t-d5", "e-pi") },
+        syncAgentStub(convergeStubMap(zs)),
+        "design-code-sync-loop",
+      );
+      const piLines = readJsonl(home, "t-d5", "e-pi").map(({ timestamp, ...rest }) => rest);
+      const zcLines = readJsonl(zcHome, "t-d5", "e-pi").map(({ timestamp, ...rest }) => rest);
+      assert.deepEqual(piLines, zcLines, "双平台事件（除 timestamp）应逐字段一致");
+    } finally {
+      rmSync(zcHome, { recursive: true, force: true });
+    }
+  } finally {
+    process.env.HOME = prevHome;
+    rmSync(home, { recursive: true, force: true });
+  }
 });

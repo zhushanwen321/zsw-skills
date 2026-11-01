@@ -41,7 +41,7 @@
 7. **运行档案分流（SKILL「运行记录」节）**：read `<name>.runlog/` 全部文件与 `<name>.ledger.md`——ledger 未清项逐条分流到既有登记处（合理偏差 → impl-plan §5、残留风险 → impl-plan 残留风险节、决策 → ADR）或标注处置完成/记录丢弃理由，禁止档案与登记处双登记并存；runlog 有价值的过程发现（踩坑根因/方案取舍）择要进交付汇总作复盘素材；零未清项注明「档案已清」
 8. [OPTIONAL] 用户指示时产物清理（运行档案默认保留）
 9. **自动衔接 D5**：最终 commit 落地后进 `flow/sync.md`（仅用户明示跳过可免，跳过须记录）
-10. **阶段事件观测终态记录（SKILL「阶段事件观测」节）**：D4 开始时经 `~/.agents/scripts/workflow-observe.mjs` 记 `--stage D4 --step finalize` 的 start，本步收尾后记 end；随后记 `step=execution` 的 start/end 对结束本次执行（end 带 `--outcome <终态词>`）。D0/D6 同理（stage=D0 / D6）；W4 的 D5 未内建观测，其边界也按此方式由主 agent 记录
+10. **阶段事件观测终态记录（SKILL「阶段事件观测」节）**：D4 开始时经 `~/.agents/scripts/workflow-observe.mjs` 记 `--stage D4 --step finalize` 的 start，本步收尾后记 end；随后记 `step=execution` 的 start/end 对结束本次执行（end 带 `--outcome <终态词>`）。D0/D6 同理（stage=D0 / D6）；W2/W3/W4 的 D1/D2/D5 已内建观测，步骤边界由引擎写入
 
 ## 失败状态的可视边界
 

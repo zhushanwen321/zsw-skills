@@ -49,14 +49,14 @@ const OBS_LAYER_PATH = join(SRC, "observability.shared.ts");
 // 契约。改事件字段或阶段词表必须三处同步（构建器在每次构建时按下述规则核对）──
 const OBS_EVENT_FIELDS = ["execution_id", "task_id", "skill", "stage", "step", "round", "attempt", "event", "timestamp", "sample_type"];
 // stage 词表 = workflow 在所属流程的阶段编号（T2 = tech-design 审查；D1/D3 = dev-flow
-// 开发/验收执行；D2 = dev-flow 一致性审查）
-const OBS_STAGES = new Set(["T2", "D1", "D3", "D2"]);
+// 开发/验收执行；D2 = dev-flow 一致性审查；D5 = dev-flow 终态同步）
+const OBS_STAGES = new Set(["T2", "D1", "D3", "D2", "D5"]);
 // stage 实参允许字面量三元（wave-executor 按 exec-plan mode 分叉 D1/D3）——三元比较
 // 里的非 stage 字面量在此显式登记豁免（同 check-workflow-parity 的白名单模式：新值
 // 先确认不属于 stage 再登记）
 const OBS_STAGE_LITERALS_IGNORE = new Set(["dev", "acceptance"]);
 // step 词表 = 阶段内的串行步骤名（execution = 执行级边界事件；其余为业务步骤）
-const OBS_STEPS = new Set(["execution", "setup", "review", "aggregate", "fix", "execute", "finalize", "gate-a"]);
+const OBS_STEPS = new Set(["execution", "setup", "review", "aggregate", "fix", "execute", "finalize", "gate-a", "retire"]);
 // canonical skill 词表 = 事件 skill 字段的合法值（所属技能名，不是 workflow 脚本名——
 // 统计入口按技能过滤，曾因写成 workflow 名被过滤掉，2026-11-01 实测）
 const OBS_SKILLS = new Set(["tech-design-wf", "dev-flow-wf"]);
