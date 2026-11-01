@@ -39,6 +39,12 @@ const WF = join(ROOT, "skills/self/dev-workflow/workflows");
 const SRC = join(WF, "src");
 const SAVED_DIR = join(homedir(), ".zcode", "workflows");
 const NAMES = ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop"];
+// 观测门禁豁免名单：shared 源无 initObservation 调用点且登记在此的 workflow 跳过观测
+// 契约检查（跳过时打一行说明，不静默）。豁免是显式决定不是默认沉默——登记格式 = 双引号
+// workflow 名（须为 NAMES 成员），豁免必须附理由（写在条目行尾或紧邻注释，如「纯脚本
+// workflow 无 agent 调用无观测价值」式）；无理由的登记视为无效，按未豁免处理。
+// 初始为空：新 workflow 默认必须接入观测（接入步骤见 skills/self/dev-workflow/workflow-authoring/SKILL.md）。
+const OBS_EXEMPT = new Set();
 // O 区观测层单一构建输入：已接入观测的 workflow（shared 正文含 initObservation 调用点）
 // 构建时把该文件全文拼在业务正文之前（obsCtx 为 let，业务顶层赋值依赖声明在前）；
 // 未接入的 workflow 不拼。观测层只此一份，业务 shared 禁止拷贝副本
@@ -62,13 +68,22 @@ const OBS_STEPS = new Set(["execution", "setup", "review", "aggregate", "fix", "
 const OBS_SKILLS = new Set(["tech-design-wf", "dev-flow-wf"]);
 
 /** 观测契约核对：shared 已接入观测（initObservation 在场）时校验——stage/step 词表、
- *  九字段在场（对照单一观测层 observability.shared.ts）、终态统一补记出口在场、两侧产物
+ *  十字段在场（对照单一观测层 observability.shared.ts）、终态统一补记出口在场、两侧产物
  *  的步骤调用点集合与 shared 一致（pi 改写/TS 剥离不应丢失观测调用点）。
- *  未接入的 workflow 显式说明跳过（不静默漏检） */
+ *  未接入的 workflow：在 OBS_EXEMPT 登记豁免 → 打印说明跳过；未登记 → 报错（计入 errors，
+ *  --check exit 非 0，pre-commit 拦截）——未接入不是默认合法状态，必须显式选择其一 */
 function checkObservationContract(name, shared, obsLayer, zcOut, piOut, errors) {
   const stageHits = [...shared.matchAll(/initObservation\("([A-Za-z0-9-]+)"/g)];
   if (stageHits.length === 0) {
-    console.log(`  观测契约：${name} 未接入观测（无 initObservation 调用点）——跳过观测维度（产物一致性检查照常）`);
+    if (OBS_EXEMPT.has(name)) {
+      console.log(`  观测门禁：${name} 在 OBS_EXEMPT 豁免名单（理由见名单注释）——跳过观测契约检查（产物一致性检查照常）`);
+      return;
+    }
+    errors.push(
+      `${name}: 未接入观测（shared 源无 initObservation 调用点）——双平台 workflow 默认必须接入阶段事件观测。` +
+        `接入步骤见权威源 skills/self/dev-workflow/workflow-authoring/SKILL.md「观测接入五步」；` +
+        `确属纯脚本、无 agent 调用、无观测价值时，在本文件 OBS_EXEMPT 登记豁免（须附理由）后重新构建`,
+    );
     return;
   }
   // stage 实参允许字面量或字面量三元（wave-executor 按 exec-plan mode 分叉 D1/D3）——

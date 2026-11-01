@@ -31,6 +31,7 @@ scripts/           Dual-platform workflow build and validation scripts
 | dev-flow-wf | Turn the complete design package produced by tech-design-wf into accepted code |
 | design-code-sync | Keep code implementation and design documents in sync |
 | architecture-clean-domain-design | Domain modeling and architecture analysis with DDD and hexagonal architecture as analysis lenses: ubiquitous language, bounded contexts, aggregate invariants, ring-nature mapping; records and maps only — never outputs structural transformation designs |
+| workflow-authoring | Authoring and observability onboarding guide for dual-platform workflow scripts: single-source build layout, GUI lane constraints, five-step observability onboarding, check gates, and data layout |
 
 ### code-optimize/ — Code Optimization
 
