@@ -292,11 +292,20 @@ const SCHEMA_RetirementVerdict = {
 // wfAgent：公共体的 agent(name, persona).ask<T>(prompt) 的 pi 等价。构建管线把公共体
 // 调用点改写为 wfAgent(、泛型参数转为首个字符串参数（typeKey），这里查 SCHEMA_BY_KEY。
 // persona 拼 prompt 头（pi agent() 无 system 通道）；每次调用都是新 agent（pi 无续聊）。
+const SCHEMA_CommitGateFix = {
+  type: "object",
+  properties: {
+    fixed: { type: "array", items: { type: "string" }, description: "实际修复的文件（相对 projectRoot 路径；空数组 = 判定真代码问题转人工）" },
+    summary: { type: "string", description: "一句话修复说明（fixed 为空时写问题与建议处置）" },
+  },
+  required: ["fixed", "summary"],
+};
 const SCHEMA_BY_KEY = {
   PlannerResult: SCHEMA_PlannerResult,
   ModuleReview: SCHEMA_ModuleReview,
   FixOutcome: SCHEMA_FixOutcome,
   RetirementVerdict: SCHEMA_RetirementVerdict,
+  CommitGateFix: SCHEMA_CommitGateFix,
 };
 function wfAgent(name, persona) {
   return {

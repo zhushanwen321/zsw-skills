@@ -171,6 +171,14 @@ interface FixOutcome {
   delegated: { issueId: string; reason: string }[];
 }
 
+/** 门禁合规修复自报（commit 被仓库钩子拒后的轮内修复；fixed 为空 = 判定真代码问题转人工） */
+interface CommitGateFix {
+  /** 实际修复的文件（相对 projectRoot 路径） */
+  fixed: string[];
+  /** 一句话修复说明（fixed 为空时写问题与建议处置） */
+  summary: string;
+}
+
 /** 修复分组（reconcileGroups 输出） */
 interface FixGroup {
   /** 组标识（G1、G2…） */

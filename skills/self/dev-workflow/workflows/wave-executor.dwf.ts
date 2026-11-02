@@ -3,10 +3,12 @@ description: dev-flow-wf W2 通用 DAG 调度引擎（wave-executor）：读 exe
   （schema/依赖环/文件存在性/工作区干净基线），依赖就绪节点流式派发（≤5 并发，wave 字段
   仅展示不参与调度），每节点确定性核验（files_changed ⊆ 声明范围 + 全量 status 粗粒度复核 +
   节点测试命令重跑）→ commit → 解锁后继；核验不过打回同名 agent 定向修（≤2 轮，超限
-  blocked 且后继挂起）；acceptance 模式承载 verify/inspect 节点 + 验收失败修复循环
-  （review-fix-loop 形态：failed 入失败池 → 聚合裁决 phase（跨节点同根因合并 + disputed
-  反证 + 文件不相交分组）→ 修复组 phase（fixer 修产品代码与验收资产，引擎按组 commit）→
-  节点重置重验回调度循环，≤3 轮不收敛按依赖可达性熔断；blocked 仍立即熔断）；终态
+  blocked 且后继挂起）；verify/inspect 节点 failed 入统一失败处理中心
+  （review-fix-loop 形态：失败池 → 聚合裁决 phase（跨节点同根因合并 + disputed 反证 +
+  文件不相交分组，验收失败与 commit 门禁被拒两类条目）→ 修复组 phase（fixer 修产品
+  代码/验收资产/门禁合规问题，引擎按组 commit、commit 条目用原 message 重试）→ 验收
+  节点重置机器重验回调度循环，≤3 轮不收敛按依赖可达性熔断；dev 与 acceptance 模式的
+  verify/inspect 一律适用；blocked 仍立即熔断）；终态
   completed / blocked / core-failed，全程 failed-as-return 不 throw。
 whenToUse: dev-flow-wf 的 D1 开发循环与 D3 端到端验收发起本 workflow（CreateWorkflow path
   指向本文件 + args.execPlan）。exec-plan.json 由 D0 从设计包编译产出；断点恢复走
@@ -1190,19 +1192,26 @@ const declaredFiles = new Set<string>();
  *  钩子在主会话代提交时照常执行）；收尾统一呈报 */
 const deferredCommits: { id: string; message: string; files: string[]; err: string }[] = [];
 
-// ── D3 验收失败修复循环（review-fix-loop 形态：失败池 → 聚合裁决 phase → 修复组 phase
-//    → 节点重置重验回循环）。验收 failed 不再立即熔断——可达性熔断改到修复轮耗尽后生效；
+// ── 统一失败处理中心（review-fix-loop 形态：失败池 → 聚合裁决 phase → 修复组 phase
+//    → 机器重验回循环）。三类「本可轮内修却会跳出」的失败统一进池：
+//    ① 验收失败（verify/inspect failed——acceptance 与 dev 模式一律，开发期 e2e 同获修复
+//    循环）；② commit 门禁失败（dev 节点核验过但 commit 被仓库钩子拒——豁免标记/清单
+//    登记类合规修复就轮内做，不再全量上抛主 agent）；③（W2 无产物类——Gate A 产物属 W3）。
 //    fixer 可修产品代码（修订 2026-09-26「验收 fixer 不碰产品代码」裁决），防线 =
-//    归因/修复分角色 + 重验走节点原路径机器判定（剧本 exit code / 判定书锚，不采信
-//    自报）+ disputed 反证通道（误报呈报人工裁决，不占修复轮次）。仅 acceptance 模式
-//    生效——dev 模式的 verify 失败维持立即熔断（D1 行为零变化）──
-const MAX_ACCEPTANCE_FIX_ROUNDS = 3;
+//    归因/修复分角色 + 重验走机器判定（剧本 exit code / 判定书锚 / commit exit code，
+//    不采信自报）+ disputed 反证通道（误报呈报人工裁决，不占修复轮次）。blocked（环境/
+//    任务书/结构化不合规）不进池——修复组解不了，维持立即熔断。dev 模式的 dev 节点打回
+//    超限 blocked 同样不进池（数字阈值裁决保留）──
+const MAX_FAILURE_FIX_ROUNDS = 3;
 /** 失败池：节点 id → 逐轮失败记录（归因结果 + 失败输出 tail），聚合裁决的输入 */
 const acceptanceFailures = new Map<
   string,
   { round: number; kind: "verify" | "inspect"; cls: string; evidence: string; failureFiles: string[]; fixHint: string; tail: string }[]
 >();
-let acceptanceFixRounds = 0;
+/** commit 门禁失败池（deferredCommits 的轮内修复通道）：节点核验已过、仅 commit 被钩子
+ *  拒——条目修复成功即从两个数组同步移除，轮内耗尽仍拒才随终态呈报（兜底通道不变） */
+const commitGateFailures: { nodeIds: string[]; message: string; files: string[]; err: string; round: number }[] = [];
+let failureFixRounds = 0;
 /** disputed 节点集（聚合级反证 + fixer 级拒修）：退出修复循环保持 failed，随终态呈报——
  *  重跑剧本仍会红（没人修它），不重置以免空占轮次 */
 const acceptanceDisputedIds = new Set<string>();
@@ -1695,8 +1704,11 @@ async function executeDevNode(node: PlanNode): Promise<void> {
     if (!cr.ok) {
       // commit 被拒不 blocked：核验已过、编码成果有效；拒因多为仓库 pre-commit 钩子的
       // 全仓检查看到并行兄弟单元的半成品（钩子要求「当场修复」，而修那些文件超出本
-      // 节点范围声明纪律——节点内无解）。转待办，收尾呈报主 agent 代提交（钩子照常执行）
+      // 节点范围声明纪律——节点内无解）。双通道：统一失败处理中心轮内修（门禁合规类：
+      // 豁免标记/清单登记/常量化——修复环重试 commit 机器重验）；轮内修不动仍留
+      // deferredCommits 随终态呈报主 agent 代提交（钩子照常执行）
       deferredCommits.push({ id: node.id, message, files: result.files_changed, err: cr.err });
+      commitGateFailures.push({ nodeIds: [node.id], message, files: result.files_changed, err: cr.err, round: failureFixRounds + 1 });
       const evidence = `${result.test_evidence}；deviations: ${result.deviations.join("；") || "无"}；commit 待主 agent 代提交（被拒输出见 event）`;
       state.set(node.id, { status: "done", attempts });
       await statusUpdate(
@@ -1777,16 +1789,7 @@ async function executeVerifyNode(node: PlanNode): Promise<void> {
     // 分角色 + 重验机器判定 + disputed 反证）或 spec-bug 自愈不收敛 / environment 重试仍红
     // → 入失败池（acceptance 模式由修复循环聚合修复后重验；dev 模式维持依赖可达性熔断）
     recordAcceptanceFailure(node, "verify", verdict.class, verdict.evidence, verdict.failureFiles, verdict.fixHint, run.output);
-    const stuck = successorsOf(node.id).filter((s) => {
-      const st = nodeState(s);
-      return st === "pending" || st === "in-progress";
-    });
-    const mode =
-      plan.mode === "acceptance"
-        ? "入验收修复循环（聚合裁决 → 修复组 → 重验）"
-        : stuck.length > 0
-          ? `卡住后继（${stuck.join("、")}）——立即熔断上报，由主 agent / 用户裁决`
-          : "不卡后续——记录跳过，其余节点照常执行，终态统一上报";
+    const mode = "入统一失败处理中心（聚合裁决 → 修复组 → 机器重验；同轮其他分支照跑，轮耗尽才按可达性判定）";
     await markNodeBlockedOrFailed(
       node.id,
       "failed",
@@ -1860,7 +1863,7 @@ async function executeInspectNode(node: PlanNode): Promise<void> {
     await markNodeBlockedOrFailed(
       node.id,
       "failed",
-      `inspect 验收结论 fail（归因 ${dv.class}${plan.mode === "acceptance" ? "；入验收修复循环" : ""}）：${dv.evidence}`,
+      `inspect 验收结论 fail（归因 ${dv.class}；入统一失败处理中心）：${dv.evidence}`,
       result.test_evidence,
       1,
     );
@@ -1895,14 +1898,14 @@ function recordAcceptanceFailure(
   output: string,
 ): void {
   const arr = acceptanceFailures.get(node.id) ?? [];
-  arr.push({ round: acceptanceFixRounds + 1, kind, cls, evidence, failureFiles, fixHint, tail: tailLines(output, TAIL_LINES) });
+  arr.push({ round: failureFixRounds + 1, kind, cls, evidence, failureFiles, fixHint, tail: tailLines(output, TAIL_LINES) });
   acceptanceFailures.set(node.id, arr);
 }
 
 /** inspect fail 归因（与 verify 的 diagnoseVerifyFailure 同契约，输入 = 判定证据文本）。
  *  返回不合规保守按 product-bug（与 verify 归因的兜底一致）。 */
 async function diagnoseInspectFailure(node: PlanNode, testEvidence: string): Promise<HealVerdict> {
-  const diag = agent(`诊断-${node.id}-i${acceptanceFixRounds + 1}`, DIAGNOSE_PERSONA);
+  const diag = agent(`诊断-${node.id}-i${failureFixRounds + 1}`, DIAGNOSE_PERSONA);
   const prompt = [
     `验收节点 ${node.id}（inspect：按任务书真机判定）的验收结论为 fail，请归因（只读分析）。`,
     `- 任务书：${node.promptFile}；判定书（verdict.json）与产物在 ${node.artifactsDir}`,
@@ -2003,18 +2006,22 @@ function validateAcceptanceFixReport(v: unknown): Validated<AcceptanceFixReport>
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as AcceptanceFixReport };
 }
 
-/** D3 验收失败修复循环一轮：聚合裁决 phase → 修复组 phase → 引擎按组 commit。
- *  ok=false 时调度循环按 fix-failure 语义熔断；resetIds = 本轮应重验（重置 pending）的
- *  节点——修复是组级的，同组连带修复的节点一并重验，由机器判定裁决谁真正转绿。 */
-async function runAcceptanceFixCycle(round: number): Promise<{ ok: boolean; reason: string; resetIds: string[] }> {
+/** 统一失败处理中心一轮：聚合裁决 phase → 修复组 phase → 引擎按组 commit + commit
+ *  条目重试。ok=false 时调度循环按 fix-failure 语义熔断；resetIds = 本轮应重验（重置
+ *  pending）的验收失败节点——修复是组级的，同组连带修复的节点一并重验，由机器判定
+ *  裁决谁真正转绿。commit 条目修复成功即从 commitGateFailures 与 deferredCommits 同步
+ *  移除（副作用），失败留池下轮（MAX_FAILURE_FIX_ROUNDS 兜底）。 */
+async function runFailureFixCycle(round: number): Promise<{ ok: boolean; reason: string; resetIds: string[] }> {
   const failedNodes = plan.nodes.filter(
     (n) => nodeState(n.id) === "failed" && (n.kind === "verify" || n.kind === "inspect") && !acceptanceDisputedIds.has(n.id),
   );
-  if (failedNodes.length === 0) return { ok: true, reason: "", resetIds: [] };
-  phase(`验收失败聚合裁决（第 ${round} 轮）`);
-  log(`第 ${round} 轮验收修复：失败池 ${failedNodes.map((n) => n.id).join("、")}${acceptanceDisputedIds.size > 0 ? `（disputed 已排除 ${acceptanceDisputedIds.size} 节点）` : ""}`);
-  const failBlocks = failedNodes
-    .map((n) => {
+  if (failedNodes.length === 0 && commitGateFailures.length === 0) return { ok: true, reason: "", resetIds: [] };
+  phase(`失败聚合裁决（第 ${round} 轮）`);
+  log(
+    `第 ${round} 轮失败修复：验收失败 ${failedNodes.map((n) => n.id).join("、") || "无"}；commit 被拒 ${commitGateFailures.map((c) => c.nodeIds.join("、")).join("；") || "无"}${acceptanceDisputedIds.size > 0 ? `（disputed 已排除 ${acceptanceDisputedIds.size} 节点）` : ""}`,
+  );
+  const failBlocks = [
+    ...failedNodes.map((n) => {
       const hist = acceptanceFailures.get(n.id) ?? [];
       const last = hist[hist.length - 1];
       return [
@@ -2032,36 +2039,56 @@ async function runAcceptanceFixCycle(round: number): Promise<{ ok: boolean; reas
       ]
         .filter(Boolean)
         .join("\n");
-    })
-    .join("\n\n");
+    }),
+    ...commitGateFailures.map((cf) =>
+      [
+        `- 节点 ${cf.nodeIds.join("、")} 的 commit 被仓库钩子拒绝（核验与测试已过、编码成果有效，仅 commit 未落）`,
+        `  原 commit message：${cf.message}`,
+        `  待提交文件：${cf.files.join("、")}`,
+        cf.round > 1 ? `  （第 ${cf.round} 轮修复后重试仍被拒——换思路，勿重复同款修法）` : "",
+        `  被拒输出（tail）：\n${String(cf.err)
+          .split("\n")
+          .map((l) => `    ${l}`)
+          .join("\n")}`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    ),
+  ].join("\n\n");
   const aggPrompt = [
-    `第 ${round} 轮验收失败聚合裁决（只读分析，不改任何文件）。`,
+    `第 ${round} 轮失败聚合裁决（只读分析，不改任何文件）。失败池两类条目——验收失败节点（修产品代码或验收资产）与 commit 被拒节点（核验已过，只差过仓库钩子：按被拒输出做门禁合规修复——豁免标记 / 清单登记 / 常量化，钩子指出什么合规问题就修什么）。`,
     "",
-    "失败节点的归因记录（逐节点）：",
+    "失败条目记录（逐条）：",
     failBlocks,
     "",
     "任务：",
-    "1. 跨节点合并同根因（一条聚合条目可覆盖多个节点——保留最强证据，修复指导合并为最具体的一句，将随任务文档直达修复者）。",
-    '2. 逐条裁决：真实缺陷（产品实现或验收资产）→ action="fix"（files 填预期改动文件，guidance 给具体可执行的修复指导）；归因误报/断言本就不该成立 → action="disputed"（rootCause 写反证——file:line + 归因漏了什么）。',
+    "1. 跨节点合并同根因（一条聚合条目可覆盖多个节点——保留最强证据，修复指导合并为最具体的一句，将随任务文档直达修复者）；两类条目同根因时可合并为一条，但 guidance 须同时覆盖两类修复动作。",
+    '2. 逐条裁决：真实缺陷/可修的钩子合规问题 → action="fix"（files 填预期改动文件，guidance 给具体可执行的修复指导——commit 类条目 guidance 以被拒输出为据）；归因误报/断言本就不该成立/钩子拦的是真代码问题（非合规登记类，超出本轮修复职责）→ action="disputed"（rootCause 写反证——file:line + 归因漏了什么）。',
     "3. 修复分组：fix 条目按文件相关性分组——同文件/同模块/同根因同组（一个修复者修一组）；不同组的 files 必须不相交（组间并行修复互不冲突）；单条独立成组即可，无关联不强行合并。",
-    "4. 延续条目（历史轮已修过仍红）优先换思路：guidance 不得复述已失败的修法。",
+    "4. 延续条目（历史轮已修过仍红/仍被拒）优先换思路：guidance 不得复述已失败的修法。",
     "",
-    `返回 JSON：{ items: [{ id: "AF-${round}-<序>", nodeIds: ["节点id"], title, action: "fix"|"disputed", rootCause, files: ["文件"], guidance }], groups: [{ id: "AG-<序>", itemIds: ["AF-..."], note }] }——每个失败节点至少被一条 item 覆盖；action=fix 的条目恰好被一个 group 覆盖；无 fix 条目时 groups=[]。`,
+    `返回 JSON：{ items: [{ id: "AF-${round}-<序>", nodeIds: ["节点id"], title, action: "fix"|"disputed", rootCause, files: ["文件"], guidance }], groups: [{ id: "AG-<序>", itemIds: ["AF-..."], note }] }——每个失败节点至少被一条 item 覆盖（两类条目都算）；action=fix 的条目恰好被一个 group 覆盖；无 fix 条目时 groups=[]。`,
   ].join("\n");
   // 构造外提（契约见 askValidated 注释块）：防校验重试再入同名二次创建
   const aggAgent = agent(`验收聚合-r${round}`, ACCEPTANCE_AGG_PERSONA);
+  // fail-closed 覆盖集 = 验收 failed 节点 ∪ commit 条目节点（两类都要被恰好覆盖）
+  const poolNodeIds = [...failedNodes.map((n) => n.id), ...commitGateFailures.flatMap((cf) => cf.nodeIds)];
   const agg = await askValidated(
-    makeAcceptanceAggValidator(failedNodes.map((n) => n.id)),
+    makeAcceptanceAggValidator(poolNodeIds),
     (p) => aggAgent.ask<AcceptanceAggregation>(p),
     aggPrompt,
   );
   if (agg === null) {
-    return { ok: false, reason: `聚合裁决返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规（失败池 ${failedNodes.map((n) => n.id).join("、")}）`, resetIds: [] };
+    return { ok: false, reason: `聚合裁决返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规（失败池 ${poolNodeIds.join("、")}）`, resetIds: [] };
   }
   for (const it of agg.items) {
     if (it.action !== "disputed") continue;
     acceptanceDisputed.push({ round, itemId: it.id, by: "aggregator", evidence: it.rootCause });
     for (const nid of it.nodeIds) acceptanceDisputedIds.add(nid);
+    // disputed 的 commit 条目出池（钩子拦的是真代码问题——主 agent 裁决；deferredCommits 保留呈报）
+    for (let i = commitGateFailures.length - 1; i >= 0; i--) {
+      if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);
+    }
     log(`条目 ${it.id}（节点 ${it.nodeIds.join("、")}）聚合判 disputed：${it.rootCause}`);
   }
   const fixItems = agg.items.filter((it) => it.action === "fix");
@@ -2071,7 +2098,7 @@ async function runAcceptanceFixCycle(round: number): Promise<{ ok: boolean; reas
     await writeTextViaNode(
       `${fixDir}/aggregated.md`,
       [
-        `# 第 ${round} 轮验收失败聚合清单`,
+        `# 第 ${round} 轮失败聚合清单（验收失败 + commit 门禁）`,
         "",
         ...agg.items.map((it) =>
           `- ${it.id} [${it.action}] ${it.title}（节点 ${it.nodeIds.join("、")}）——${it.rootCause}${it.action === "fix" ? `\n  files: ${it.files.join("、")}\n  guidance: ${it.guidance}` : ""}`,
@@ -2084,32 +2111,35 @@ async function runAcceptanceFixCycle(round: number): Promise<{ ok: boolean; reas
     log(`WARN: 聚合清单落盘失败（${errText(e)}）——聚合数据以日志与返回值为准`);
   }
   if (fixItems.length === 0) {
-    log("聚合裁决全部 disputed——无可修项，失败节点保持 failed 随终态呈报");
+    log("聚合裁决全部 disputed——无可修项（验收节点保持 failed、commit 条目回 deferredCommits，均随终态呈报）");
     return { ok: true, reason: "", resetIds: [] };
   }
-  phase(`验收修复组并行（第 ${round} 轮）`);
+  phase(`失败修复组并行（第 ${round} 轮）`);
   // per-fixer 任务文档确定性渲染（文档与组严格一致——LLM 自写文档会与派发组错位）
+  const commitItemIds = new Set(
+    fixItems.filter((it) => commitGateFailures.some((cf) => cf.nodeIds.some((nid) => it.nodeIds.includes(nid)))).map((it) => it.id),
+  );
   const fixerDocs: { path: string; group: AcceptanceAggregation["groups"][number]; items: AcceptanceAggItem[]; cwd: string }[] = [];
   let docIdx = 0;
   for (const g of agg.groups) {
     docIdx += 1;
     const gItems = fixItems.filter((it) => g.itemIds.includes(it.id));
     if (gItems.length === 0) continue;
-    const gNodes = failedNodes.filter((n) => gItems.some((it) => it.nodeIds.includes(n.id)));
+    const gNodes = plan.nodes.filter((n) => gItems.some((it) => it.nodeIds.includes(n.id)));
     const docPath = `${fixDir}/fixer-${docIdx}.md`;
     await writeTextViaNode(
       docPath,
       [
-        `# 验收修复任务 ${g.id}${g.note ? `——${g.note}` : ""}`,
+        `# 失败修复任务 ${g.id}${g.note ? `——${g.note}` : ""}`,
         "",
         "并行修复：其他组同时进行且文件与你不相交；只改本组条目涉及的文件。",
         "",
         ...gItems.flatMap((it) => [
-          `- ${it.id} ${it.title}（节点 ${it.nodeIds.join("、")}）`,
+          `- ${it.id} ${it.title}（节点 ${it.nodeIds.join("、")}）${commitItemIds.has(it.id) ? "〔commit 门禁类：按被拒输出做合规修复，禁改产品逻辑；真代码问题走 disputed〕" : ""}`,
           `  根因：${it.rootCause}`,
           it.files.length > 0 ? `  files: ${it.files.join(", ")}` : "",
           it.guidance !== "" ? `  guidance: ${it.guidance}` : "",
-          ...(acceptanceFailures.get(it.nodeIds[0]) ?? []).slice(0, -1).map((h) => `  历史修法（已失败勿重复）：第${h.round}轮 ${h.cls}——${h.evidence}`),
+          ...(acceptanceFailures.get(it.nodeIds[0] ?? "") ?? []).slice(0, -1).map((h) => `  历史修法（已失败勿重复）：第${h.round}轮 ${h.cls}——${h.evidence}`),
         ]),
       ]
         .filter(Boolean)
@@ -2117,17 +2147,17 @@ async function runAcceptanceFixCycle(round: number): Promise<{ ok: boolean; reas
     );
     fixerDocs.push({ path: docPath, group: g, items: gItems, cwd: gNodes[0]?.cwd ?? plan.projectRoot });
   }
-  log(`第 ${round} 轮验收修复分 ${fixerDocs.length} 组并行`);
+  log(`第 ${round} 轮失败修复分 ${fixerDocs.length} 组并行`);
   const fixerResults = await Promise.all(
     fixerDocs.map(async (d, idx) => {
       const fixerAgent = agent(`验收修复-r${round}-g${idx + 1}`, ACCEPTANCE_FIXER_PERSONA);
       const prompt = [
-        `读取修复任务文档 ${d.path}（绝对路径）并完整执行（第 ${round} 轮验收修复）。`,
+        `读取修复任务文档 ${d.path}（绝对路径）并完整执行（第 ${round} 轮失败修复：验收缺陷修产品代码/验收资产；commit 门禁类条目按钩子被拒输出做合规修复——豁免标记/清单登记/常量化，钩子指出什么修什么）。`,
         "",
         "约束：",
-        "1. 以条目根因与 guidance 为依据修复产品代码或验收资产；小步修改；只改本组条目涉及的文件与波及文件。",
+        "1. 以条目根因与 guidance 为依据修复；小步修改；只改本组条目涉及的文件与波及文件。",
         "2. 修完自跑改动相关的测试/类型检查（只重跑失败相关项，禁止全套复跑——重验由引擎机器执行，无需你跑全量）。",
-        "3. 确信条目是误报（断言口径本就不该成立/属既有非缺陷行为）：不要修，放 disputed 并给反证（file:line + 归因漏了什么），人工裁决——禁止靠修代码迎合错误断言。",
+        "3. 确信条目是误报（断言口径本就不该成立 / 钩子拦的是真代码问题而非合规登记类）：不要修，放 disputed 并给反证（file:line + 归因漏了什么），人工裁决——禁止靠修代码迎合错误断言、禁止为过门禁擅自改产品逻辑。",
         "4. git 禁令：禁止 git add / commit / push / stash——提交由引擎统一执行。",
         "5. 改动触发仓库门禁义务的（豁免标记 / 清单登记）按仓库规范就地处理，防引擎提交被钩子拦。",
         `6. 工作目录锚：${d.cwd}（files 申报相对该仓库根的路径）。`,
@@ -2149,20 +2179,55 @@ async function runAcceptanceFixCycle(round: number): Promise<{ ok: boolean; reas
     for (const dsp of rep.disputed) {
       const it = doc.items.find((x) => x.id === dsp.itemId);
       acceptanceDisputed.push({ round, itemId: dsp.itemId, by: `fixer:${doc.group.id}`, evidence: dsp.evidence });
-      for (const nid of it?.nodeIds ?? []) acceptanceDisputedIds.add(nid);
+      if (it !== undefined) for (const nid of it.nodeIds) acceptanceDisputedIds.add(nid);
+      // fixer 级 disputed 的 commit 条目出池（钩子拦的是真代码问题——主 agent 裁决；deferredCommits 保留呈报）
+      if (it !== undefined) {
+        for (let i = commitGateFailures.length - 1; i >= 0; i--) {
+          if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);
+        }
+      }
       log(`条目 ${dsp.itemId}（组 ${doc.group.id}）fixer 判 disputed：${dsp.evidence}`);
     }
   }
   // 组级一笔 commit（引擎执行；按组 cwd 分桶——跨仓组按首节点仓根提交，文件不在该仓时
-  // git add 报错以 fix-failure 熔断呈报，不留半提交状态）
+  // git add 报错以 fix-failure 熔断呈报，不留半提交状态）。commit 门禁类条目的文件不走
+  // 组级 commit——它们必须用原 message 重试（message 含 unitId，是崩溃恢复对账的反查锚）
   for (const { doc, rep } of okResults) {
-    const files = [...new Set(rep.fixes.flatMap((f) => f.files))];
+    const files = [...new Set(rep.fixes.filter((f) => !commitItemIds.has(f.itemId)).flatMap((f) => f.files))];
     if (files.length === 0) continue;
-    const c = await gitAddCommitViaNode(doc.cwd, `fix(acceptance): 第 ${round} 轮验收修复（${doc.group.id}，${files.length} 文件）`, files);
+    const c = await gitAddCommitViaNode(doc.cwd, `fix(acceptance): 第 ${round} 轮失败修复（${doc.group.id}，${files.length} 文件）`, files);
     if (!c.ok) {
       return { ok: false, reason: `修复组 ${doc.group.id} commit 失败（${doc.cwd}）：${c.err}——改动留工作区，接管前先 git status 盘点`, resetIds: [] };
     }
     log(`修复组 ${doc.group.id} 已提交（${c.hash.slice(0, 8)}）`);
+  }
+  // commit 门禁条目重验：用原 message + 原文件 ∪ fixer 合规修复文件重试提交（exit 0 = 恢复）
+  for (const { rep } of okResults) {
+    for (const cf of [...commitGateFailures]) {
+      const node = plan.nodes.find((n) => cf.nodeIds.includes(n.id));
+      if (node === undefined) continue;
+      const fixFiles = rep.fixes.filter((f) => f.itemId !== "" && cf.nodeIds.some((nid) => (fixItems.find((it) => it.id === f.itemId)?.nodeIds.includes(nid) ?? false))).flatMap((f) => f.files);
+      if (fixFiles.length === 0) continue; // 本组没有覆盖该 commit 条目的修复申报（他组管辖或未申报）
+      const tryFiles = [...new Set([...cf.files, ...fixFiles])];
+      const c2 = await gitAddCommitViaNode(node.cwd, cf.message, tryFiles);
+      const cfIdx = commitGateFailures.indexOf(cf);
+      const dcIdx = deferredCommits.findIndex((dc) => cf.nodeIds.includes(dc.id) && dc.message === cf.message);
+      if (c2.ok) {
+        if (cfIdx >= 0) commitGateFailures.splice(cfIdx, 1);
+        if (dcIdx >= 0) deferredCommits.splice(dcIdx, 1);
+        const prevAttempts = state.get(node.id)?.attempts ?? 0;
+        await statusUpdate(
+          node.id,
+          { status: "done", attempts: prevAttempts, commit: c2.hash, evidence: `commit 门禁修复后恢复提交（第 ${round} 轮，${c2.hash.slice(0, 8)}）` },
+          "commit-recovered",
+          `commit 被拒经第 ${round} 轮门禁合规修复后重试成功`,
+        );
+        log(`commit 条目（节点 ${cf.nodeIds.join("、")}）已恢复提交（${c2.hash.slice(0, 8)}，原 message 保留对账锚）`);
+      } else {
+        if (cfIdx >= 0) commitGateFailures[cfIdx] = { ...cf, err: c2.err, round };
+        log(`WARN: commit 条目（节点 ${cf.nodeIds.join("、")}）重试仍被拒——留池下轮（${MAX_FAILURE_FIX_ROUNDS - round} 轮余量）`);
+      }
+    }
   }
   // 重置重验：非 disputed 失败节点全部重置（修复是组级的，连带修复的节点由机器判定裁决）
   const resetIds = failedNodes.filter((n) => !acceptanceDisputedIds.has(n.id)).map((n) => n.id);
@@ -2220,34 +2285,35 @@ async function runSchedulingLoop(): Promise<void> {
       dispatched += 1;
     }
     if (active.size === 0) {
-      // D3 验收失败修复循环（仅 acceptance 模式）：无活跃且存在可修的 failed 验收节点 →
-      // 聚合修复一轮后重置重验（重跑节点原路径 = 机器判定）；轮耗尽仍 failed 按可达性
-      // 判定收束（卡后继 = core-failed；不卡 = 保持 failed 由收尾呈报）。
-      // blocked 不进修复循环（环境/任务书/结构化问题非修复组可解）；dev 模式零变化
-      if (plan.mode === "acceptance") {
+      // 统一失败处理中心：无活跃且失败池非空（验收 failed 未 disputed / commit 被拒未恢复）
+      // → 聚合修复一轮（验收节点重置 pending 重验 = 机器判定走原路径；commit 条目修复后
+      // 环内重试提交 = exit 0 重验）。轮耗尽收束：验收 failed 按可达性判定（卡后继 =
+      // core-failed；不卡 = 保持 failed 由收尾呈报）；commit 残留留 deferredCommits 呈报
+      // 主 agent 代提交（兜底通道不变）。blocked 不进（环境/任务书/结构化问题非修复组可解）
+      {
         const failedAcc = plan.nodes.filter(
           (n) => nodeState(n.id) === "failed" && (n.kind === "verify" || n.kind === "inspect") && !acceptanceDisputedIds.has(n.id),
         );
-        if (failedAcc.length > 0 && acceptanceFixRounds < MAX_ACCEPTANCE_FIX_ROUNDS) {
-          acceptanceFixRounds += 1;
-          const cyc = await runAcceptanceFixCycle(acceptanceFixRounds);
+        if ((failedAcc.length > 0 || commitGateFailures.length > 0) && failureFixRounds < MAX_FAILURE_FIX_ROUNDS) {
+          failureFixRounds += 1;
+          const cyc = await runFailureFixCycle(failureFixRounds);
           if (!cyc.ok) {
-            coreFail = { id: "acceptance-fix", detail: `第 ${acceptanceFixRounds} 轮验收修复失败：${cyc.reason}` };
+            coreFail = { id: "failure-fix", detail: `第 ${failureFixRounds} 轮失败修复失败：${cyc.reason}` };
             break;
           }
           for (const id of cyc.resetIds) {
             const prev = state.get(id);
             const attempts = (prev?.attempts ?? 0) + 1;
             state.set(id, { status: "pending", attempts });
-            await statusUpdate(id, { status: "pending", attempts }, "fix-round", `第 ${acceptanceFixRounds} 轮验收修复完成，重置重验（机器判定）`);
+            await statusUpdate(id, { status: "pending", attempts }, "fix-round", `第 ${failureFixRounds} 轮失败修复完成，重置重验（机器判定）`);
           }
-          if (cyc.resetIds.length > 0) {
-            log(`第 ${acceptanceFixRounds} 轮验收修复完成：重置重验 ${cyc.resetIds.join("、")}`);
-            continue;
-          }
-          // 全 disputed：无可修项——按可达性判定收束（同轮耗尽路径）
+          log(
+            `第 ${failureFixRounds} 轮失败修复：重置重验 ${cyc.resetIds.length} 节点${commitGateFailures.length > 0 ? `，commit 待恢复 ${commitGateFailures.length} 条` : ""}`,
+          );
+          if (cyc.resetIds.length > 0 || commitGateFailures.length > 0) continue;
+          // 池已清空（全恢复或全 disputed）——按可达性判定收束（同轮耗尽路径）
         }
-        if (failedAcc.length > 0 && acceptanceFixRounds >= MAX_ACCEPTANCE_FIX_ROUNDS) {
+        if (failedAcc.length > 0 && failureFixRounds >= MAX_FAILURE_FIX_ROUNDS) {
           const stuckN = failedAcc.find((n) =>
             successorsOf(n.id).some((s) => {
               const sst = nodeState(s);
@@ -2257,7 +2323,7 @@ async function runSchedulingLoop(): Promise<void> {
           if (stuckN !== undefined) {
             coreFail = {
               id: stuckN.id,
-              detail: `验收失败经 ${MAX_ACCEPTANCE_FIX_ROUNDS} 轮修复循环仍未收敛——节点 ${stuckN.id} 卡住后继，熔断呈报；disputed 反证与聚合历史（${skillDataDir}/${String(plan.statusPath.split("/").pop() ?? "status")}.fixes/）随终态`,
+              detail: `验收失败经 ${MAX_FAILURE_FIX_ROUNDS} 轮修复循环仍未收敛——节点 ${stuckN.id} 卡住后继，熔断呈报；disputed 反证与聚合历史（${skillDataDir}/${String(plan.statusPath.split("/").pop() ?? "status")}.fixes/）随终态`,
             };
             break;
           }
@@ -2282,16 +2348,15 @@ async function runSchedulingLoop(): Promise<void> {
     log(`节点 ${finishedId} 落定（活跃 ${active.size}），重算就绪集`);
     // 核心组熔断判定：任一核心节点 blocked/failed 且 haltOnCoreFail → 记归因、停止新派发。
     // 在飞节点收尾不放弃（await allSettled——熔断只是不派新，已派节点的落盘/commit 照常完成）
-    // §8.7 依赖可达性熔断（2026-09-26 用户裁决，统一判据）：任一节点 blocked/failed 且
-    // 卡住未终态后继（dev 打回超限 / 自报 blockers / 引擎层失败）→ 立即停止派发（在飞
-    // 收尾不放弃）。验收 failed（acceptance 模式）不再立即熔断——修复循环承接（同轮其他
-    // 分支照跑，修复轮耗尽后才按可达性判定，见循环头 active.size === 0 分支）。
-    // 原静态 coreIds/haltOnCoreFail 短路已退役（核心场景标注不再承载熔断语义——依赖闭包
-    // 是唯一判据）
+    // §8.7 依赖可达性熔断（统一判据）：任一节点 blocked/failed 且卡住未终态后继
+    // （dev 打回超限 / 自报 blockers / 引擎层失败）→ 立即停止派发（已派节点收尾不放弃）。
+    // verify/inspect 的 failed 不立即熔断（acceptance 与 dev 模式一律）——统一失败处理
+    // 中心承接（同轮其他分支照跑，修复轮耗尽后才按可达性判定，见循环头 active.size===0
+    // 分支）。原静态 coreIds/haltOnCoreFail 短路已退役（依赖闭包是唯一判据）
     {
       const stuckBad = plan.nodes.find((n) => {
         const st = nodeState(n.id);
-        if (st === "failed" && plan.mode === "acceptance" && (n.kind === "verify" || n.kind === "inspect")) return false;
+        if (st === "failed" && (n.kind === "verify" || n.kind === "inspect")) return false;
         if (st !== "failed" && st !== "blocked") return false;
         return successorsOf(n.id).some((s) => {
           const sst = nodeState(s);
@@ -2780,8 +2845,8 @@ if (runStartedAt !== null) {
   deferredCommits,
   residualFiles,
   acceptanceFix:
-    acceptanceFixRounds > 0 || acceptanceDisputed.length > 0
-      ? { rounds: acceptanceFixRounds, disputed: acceptanceDisputed, fixesDir: `${skillDataDir}/${String(plan.statusPath.split("/").pop() ?? "status")}.fixes` }
+    failureFixRounds > 0 || acceptanceDisputed.length > 0
+      ? { rounds: failureFixRounds, disputed: acceptanceDisputed, fixesDir: `${skillDataDir}/${String(plan.statusPath.split("/").pop() ?? "status")}.fixes` }
       : null,
 };
 

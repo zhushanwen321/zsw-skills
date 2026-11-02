@@ -2035,8 +2035,18 @@ gateARetry: while (true) {
                 }
             }
             else {
-                g.commitNote = `commit 失败（exit ${c.exitCode}）：${c.stderr.trim() || c.stdout.trim()}——改动留工作区`;
-                log(`WARN 组 ${g.name} ${g.commitNote}`);
+                // 立即重试一次（index.lock 竞争类瞬时失败自愈；钩子拦截类留工作区由 settle 收编
+                // 与终态呈报承接——组 commit 实测未见门禁拦截案例，不建 fixer 环）
+                const c2 = await world.run("node", ["-e", NODE_COMMIT, info.projectRoot, JSON.stringify(g.changedFiles), commitMsg]);
+                if (c2.exitCode === 0) {
+                    g.committed = true;
+                    g.commitNote = `${commitMsg}（首次失败后重试成功——瞬时锁竞争）`;
+                    log(`组 ${g.name} commit 首次失败，重试成功`);
+                }
+                else {
+                    g.commitNote = `commit 失败（exit ${c.exitCode}，重试仍败）：${c.stderr.trim() || c.stdout.trim()}——改动留工作区`;
+                    log(`WARN 组 ${g.name} ${g.commitNote}`);
+                }
             }
         }
         // ── 阶段 B2：未归属改动 settle（2026-10-04 裁决）──
@@ -2394,7 +2404,43 @@ gateARetry: while (true) {
                 artCode = -1;
             }
             if (r.exitCode !== 0 || artCode !== 0) {
-                return await finishGateA(`产物类构建失败（${a.id}，exit ${r.exitCode}/code ${artCode}）——后续验证类条目依赖该产物，先归因产物构建（日志 ${artifactLogOf(a.id)}）再重跑；本工作流不自动归因`);
+                // 产物构建失败不再直接终态：先引擎重跑一次自愈（产物过期是最常见因，重建即愈），
+                // 仍败登记条目回注修复轮（fixer 读构建日志修产物脚本/基建；产物是本轮声明依赖，
+                // 无豁免语义，不派分诊），分诊轮耗尽才终态
+                if (gateARounds >= MAX_GATE_A_TRIAGE_ROUNDS) {
+                    return await finishGateA(`产物类构建失败（${a.id}，exit ${r.exitCode}/code ${artCode}）且回注轮已耗尽（${MAX_GATE_A_TRIAGE_ROUNDS}）——日志 ${artifactLogOf(a.id)}，由主 agent 归因产物构建后重跑`);
+                }
+                gateARounds += 1;
+                const r2 = await world.run("node", ["-e", NODE_RUN_CMD, info.projectRoot, a.command.program, JSON.stringify(a.command.args), artifactLogOf(a.id), String(GATE_A_TIMEOUT_MS)], { timeoutMs: GATE_A_WORLD_TIMEOUT_MS });
+                let r2Code = -1;
+                try {
+                    r2Code = JSON.parse(r2.stdout).code ?? -1;
+                }
+                catch {
+                    r2Code = -1;
+                }
+                if (r2.exitCode === 0 && r2Code === 0) {
+                    log(`产物 ${a.id} 构建失败经引擎重跑自愈（stale 重建）`);
+                    continue;
+                }
+                items.push({
+                    id: `GA-${gateARounds}-A1`,
+                    key: `gate-a|artifact:${a.id}`,
+                    location: `产物构建 ${a.id}（${a.command.program} ${a.command.args.join(" ")}）`,
+                    gap: `[gate-a 产物] 构建失败 exit ${r.exitCode}/code ${artCode}，重跑仍败——读构建日志归因（产物过期未自愈 / 产物脚本或基建真坏），修复后引擎随轮重建`,
+                    affectsDecision: "是——Gate A 验证类条目依赖该产物",
+                    affectsDelivery: "有——产物缺失全量门无法执行",
+                    severity: "must",
+                    fixHint: `构建日志：${artifactLogOf(a.id)}（Read 它定位失败原因；修复对象 = 产物脚本/构建基建，按日志报错修）`,
+                    group: "gate-a",
+                    firstRound: reviewRound,
+                    uncleanRounds: 0,
+                    active: true,
+                    fixHistory: [`Gate A 产物第 ${gateARounds} 轮回注：构建失败（${a.id}）重跑未自愈`],
+                });
+                await obsEnd("gate-a", null);
+                log(`产物 ${a.id} 构建失败回注修复轮（第 ${gateARounds} 轮，fixRound ${fixRound} 续跑）`);
+                continue gateARetry;
             }
             const artSkipHits = await scanSkipEvidence(artifactLogOf(a.id), `产物 ${a.id}`);
             if (artSkipHits !== null && artSkipHits.length > 0) {

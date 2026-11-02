@@ -171,6 +171,14 @@ interface FixOutcome {
   delegated: { issueId: string; reason: string }[];
 }
 
+/** 门禁合规修复自报（commit 被仓库钩子拒后的轮内修复；fixed 为空 = 判定真代码问题转人工） */
+interface CommitGateFix {
+  /** 实际修复的文件（相对 projectRoot 路径） */
+  fixed: string[];
+  /** 一句话修复说明（fixed 为空时写问题与建议处置） */
+  summary: string;
+}
+
 /** 修复分组（reconcileGroups 输出） */
 interface FixGroup {
   /** 组标识（G1、G2…） */
@@ -1654,6 +1662,10 @@ const FIXER_PERSONA =
 const RETIRE_PERSONA =
   "你是交付收尾判定者：按规则产退役/保留清单，只判定不执行；拿不准的列保留并说明理由。" +
   NO_ASK_RULE;
+const COMMIT_GATE_FIXER_PERSONA =
+  "你是仓库门禁合规修复者：commit 被仓库钩子拒绝时，按被拒输出做且仅做钩子指出的合规修复（豁免标记 / 清单登记 / 指针跟改 / 常量化）；" +
+  "禁改产品逻辑——钩子拦的是真代码问题而非合规登记类时，不修，如实返回空 fixed 并在 summary 说明，转人工裁决；修完如实申报改动文件。" +
+  NO_ASK_RULE;
 
 // ── 结构化返回校验回喂（用户裁决 2026-09-26：全部 agent 结构化返回必备，回喂重试上限 3 次）──
 // rawAsk 由调用方闭包提供（用各自具体类型调 ask——pi 构建管线按泛型名查 SCHEMA_BY_KEY，
@@ -2166,10 +2178,62 @@ async function commitGroupFiles(round: number, gid: string, count: number, files
     return;
   }
   const msg = `fix: design-code-sync R${round} ${gid} (${count} findings)`;
-  const c = await world.run("git", ["-C", projectRoot, "commit", "--only", "-m", msg, "--", ...rels]);
+  const runCommit = (tryRels: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> =>
+    world.run("git", ["-C", projectRoot, "commit", "--only", "-m", msg, "--", ...tryRels]);
+  const c = await runCommit(rels);
   if (c.exitCode !== 0) {
+    // 门禁拦截先轮内修（实测形态：修复组合法改动被仓库钩子的全仓检查拒——多为豁免标记/
+    // 清单登记/指针跟改类合规问题）：派门禁修复 fixer 按被拒输出做合规修复，重试 ≤2 轮，
+    // 仍败才走 fix-failure 兜底。真代码问题 fixer 返回空 fixed 转人工（不盲改）
+    const cErr = (c.stderr !== "" ? c.stderr : c.stdout).trim();
+    for (let cgRound = 1; cgRound <= 2; cgRound++) {
+      const cgAgent = agent(`门禁修复-r${round}-${gid}-r${cgRound}`, COMMIT_GATE_FIXER_PERSONA);
+      const rep = await askValidated(
+        (v: unknown): Validated<CommitGateFix> => {
+          const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+          const errors: string[] = [];
+          if (!isStrArr(o["fixed"])) errors.push("fixed 须为字符串数组");
+          if (typeof o["summary"] !== "string" || o["summary"] === "") errors.push("summary 须为非空字符串");
+          return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as CommitGateFix };
+        },
+        (p2) => cgAgent.ask<CommitGateFix>(p2),
+        [
+          `组 ${gid} 的 git commit 被仓库钩子拒绝（第 ${cgRound} 次修复尝试）。修复组的改动本身已过审查——只差过钩子。`,
+          "",
+          `- 原 commit message：${msg}`,
+          `- 待提交文件（相对 projectRoot）：${rels.join("、")}`,
+          `- projectRoot：${projectRoot}`,
+          `- 被拒输出：\n${cErr}`,
+          "",
+          "按被拒输出定位钩子（pre-commit / 结构校验类）要求的合规动作并就地完成（豁免标记 / 清单登记 / 指针跟改 / 常量化——钩子指出什么修什么）。",
+          "禁改产品逻辑；钩子拦的是真代码问题而非合规登记类时不要修：fixed 返回空数组、summary 写明问题与建议处置，转人工裁决。",
+          cgRound > 1 ? "（上一轮修复后重试仍被拒——换思路，读完整被拒输出找漏掉的合规项）" : "",
+          "",
+          '返回 JSON：{ "fixed": ["相对 projectRoot 的改动文件路径"], "summary": "一句话修复说明" }。',
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+      if (rep === null) {
+        throw new Error(`组 ${gid} 门禁修复返回 ${STRUCTURED_RETRY_MAX} 次回喂仍不合规。原被拒输出：${cErr}`);
+      }
+      if (rep.fixed.length === 0) {
+        throw new Error(`组 ${gid} commit 被钩子拦且门禁修复判定为真代码问题（${rep.summary}）——转人工裁决。原被拒输出：${cErr}`);
+      }
+      const extraAbs = rep.fixed.filter((p2) => p2 !== "").map((p2) => (p2.startsWith("/") ? p2 : `${projectRoot}/${p2}`));
+      const extraRels: string[] = [];
+      for (const p2 of extraAbs) {
+        if (p2.startsWith(`${projectRoot}/`) && (await pathExists(p2))) extraRels.push(rel(p2));
+      }
+      const c2 = await runCommit([...new Set([...rels, ...extraRels])]);
+      if (c2.exitCode === 0) {
+        log(`  ${gid}: commit 首次被拒，经第 ${cgRound} 轮门禁修复后提交成功（追加合规文件 ${extraRels.length} 个）`);
+        return;
+      }
+      log(`WARN: ${gid} 第 ${cgRound} 轮门禁修复后重试仍被拒：${(c2.stderr !== "" ? c2.stderr : c2.stdout).trim()}`);
+    }
     throw new Error(
-      `组 ${gid} git commit 失败（exit ${c.exitCode}）：${(c.stderr !== "" ? c.stderr : c.stdout).trim()}。改动已 staged 未提交。恢复动作：人工检查 git index 后重试 commit 或接管`,
+      `组 ${gid} git commit 失败（门禁修复 2 轮后仍拒）：${cErr}。改动已 staged 未提交。恢复动作：人工检查 git index 后重试 commit 或接管`,
     );
   }
   log(`  ${gid}: commit（${staged.length} 文件）`);

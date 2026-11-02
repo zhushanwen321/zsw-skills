@@ -24,6 +24,8 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
 
 观测参数（taskId + executionId）同时传入即启用阶段事件观测（stage 恒 T2，落点与可选兼容语义见 SKILL「W1 workflow 契约」节）；不传业务照常。进 dev-flow-wf 执行时同一 task_id 延续共用，execution_id 换新段。
 
+**修复后机器预检**（引擎内置）：每轮文档修复者返回且处置表过校验后，引擎复跑 render-design-doc.mjs（刷新渲染视图）+ check-design-doc.mjs（机器校验）——章节 JSON 的语法/结构/渲染红当场回喂修复者修正（与处置表回喂共享重试预算），全绿才进下一轮四席复审；避免格式错误烧掉一整轮审查才暴露 rendered.md 损坏。手工路径同义务：主 agent 在派复审前先跑同两个脚本，红则打回修复 agent。
+
 终态处置（workflow 与手工路径同表）：
 
 | 终态 | 主 agent 动作 |

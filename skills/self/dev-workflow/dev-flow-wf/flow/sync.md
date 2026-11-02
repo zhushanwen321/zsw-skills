@@ -79,7 +79,7 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 | converged | 交付汇报：矩阵 + 收敛轨迹（各轮三等级计数）+ direction 分布 + contested 记录 + overdesignCandidates + 退役判定 |
 | contested | must-fix 级方向争议逐条呈报用户裁决；裁决后重新发起（runDir 自动 attempt 后缀不覆盖历史；重发起首轮 = planner 全量重审，上轮修复在重审对账中确认——条目不跨 run 延续） |
 | stuck | must-fix ≥3 轮不收敛或单条 must-fix 超 2 轮 → 呈报残余差距矩阵（2026-09-26 用户裁决三 loop 统一 3 轮） |
-| `*-failure`（setup/planner/review/fix/retire/io） | 按 message 恢复动作：ResumeWorkflowRun 或 attempt 递增重发 |
+| `*-failure`（setup/planner/review/fix/retire/io） | 按 message 恢复动作：ResumeWorkflowRun 或 attempt 递增重发。fix-failure 的 commit 被钩子拒场景已先轮内修过（门禁合规修复 fixer + 原 message 重试 ≤2 轮）——仍终态 = 修不动（真代码问题转人工）或结构化不合规，接管前先 git status 盘点已 staged 内容 |
 
 **处置记录义务**：终态处置表任一行的处置动作与结果（含用户对 contested / overdesignCandidates 的裁决），append 一笔到 `<name>.ledger.md`——引擎终态已写入未决清单（contested 待裁决 / overdesignCandidates 待裁决 / exemptList 待终审 / remaining 待呈报，含 final.json 指针），主 agent 处置一项即追加记录一项；W4 终态全量另在 `runDir/final.json`（attempt 不覆盖）。
 

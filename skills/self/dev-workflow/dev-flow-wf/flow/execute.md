@@ -44,13 +44,13 @@ worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 workt
 |------|--------------|
 | completed | 全节点 done——D1 完成转 D2（consistency-review.md）；D3 完成转 D4 收尾 |
 | blocked | 读 blocked 清单逐条处置：打回超限类 → 人工裁决（采纳修复方案/放弃该单元）；引擎层异常 → ResumeWorkflowRun 或修复 exec-plan 后重发 |
-| core-failed | 读 coreFailure 归因。D3 场景 = 验收失败修复循环（失败池 → 聚合裁决 phase → 修复组 phase → 节点重置机器重验，≤3 轮）已耗尽仍不收敛——聚合清单与全部失败归因在 acceptanceFix.fixesDir，按归因逐条人工裁决（采纳修复方案重验 / 放弃节点）；D1 场景同旧语义。主 agent 只裁决与重发起，不亲编码 |
+| core-failed | 读 coreFailure 归因。verify/inspect 验收失败（D1 与 D3 一律）与 commit 门禁被拒已经统一失败处理中心轮内修（失败池 → 聚合裁决 phase → 修复组 phase → 机器重验，≤3 轮）——此终态 = 修复环已耗尽仍不收敛。聚合清单与全部失败归因在 acceptanceFix.fixesDir，按归因逐条人工裁决（采纳修复方案重验 / 放弃节点）；主 agent 只裁决与重发起，不亲编码 |
 
-**D3 验收失败修复循环（终态 result 携带 acceptanceFix 时必读）**：`{ rounds（实际修复轮数）, disputed（聚合裁决员与 fixer 的误报反证清单——对应节点保持 failed 未修）, fixesDir（逐轮聚合清单 aggregated.md 与 per-fixer 任务文档） }`。disputed 条目是「验收断言本不该成立/归因误报」的反证申报，人工裁决：反证成立 → 修验收资产或 waive 该节点后重发；不成立 → 按原归因修复后重发。**验收修复后重发优先整 run 重发**（引擎增量对账自动跳过 done 节点）——不要手工编辑 status.json 写结果（实测手工写坏 JSON 会触发引擎「状态不可信」全量重验）。
+**统一失败处理中心（终态 result 携带 acceptanceFix 时必读）**：`{ rounds（实际修复轮数）, disputed（聚合裁决员与 fixer 的误报反证清单——对应节点保持 failed 未修）, fixesDir（逐轮聚合清单 aggregated.md 与 per-fixer 任务文档） }`。disputed 条目是「验收断言本不该成立/归因误报/钩子拦的是真代码问题」的反证申报，人工裁决：反证成立 → 修验收资产或 waive 该节点后重发；不成立 → 按原归因修复后重发。**修复后重发优先整 run 重发**（引擎增量对账自动跳过 done 节点）——不要手工编辑 status.json 写结果（实测手工写坏 JSON 会触发引擎「状态不可信」全量重验）。
 
 **commit-deferred 与清单外残留（终态 result 携带，status.json events 有 commit-deferred-list / residual-files 同名事件）**：
 
-- `deferredCommits`：节点核验已过、编码成果有效，仅 commit 被仓库钩子拒（多为钩子全仓检查看到并行兄弟单元的半成品，节点内无解）——主 agent 收尾逐条代提交：`git commit <message> -- <files>`（message/files 在 result 里给全，钩子照常执行；钩子红则当场修复后重试）。处置完重发 run，启动对账按 git log 补 done 自动续跑
+- `deferredCommits`：节点核验已过、编码成果有效，仅 commit 被仓库钩子拒——引擎统一失败处理中心已先轮内修过（聚合裁决 → 门禁合规修复 fixer → 原 message 重试 commit，≤3 轮；恢复的条目 status.json 记 commit-recovered 事件且不出现在本清单）。终态仍在此清单的 = 轮内修不动（钩子拦的是真代码问题，fixer 已带反证申报）或修复环耗尽——主 agent 收尾逐条代提交：`git commit <message> -- <files>`（message/files 在 result 里给全，钩子照常执行；钩子红则当场修复后重试）。处置完重发 run，启动对账按 git log 补 done 自动续跑
 - `residualFiles`：全工作区清单外残留（并行单元运行中新建的文件 + 未申报改动）——主 agent 判归属：属某单元成果 → 补提交（commit subject 埋单元 id，供下次对账反查）；无主/临时 → 清理；判不了 → 呈报用户，禁静默丢弃
 
 **处置记录义务**：终态处置表任一行的处置动作与结果（含用户裁决），append 一笔到 `<name>.ledger.md`（时间 + 终态 + 动作 + 理由 + 结果）——引擎终态已写入未决清单一笔，主 agent 在其下追加处置记录形成完整时间线；主会话中断后接手者按 ledger 恢复「裁决到哪一步」。手工路径全程同理（派发时任务书已含 runlog 义务句，主 agent 自身的调度判断与打回理由也记 ledger）。

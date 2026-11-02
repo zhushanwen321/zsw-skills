@@ -1448,9 +1448,11 @@ for (let round = 1; round <= maxRounds; round++) {
             ? baseFixInstructions
             : [
                 withRetryContext(baseFixInstructions, fix, lastCheckReport),
-                "你此前对设计文档的修订都保留在磁盘上，本轮不要重复修改文档。",
-                "只需修正处置表的结构化返回：按下方校验报告逐条修正（补齐缺失的 source 引用、修正字段形态），重新返回完整 JSON（status / dispositions / revisionSummary，仅卡点时加 blocked——全量重新给出，不是增量补丁）。",
-                `校验报告（每条 error 都必须在本轮返回中修正）：\n${lastCheckReport}`,
+                "你此前对设计文档的修订都保留在磁盘上，本轮按校验报告分类处理，不重复未指出的修改：",
+                "- [precheck] 类（渲染/机器校验红）：修复报告指出的章节 JSON 问题，修完重跑 node " + renderCliAbs + " " + designDoc + " 刷新渲染视图；",
+                "- 其余类：处置表结构化返回问题——补齐缺失的 source 引用、修正字段形态，不动文档。",
+                "重新返回完整 JSON（status / dispositions / revisionSummary，仅卡点时加 blocked——全量重新给出，不是增量补丁）。",
+                `校验报告（每条 error 都必须在本轮修正）：\n${lastCheckReport}`,
             ].join("\n\n");
         try {
             fix = await fixer.ask("FixOutcome", instructions);
@@ -1498,14 +1500,34 @@ for (let round = 1; round <= maxRounds; round++) {
             log(`WARN: ${w}`);
         const coveredIds = new Set(dispositions.map((d) => d.id));
         const missedOutstanding = outstanding.filter((d) => !coveredIds.has(d.id));
+        // 机器预检（处置表过校验后追加）：引擎复跑渲染 + check-design-doc——章节 JSON 的
+        // 语法/结构/渲染红当场回喂修复者，免烧一整轮审查才暴露 rendered.md 损坏；warning
+        // 档不进 exit code（与 setup 进场门槛同口径）
+        let precheckErr = "";
         if (check.ok && missedOutstanding.length === 0) {
-            checkPassed = true;
-            break;
+            const mRender = await world.run("node", [renderCliAbs, designDoc]);
+            if (mRender.exitCode !== 0) {
+                precheckErr = `渲染失败（render-design-doc.mjs exit ${mRender.exitCode}）：${mRender.stderr.trim() || mRender.stdout.trim()}——章节 JSON 存在语法/结构错误，按报错定位修复对应 JSON`;
+            }
+            else {
+                if (mRender.stdout.trim() !== "")
+                    log(mRender.stdout.trim());
+                const mChk = await world.run("node", [checkDesignCliAbs, designDoc]);
+                if (mChk.exitCode !== 0) {
+                    precheckErr = `设计文档机器校验未过（check-design-doc.mjs exit ${mChk.exitCode}）：${mChk.stdout.trim() || mChk.stderr.trim()}——按校验报告修复对应章节 JSON`;
+                }
+            }
+            if (precheckErr === "") {
+                checkPassed = true;
+                break;
+            }
         }
         const errLines = check.errors.map((e) => `- [${e.kind}] ${e.detail}`);
         if (missedOutstanding.length > 0) {
             errLines.push(`- [outstanding] 上轮遗留条目 ${missedOutstanding.map((d) => `${d.id}（${d.title}）`).join("、")} 未出现在本轮处置表（延续条目必须复用原 id 处置——含登记不修/归档形态）`);
         }
+        if (precheckErr !== "")
+            errLines.push(`- [precheck] ${precheckErr}`);
         lastCheckReport = errLines.join("\n");
         // 失败留档：原始返回 + 校验报告（终态后接管者可对账——修复者的原始 dispositions
         // 只存在于返回值里，不落盘即无处可寻）

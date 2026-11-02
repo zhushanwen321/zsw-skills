@@ -3,10 +3,12 @@ description: dev-flow-wf W2 通用 DAG 调度引擎（wave-executor）：读 exe
   （schema/依赖环/文件存在性/工作区干净基线），依赖就绪节点流式派发（≤5 并发，wave 字段
   仅展示不参与调度），每节点确定性核验（files_changed ⊆ 声明范围 + 全量 status 粗粒度复核 +
   节点测试命令重跑）→ commit → 解锁后继；核验不过打回同名 agent 定向修（≤2 轮，超限
-  blocked 且后继挂起）；acceptance 模式承载 verify/inspect 节点 + 验收失败修复循环
-  （review-fix-loop 形态：failed 入失败池 → 聚合裁决 phase（跨节点同根因合并 + disputed
-  反证 + 文件不相交分组）→ 修复组 phase（fixer 修产品代码与验收资产，引擎按组 commit）→
-  节点重置重验回调度循环，≤3 轮不收敛按依赖可达性熔断；blocked 仍立即熔断）；终态
+  blocked 且后继挂起）；verify/inspect 节点 failed 入统一失败处理中心
+  （review-fix-loop 形态：失败池 → 聚合裁决 phase（跨节点同根因合并 + disputed 反证 +
+  文件不相交分组，验收失败与 commit 门禁被拒两类条目）→ 修复组 phase（fixer 修产品
+  代码/验收资产/门禁合规问题，引擎按组 commit、commit 条目用原 message 重试）→ 验收
+  节点重置机器重验回调度循环，≤3 轮不收敛按依赖可达性熔断；dev 与 acceptance 模式的
+  verify/inspect 一律适用；blocked 仍立即熔断）；终态
   completed / blocked / core-failed，全程 failed-as-return 不 throw。
 whenToUse: dev-flow-wf 的 D1 开发循环与 D3 端到端验收发起本 workflow（CreateWorkflow path
   指向本文件 + args.execPlan）。exec-plan.json 由 D0 从设计包编译产出；断点恢复走
