@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "zcodeToTaiji": {
+    "account:bigmodel-individual-coding-plan": "zai-coding-cn",
+    "account:bigmodel-team-coding-plan": "zai-coding-cn",
+    "kimi-for-coding": "kimi-coding",
+    "opencode-go-chat": "opencode-go",
+    "new-provider": "stepfun",
+    "new-provider-2": "OpenDesign",
+    "xiaomi-token-plan-cn": "xiaomi-token-plan-cn"
+  }
+}

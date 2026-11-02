@@ -65,7 +65,7 @@ scripts/           Dual-platform workflow build and validation scripts
 |-------|-------------|
 | anysearch | Unified search: general web, news, URL extraction/crawl, vertical structured search (stocks/CVE/papers/patents), and batch parallel queries |
 | browser-automation | Web/Electron debugging: screenshots, element inspection, UI interaction, network monitoring |
-| quota-wait | Suspend tasks when model quota runs out and resume on schedule |
+| quota-wait | Suspend or stand by when model quota runs out; bundled CLI polls plan quota and returns on reset or deadline |
 | user-memory | Record and recall user preferences and habits |
 | worktree-manipulate | Single entry for bare repo + worktree workspace management |
 
