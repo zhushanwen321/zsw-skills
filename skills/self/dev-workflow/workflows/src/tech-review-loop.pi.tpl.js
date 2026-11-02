@@ -5,7 +5,7 @@ description: >-
 when: >-
   tech-design-wf 技能 W1 阶段——技术设计文档（tech-design 产物）需要对抗式审查修复循环时调用，必传设计文档与项目根绝对路径
 notFor: 代码 review-fix 循环（用内置 review-fix-loop workflow）
-phases: ['校验审查环境并四席发起', '四席并行聚焦复审', '聚合裁决', '修复设计文档并产出处置表', '落盘终态档案']
+phases: ['校验审查环境并做方向审', '四席并行聚焦复审', '聚合裁决', '修复设计文档并产出处置表', '落盘终态档案']
 parameters:
   type: object
   properties:

@@ -190,7 +190,7 @@ interface WaveExecutorOutcome {
   /** 收尾全工作区对账后的清单外残留（不属于任何节点范围声明 ∪ 自报 files_changed 并集，
    *  含并行单元新建文件与未申报改动）——主 agent 判归属后处置（提交/清理/登记新范围声明） */
   residualFiles: string[];
-  /** D3 验收失败修复循环记录（acceptance 模式且发生过失败聚合时非 null）：
+  /** D3 验收失败修复循环记录（dev 与 acceptance 模式发生过失败聚合时非 null）：
    *  rounds = 实际执行的修复轮数；disputed = 聚合级与 fixer 级反证清单（人工裁决，
    *  对应节点保持 failed 不重置）；fixesDir = 聚合清单与 per-fixer 任务文档目录 */
   acceptanceFix: {

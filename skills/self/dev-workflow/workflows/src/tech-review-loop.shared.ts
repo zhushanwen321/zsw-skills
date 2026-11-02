@@ -1239,7 +1239,9 @@ for (let round = 1; round <= maxRounds; round++) {
     return await finish(
       "fix-failure",
       round,
-      `处置表校验 ${FIX_RETRY_MAX} 次未通过（初始 1 次 + 回喂重试）：\n${lastCheckReport}\n原始返回与校验报告已留档 ${roundAbs}/raw-fix-return-*.json；文档修订已留磁盘（修复内容通常有效，仅结构化返回不合规），接管前先盘点 ${designDoc}。恢复动作：人工按校验报告补正后落 ${roundAbs}/dispositions.json 续下轮，或 args.attempt 递增重新发起`,
+      lastCheckReport.includes("[precheck]")
+        ? `机器预检 ${FIX_RETRY_MAX} 次未通过（章节 JSON/渲染红——非处置表问题）：\n${lastCheckReport}\n原始返回与校验报告已留档 ${roundAbs}/raw-fix-return-*.json；按报告修复对应章节 JSON 后重跑 node ${renderCliAbs} ${designDoc} 再校验。恢复动作：人工修 JSON 后 args.attempt 递增重新发起（在途修订已留磁盘，接管前先盘点 ${designDoc}）`
+        : `处置表校验 ${FIX_RETRY_MAX} 次未通过（初始 1 次 + 回喂重试）：\n${lastCheckReport}\n原始返回与校验报告已留档 ${roundAbs}/raw-fix-return-*.json；文档修订已留磁盘（修复内容通常有效，仅结构化返回不合规），接管前先盘点 ${designDoc}。恢复动作：人工按校验报告补正后落 ${roundAbs}/dispositions.json 续下轮，或 args.attempt 递增重新发起`,
     );
   }
 

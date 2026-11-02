@@ -1655,15 +1655,28 @@ async function commitGroupFiles(round: number, gid: string, count: number, files
           .join("\n"),
       );
       if (rep === null) {
-        throw new Error(`组 ${gid} 门禁修复返回 ${STRUCTURED_RETRY_MAX} 次回喂仍不合规。原被拒输出：${cErr}`);
+        throw new Error(
+          `组 ${gid} 门禁修复返回 ${STRUCTURED_RETRY_MAX} 次回喂仍不合规。原被拒输出：${cErr}。恢复动作：人工检查 git index（组文件已 staged 未提交）后按被拒输出手工完成合规修复并重试 commit`,
+        );
       }
       if (rep.fixed.length === 0) {
-        throw new Error(`组 ${gid} commit 被钩子拦且门禁修复判定为真代码问题（${rep.summary}）——转人工裁决。原被拒输出：${cErr}`);
+        throw new Error(
+          `组 ${gid} commit 被钩子拦且门禁修复判定为真代码问题（${rep.summary}）——转人工裁决。原被拒输出：${cErr}。恢复动作：人工检查 git index（组文件已 staged 未提交），按 summary 裁决（修代码后重试 commit 或放弃该组改动）`,
+        );
       }
       const extraAbs = rep.fixed.filter((p2) => p2 !== "").map((p2) => (p2.startsWith("/") ? p2 : `${projectRoot}/${p2}`));
       const extraRels: string[] = [];
       for (const p2 of extraAbs) {
-        if (p2.startsWith(`${projectRoot}/`) && (await pathExists(p2))) extraRels.push(rel(p2));
+        if (!p2.startsWith(`${projectRoot}/`) || !(await pathExists(p2))) {
+          log(`WARN: ${gid} 门禁修复申报文件不进本次 commit（projectRoot 外或不存在，留盘处理）：${p2}`);
+          continue;
+        }
+        const r2 = rel(p2);
+        // 新建（untracked）合规文件必须先 add——commit --only 的 pathspec 只认已跟踪文件，
+        // 未 add 直接进 pathspec 会报 pathspec did not match 且报错形态误导下一轮修复方向
+        const a2 = await world.run("git", ["-C", projectRoot, "add", "--", r2]);
+        if (a2.exitCode === 0) extraRels.push(r2);
+        else log(`WARN: ${gid} 合规文件 add 失败（${r2}）：${(a2.stderr !== "" ? a2.stderr : a2.stdout).trim()}`);
       }
       const c2 = await runCommit([...new Set([...rels, ...extraRels])]);
       if (c2.exitCode === 0) {

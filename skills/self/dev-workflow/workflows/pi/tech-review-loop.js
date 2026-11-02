@@ -5,7 +5,7 @@ description: >-
 when: >-
   tech-design-wf 技能 W1 阶段——技术设计文档（tech-design 产物）需要对抗式审查修复循环时调用，必传设计文档与项目根绝对路径
 notFor: 代码 review-fix 循环（用内置 review-fix-loop workflow）
-phases: ['校验审查环境并四席发起', '四席并行聚焦复审', '聚合裁决', '修复设计文档并产出处置表', '落盘终态档案']
+phases: ['校验审查环境并做方向审', '四席并行聚焦复审', '聚合裁决', '修复设计文档并产出处置表', '落盘终态档案']
 parameters:
   type: object
   properties:
@@ -1536,7 +1536,9 @@ for (let round = 1; round <= maxRounds; round++) {
         log(`WARN: 修复者处置表第 ${fixAttempt} 次未过校验（${errLines.length} 项）${fixAttempt < FIX_RETRY_MAX ? "，回喂校验报告重试" : "，重试预算耗尽"}`);
     }
     if (!checkPassed) {
-        return await finish("fix-failure", round, `处置表校验 ${FIX_RETRY_MAX} 次未通过（初始 1 次 + 回喂重试）：\n${lastCheckReport}\n原始返回与校验报告已留档 ${roundAbs}/raw-fix-return-*.json；文档修订已留磁盘（修复内容通常有效，仅结构化返回不合规），接管前先盘点 ${designDoc}。恢复动作：人工按校验报告补正后落 ${roundAbs}/dispositions.json 续下轮，或 args.attempt 递增重新发起`);
+        return await finish("fix-failure", round, lastCheckReport.includes("[precheck]")
+            ? `机器预检 ${FIX_RETRY_MAX} 次未通过（章节 JSON/渲染红——非处置表问题）：\n${lastCheckReport}\n原始返回与校验报告已留档 ${roundAbs}/raw-fix-return-*.json；按报告修复对应章节 JSON 后重跑 node ${renderCliAbs} ${designDoc} 再校验。恢复动作：人工修 JSON 后 args.attempt 递增重新发起（在途修订已留磁盘，接管前先盘点 ${designDoc}）`
+            : `处置表校验 ${FIX_RETRY_MAX} 次未通过（初始 1 次 + 回喂重试）：\n${lastCheckReport}\n原始返回与校验报告已留档 ${roundAbs}/raw-fix-return-*.json；文档修订已留磁盘（修复内容通常有效，仅结构化返回不合规），接管前先盘点 ${designDoc}。恢复动作：人工按校验报告补正后落 ${roundAbs}/dispositions.json 续下轮，或 args.attempt 递增重新发起`);
     }
     // 处置表落盘（json + md 由脚本从结构化数据确定性渲染，两版严格一致）
     const dispJson = JSON.stringify({ round, designDoc, revisionSummary, dispositions }, null, 2);

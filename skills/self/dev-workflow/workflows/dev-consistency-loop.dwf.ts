@@ -1,16 +1,20 @@
 /* zcode-workflow
 description: dev-flow-wf W3 一致性审查循环（D2）：R1 分区全面审（分区互斥契约，
-  git diff 基线..HEAD 文件清单按顶层段不相交划分）→ 脚本聚合（无 LLM 聚合层——分区
-  互斥契约下聚合退化为脚本操作）→ 修复组并行（组 = 分区边界，组级一笔 commit）→
+  git diff 基线..HEAD 文件清单按顶层段不相交划分）→ 每轮修复前聚合定性独立 phase
+  （跨区同根因去重 / 定性复核改判 doc_errors / expectedFiles 无交集分组 / 跨职责路由）→
+  修复组并行（组级一笔 commit）→
   R2+ 每组定向复审（只审三条 + reconciliation 逐条对账申报——清零判定唯一证据通道，
   条目身份按引擎分配的 U 编号，不按文本匹配）→ Gate A 全量测试（零容忍绕过：无任何
-  SKIP 逻辑，脚本不传环境变量）→ 终态回流 doc_errors/reasonable 给主 agent。
+  SKIP 逻辑，脚本不传环境变量；红后归因分诊独立 phase ≤2 轮——本批回归条目回注修复轮
+  再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态；产物构建失败先引擎重跑自愈，
+  仍败回注修复轮）→ 终态回流 doc_errors/reasonable 给主 agent。
   停止线（合并语义）：审查轮累计 3 轮不收敛（或 unreasonable 活跃数不减反增）→
   stuck；顽固条目（连续 ≥2 轮修复未清，按 reconciliation not-fixed 申报追踪）随 stuck
   终态 escalated 清单呈报——单条独立停机线与时序互斥（到点必晚于计数线），已并入
 whenToUse: dev-flow-wf 主流程 D2 阶段——W2 开发循环终态（blocked 已升级处理）后由
   主 agent 发起；输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/
-  环节失败由主 agent 接力（Gate A 红不自动归因，归因补修是主 agent 的事）
+  环节失败由主 agent 接力（gate-a-failed 终态自带分诊报告——存量红/基建缺陷按报告
+  裁决，分诊轮耗尽才需主 agent 从日志归因）
 args:
   execPlan:
     type: string
@@ -1731,6 +1735,8 @@ gateARetry: while (true) {
   }
   if (roundActive.length === 0) {
     log("本轮全部活跃条目降级为登记项——无修复组，进清零判定");
+    // continue 跳过循环尾的 obsEnd("aggregate")——显式关窗防下一 obsBegin 触发重叠告警
+    await obsEnd("aggregate", fixRound);
     continue;
   }
 
@@ -2478,8 +2484,11 @@ gateARetry: while (true) {
           ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${contentActive.length}${processActiveCount > 0 ? `，已排除 ${processActiveCount} 条 [process] 流程类` : ""}）`
           : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${contentActive.length} 条${processActiveCount > 0 ? `，另有 ${processActiveCount} 条 [process] 流程类` : ""}）`;
       stuckPendingReason = `计数停机线触发：${why}${stubborn.length > 0 ? `；顽固条目（≥2 轮修复未清，优先人工裁决）：${stubborn.map((i) => `${i.id}（${i.location}，${i.uncleanRounds} 轮）`).join("、")}` : ""}——残留清单见 remaining / 顽固清单见 escalated 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`;
-      // break 跳过循环体尾的观测补记——此处显式补记本步 end 再跳出
+      // break 跳过循环体尾的观测补记——此处显式补记本步 end 再跳出。break 前必须递增
+      // fixRound：Gate A 回注（分诊/产物/瞬态）continue 进本循环时 for 条件用当前值判定，
+      // 不递增会同轮号重跑 → 聚合/修复/复审同名 agent 二次创建 → zcode 同名二建杀 run
       await obsEnd("fix", fixRound);
+      fixRound += 1;
       break;
     }
     prevActiveCount = contentActive.length;
@@ -2489,7 +2498,7 @@ gateARetry: while (true) {
 
 const contentActiveFinal = activeItems().filter((i) => !String(i.gap ?? "").trim().startsWith("[process]"));
 if (contentActiveFinal.length > 0 && stuckPendingReason === null) {
-  stuckPendingReason = `修复轮次上限 ${maxRounds} 耗尽仍有 ${contentActiveFinal.length} 条 unreasonable 活跃——残留清单见 remaining 字段；恢复动作：主 agent 人工裁决残留条目（定性争议转 doc_errors / 需重设计的走设计流程），不要盲目重跑本工作流`;
+  stuckPendingReason = `修复轮次上限 ${maxRounds + gateARounds}（含 Gate A 回注轮）耗尽仍有 ${contentActiveFinal.length} 条 unreasonable 活跃——残留清单见 remaining 字段；恢复动作：主 agent 人工裁决残留条目（定性争议转 doc_errors / 需重设计的走设计流程），不要盲目重跑本工作流`;
 }
 
 // ══════════════ Phase 3：产物类第一波并行预备 + 全量测试 Gate A ══════════════
@@ -2554,7 +2563,8 @@ if (info.artifacts.length > 0) {
           `产物类构建失败（${a.id}，exit ${r.exitCode}/code ${artCode}）且回注轮已耗尽（${MAX_GATE_A_TRIAGE_ROUNDS}）——日志 ${artifactLogOf(a.id)}，由主 agent 归因产物构建后重跑`,
         );
       }
-      gateARounds += 1;
+      // stale 自愈不计费（自愈成功不占分诊轮预算——两次自愈就把分诊挤成零轮的错误形态）：
+      // 先重跑，确认仍败才递增 gateARounds 并回注
       const r2 = await world.run(
         "node",
         ["-e", NODE_RUN_CMD, info.projectRoot, a.command.program, JSON.stringify(a.command.args), artifactLogOf(a.id), String(GATE_A_TIMEOUT_MS)],
@@ -2567,12 +2577,17 @@ if (info.artifacts.length > 0) {
         r2Code = -1;
       }
       if (r2.exitCode === 0 && r2Code === 0) {
-        log(`产物 ${a.id} 构建失败经引擎重跑自愈（stale 重建）`);
+        log(`产物 ${a.id} 构建失败经引擎重跑自愈（stale 重建，不占分诊轮预算）`);
         continue;
       }
+      gateARounds += 1;
+      const artKey = `gate-a|artifact:${a.id}`;
+      if (items.some((it) => it.key === artKey && it.active)) {
+        log(`产物 ${a.id} 失败条目已在池（前轮回注未清零）——不重复建档，随既有条目再修`);
+      } else {
       items.push({
         id: `GA-${gateARounds}-A1`,
-        key: `gate-a|artifact:${a.id}`,
+        key: artKey,
         location: `产物构建 ${a.id}（${a.command.program} ${a.command.args.join(" ")}）`,
         gap: `[gate-a 产物] 构建失败 exit ${r.exitCode}/code ${artCode}，重跑仍败——读构建日志归因（产物过期未自愈 / 产物脚本或基建真坏），修复后引擎随轮重建`,
         affectsDecision: "是——Gate A 验证类条目依赖该产物",
@@ -2585,6 +2600,7 @@ if (info.artifacts.length > 0) {
         active: true,
         fixHistory: [`Gate A 产物第 ${gateARounds} 轮回注：构建失败（${a.id}）重跑未自愈`],
       });
+      }
       await obsEnd("gate-a", null);
       log(`产物 ${a.id} 构建失败回注修复轮（第 ${gateARounds} 轮，fixRound ${fixRound} 续跑）`);
       continue gateARetry;
@@ -2670,10 +2686,14 @@ if (gateCode !== 0) {
     `Gate A 分诊（第 ${gateARounds} 轮）：本批回归 ${batchItems.length} 条 / 瞬态 ${hasFlaky ? "有" : "无"} / 存量与基建缺陷 ${triage.items.length - batchItems.length - (hasFlaky ? 1 : 0)} 条`,
   );
   if (batchItems.length > 0) {
-    for (const [bi, t] of batchItems.entries()) {
+    let gaSeq = 0;
+    for (const t of batchItems) {
+      const tKey = `gate-a|${t.testRef}`;
+      if (items.some((it) => it.key === tKey && it.active)) continue; // 同段已建档（前轮未清零）——不虚增活跃
+      gaSeq += 1;
       items.push({
-        id: `GA-${gateARounds}-${bi + 1}`,
-        key: `gate-a|${t.testRef}`,
+        id: `GA-${gateARounds}-${gaSeq}`,
+        key: tKey,
         location: t.testRef,
         gap: `[gate-a 分诊] ${t.evidence}`,
         affectsDecision: "是——Gate A 全量测试红",
