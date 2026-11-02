@@ -3,8 +3,11 @@ description: dev-flow-wf W2 通用 DAG 调度引擎（wave-executor）：读 exe
   （schema/依赖环/文件存在性/工作区干净基线），依赖就绪节点流式派发（≤5 并发，wave 字段
   仅展示不参与调度），每节点确定性核验（files_changed ⊆ 声明范围 + 全量 status 粗粒度复核 +
   节点测试命令重跑）→ commit → 解锁后继；核验不过打回同名 agent 定向修（≤2 轮，超限
-  blocked 且后继挂起）；acceptance 模式承载 verify/inspect 节点 + §8.7 依赖可达性熔断
-  （blocked/failed 卡未终态后继即停；原 coreIds/haltOnCoreFail 静态短路已退役）；终态 completed / blocked / core-failed，全程 failed-as-return 不 throw。
+  blocked 且后继挂起）；acceptance 模式承载 verify/inspect 节点 + 验收失败修复循环
+  （review-fix-loop 形态：failed 入失败池 → 聚合裁决 phase（跨节点同根因合并 + disputed
+  反证 + 文件不相交分组）→ 修复组 phase（fixer 修产品代码与验收资产，引擎按组 commit）→
+  节点重置重验回调度循环，≤3 轮不收敛按依赖可达性熔断；blocked 仍立即熔断）；终态
+  completed / blocked / core-failed，全程 failed-as-return 不 throw。
 whenToUse: dev-flow-wf 的 D1 开发循环与 D3 端到端验收发起本 workflow（CreateWorkflow path
   指向本文件 + args.execPlan）。exec-plan.json 由 D0 从设计包编译产出；断点恢复走
   ResumeWorkflowRun（node-<unitId> 命名保缓存）或按 status.json 人读恢复（git 为准）。
@@ -67,6 +70,36 @@ interface HealFixReport {
   fixed: string[];
   /** 一句话修复说明 */
   summary: string;
+}
+
+/** 验收失败聚合条目（D3 修复循环：聚合裁决 agent 的输出单元） */
+interface AcceptanceAggItem {
+  /** AF-<round>-<序> */
+  id: string;
+  /** 覆盖的失败节点（fail-closed：失败池节点必须被恰好覆盖） */
+  nodeIds: string[];
+  title: string;
+  /** fix=真实缺陷进修复组；disputed=归因误报反证（不修，随终态呈报人工裁决） */
+  action: "fix" | "disputed";
+  /** 根因一句话（disputed 时即反证：file:line + 归因漏了什么） */
+  rootCause: string;
+  /** 预期改动文件（组间判交依据；fix 时非空） */
+  files: string[];
+  /** 修复指导（随 per-fixer 任务文档直达修复者） */
+  guidance: string;
+}
+
+/** 验收失败聚合裁决输出（修复分组：组间文件不相交，组内一个修复者） */
+interface AcceptanceAggregation {
+  items: AcceptanceAggItem[];
+  groups: { id: string; itemIds: string[]; note: string }[];
+}
+
+/** 验收修复组自报（重验由引擎机器执行——节点重置重跑，不采信自报） */
+interface AcceptanceFixReport {
+  fixes: { itemId: string; files: string[] }[];
+  disputed: { itemId: string; evidence: string }[];
+  selfCheck: string;
 }
 
 interface TestCommand {
@@ -155,6 +188,14 @@ interface WaveExecutorOutcome {
   /** 收尾全工作区对账后的清单外残留（不属于任何节点范围声明 ∪ 自报 files_changed 并集，
    *  含并行单元新建文件与未申报改动）——主 agent 判归属后处置（提交/清理/登记新范围声明） */
   residualFiles: string[];
+  /** D3 验收失败修复循环记录（acceptance 模式且发生过失败聚合时非 null）：
+   *  rounds = 实际执行的修复轮数；disputed = 聚合级与 fixer 级反证清单（人工裁决，
+   *  对应节点保持 failed 不重置）；fixesDir = 聚合清单与 per-fixer 任务文档目录 */
+  acceptanceFix: {
+    rounds: number;
+    disputed: { round: number; itemId: string; by: string; evidence: string }[];
+    fixesDir: string;
+  } | null;
 }
 
 interface RunOutcome {

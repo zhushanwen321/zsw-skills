@@ -1,10 +1,10 @@
 /* @pi-meta
 name: wave-executor
 description: >-
-  dev-flow-wf W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验范围声明、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），acceptance 模式承载 verify/inspect 节点与核心组熔断，终态 completed、blocked 或 core-failed
+  dev-flow-wf W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验范围声明、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），acceptance 模式承载 verify/inspect 节点与验收失败修复循环（失败池 → 聚合裁决 → 修复组 → 重置重验，≤3 轮不收敛按依赖可达性熔断），终态 completed、blocked 或 core-failed
 when: >-
   dev-flow-wf 的 D1 开发循环与 D3 端到端验收发起本 workflow，传入 exec-plan.json 绝对路径（D0 编译产出），断点恢复按 status.json 人读恢复（git 为准）
-phases: ['校验执行计划', '并行执行开发节点', '并行执行验收节点', '收尾汇总']
+phases: ['校验执行计划', '并行执行开发节点', '并行执行验收节点', '验收失败聚合裁决', '验收修复组并行', '收尾汇总']
 parameters:
   type: object
   properties:
@@ -95,6 +95,70 @@ const SCHEMA_HealFixReport = {
   },
   required: ["fixed", "summary"],
 };
+const SCHEMA_AcceptanceAggItem = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "AF-<round>-<序>" },
+    nodeIds: { type: "array", items: { type: "string" }, description: "覆盖的失败节点（fail-closed：失败池节点必须被恰好覆盖）" },
+    title: { type: "string", description: "一句话标题" },
+    action: { type: "string", enum: ["fix", "disputed"], description: "fix=真实缺陷进修复组；disputed=归因误报反证（不修，随终态呈报人工裁决）" },
+    rootCause: { type: "string", description: "根因一句话（disputed 时即反证：file:line + 归因漏了什么）" },
+    files: { type: "array", items: { type: "string" }, description: "预期改动文件（组间判交依据；fix 时非空）" },
+    guidance: { type: "string", description: "修复指导（随 per-fixer 任务文档直达修复者）" },
+  },
+  required: ["id", "nodeIds", "title", "action", "rootCause", "files", "guidance"],
+};
+const SCHEMA_AcceptanceAggregation = {
+  type: "object",
+  properties: {
+    items: { type: "array", items: SCHEMA_AcceptanceAggItem, description: "聚合条目（跨节点合并同根因）" },
+    groups: {
+      type: "array",
+      description: "修复分组（组间文件不相交，组内一个修复者；无 fix 条目时为空）",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "AG-<序>" },
+          itemIds: { type: "array", items: { type: "string" }, description: "组内 fix 条目 id（每条恰好属一组）" },
+          note: { type: "string", description: "分组依据（可空串）" },
+        },
+        required: ["id", "itemIds", "note"],
+      },
+    },
+  },
+  required: ["items", "groups"],
+};
+const SCHEMA_AcceptanceFixReport = {
+  type: "object",
+  properties: {
+    fixes: {
+      type: "array",
+      description: "实际修复的条目（无改动的条目走 disputed，不占 fixes）",
+      items: {
+        type: "object",
+        properties: {
+          itemId: { type: "string", description: "聚合条目 id（AF-...）" },
+          files: { type: "array", items: { type: "string" }, description: "实际改动文件（相对仓库根路径）" },
+        },
+        required: ["itemId", "files"],
+      },
+    },
+    disputed: {
+      type: "array",
+      description: "误报反证（不修——人工裁决，对应节点保持 failed）",
+      items: {
+        type: "object",
+        properties: {
+          itemId: { type: "string", description: "聚合条目 id" },
+          evidence: { type: "string", description: "反证（file:line + 归因漏了什么；空泛证据=ES3 违规）" },
+        },
+        required: ["itemId", "evidence"],
+      },
+    },
+    selfCheck: { type: "string", description: "自检（命令: 结果）" },
+  },
+  required: ["fixes", "disputed", "selfCheck"],
+};
 const SCHEMA_InspectResult = {
   type: "object",
   properties: {
@@ -114,6 +178,8 @@ const SCHEMA_BY_KEY = {
   InspectResult: SCHEMA_InspectResult,
   HealVerdict: SCHEMA_HealVerdict,
   HealFixReport: SCHEMA_HealFixReport,
+  AcceptanceAggregation: SCHEMA_AcceptanceAggregation,
+  AcceptanceFixReport: SCHEMA_AcceptanceFixReport,
 };
 function wfAgent(name, persona) {
   return {
@@ -427,6 +493,16 @@ const HEAL_PERSONA = "你是验收资产修复者：只修改归因指定的验�
     "修复必须以归因证据为依据（断言口径错→改对口径 / 等待时序错→改等待点 / 窗口失配→按实测校准），" +
     "禁止无证据地放宽断言、删除断言或跳过用例换绿灯；修完如实返回修改清单；" +
     NO_ASK_RULE;
+// ── D3 验收失败修复循环 persona（review-fix-loop 形态：聚合裁决 → 修复组 → 机器重验）──
+const ACCEPTANCE_AGG_PERSONA = "你是验收失败聚合裁决员：跨节点合并同根因、证据裁决从严（反证不成立不进修复队列）、" +
+    "延续条目优先换思路不复述已失败修法、修复分组遵循组内相关/组间文件不相交；" +
+    "只读归因记录与代码，不改任何文件；" +
+    NO_ASK_RULE;
+const ACCEPTANCE_FIXER_PERSONA = "你是验收缺陷修复者：按修复任务文档修复产品代码或验收资产（以归因证据与修复指导为依据，小步修改）；" +
+    "重验由引擎机器执行（剧本原样重跑 / 判定书锚核对）——禁止靠放宽断言、删断言、跳过用例换绿灯；" +
+    "确信条目是误报时不修，返回 disputed 并给反证（file:line + 归因漏了什么）；" +
+    "git 全禁（提交由引擎统一执行）；" +
+    NO_ASK_RULE;
 // ── node -e 通道（脚本无 fs/process：写盘/读文件/git/带 cwd 的子进程全走 world.run node -e，
 //    argv 传参无 shell 注入面；代码串内可 require Node 内建） ──
 const WRITE_FILE = "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2])";
@@ -561,6 +637,7 @@ function invalidRet(message, statusFile) {
         validationError: message,
         deferredCommits: [],
         residualFiles: [],
+        acceptanceFix: null,
     };
 }
 /** 观测启用后的启动校验失败出口：先补记观测执行结束事件（outcome=blocked）再走
@@ -1011,6 +1088,21 @@ const declaredFiles = new Set();
  *  已过、编码成果有效，不 blocked（2026-09-26 用户裁决：全部做完留给主 agent 处理，
  *  钩子在主会话代提交时照常执行）；收尾统一呈报 */
 const deferredCommits = [];
+// ── D3 验收失败修复循环（review-fix-loop 形态：失败池 → 聚合裁决 phase → 修复组 phase
+//    → 节点重置重验回循环）。验收 failed 不再立即熔断——可达性熔断改到修复轮耗尽后生效；
+//    fixer 可修产品代码（修订 2026-09-26「验收 fixer 不碰产品代码」裁决），防线 =
+//    归因/修复分角色 + 重验走节点原路径机器判定（剧本 exit code / 判定书锚，不采信
+//    自报）+ disputed 反证通道（误报呈报人工裁决，不占修复轮次）。仅 acceptance 模式
+//    生效——dev 模式的 verify 失败维持立即熔断（D1 行为零变化）──
+const MAX_ACCEPTANCE_FIX_ROUNDS = 3;
+/** 失败池：节点 id → 逐轮失败记录（归因结果 + 失败输出 tail），聚合裁决的输入 */
+const acceptanceFailures = new Map();
+let acceptanceFixRounds = 0;
+/** disputed 节点集（聚合级反证 + fixer 级拒修）：退出修复循环保持 failed，随终态呈报——
+ *  重跑剧本仍会红（没人修它），不重置以免空占轮次 */
+const acceptanceDisputedIds = new Set();
+/** disputed 呈报清单（round / 聚合条目 id / 来源 / 反证），随终态带出 */
+const acceptanceDisputed = [];
 function nodeState(id) {
     return state.get(id)?.status ?? "pending";
 }
@@ -1468,15 +1560,19 @@ async function executeVerifyNode(node) {
             run = await runVerifyScript(node);
             continue;
         }
-        // product-bug（用户裁决 2026-09-26：验收 fixer 不碰产品代码）或 spec-bug 自愈不收敛 /
-        // environment 重试仍红 → 依赖可达性判定（调度循环据此熔断或继续）
+        // product-bug（fixer 可修产品代码——2026-10-31 修订 2026-09-26 裁决，防线 = 归因/修复
+        // 分角色 + 重验机器判定 + disputed 反证）或 spec-bug 自愈不收敛 / environment 重试仍红
+        // → 入失败池（acceptance 模式由修复循环聚合修复后重验；dev 模式维持依赖可达性熔断）
+        recordAcceptanceFailure(node, "verify", verdict.class, verdict.evidence, verdict.failureFiles, verdict.fixHint, run.output);
         const stuck = successorsOf(node.id).filter((s) => {
             const st = nodeState(s);
             return st === "pending" || st === "in-progress";
         });
-        const mode = stuck.length > 0
-            ? `卡住后继（${stuck.join("、")}）——立即熔断上报，由主 agent / 用户裁决`
-            : "不卡后续——记录跳过，其余节点照常执行，终态统一上报";
+        const mode = plan.mode === "acceptance"
+            ? "入验收修复循环（聚合裁决 → 修复组 → 重验）"
+            : stuck.length > 0
+                ? `卡住后继（${stuck.join("、")}）——立即熔断上报，由主 agent / 用户裁决`
+                : "不卡后续——记录跳过，其余节点照常执行，终态统一上报";
         await markNodeBlockedOrFailed(node.id, "failed", `验收失败（${verdict.class}，${attempt} 次尝试；${mode}）：${verdict.evidence}`, [
             tailLines(run.output, TAIL_LINES),
             verdict.failureFiles.length > 0 ? `归因指向：${verdict.failureFiles.join("、")}` : "",
@@ -1520,7 +1616,11 @@ async function executeInspectNode(node) {
         return;
     }
     if (result.verdict === "fail") {
-        await markNodeBlockedOrFailed(node.id, "failed", `inspect 验收结论 fail`, result.test_evidence, 1);
+        // inspect fail 先归因再入失败池（verify 同款三分类——无归因直接 failed 会让修复循环
+        // 拿不到 failureFiles/fixHint，聚合修复失去输入）；归因不合规保守按 product-bug 进池
+        const dv = await diagnoseInspectFailure(node, result.test_evidence);
+        recordAcceptanceFailure(node, "inspect", dv.class, dv.evidence, dv.failureFiles, dv.fixHint, result.test_evidence);
+        await markNodeBlockedOrFailed(node.id, "failed", `inspect 验收结论 fail（归因 ${dv.class}${plan.mode === "acceptance" ? "；入验收修复循环" : ""}）：${dv.evidence}`, result.test_evidence, 1);
         return;
     }
     // pass/degraded 收 done 前核判定书锚：结构化自报与落盘判定文件一致才算数——
@@ -1531,6 +1631,299 @@ async function executeInspectNode(node) {
     }
     await finishNodeDone(node.id, 1, undefined, (result.verdict === "degraded" ? "[DEGRADED] " : "") + result.test_evidence);
     log(`Inspect 节点 ${node.id} 验收结论 ${result.verdict}${result.verdict === "degraded" ? "（降级通过，evidence 已标注）" : "（判定书锚核对一致）"}`);
+}
+// ── D3 验收失败修复循环（review-fix-loop 形态；仅 acceptance 模式）──
+/** 失败入池（verify/inspect 的 failed 分支调用；round 用当前修复轮+1 标记首见轮） */
+function recordAcceptanceFailure(node, kind, cls, evidence, failureFiles, fixHint, output) {
+    const arr = acceptanceFailures.get(node.id) ?? [];
+    arr.push({ round: acceptanceFixRounds + 1, kind, cls, evidence, failureFiles, fixHint, tail: tailLines(output, TAIL_LINES) });
+    acceptanceFailures.set(node.id, arr);
+}
+/** inspect fail 归因（与 verify 的 diagnoseVerifyFailure 同契约，输入 = 判定证据文本）。
+ *  返回不合规保守按 product-bug（与 verify 归因的兜底一致）。 */
+async function diagnoseInspectFailure(node, testEvidence) {
+    const diag = wfAgent(`诊断-${node.id}-i${acceptanceFixRounds + 1}`, DIAGNOSE_PERSONA);
+    const prompt = [
+        `验收节点 ${node.id}（inspect：按任务书真机判定）的验收结论为 fail，请归因（只读分析）。`,
+        `- 任务书：${node.promptFile}；判定书（verdict.json）与产物在 ${node.artifactsDir}`,
+        `- 验收 agent 给出的失败证据：\n${tailLines(testEvidence, TAIL_LINES)}`,
+        "",
+        "归类三选一（class 字段）：",
+        '- spec-bug：验收资产自身缺陷（断言口径错 / 等待时序错 / 窗口失配 / 剧本 bug）——failureFiles 填验收资产文件，fixHint 给修复要点',
+        "- product-bug：被测产品实现缺陷——failureFiles 填产品文件，fixHint 给修复要点",
+        "- environment：超时 / 资源 / 环境类失败（非断言红）",
+        "",
+        '返回 JSON：{ "class": "spec-bug"|"product-bug"|"environment", "evidence": "一句话证据（引用失败证据原文）", "failureFiles": ["文件路径"], "fixHint": "修复要点（可空串）" }',
+    ].join("\n");
+    const validated = await askValidated(validateHealVerdict, (p) => diag.ask("HealVerdict", p), prompt);
+    if (validated !== null)
+        return validated;
+    log(`WARN: inspect 节点 ${node.id} 归因返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规——保守按产品缺陷处理`);
+    return {
+        class: "product-bug",
+        evidence: `归因返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规——保守按产品缺陷处理`,
+        failureFiles: [],
+        fixHint: "",
+    };
+}
+/** 聚合裁决 fail-closed 校验器工厂（依赖失败节点集合，闭包捕获）：
+ *  ① 每个失败节点至少被一条 item 覆盖（禁止静默丢弃）② fix 条目被 groups 恰好覆盖一次
+ *  ③ 组间 files 不相交（并行修复禁改同一文件）④ disputed 须非空根因（反证留痕） */
+function makeAcceptanceAggValidator(failedIds) {
+    return (v) => {
+        const o = typeof v === "object" && v !== null ? v : {};
+        const errors = [];
+        if (!Array.isArray(o["items"]))
+            return { ok: false, errors: ["items 须为数组"] };
+        if (!Array.isArray(o["groups"]))
+            return { ok: false, errors: ["groups 须为数组"] };
+        const items = o["items"];
+        const groups = o["groups"];
+        const seenIds = new Set();
+        for (const it of items) {
+            if (typeof it["id"] !== "string" || it["id"] === "")
+                errors.push("item.id 须为非空字符串");
+            else if (seenIds.has(it["id"]))
+                errors.push(`item.id 重复：${it["id"]}`);
+            else
+                seenIds.add(it["id"]);
+            if (!isStrArr(it["nodeIds"]) || it["nodeIds"].length === 0)
+                errors.push(`item ${it["id"]}：nodeIds 须为非空字符串数组`);
+            else
+                for (const nid of it["nodeIds"])
+                    if (!failedIds.includes(nid))
+                        errors.push(`item ${it["id"]}：nodeIds 含未知/已 disputed 节点 ${nid}（幻觉 ref）`);
+            if (it["action"] !== "fix" && it["action"] !== "disputed")
+                errors.push(`item ${it["id"]}：action 须为 "fix"|"disputed"`);
+            if (typeof it["title"] !== "string")
+                errors.push(`item ${it["id"]}：title 须为字符串`);
+            if (typeof it["rootCause"] !== "string" || it["rootCause"] === "")
+                errors.push(`item ${it["id"]}：rootCause 须为非空字符串（disputed 时即反证）`);
+            if (!isStrArr(it["files"]))
+                errors.push(`item ${it["id"]}：files 须为字符串数组`);
+            if (it["action"] === "fix" && Array.isArray(it["files"]) && it["files"].length === 0)
+                errors.push(`item ${it["id"]}：action=fix 但 files 为空（修复组需要预期改动文件做判交）`);
+            if (typeof it["guidance"] !== "string")
+                errors.push(`item ${it["id"]}：guidance 须为字符串（fix 时为修复指导）`);
+        }
+        const covered = new Set(items.flatMap((it) => (isStrArr(it["nodeIds"]) ? it["nodeIds"] : [])));
+        const missing = failedIds.filter((id) => !covered.has(id));
+        if (missing.length > 0)
+            errors.push(`以下失败节点未被任何聚合条目覆盖（禁止静默丢弃）：${missing.join("、")}`);
+        const fixIds = new Set(items.filter((it) => it["action"] === "fix").map((it) => it["id"]));
+        const groupedCount = new Map();
+        const groupFiles = [];
+        for (const g of groups) {
+            if (typeof g["id"] !== "string" || g["id"] === "")
+                errors.push("group.id 须为非空字符串");
+            if (!isStrArr(g["itemIds"]) || g["itemIds"].length === 0)
+                errors.push(`group ${g["id"]}：itemIds 须为非空字符串数组`);
+            const ids = (isStrArr(g["itemIds"]) ? g["itemIds"] : []);
+            for (const iid of ids) {
+                if (!fixIds.has(iid))
+                    errors.push(`group ${g["id"]}：itemIds 含非 fix 条目或幻觉 id ${iid}`);
+                groupedCount.set(iid, (groupedCount.get(iid) ?? 0) + 1);
+            }
+            const files = items.filter((it) => ids.includes(it["id"])).flatMap((it) => (isStrArr(it["files"]) ? it["files"] : []));
+            groupFiles.push(files);
+        }
+        for (const [iid, c] of groupedCount)
+            if (c > 1)
+                errors.push(`fix 条目 ${iid} 被多个组覆盖（恰好一次）`);
+        for (const iid of fixIds)
+            if (!groupedCount.has(iid))
+                errors.push(`fix 条目 ${iid} 未被任何组覆盖（禁止静默丢弃）`);
+        for (let i = 0; i < groupFiles.length; i++)
+            for (let j = i + 1; j < groupFiles.length; j++) {
+                const inter = groupFiles[i].filter((f) => groupFiles[j].includes(f));
+                if (inter.length > 0)
+                    errors.push(`组 ${i + 1} 与组 ${j + 1} 的 files 相交（${inter.slice(0, 3).join("、")}）——并行修复禁改同一文件，请重新分组`);
+            }
+        if (fixIds.size > 0 && groups.length === 0)
+            errors.push("存在 fix 条目但 groups 为空");
+        if (fixIds.size === 0 && groups.length > 0)
+            errors.push("无 fix 条目但 groups 非空");
+        return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v };
+    };
+}
+function validateAcceptanceFixReport(v) {
+    const o = typeof v === "object" && v !== null ? v : {};
+    const errors = [];
+    if (!Array.isArray(o["fixes"]))
+        errors.push("fixes 须为数组");
+    else
+        for (const f of o["fixes"]) {
+            if (typeof f["itemId"] !== "string")
+                errors.push("fixes[].itemId 须为字符串");
+            if (!isStrArr(f["files"]) || f["files"].length === 0)
+                errors.push(`fixes ${f["itemId"]}：files 须为非空字符串数组（无改动走 disputed，不占 fixes）`);
+        }
+    if (!Array.isArray(o["disputed"]))
+        errors.push("disputed 须为数组");
+    else
+        for (const d of o["disputed"]) {
+            if (typeof d["itemId"] !== "string")
+                errors.push("disputed[].itemId 须为字符串");
+            if (typeof d["evidence"] !== "string" || d["evidence"] === "")
+                errors.push(`disputed ${d["itemId"]}：evidence 须为非空反证（file:line + 归因漏了什么）`);
+        }
+    if (typeof o["selfCheck"] !== "string")
+        errors.push("selfCheck 须为字符串（命令: 结果）");
+    return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v };
+}
+/** D3 验收失败修复循环一轮：聚合裁决 phase → 修复组 phase → 引擎按组 commit。
+ *  ok=false 时调度循环按 fix-failure 语义熔断；resetIds = 本轮应重验（重置 pending）的
+ *  节点——修复是组级的，同组连带修复的节点一并重验，由机器判定裁决谁真正转绿。 */
+async function runAcceptanceFixCycle(round) {
+    const failedNodes = plan.nodes.filter((n) => nodeState(n.id) === "failed" && (n.kind === "verify" || n.kind === "inspect") && !acceptanceDisputedIds.has(n.id));
+    if (failedNodes.length === 0)
+        return { ok: true, reason: "", resetIds: [] };
+    phase(`验收失败聚合裁决（第 ${round} 轮）`);
+    log(`第 ${round} 轮验收修复：失败池 ${failedNodes.map((n) => n.id).join("、")}${acceptanceDisputedIds.size > 0 ? `（disputed 已排除 ${acceptanceDisputedIds.size} 节点）` : ""}`);
+    const failBlocks = failedNodes
+        .map((n) => {
+        const hist = acceptanceFailures.get(n.id) ?? [];
+        const last = hist[hist.length - 1];
+        return [
+            `- 节点 ${n.id}（${n.kind}）任务书 ${n.promptFile}${n.kind === "verify" ? ` 剧本 ${n.script}` : ""}`,
+            `  最新归因：${last?.cls ?? "unknown"}——${last?.evidence ?? ""}`,
+            `  归因指向文件：${last?.failureFiles.join("、") || "（未给——按任务书与产物自判）"}`,
+            `  修复要点：${last?.fixHint || "（未给）"}`,
+            `  失败输出（tail）：\n${String(last?.tail ?? "")
+                .split("\n")
+                .map((l) => `    ${l}`)
+                .join("\n")}`,
+            hist.length > 1
+                ? `  历史轮归因（均已修复重验仍红——本轮须换思路，勿重复同款修法）：\n${hist.slice(0, -1).map((h) => `    第${h.round}轮 ${h.cls}：${h.evidence}`).join("\n")}`
+                : "",
+        ]
+            .filter(Boolean)
+            .join("\n");
+    })
+        .join("\n\n");
+    const aggPrompt = [
+        `第 ${round} 轮验收失败聚合裁决（只读分析，不改任何文件）。`,
+        "",
+        "失败节点的归因记录（逐节点）：",
+        failBlocks,
+        "",
+        "任务：",
+        "1. 跨节点合并同根因（一条聚合条目可覆盖多个节点——保留最强证据，修复指导合并为最具体的一句，将随任务文档直达修复者）。",
+        '2. 逐条裁决：真实缺陷（产品实现或验收资产）→ action="fix"（files 填预期改动文件，guidance 给具体可执行的修复指导）；归因误报/断言本就不该成立 → action="disputed"（rootCause 写反证——file:line + 归因漏了什么）。',
+        "3. 修复分组：fix 条目按文件相关性分组——同文件/同模块/同根因同组（一个修复者修一组）；不同组的 files 必须不相交（组间并行修复互不冲突）；单条独立成组即可，无关联不强行合并。",
+        "4. 延续条目（历史轮已修过仍红）优先换思路：guidance 不得复述已失败的修法。",
+        "",
+        `返回 JSON：{ items: [{ id: "AF-${round}-<序>", nodeIds: ["节点id"], title, action: "fix"|"disputed", rootCause, files: ["文件"], guidance }], groups: [{ id: "AG-<序>", itemIds: ["AF-..."], note }] }——每个失败节点至少被一条 item 覆盖；action=fix 的条目恰好被一个 group 覆盖；无 fix 条目时 groups=[]。`,
+    ].join("\n");
+    // 构造外提（契约见 askValidated 注释块）：防校验重试再入同名二次创建
+    const aggAgent = wfAgent(`验收聚合-r${round}`, ACCEPTANCE_AGG_PERSONA);
+    const agg = await askValidated(makeAcceptanceAggValidator(failedNodes.map((n) => n.id)), (p) => aggAgent.ask("AcceptanceAggregation", p), aggPrompt);
+    if (agg === null) {
+        return { ok: false, reason: `聚合裁决返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规（失败池 ${failedNodes.map((n) => n.id).join("、")}）`, resetIds: [] };
+    }
+    for (const it of agg.items) {
+        if (it.action !== "disputed")
+            continue;
+        acceptanceDisputed.push({ round, itemId: it.id, by: "aggregator", evidence: it.rootCause });
+        for (const nid of it.nodeIds)
+            acceptanceDisputedIds.add(nid);
+        log(`条目 ${it.id}（节点 ${it.nodeIds.join("、")}）聚合判 disputed：${it.rootCause}`);
+    }
+    const fixItems = agg.items.filter((it) => it.action === "fix");
+    // 聚合清单落盘（机器渲染——追溯锚，修复轮次产物与 per-fixer 文档同目录）
+    const fixDir = `${skillDataDir}/${String(plan.statusPath.split("/").pop() ?? "status")}.fixes/r${round}`;
+    try {
+        await writeTextViaNode(`${fixDir}/aggregated.md`, [
+            `# 第 ${round} 轮验收失败聚合清单`,
+            "",
+            ...agg.items.map((it) => `- ${it.id} [${it.action}] ${it.title}（节点 ${it.nodeIds.join("、")}）——${it.rootCause}${it.action === "fix" ? `\n  files: ${it.files.join("、")}\n  guidance: ${it.guidance}` : ""}`),
+            "",
+            ...(agg.groups.length > 0 ? ["## 修复分组", ...agg.groups.map((g) => `- ${g.id}：${g.itemIds.join("、")}${g.note ? `——${g.note}` : ""}`)] : []),
+        ].join("\n"));
+    }
+    catch (e) {
+        log(`WARN: 聚合清单落盘失败（${errText(e)}）——聚合数据以日志与返回值为准`);
+    }
+    if (fixItems.length === 0) {
+        log("聚合裁决全部 disputed——无可修项，失败节点保持 failed 随终态呈报");
+        return { ok: true, reason: "", resetIds: [] };
+    }
+    phase(`验收修复组并行（第 ${round} 轮）`);
+    // per-fixer 任务文档确定性渲染（文档与组严格一致——LLM 自写文档会与派发组错位）
+    const fixerDocs = [];
+    let docIdx = 0;
+    for (const g of agg.groups) {
+        docIdx += 1;
+        const gItems = fixItems.filter((it) => g.itemIds.includes(it.id));
+        if (gItems.length === 0)
+            continue;
+        const gNodes = failedNodes.filter((n) => gItems.some((it) => it.nodeIds.includes(n.id)));
+        const docPath = `${fixDir}/fixer-${docIdx}.md`;
+        await writeTextViaNode(docPath, [
+            `# 验收修复任务 ${g.id}${g.note ? `——${g.note}` : ""}`,
+            "",
+            "并行修复：其他组同时进行且文件与你不相交；只改本组条目涉及的文件。",
+            "",
+            ...gItems.flatMap((it) => [
+                `- ${it.id} ${it.title}（节点 ${it.nodeIds.join("、")}）`,
+                `  根因：${it.rootCause}`,
+                it.files.length > 0 ? `  files: ${it.files.join(", ")}` : "",
+                it.guidance !== "" ? `  guidance: ${it.guidance}` : "",
+                ...(acceptanceFailures.get(it.nodeIds[0]) ?? []).slice(0, -1).map((h) => `  历史修法（已失败勿重复）：第${h.round}轮 ${h.cls}——${h.evidence}`),
+            ]),
+        ]
+            .filter(Boolean)
+            .join("\n"));
+        fixerDocs.push({ path: docPath, group: g, items: gItems, cwd: gNodes[0]?.cwd ?? plan.projectRoot });
+    }
+    log(`第 ${round} 轮验收修复分 ${fixerDocs.length} 组并行`);
+    const fixerResults = await Promise.all(fixerDocs.map(async (d, idx) => {
+        const fixerAgent = wfAgent(`验收修复-r${round}-g${idx + 1}`, ACCEPTANCE_FIXER_PERSONA);
+        const prompt = [
+            `读取修复任务文档 ${d.path}（绝对路径）并完整执行（第 ${round} 轮验收修复）。`,
+            "",
+            "约束：",
+            "1. 以条目根因与 guidance 为依据修复产品代码或验收资产；小步修改；只改本组条目涉及的文件与波及文件。",
+            "2. 修完自跑改动相关的测试/类型检查（只重跑失败相关项，禁止全套复跑——重验由引擎机器执行，无需你跑全量）。",
+            "3. 确信条目是误报（断言口径本就不该成立/属既有非缺陷行为）：不要修，放 disputed 并给反证（file:line + 归因漏了什么），人工裁决——禁止靠修代码迎合错误断言。",
+            "4. git 禁令：禁止 git add / commit / push / stash——提交由引擎统一执行。",
+            "5. 改动触发仓库门禁义务的（豁免标记 / 清单登记）按仓库规范就地处理，防引擎提交被钩子拦。",
+            `6. 工作目录锚：${d.cwd}（files 申报相对该仓库根的路径）。`,
+            "",
+            '返回 JSON：{ fixes: [{ itemId, files: ["相对仓库根路径"] }], disputed: [{ itemId, evidence }], selfCheck: "命令: 结果" }——修了哪些条目如实申报，未修且非误报的条目不得静默丢弃（如实写进 selfCheck 说明）。',
+        ].join("\n");
+        const rep = await askValidated(validateAcceptanceFixReport, (p) => fixerAgent.ask("AcceptanceFixReport", p), prompt);
+        return { doc: d, rep };
+    }));
+    const badGroup = fixerResults.find((fr) => fr.rep === null);
+    if (badGroup !== undefined) {
+        return { ok: false, reason: `修复组 ${badGroup.doc.group.id} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规（改动可能已落盘——接管前先 git status 盘点）`, resetIds: [] };
+    }
+    const okResults = fixerResults.filter((fr) => fr.rep !== null);
+    for (const { doc, rep } of okResults) {
+        for (const dsp of rep.disputed) {
+            const it = doc.items.find((x) => x.id === dsp.itemId);
+            acceptanceDisputed.push({ round, itemId: dsp.itemId, by: `fixer:${doc.group.id}`, evidence: dsp.evidence });
+            for (const nid of it?.nodeIds ?? [])
+                acceptanceDisputedIds.add(nid);
+            log(`条目 ${dsp.itemId}（组 ${doc.group.id}）fixer 判 disputed：${dsp.evidence}`);
+        }
+    }
+    // 组级一笔 commit（引擎执行；按组 cwd 分桶——跨仓组按首节点仓根提交，文件不在该仓时
+    // git add 报错以 fix-failure 熔断呈报，不留半提交状态）
+    for (const { doc, rep } of okResults) {
+        const files = [...new Set(rep.fixes.flatMap((f) => f.files))];
+        if (files.length === 0)
+            continue;
+        const c = await gitAddCommitViaNode(doc.cwd, `fix(acceptance): 第 ${round} 轮验收修复（${doc.group.id}，${files.length} 文件）`, files);
+        if (!c.ok) {
+            return { ok: false, reason: `修复组 ${doc.group.id} commit 失败（${doc.cwd}）：${c.err}——改动留工作区，接管前先 git status 盘点`, resetIds: [] };
+        }
+        log(`修复组 ${doc.group.id} 已提交（${c.hash.slice(0, 8)}）`);
+    }
+    // 重置重验：非 disputed 失败节点全部重置（修复是组级的，连带修复的节点由机器判定裁决）
+    const resetIds = failedNodes.filter((n) => !acceptanceDisputedIds.has(n.id)).map((n) => n.id);
+    return { ok: true, reason: "", resetIds };
 }
 async function executeNode(node) {
     if (node.kind === "dev")
@@ -1582,8 +1975,49 @@ async function runSchedulingLoop() {
             launch(ready[dispatched]);
             dispatched += 1;
         }
-        if (active.size === 0)
+        if (active.size === 0) {
+            // D3 验收失败修复循环（仅 acceptance 模式）：无活跃且存在可修的 failed 验收节点 →
+            // 聚合修复一轮后重置重验（重跑节点原路径 = 机器判定）；轮耗尽仍 failed 按可达性
+            // 判定收束（卡后继 = core-failed；不卡 = 保持 failed 由收尾呈报）。
+            // blocked 不进修复循环（环境/任务书/结构化问题非修复组可解）；dev 模式零变化
+            if (plan.mode === "acceptance") {
+                const failedAcc = plan.nodes.filter((n) => nodeState(n.id) === "failed" && (n.kind === "verify" || n.kind === "inspect") && !acceptanceDisputedIds.has(n.id));
+                if (failedAcc.length > 0 && acceptanceFixRounds < MAX_ACCEPTANCE_FIX_ROUNDS) {
+                    acceptanceFixRounds += 1;
+                    const cyc = await runAcceptanceFixCycle(acceptanceFixRounds);
+                    if (!cyc.ok) {
+                        coreFail = { id: "acceptance-fix", detail: `第 ${acceptanceFixRounds} 轮验收修复失败：${cyc.reason}` };
+                        break;
+                    }
+                    for (const id of cyc.resetIds) {
+                        const prev = state.get(id);
+                        const attempts = (prev?.attempts ?? 0) + 1;
+                        state.set(id, { status: "pending", attempts });
+                        await statusUpdate(id, { status: "pending", attempts }, "fix-round", `第 ${acceptanceFixRounds} 轮验收修复完成，重置重验（机器判定）`);
+                    }
+                    if (cyc.resetIds.length > 0) {
+                        log(`第 ${acceptanceFixRounds} 轮验收修复完成：重置重验 ${cyc.resetIds.join("、")}`);
+                        continue;
+                    }
+                    // 全 disputed：无可修项——按可达性判定收束（同轮耗尽路径）
+                }
+                if (failedAcc.length > 0 && acceptanceFixRounds >= MAX_ACCEPTANCE_FIX_ROUNDS) {
+                    const stuckN = failedAcc.find((n) => successorsOf(n.id).some((s) => {
+                        const sst = nodeState(s);
+                        return sst === "pending" || sst === "in-progress";
+                    }));
+                    if (stuckN !== undefined) {
+                        coreFail = {
+                            id: stuckN.id,
+                            detail: `验收失败经 ${MAX_ACCEPTANCE_FIX_ROUNDS} 轮修复循环仍未收敛——节点 ${stuckN.id} 卡住后继，熔断呈报；disputed 反证与聚合历史（${skillDataDir}/${String(plan.statusPath.split("/").pop() ?? "status")}.fixes/）随终态`,
+                        };
+                        break;
+                    }
+                    // 不卡后继：保持 failed，收尾按 blockedOut 呈报（终态 blocked）
+                }
+            }
             break; // 无可调度且无活跃 → 依赖挂起或全终态 → 终态判定
+        }
         // 级二粗粒度复核的基线：**单调累积**（launch 时并入该节点范围声明，settle 后不移除）——
         // 粗粒度复核「只松不严」原则下，移除已落定节点的范围声明只会收紧：兄弟节点带残留改动
         // 落定（blocked/commit 失败）后，在飞节点的核验会把残留判为越界 stray 而被误伤打回
@@ -1604,12 +2038,16 @@ async function runSchedulingLoop() {
         // 核心组熔断判定：任一核心节点 blocked/failed 且 haltOnCoreFail → 记归因、停止新派发。
         // 在飞节点收尾不放弃（await allSettled——熔断只是不派新，已派节点的落盘/commit 照常完成）
         // §8.7 依赖可达性熔断（2026-09-26 用户裁决，统一判据）：任一节点 blocked/failed 且
-        // 卡住未终态后继（verify 自愈不收敛 / product-bug / dev 打回超限 / 自报 blockers）→
-        // 立即停止派发（在飞收尾不放弃）；不卡的失败已被记录跳过，其余节点照常调度。原静态
-        // coreIds/haltOnCoreFail 短路已退役（核心场景标注不再承载熔断语义——依赖闭包是唯一判据）
+        // 卡住未终态后继（dev 打回超限 / 自报 blockers / 引擎层失败）→ 立即停止派发（在飞
+        // 收尾不放弃）。验收 failed（acceptance 模式）不再立即熔断——修复循环承接（同轮其他
+        // 分支照跑，修复轮耗尽后才按可达性判定，见循环头 active.size === 0 分支）。
+        // 原静态 coreIds/haltOnCoreFail 短路已退役（核心场景标注不再承载熔断语义——依赖闭包
+        // 是唯一判据）
         {
             const stuckBad = plan.nodes.find((n) => {
                 const st = nodeState(n.id);
+                if (st === "failed" && plan.mode === "acceptance" && (n.kind === "verify" || n.kind === "inspect"))
+                    return false;
                 if (st !== "failed" && st !== "blocked")
                     return false;
                 return successorsOf(n.id).some((s) => {
@@ -2069,5 +2507,8 @@ return {
     validationError: null,
     deferredCommits,
     residualFiles,
+    acceptanceFix: acceptanceFixRounds > 0 || acceptanceDisputed.length > 0
+        ? { rounds: acceptanceFixRounds, disputed: acceptanceDisputed, fixesDir: `${skillDataDir}/${String(plan.statusPath.split("/").pop() ?? "status")}.fixes` }
+        : null,
 };
 

@@ -132,6 +132,27 @@ interface AggregateReport {
   items: AggregateItem[];
 }
 
+/** Gate A 失败归因分诊条目（Gate A 红后的「该谁修」裁决：本批回归回注修复轮，其余豁免呈报） */
+interface GateATriageItem {
+  /** GT-<序> */
+  id: string;
+  /** batch-regression=本批改动引入的回归（回注修复轮）/ legacy=存量红（与本批 diff 零交集，豁免呈报）/ script-defect=测试基建自身缺陷（段退出码累计假红、清单配置错等）/ flaky=瞬态失败（直接重跑 Gate A） */
+  kind: "batch-regression" | "legacy" | "script-defect" | "flaky";
+  /** 失败段/用例标识 */
+  testRef: string;
+  /** 判定依据（基线对照结论或文件交集证据） */
+  evidence: string;
+  /** 本批侧改动文件（batch-regression 时非空） */
+  files: string[];
+  /** 修复要点（可空串） */
+  fixHint: string;
+}
+
+/** Gate A 归因分诊输出（日志中每个失败段恰好一条，禁止静默跳过） */
+interface GateATriage {
+  items: GateATriageItem[];
+}
+
 interface ItemRecord {
   id: string;
   /** 建档去重键 = location + 归一 gap（仅用于同轮跨区双报与无 prevId 新报的建档去重——

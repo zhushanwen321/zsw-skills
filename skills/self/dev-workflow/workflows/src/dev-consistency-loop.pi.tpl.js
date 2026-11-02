@@ -1,10 +1,10 @@
 /* @pi-meta
 name: dev-consistency-loop
 description: >-
-  dev-flow-wf W3 一致性审查循环：R1 分区全面审后修复组并行修复并定向复审，Gate A 全量测试零容忍绕过，循环至 converged 或 stuck，终态判定与顽固条目追踪全由脚本完成，不信任 agent 自报收敛
+  dev-flow-wf W3 一致性审查循环：R1 分区全面审后修复组并行修复并定向复审（每轮前聚合定性独立 phase），Gate A 全量测试零容忍绕过——红后归因分诊（≤2 轮）：本批回归条目回注修复轮再修、瞬态重跑、存量红与测试基建缺陷带分诊报告终态，循环至 converged 或 stuck，终态判定与顽固条目追踪全由脚本完成，不信任 agent 自报收敛
 when: >-
   dev-flow-wf 主流程 D2 阶段——W2 开发循环终态后由主 agent 发起，输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/环节失败由主 agent 接力处理
-phases: ['生成分区并全面审查', '聚合定性', '并行修复与定向复审', '产物类并行预备', '跑全量测试 Gate A']
+phases: ['生成分区并全面审查', '聚合定性', '并行修复与定向复审', '产物类并行预备', '跑全量测试 Gate A', 'Gate A 归因分诊']
 parameters:
   type: object
   properties:
@@ -194,6 +194,29 @@ const SCHEMA_AggregateReport = {
   },
   required: ["items"],
 };
+const SCHEMA_GateATriageItem = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "GT-<序>" },
+    kind: {
+      type: "string",
+      enum: ["batch-regression", "legacy", "script-defect", "flaky"],
+      description: "batch-regression=本批改动引入的回归（回注修复轮）/ legacy=存量红（与本批 diff 零交集，豁免呈报）/ script-defect=测试基建自身缺陷 / flaky=瞬态失败（直接重跑 Gate A）",
+    },
+    testRef: { type: "string", description: "失败段/用例标识" },
+    evidence: { type: "string", description: "判定依据（基线对照结论或文件交集证据）" },
+    files: { type: "array", items: { type: "string" }, description: "本批侧改动文件（batch-regression 时非空）" },
+    fixHint: { type: "string", description: "修复要点（可空串）" },
+  },
+  required: ["id", "kind", "testRef", "evidence", "files", "fixHint"],
+};
+const SCHEMA_GateATriage = {
+  type: "object",
+  properties: {
+    items: { type: "array", description: "日志中每个失败段恰好一条分诊结论（禁止静默跳过）", items: SCHEMA_GateATriageItem },
+  },
+  required: ["items"],
+};
 // wfAgent：公共体的 agent(name, persona).ask<T>(prompt) 的 pi 等价。构建管线把公共体
 // 调用点改写为 wfAgent(、泛型参数转为首个字符串参数（typeKey），这里查 SCHEMA_BY_KEY。
 // persona 拼 prompt 头（pi agent() 无 system 通道）；每次调用都是新 agent（pi 无续聊）。
@@ -201,6 +224,7 @@ const SCHEMA_BY_KEY = {
   ReviewResult: SCHEMA_ReviewResult,
   FixReport: SCHEMA_FixReport,
   AggregateReport: SCHEMA_AggregateReport,
+  GateATriage: SCHEMA_GateATriage,
 };
 function wfAgent(name, persona) {
   return {

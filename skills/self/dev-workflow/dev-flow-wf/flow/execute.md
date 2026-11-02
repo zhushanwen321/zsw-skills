@@ -44,7 +44,9 @@ worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 workt
 |------|--------------|
 | completed | 全节点 done——D1 完成转 D2（consistency-review.md）；D3 完成转 D4 收尾 |
 | blocked | 读 blocked 清单逐条处置：打回超限类 → 人工裁决（采纳修复方案/放弃该单元）；引擎层异常 → ResumeWorkflowRun 或修复 exec-plan 后重发 |
-| core-failed | 读 coreFailure 归因——缺陷修复走 W2 修复节点形态重验（exec-plan 更新为重验子集），主 agent 只裁决与重发起，不亲编码 |
+| core-failed | 读 coreFailure 归因。D3 场景 = 验收失败修复循环（失败池 → 聚合裁决 phase → 修复组 phase → 节点重置机器重验，≤3 轮）已耗尽仍不收敛——聚合清单与全部失败归因在 acceptanceFix.fixesDir，按归因逐条人工裁决（采纳修复方案重验 / 放弃节点）；D1 场景同旧语义。主 agent 只裁决与重发起，不亲编码 |
+
+**D3 验收失败修复循环（终态 result 携带 acceptanceFix 时必读）**：`{ rounds（实际修复轮数）, disputed（聚合裁决员与 fixer 的误报反证清单——对应节点保持 failed 未修）, fixesDir（逐轮聚合清单 aggregated.md 与 per-fixer 任务文档） }`。disputed 条目是「验收断言本不该成立/归因误报」的反证申报，人工裁决：反证成立 → 修验收资产或 waive 该节点后重发；不成立 → 按原归因修复后重发。**验收修复后重发优先整 run 重发**（引擎增量对账自动跳过 done 节点）——不要手工编辑 status.json 写结果（实测手工写坏 JSON 会触发引擎「状态不可信」全量重验）。
 
 **commit-deferred 与清单外残留（终态 result 携带，status.json events 有 commit-deferred-list / residual-files 同名事件）**：
 

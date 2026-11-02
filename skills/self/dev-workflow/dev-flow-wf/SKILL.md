@@ -35,13 +35,13 @@ description: >-
 |----|------|------|--------|
 | D0 编译 | 设计包 → exec-plan.json + 逐节点 promptFile + 初始 status.json + L0 前置 + 环境 smoke | 主 agent | `flow/compile.md` |
 | D1 开发循环 | 单元 DAG 流式并行（写码→核验→commit→解锁） | W2 wave-executor（手工路径 `flow/execute.md`） | 全节点 done 或 blocked |
-| D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组并行 + Gate A 全量测试 | W3 dev-consistency-loop（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
-| D3 端到端验收 | 验收计划表 L3/L4 编译成 verify/inspect 节点（核心先行 + 短路） | W2 第二实例化（手工路径 `flow/acceptance.md`） | 验收全绿 |
+| D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组并行 + Gate A 全量测试（红后归因分诊独立 phase：本批回归条目回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态，≤2 轮） | W3 dev-consistency-loop（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
+| D3 端到端验收 | 验收计划表 L3/L4 编译成 verify/inspect 节点（核心先行 + 短路）+ 验收失败修复循环（failed 入失败池 → 聚合裁决独立 phase（跨节点同根因合并/disputed 反证/文件不相交分组）→ 修复组独立 phase（fixer 修产品代码与验收资产，引擎按组 commit）→ 节点重置机器重验回调度循环，≤3 轮不收敛才熔断） | W2 第二实例化（手工路径 `flow/acceptance.md`） | 验收全绿 |
 | D4 收尾交付 | 交付汇总 + 功能分级登记 + 文档资产同步 + ADR 复审 + 最终 commit | 主 agent | `flow/acceptance.md` 收尾节 |
 | D5 终态同步 | 代码与设计双向校准：三向功能对照矩阵 + 越权三问 + 两级审查拓扑 | W4 design-code-sync-loop（手工路径 `flow/sync.md`） | 矩阵 0 must-fix |
 | D6 交付后守护 | 交付后修复回写纪律 + 按需定向对抗审查 | 主 agent | `flow/post-delivery.md`（[HISTORICAL] 原样） |
 
-段间不设用户确认（gate 驱动连续推进）；熔断终态（blocked / stuck / core-failed / contested / gate-a-failed / review-failure / fix-failure）停回主 agent 按 flow/execute.md 与 flow/consistency-review.md 的终态处置表处置。
+段间不设用户确认（gate 驱动连续推进）；熔断终态（blocked / stuck / core-failed / contested / gate-a-failed / review-failure / fix-failure）停回主 agent 按 flow/execute.md 与 flow/consistency-review.md 的终态处置表处置——core-failed / gate-a-failed 在 D3/D2 是修复循环不收敛的出口（常态失败已由轮内聚合修复消化），终态自带归因材料（聚合清单 / 分诊报告 / disputed 反证）。
 
 ## 核心原则
 
@@ -122,8 +122,8 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 
 | workflow | 段 | args | 终态 |
 |----------|----|------|------|
-| W2 `wave-executor`（saved） | D1 / D3（两实例化） | `{ execPlan, taskId?, executionId?, sampleType? }` | completed / blocked / core-failed |
-| W3 `dev-consistency-loop`（saved） | D2 | `{ execPlan, maxRounds?, reviewerTemplate?, attempt?, taskId?, executionId?, sampleType? }` | converged / stuck / gate-a-failed / review-failure / fix-failure（终态回写 status.json events：consistency 终态一笔恒写 + gate-a 笔仅在 converged/gate-a-failed 时写；必填字段双无条目降级登记项——deferredLedger 回流；attempt>1 时 Gate A 日志带 .attemptM 后缀） |
+| W2 `wave-executor`（saved） | D1 / D3（两实例化） | `{ execPlan, taskId?, executionId?, sampleType? }` | completed / blocked / core-failed（D3 含验收失败修复循环：failed 入失败池 → 聚合裁决 → 修复组 → 重置机器重验，≤3 轮；终态携带 acceptanceFix = { rounds, disputed（聚合级与 fixer 级反证清单，人工裁决）, fixesDir（聚合清单与 per-fixer 任务文档目录） }，非 null 时 disputed 必处置） |
+| W3 `dev-consistency-loop`（saved） | D2 | `{ execPlan, maxRounds?, reviewerTemplate?, attempt?, taskId?, executionId?, sampleType? }` | converged / stuck / gate-a-failed / review-failure / fix-failure（Gate A 红后归因分诊独立 phase ≤2 轮：本批回归条目（GA-id）回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态；终态回写 status.json events：consistency 终态一笔恒写 + gate-a 笔仅在 converged/gate-a-failed 时写；必填字段双无条目降级登记项——deferredLedger 回流；attempt>1 时 Gate A 日志带 .attemptM 后缀） |
 | W4 `design-code-sync-loop`（saved） | D5 | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath?, plannerTemplate?, reviewerTemplate?, attempt?, taskId?, executionId?, sampleType? }` | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（模板路径与 attempt 缺省自动处理，attempt>1 历史产物不覆盖；终态含 overdesignCandidates——越权候选卡呈报） |
 
 执行体按宿主环境选择：**zcode**（会话可见 CreateWorkflow 工具 / saved workflows）→ 上表 saved workflow 经 `CreateWorkflow saved` 发起；**pi**（subagent-workflow extension、workflow 工具可用）→ 本 skill 安装位置上级的 `../workflows/pi/<name>.js`（四件：wave-executor / dev-consistency-loop / design-code-sync-loop）复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run <name> --args k=v`——两版脚本业务逻辑逐行一致，仅 agent 调用层与文件头不同；--args 值全字符串，数字参数脚本内自动归一，数组型不支持。两版均未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：zcode workflow 用 ResumeWorkflowRun/AmendWorkflow，pi 重新 run（attempt 递增防产物覆盖），手工路径以 status.json + git log 对账，冲突以 git 为准）。

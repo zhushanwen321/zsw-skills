@@ -1,10 +1,10 @@
 /* @pi-meta
 name: wave-executor
 description: >-
-  dev-flow-wf W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验范围声明、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），acceptance 模式承载 verify/inspect 节点与核心组熔断，终态 completed、blocked 或 core-failed
+  dev-flow-wf W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验范围声明、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），acceptance 模式承载 verify/inspect 节点与验收失败修复循环（失败池 → 聚合裁决 → 修复组 → 重置重验，≤3 轮不收敛按依赖可达性熔断），终态 completed、blocked 或 core-failed
 when: >-
   dev-flow-wf 的 D1 开发循环与 D3 端到端验收发起本 workflow，传入 exec-plan.json 绝对路径（D0 编译产出），断点恢复按 status.json 人读恢复（git 为准）
-phases: ['校验执行计划', '并行执行开发节点', '并行执行验收节点', '收尾汇总']
+phases: ['校验执行计划', '并行执行开发节点', '并行执行验收节点', '验收失败聚合裁决', '验收修复组并行', '收尾汇总']
 parameters:
   type: object
   properties:
@@ -95,6 +95,70 @@ const SCHEMA_HealFixReport = {
   },
   required: ["fixed", "summary"],
 };
+const SCHEMA_AcceptanceAggItem = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "AF-<round>-<序>" },
+    nodeIds: { type: "array", items: { type: "string" }, description: "覆盖的失败节点（fail-closed：失败池节点必须被恰好覆盖）" },
+    title: { type: "string", description: "一句话标题" },
+    action: { type: "string", enum: ["fix", "disputed"], description: "fix=真实缺陷进修复组；disputed=归因误报反证（不修，随终态呈报人工裁决）" },
+    rootCause: { type: "string", description: "根因一句话（disputed 时即反证：file:line + 归因漏了什么）" },
+    files: { type: "array", items: { type: "string" }, description: "预期改动文件（组间判交依据；fix 时非空）" },
+    guidance: { type: "string", description: "修复指导（随 per-fixer 任务文档直达修复者）" },
+  },
+  required: ["id", "nodeIds", "title", "action", "rootCause", "files", "guidance"],
+};
+const SCHEMA_AcceptanceAggregation = {
+  type: "object",
+  properties: {
+    items: { type: "array", items: SCHEMA_AcceptanceAggItem, description: "聚合条目（跨节点合并同根因）" },
+    groups: {
+      type: "array",
+      description: "修复分组（组间文件不相交，组内一个修复者；无 fix 条目时为空）",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "AG-<序>" },
+          itemIds: { type: "array", items: { type: "string" }, description: "组内 fix 条目 id（每条恰好属一组）" },
+          note: { type: "string", description: "分组依据（可空串）" },
+        },
+        required: ["id", "itemIds", "note"],
+      },
+    },
+  },
+  required: ["items", "groups"],
+};
+const SCHEMA_AcceptanceFixReport = {
+  type: "object",
+  properties: {
+    fixes: {
+      type: "array",
+      description: "实际修复的条目（无改动的条目走 disputed，不占 fixes）",
+      items: {
+        type: "object",
+        properties: {
+          itemId: { type: "string", description: "聚合条目 id（AF-...）" },
+          files: { type: "array", items: { type: "string" }, description: "实际改动文件（相对仓库根路径）" },
+        },
+        required: ["itemId", "files"],
+      },
+    },
+    disputed: {
+      type: "array",
+      description: "误报反证（不修——人工裁决，对应节点保持 failed）",
+      items: {
+        type: "object",
+        properties: {
+          itemId: { type: "string", description: "聚合条目 id" },
+          evidence: { type: "string", description: "反证（file:line + 归因漏了什么；空泛证据=ES3 违规）" },
+        },
+        required: ["itemId", "evidence"],
+      },
+    },
+    selfCheck: { type: "string", description: "自检（命令: 结果）" },
+  },
+  required: ["fixes", "disputed", "selfCheck"],
+};
 const SCHEMA_InspectResult = {
   type: "object",
   properties: {
@@ -114,6 +178,8 @@ const SCHEMA_BY_KEY = {
   InspectResult: SCHEMA_InspectResult,
   HealVerdict: SCHEMA_HealVerdict,
   HealFixReport: SCHEMA_HealFixReport,
+  AcceptanceAggregation: SCHEMA_AcceptanceAggregation,
+  AcceptanceFixReport: SCHEMA_AcceptanceFixReport,
 };
 function wfAgent(name, persona) {
   return {

@@ -132,6 +132,27 @@ interface AggregateReport {
   items: AggregateItem[];
 }
 
+/** Gate A 失败归因分诊条目（Gate A 红后的「该谁修」裁决：本批回归回注修复轮，其余豁免呈报） */
+interface GateATriageItem {
+  /** GT-<序> */
+  id: string;
+  /** batch-regression=本批改动引入的回归（回注修复轮）/ legacy=存量红（与本批 diff 零交集，豁免呈报）/ script-defect=测试基建自身缺陷（段退出码累计假红、清单配置错等）/ flaky=瞬态失败（直接重跑 Gate A） */
+  kind: "batch-regression" | "legacy" | "script-defect" | "flaky";
+  /** 失败段/用例标识 */
+  testRef: string;
+  /** 判定依据（基线对照结论或文件交集证据） */
+  evidence: string;
+  /** 本批侧改动文件（batch-regression 时非空） */
+  files: string[];
+  /** 修复要点（可空串） */
+  fixHint: string;
+}
+
+/** Gate A 归因分诊输出（日志中每个失败段恰好一条，禁止静默跳过） */
+interface GateATriage {
+  items: GateATriageItem[];
+}
+
 interface ItemRecord {
   id: string;
   /** 建档去重键 = location + 归一 gap（仅用于同轮跨区双报与无 prevId 新报的建档去重——
@@ -1375,6 +1396,11 @@ const AGGREGATE_PERSONA =
   "④路由：条目修复动作与分区职责域不匹配时重派到匹配职责域的组，无任何组可承接时升级呈报。" +
   "清单中每个条目都必须出现在输出中（含 keep），漏报的条目由引擎按原分区机械分组兜底。" +
   NO_ASK_RULE;
+const GATE_A_TRIAGE_PERSONA =
+  "你是 Gate A 全量测试的归因分诊员：读失败日志与本批基线 diff，逐失败段判定「本批回归 / 存量红 / 测试基建自身缺陷 / 瞬态」；" +
+  "判定必须给依据（基线对照结论或文件交集证据），不猜测；只读分析——不改任何文件、不重跑测试；" +
+  "日志中每个失败段都必须分诊，禁止静默跳过。" +
+  NO_ASK_RULE;
 
 // ── 结构化返回校验回喂（用户裁决 2026-09-26：全部 agent 结构化返回必备，回喂重试上限 3 次）──
 // rawAsk 由调用方闭包提供（用各自具体类型调 ask——pi 构建管线按泛型名查 SCHEMA_BY_KEY，
@@ -1644,7 +1670,39 @@ let stuckPendingReason: string | null = null;
 // Gate A 本轮结果（finish 的 events 回写判据：stuck 终态也按结果写 gate-a 一笔）
 let gateOutcome: "pass" | "fail" | null = null;
 
-for (let fixRound = 1; fixRound <= maxRounds && activeItems().length > 0; fixRound++) {
+/** Gate A 归因分诊条目校验（≥1 条；batch-regression 必带 files；kind 枚举收窄） */
+function validateGateATriage(v: unknown): Validated<GateATriage> {
+  const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const errors: string[] = [];
+  if (!Array.isArray(o["items"]) || (o["items"] as unknown[]).length === 0)
+    return { ok: false, errors: ["items 须为非空数组（日志中每个失败段都要有分诊结论）"] };
+  const KINDS = ["batch-regression", "legacy", "script-defect", "flaky"];
+  for (const t of o["items"] as Record<string, unknown>[]) {
+    if (typeof t["id"] !== "string" || t["id"] === "") errors.push("item.id 须为非空字符串");
+    if (typeof t["kind"] !== "string" || !KINDS.includes(t["kind"]))
+      errors.push(`item ${t["id"]}：kind 须为 ${KINDS.join("|")} 之一`);
+    if (typeof t["testRef"] !== "string" || t["testRef"] === "") errors.push(`item ${t["id"]}：testRef 须为非空字符串（失败段/用例标识）`);
+    if (typeof t["evidence"] !== "string" || t["evidence"] === "") errors.push(`item ${t["id"]}：evidence 须为非空判定依据`);
+    if (!isStrArr(t["files"])) errors.push(`item ${t["id"]}：files 须为字符串数组`);
+    if (t["kind"] === "batch-regression" && Array.isArray(t["files"]) && (t["files"] as string[]).length === 0)
+      errors.push(`item ${t["id"]}：kind=batch-regression 但 files 为空（本批回归必须指出本批侧改动文件）`);
+    if (typeof t["fixHint"] !== "string") errors.push(`item ${t["id"]}：fixHint 须为字符串（可空串）`);
+  }
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as GateATriage };
+}
+
+// ── Gate A 分诊回注外层循环（≤2 轮分诊）：Gate A 红不再直接终态——归因分诊后
+//    「本批回归」条目回注修复轮（聚合定性合池重分组再修，产物预备与 Gate A 随轮重建
+//    ——代码修复后测试产物可能过期，重复构建是正确语义），瞬态失败直接重跑，存量红/
+//    测试基建自身缺陷不属本批修复范围（带分诊报告终态，由主 agent 裁决豁免或调整
+//    full-suite 清单后 attempt+1 重发）。修复轮上限 = maxRounds + 分诊轮数（回注条目
+//    不挤占审查修复轮额度，总量有界：maxRounds + MAX_GATE_A_TRIAGE_ROUNDS）──
+const MAX_GATE_A_TRIAGE_ROUNDS = 2;
+let gateARounds = 0;
+let fixRound = 1;
+gateARetry: while (true) {
+  stuckPendingReason = null; // 回注轮重判（上一轮的 stuck 理由不带入）
+  for (; fixRound <= maxRounds + gateARounds && activeItems().length > 0; fixRound++) {
   phase("聚合定性");
   await obsBegin("aggregate", fixRound);
   reviewRound = fixRound + 1;
@@ -2522,9 +2580,76 @@ try {
 }
 
 if (gateCode !== 0) {
-  // 零容忍绕过：不自动归因、不降级、不重试——归因与补修是主 agent 的事
+  // Gate A 红不再直接终态：归因分诊（≤MAX_GATE_A_TRIAGE_ROUNDS 轮）——本批回归回注修复轮、
+  // 瞬态重跑、存量红/基建缺陷带报告终态。分诊不是零容忍绕过对象（那是 skipped/disable 假绿，
+  // 见下方扫描）；对真实失败段做「该谁修」的分派是修复循环的自然延伸。分诊轮耗尽保留
+  // 直接终态出口（原文指引不变）
+  if (gateARounds >= MAX_GATE_A_TRIAGE_ROUNDS) {
+    return await finishGateA(
+      `${gateNote || `全量测试退出码 ${gateCode}`}。Gate A 分诊轮已耗尽（${MAX_GATE_A_TRIAGE_ROUNDS}）。日志：${gateALogPath}。归因指引：读日志定位失败用例（单测红 = 修复回归；编译/类型红 = 一致性残留漂移；超时 = 用例预算问题），由主 agent 派归因补修后重跑本工作流或全量测试`,
+    );
+  }
+  gateARounds += 1;
+  phase("Gate A 归因分诊");
+  // 构造外提（契约见 askValidated 注释块）：防校验重试再入同名二次创建
+  const triageAgent = agent(`GateA分诊-r${gateARounds}`, GATE_A_TRIAGE_PERSONA);
+  const triagePrompt = [
+    `第 ${gateARounds} 轮 Gate A 归因分诊（只读分析，不改任何文件）。`,
+    "",
+    `Gate A 全量测试退出码 ${gateCode}${gateNote !== "" ? `（${gateNote}）` : ""}。`,
+    `- 完整日志：${gateALogPath}（Read 它定位每个失败段的具体报错）`,
+    `- 本批改动范围：git diff ${info.baseline}..HEAD（自行执行查看；判定「本批引入 vs 存量」以交集为准）`,
+    "",
+    "逐失败段分类（kind 字段，四选一）：",
+    "- batch-regression：本批改动引入的回归（失败段涉及文件与本批 diff 有交集）——files 填本批侧改动文件，fixHint 给修复要点",
+    "- legacy：存量红——失败段与本批 diff 零交集（尽量以基线对照或失败段涉及文件不在本批改动内为据），evidence 写判定依据",
+    "- script-defect：测试基建/全量脚本自身缺陷（段退出码累计传播的假红、清单配置错、产物过期等——修复对象是测试基建而非产品）",
+    "- flaky：瞬态失败（重跑大概率绿——历史同段忽红忽绿、报错形态为超时/资源类）",
+    "",
+    "要求：日志中每个失败段都必须出现且只分诊一次（禁止静默跳过）；判 batch-regression 必须给 files。",
+    "",
+    '返回 JSON：{ items: [{ id: "GT-<序>", kind, testRef: "失败段/用例标识", evidence: "判定依据", files: [], fixHint: "" }] }',
+  ].join("\n");
+  const triage = await askValidated(validateGateATriage, (q) => triageAgent.ask<GateATriage>(q), triagePrompt);
+  if (triage === null) {
+    return await finishGateA(
+      `Gate A 归因分诊返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规——日志：${gateALogPath}，由主 agent 归因处置后重跑本工作流或全量测试`,
+    );
+  }
+  const batchItems = triage.items.filter((t) => t.kind === "batch-regression");
+  const hasFlaky = triage.items.some((t) => t.kind === "flaky");
+  log(
+    `Gate A 分诊（第 ${gateARounds} 轮）：本批回归 ${batchItems.length} 条 / 瞬态 ${hasFlaky ? "有" : "无"} / 存量与基建缺陷 ${triage.items.length - batchItems.length - (hasFlaky ? 1 : 0)} 条`,
+  );
+  if (batchItems.length > 0) {
+    for (const [bi, t] of batchItems.entries()) {
+      items.push({
+        id: `GA-${gateARounds}-${bi + 1}`,
+        key: `gate-a|${t.testRef}`,
+        location: t.testRef,
+        gap: `[gate-a 分诊] ${t.evidence}`,
+        affectsDecision: "是——Gate A 全量测试红",
+        affectsDelivery: "有——全量门未过",
+        severity: "must",
+        fixHint: t.fixHint,
+        group: "gate-a", // 聚合定性正常时会被路由覆盖；聚合回退时落独立组
+        firstRound: reviewRound,
+        uncleanRounds: 0,
+        active: true,
+        fixHistory: [`Gate A 第 ${gateARounds} 轮分诊回注（batch-regression）：${t.evidence}`],
+      });
+    }
+    await obsEnd("gate-a", null);
+    log(`Gate A 分诊回注 ${batchItems.length} 条进修复轮（fixRound ${fixRound} 续跑，上限 ${maxRounds + gateARounds}）`);
+    continue gateARetry;
+  }
+  if (hasFlaky) {
+    await obsEnd("gate-a", null);
+    log("Gate A 分诊为瞬态失败（无本批回归条目）——直接重跑 Gate A");
+    continue gateARetry;
+  }
   return await finishGateA(
-    `${gateNote || `全量测试退出码 ${gateCode}`}。日志：${gateALogPath}。归因指引：读日志定位失败用例（单测红 = 修复回归；编译/类型红 = 一致性残留漂移；超时 = 用例预算问题），由主 agent 派归因补修后重跑本工作流或全量测试——本工作流不自动归因`,
+    `${gateNote || `全量测试退出码 ${gateCode}`}。Gate A 归因分诊（第 ${gateARounds} 轮）——存量红/测试基建自身缺陷不属本批修复范围（分诊报告如下，由主 agent 裁决：调整 full-suite 清单后 attempt+1 重发，或登记存量债务；日志 ${gateALogPath}）：\n${triage.items.map((t) => `- [${t.kind}] ${t.testRef}——${t.evidence}`).join("\n")}`,
   );
 }
 // 零容忍绕过扫描（exit 0 之后；设计 §6.1 条目 1）：日志尾部 skipped 汇总 > 0 或
@@ -2544,4 +2669,5 @@ if (stuckPendingReason !== null) {
   );
 }
 return await finish("converged", reviewRound, `全部分区 unreasonable 清零，Gate A 全量测试通过（日志：${gateALogPath}）；doc_errors 与 reasonable 已随终态回流，由主 agent 转 D5 终态同步`);
+} // gateARetry 外层循环（Gate A 分诊回注）结束——全部出口在循环内 return
 

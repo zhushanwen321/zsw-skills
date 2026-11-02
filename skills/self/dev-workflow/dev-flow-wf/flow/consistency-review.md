@@ -21,7 +21,8 @@ args: { execPlan: "<path>.exec-plan.json",
 - **修复组并行**：组间范围声明互斥（≤5），每组 fixer；组内核验过即 commit（组级一笔）
 - **R2+**：定向复审（只审上批修复影响面）——对上批待对账条目逐条 reconciliation 申报裁决（{prevId, status: fixed|not-fixed, evidence}，fixed 必须带 file:line 证据；仍存在的条目同时在 unreasonable 带 prevId 重新描述；新问题不带 prevId）；**清零判定唯一采信 reconciliation 的 fixed+证据申报，漏报/not-fixed 保持活跃下轮再核**（fail-closed，条目身份按引擎 U 编号对账，不按文本匹配）；另审修复引入新问题/新 diff 新偏差；复审目标 = 有改动/测试挂的组 ∪ 仍有活跃条目的组（防漏报条目零改动后失去再核机会）
 - **停止线**：审查轮累计 3 轮仍未收敛，或 unreasonable 活跃数不减反增（高于前轮）→ stuck（终态随 remaining 呈报残留清单 + escalated 呈报顽固清单——≥2 轮修复未清的活跃条目在 stuck 消息逐条标注，优先人工裁决）
-- **Gate A**（清零后）：world.run 全量测试（fullSuite = D0 从项目配置真实读取合成的全量命令（含 lint/typecheck），引擎单命令执行；产物类条目 = testPlan.artifacts，引擎自动执行（compile.md §5），无需人工排布——Gate A 前第一波并行预备），输出落 `<name>.gate-a.log`
+- **Gate A**（清零后）：world.run 全量测试（fullSuite = D0 从项目配置真实读取合成的全量命令（含 lint/typecheck），引擎单命令执行；产物类条目 = testPlan.artifacts，引擎自动执行（compile.md §5），无需人工排布——Gate A 前第一波并行预备；代码修复后测试产物可能过期，分诊回注轮随轮重建），输出落 `<name>.gate-a.log`
+- **Gate A 归因分诊**（独立 phase，红后触发，≤2 轮）：分诊 agent 读 gate-a 日志 + 基线 diff，逐失败段四分类——batch-regression（本批回归）条目（GA-<轮>-<序> id）回注修复轮（聚合定性合池重新分组再修，产物预备与 Gate A 随轮重跑）；flaky 直接重跑 Gate A；legacy（存量红）/ script-defect（测试基建自身缺陷，如段退出码累计传播假红）不属本批修复范围——带分诊报告终态 gate-a-failed，由主 agent 裁决（调整 full-suite 清单 attempt+1 重发 / 登记存量债务）。零容忍绕过扫描（skipped/eslint-disable 假绿）不经分诊，维持直接终态
 - **终态回写 status.json events**：consistency 终态一笔 + gate-a pass/fail 一笔——D3 入口门「Gate A 绿证据可查」即查 gate-a-pass 事件；**终态同时写 `<name>.ledger.md` 未决清单一笔**（docErrors / reasonable / deferredLedger / escalated / remaining / 残留改动，带 attempt 标识——主会话中断后仍可从盘上恢复待处置清单）
 - doc_errors（文档错了）**进文档修复组在审出它的轮次当场修**（方向 = 改文档对齐实现；每组修复批次后引擎派一个文档修复组承接当轮全部 doc_errors，纯文档改动不跑增量测试不派定向复审）；fixer 核实方向两可或实现侧错误的条目随终态回流主 agent 裁决（2026-10-06 裁决：哪个阶段审出来就在哪个阶段修）。reasonable（合理演化）**不进修复循环**，随终态回流主 agent 写入 impl-plan 合理偏差登记表（`.impl-plan.md` §5 + json notes）
 
@@ -41,7 +42,7 @@ args: { execPlan: "<path>.exec-plan.json",
 |------|--------------|
 | converged | unreasonable 清零 + Gate A 绿——转 D3（acceptance.md），入口门直接引用 status.json events 的 gate-a-pass |
 | stuck | 读 remaining/escalated 清单人工裁决（定性争议转 doc_errors / 需重设计走设计流程），不盲目重跑 |
-| gate-a-failed | 读 gate-a 日志归因（单测红=修复回归；编译/类型红=一致性残留；超时=用例预算），派归因补修后重跑 |
+| gate-a-failed | 引擎已完成 ≤2 轮归因分诊，终态 message 自带分诊报告（逐失败段 kind + 依据）——legacy/script-defect 类按报告裁决：调整 full-suite 清单后 attempt+1 重发，或登记存量债务；分诊轮耗尽（仍有 batch 类）读 gate-a 日志人工归因补修后重跑 |
 | review-failure / fix-failure | 按 message 恢复动作修复后重发（attempt 递增；errored/completed run 不可 resume）；在途改动先 git status 盘点 |
 
 **处置记录义务**：终态处置表任一行的处置动作与结果（含用户裁决），append 一笔到 `<name>.ledger.md`——引擎终态已写入未决清单（docErrors 待修文档 / reasonable 待登记 / deferredLedger 待登记残留风险 / escalated 待裁决），主 agent 处置一项即追加记录一项，全部处置完毕在 ledger 标注收尾；手工路径全程同理（reviewer/fixer 任务 prompt 内嵌模板义务句，过程发现记各自 runlog 文件）。
