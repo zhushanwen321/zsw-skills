@@ -105,7 +105,7 @@ ln -sf <zsw-skills 检出根>/skills/self/dev-workflow/workflows/src/observabili
 
 用法错误 exit 2（stderr 含恢复动作）、写失败 exit 1。一次外部步骤 = 一对 start/end；整个执行结束时再记一对 `step=execution` 的 start/end（end 带 `--outcome <终态词>`）。
 
-**统计入口**：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs` 汇总 tech-design-wf / dev-flow-wf / dev-merge / pr-cr-fix 四技能的耗时与 token（双平台数据经 `agent-session-reader usage` CLI 采集——zcode `--db`、pi `--agent-dir`；观测事件直读观测根 JSONL，此外不直连任何数据库或会话文件）：
+**统计入口**：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs` 汇总 tech-design-wf / dev-flow-wf / dev-merge / pr-cr-fix 四技能的耗时与 token（双平台数据经 `agent-session-reader usage` CLI 采集——zcode `--zcode`、pi `--pi=<目录>`；观测事件直读观测根 JSONL，此外不直连任何数据库或会话文件）：
 
 ```bash
 node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --skill dev-flow-wf --since 2026-10-01   # 单技能 + 时间窗（table 输出）

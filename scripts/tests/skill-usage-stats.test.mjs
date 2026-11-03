@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = join(ROOT, "scripts", "skill-usage-stats.mjs");
 
-// ── 假 agent-session-reader：按 --db / --agent-dir 选 fixture，调用记录进日志 ──
+// ── 假 agent-session-reader：按 --zcode / --pi= 选 fixture，调用记录进日志 ──
 const FAKE_CLI = `#!/usr/bin/env node
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
@@ -39,7 +39,7 @@ if (process.env.FAKE_CLI_LOG) {
 }
 const mode = process.env.FAKE_CLI_MODE || "ok";
 if (mode === "error") {
-  console.log(JSON.stringify({ error: "db_read_failed", code: "db_read_failed", help: ["跑 agent-session-reader doctor --db"] }));
+  console.log(JSON.stringify({ error: "db_read_failed", code: "db_read_failed", help: ["跑 agent-session-reader doctor --zcode"] }));
   process.exit(1);
 }
 if (mode === "gibberish") {
@@ -50,7 +50,7 @@ if (mode === "enoent") {
   process.exit(0);
 }
 const fixtures = JSON.parse(fs.readFileSync(process.env.FAKE_FIXTURE_PATH, "utf8"));
-const payload = argv.includes("--db") ? fixtures.zcode : fixtures.pi;
+const payload = argv.includes("--zcode") ? fixtures.zcode : fixtures.pi;
 process.stdout.write(JSON.stringify(payload));
 `;
 
@@ -1002,8 +1002,8 @@ test("--pi-agent-dir realpath 去重；run 按 backend+id 去重；--since/--unt
 
   const invocations = readLog(logPath);
   assert.equal(invocations.length, 2, "只调两次 CLI（zcode + pi）");
-  assert.ok(invocations[0].includes("--db"));
-  const piInvocation = invocations.find((a) => a.includes("--agent-dir"));
+  assert.ok(invocations[0].includes("--zcode"));
+  const piInvocation = invocations.find((a) => a.some((tok) => String(tok).startsWith("--pi=")));
   assert.ok(piInvocation.includes("--since") && piInvocation.includes("2026-05-01"));
   assert.ok(piInvocation.includes("--until") && piInvocation.includes("2026-05-31"));
   assert.ok(piInvocation.includes("--all") && piInvocation.includes("--json"));

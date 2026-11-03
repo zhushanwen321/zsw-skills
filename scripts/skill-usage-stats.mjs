@@ -3,8 +3,8 @@
 // 统一耗时与 token 统计命令
 //
 // 数据来源（只读，不直连任何数据库 / 会话文件）：
-//   1. `agent-session-reader usage --db --all --json`（zcode）与
-//      `agent-session-reader usage --agent-dir <dir> --all --json`（pi）——workflow run 级
+//   1. `agent-session-reader usage --zcode --all --json`（zcode）与
+//      `agent-session-reader usage --pi=<dir> --all --json`（pi）——workflow run 级
 //      明细与 CLI 重算 token（tokensInput/Output/CacheRead/CacheWrite/Reasoning/
 //      NoncacheInput/Total；不读 spent_tokens / tokensReported 自报值）
 //   2. ~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl
@@ -108,7 +108,7 @@ function parseArgs(argv) {
           "  node scripts/skill-usage-stats.mjs --format json --output /tmp/stats.json",
           "  node scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taiji/agent --group stage --group model",
           "",
-          "数据来源：agent-session-reader usage CLI（zcode --db / pi --agent-dir）+",
+          "数据来源：agent-session-reader usage CLI（zcode --zcode / pi --pi=<目录>）+",
           "~/.agents/skill-data/workflow-observability/ 阶段事件；本命令不修改任何会话/workflow 数据，",
           "唯一写入是 --output 指定的报告文件。",
           "口径：token 用 CLI 重算值（不读自报值）；observed（executionId 精确关联观测）与",
@@ -281,9 +281,9 @@ function isTempPath(cwd) {
 function collectBackend(backend, since, until) {
   const args = ["usage", "--all", "--json"];
   if (backend.kind === "zcode") {
-    args.push("--db");
+    args.push("--zcode");
   } else {
-    args.push("--agent-dir", backend.agentDir);
+    args.push(`--pi=${backend.agentDir}`);
   }
   if (since) args.push("--since", since);
   if (until) args.push("--until", until);
@@ -316,7 +316,7 @@ function collectBackend(backend, since, until) {
     } catch {
       detail = (res.stdout || res.stderr || "").slice(0, 400);
     }
-    const probe = ["agent-session-reader", "usage", backend.kind === "zcode" ? "--db" : `--agent-dir ${backend.agentDir}`, "--limit", "3"].join(" ");
+    const probe = ["agent-session-reader", "usage", backend.kind === "zcode" ? "--zcode" : `--pi=${backend.agentDir}`, "--limit", "3"].join(" ");
     fail(`agent-session-reader usage 失败（exit ${res.status}，后端 ${backend.label}）：${detail}——恢复动作：先单独跑 ${probe} 确认 CLI 本身可用`, 1);
   }
   let payload;
@@ -1406,7 +1406,7 @@ function main() {
 
   if (!anyRuns && manualCount === 0) {
     fail(
-      `没有任何数据：各后端都零匹配且观测根无事件（观测根 ${obsRoot}）。恢复动作：① 放宽 --since/--until（示例 --since 2026-01-01）② 多 agentDir 机器用 --pi-agent-dir 显式指定（agent-session-reader doctor 可列数据目录）③ 确认 zcode 库存在（agent-session-reader doctor --db）`,
+      `没有任何数据：各后端都零匹配且观测根无事件（观测根 ${obsRoot}）。恢复动作：① 放宽 --since/--until（示例 --since 2026-01-01）② 多 agentDir 机器用 --pi-agent-dir 显式指定（agent-session-reader doctor --pi 可列数据目录）③ 确认 zcode 库存在（agent-session-reader doctor --zcode）`,
       1,
     );
   }
