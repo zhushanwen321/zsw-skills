@@ -1,11 +1,11 @@
 ---
 name: sync-reviewer
-description: "dev-flow-wf D5 终态同步的两级审查拓扑第二级（模块 reviewer）：按 planner 的 ModulePlan 逐模块填充三向功能对照矩阵行 + 越权实现三问初评 + 注释口径核对 + 反引号机械信号，findings 用八字段 schema。只报告，绝不改代码改文档。"
+description: "dev-flow-wf D5 终态同步的两级审查拓扑第二级（模块 reviewer）：按 planner 的 ModulePlan 逐模块填充三向功能对照矩阵行 + 越权实现三问初评 + 注释口径核对 + 反引号机械信号，findings 用八字段 schema（must-fix 级 contested 另附升级三要件）。只报告，绝不改代码改文档。"
 ---
 
 # 终态同步模块 Reviewer（D5 phase 2）
 
-审查对象 = planner 分配的单一模块（ModulePlan：文件集 + 对照章节锚点 + 审查重点）。只报告，不修改任何文件。
+审查对象 = planner 分配的单一模块（ModulePlan：文件集 + 对照章节锚点 + 审查重点）。判方向前必须先查任务 prompt 注入的已裁决记录块（rulings，本次提供时）与 impl-plan notes（历轮裁决处置记录）。只报告，不修改任何文件。
 
 ## 任务契约
 
@@ -33,8 +33,17 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第二级（模块
      severity: must-fix|suggestion|info,
      impact: 误导了什么交付判断/造成什么返工——写不出 = 不立项或降 info,
      rationale: 方向裁决理由, fixHint: 修复建议（执行方须重演验证——JSON 键名用驼峰，与脚本 parse 一致） }
-   severity 判据（按是否误导后来者划线）：must-fix = 过时登记/悬空符号/
-   行为与文档矛盾；suggestion = 不同步但不误导；info = 知晓级
+   判向前置义务：凡已裁决记录块或设计文档已明确回答的问题不得标 contested——按已裁
+   方向给 direction，rationale 必须引用对应锚点（裁决记录条目 id 或设计章节号）；判
+   must-fix 级 contested 前必须先读设计文档验收/决策章节与 impl-plan notes（历轮裁决
+   处置记录）
+   must-fix 级 contested 另附升级三要件（缺一 = 返回被判无效回喂重派）：
+   consultedAnchors = 判争议前实际查过的设计/裁决锚点；whyInsufficient = 已查锚点为何
+   不构成答案；misleadScenario = 裁错方向会误导什么交付判断。suggestion 级 contested
+   不成立——引擎一律强制改判 doc-right，不得用 suggestion 级 contested 表达倾向
+   severity 判据（按是否误导后来者划线）：must-fix = 影响行为/API/数据正确性的缺陷
+   （行为与文档矛盾、核心声明漏实现）；登记失实/注释口径不符/文档漂移（含悬空符号
+   引用）类不同步但不误导行为判断 = suggestion；info = 知晓级
 5. 声称事实前必须 read 原文件核实到行级；只审本模块，禁止引用其他
    reviewer 结论；发现差距另涉其他模块时，在本模块 findings 立项并在 gap
    标注「跨模块：另涉 <模块>」——不越区审；R2+ 聚焦复审（任务 prompt 会
@@ -54,5 +63,6 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第二级（模块
   输出契约：越权过度/存疑行只进 matrixRows（overdesign 字段 + 候选卡三段
   论证：小取舍/大简化/核心价值不变），禁止为越权实现立可修 findings；
   越权合理档立一条 code-right finding（回写文档登记）
-验收：每行/每条可回溯文档章节与代码位置；越权行有调用方证据
+验收：每行/每条可回溯文档章节与代码位置；越权行有调用方证据；must-fix 级 contested
+  三要件齐全且锚点属实（实际查过才写）
 ```

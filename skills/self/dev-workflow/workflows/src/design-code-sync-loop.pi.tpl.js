@@ -23,6 +23,10 @@ parameters:
       type: string
       default: ""
       description: "status.json 绝对路径（可选；planner 职责②「现实↔impl-plan 进度核对」的数据源——D1/D2 终态事实；未传时②的进度核对降级为 impl-plan.json 单侧并在轨迹注明）"
+    watchlist:
+      type: string
+      default: ""
+      description: "符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）；终态同步必备前置——setup 等集校验（词表与文档反引号集）不过即拒启，机械悬空引用防线由它供词"
     maxRounds:
       type: number
       default: 10
@@ -39,6 +43,14 @@ parameters:
       type: number
       default: 1
       description: "重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）"
+    rulings:
+      type: string
+      default: ""
+      description: "已裁决记录 json 绝对路径（可选；顶层数组，元素 {id, direction: 'doc-right'|'code-right', anchor, quote, source}）——设计决策与开发期裁决的机器可读清单，注入全部 reviewer（已答问题不得标 contested）；断点续跑（resumeFrom）时按它把冻结条目重绑定方向"
+    resumeFrom:
+      type: string
+      default: ""
+      description: "断点续跑（可选）：先前一次运行的 runDir 绝对路径（终态 message 中有指针）。终态停回（典型 contested）后携用户裁决续跑：跳过 R1 全量重审，载入先前 final.json 全量条目清单、按 rulings 把冻结条目重绑定方向后直接进修复轮。指纹不一致或无法验证时自动放弃续跑、降级常规全量模式并在 log 说明"
     taskId:
       type: string
       description: "观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」"
@@ -171,8 +183,23 @@ const SCHEMA_Finding8 = {
     impact: { type: "string", description: "误导了什么交付判断——写不出 = 不立项或降 info" },
     rationale: { type: "string", description: "方向裁决理由" },
     fixHint: { type: "string", description: "修复建议（执行方须重演验证）" },
+    consultedAnchors: { type: "string", description: "升级三要件①（must-fix 级 contested 必填）：实际查过的设计/裁决记录锚点清单（章节号或裁决 id）" },
+    whyInsufficient: { type: "string", description: "三要件②：已查锚点为何不构成答案（一句话论证）" },
+    misleadScenario: { type: "string", description: "三要件③：裁错方向会误导什么交付判断（可证伪场景）" },
   },
   required: ["id", "location", "gap", "direction", "severity", "impact", "rationale", "fixHint"],
+};
+
+// 争议仲裁步结构化返回（2026-11-03 授权新增：R1 聚合后、contested 分流前消解伪争议）
+const SCHEMA_ArbiterVerdict = {
+  type: "object",
+  properties: {
+    verdict: { type: "string", enum: ["settled-doc-right", "settled-code-right", "genuinely-open"], description: "settled = 设计原文/裁决记录已答（必须给 quote+anchorRef+reasoning）；genuinely-open = 默认态——引用不出或推理不成立一律回此值（宁停勿错）" },
+    quote: { type: "string", description: "设计文档/裁决记录原文引文（≥12 字，脚本逐字校验存在，防幻觉；genuinely-open 可空）" },
+    anchorRef: { type: "string", description: "引文所在锚点（设计章节号或裁决 id）" },
+    reasoning: { type: "string", description: "引文→结论的推理链（引文说了什么、为何据此判定该修哪边）" },
+  },
+  required: ["verdict"],
 };
 
 // R2+ 聚焦复审对账条目
@@ -306,6 +333,7 @@ const SCHEMA_BY_KEY = {
   FixOutcome: SCHEMA_FixOutcome,
   RetirementVerdict: SCHEMA_RetirementVerdict,
   CommitGateFix: SCHEMA_CommitGateFix,
+  ArbiterVerdict: SCHEMA_ArbiterVerdict,
 };
 function wfAgent(name, persona) {
   return {

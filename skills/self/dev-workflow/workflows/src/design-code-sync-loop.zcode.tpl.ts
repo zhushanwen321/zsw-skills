@@ -29,6 +29,12 @@ args:
     description: status.json 绝对路径（可选；planner 职责②「现实↔impl-plan 进度核对」的数据源——
       D1/D2 终态事实；未传时②的进度核对降级为 impl-plan.json 单侧并在轨迹注明）
     default: ""
+  watchlist:
+    type: string
+    description: 符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）；
+      终态同步必备前置——setup 等集校验（词表与文档反引号集）不过即拒启，机械悬空引用
+      防线由它供词
+    default: ""
   maxRounds:
     type: number
     description: 审查→修复循环轮次上限（含 R1 首轮全量审）
@@ -47,6 +53,20 @@ args:
       缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取
       已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）
     default: 1
+  rulings:
+    type: string
+    description: 已裁决记录 json 绝对路径（可选；顶层数组，元素 {id, direction: 'doc-right'|
+      'code-right', anchor, quote, source}）——设计决策与开发期裁决的机器可读清单，注入全部
+      reviewer（已答问题不得标 contested）；断点续跑（resumeFrom）时按它把冻结条目重绑定方向
+    default: ""
+  resumeFrom:
+    type: string
+    description: 断点续跑（可选）：先前一次运行的 runDir 绝对路径（终态 message 中有指针）。
+      终态停回（典型 contested）后携用户裁决续跑：跳过 R1 全量重审（实测每轮 30-45M
+      token），载入先前 final.json 全量条目清单、按 rulings 把冻结条目重绑定方向后直接
+      进修复轮。前置 = 先前 run.json 记录的终态文档指纹与当前一致（设计/计划在先前终态后未被
+      外部改动）；不一致或无法验证时自动放弃续跑、降级常规全量模式并在 log 说明
+    default: ""
   taskId:
     type: string
     description: 观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其
@@ -121,6 +141,13 @@ interface Finding8 {
   rationale: string;
   /** 修复建议（执行方须重演验证） */
   fixHint: string;
+  /** 升级三要件①（must-fix 级 contested 必填，validateModuleReview 机器校验）：实际查过的
+   *  设计/裁决记录锚点清单（章节号或裁决 id）——与 pi SCHEMA_Finding8 对齐（parity 维度 4） */
+  consultedAnchors?: string;
+  /** 三要件②：已查锚点为何不构成答案（一句话论证） */
+  whyInsufficient?: string;
+  /** 三要件③：裁错方向会误导什么交付判断（可证伪场景） */
+  misleadScenario?: string;
 }
 
 /** 模块 reviewer 结构化返回（sync-reviewer 模板输出节） */
@@ -212,12 +239,25 @@ interface FindingRecord {
   rationale: string;
   fixHint: string;
   firstSeen: number;
-  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报）/ exempt=符号豁免（fixer 核实不该扫的词，主 agent 终审，随终态 exemptList 呈报）/ delegated=职责外（修复动作属其他职责域，不计活跃，随终态 delegatedList 呈报主 agent 重派） */
-  status: "open" | "fixed" | "deferred" | "frozen" | "exempt" | "delegated";
+  /** open=待修 / fixed=已清（复审实证）/ deferred=越权候选（用户裁决前不删码）/ frozen=must-fix 级方向争议冻结（待用户裁决方向，不修不计数，随终态 contestedList 呈报）/ frozen-blocked=争议连坐冻结（2026-11-03 授权修订 2026-09-26 语义：条目本身方向已定但与争议条目同文件，随争议一并冻结，终态 contestedBlockedList 呈报）/ exempt=符号豁免（fixer 核实不该扫的词，主 agent 终审，随终态 exemptList 呈报）/ delegated=职责外（修复动作属其他职责域，不计活跃，随终态 delegatedList 呈报主 agent 重派） */
+  status: "open" | "fixed" | "deferred" | "frozen" | "frozen-blocked" | "exempt" | "delegated";
   fixedRound?: number;
   /** 修复史（紧凑一行式：第N轮复审判 not-fixed/regressed + 证据摘要，一句一条）——
    *  下轮 fixer 注入防重复已失败的修法；fixed 清零不留史，未断言处缺省 */
   fixHistory?: string[];
+  /** 升级三要件（2026-11-03 授权，must-fix 级 contested 必填，validateModuleReview 机器校验）：
+   *  实际查过的设计/裁决记录锚点清单（章节号或裁决 id） */
+  consultedAnchors?: string;
+  /** 三要件②：已查锚点为何不构成答案（一句话论证） */
+  whyInsufficient?: string;
+  /** 三要件③：裁错方向会误导什么交付判断（可证伪场景） */
+  misleadScenario?: string;
+  /** 争议仲裁步改判记录（2026-11-03 授权新增）：verdict=settled-doc-right/settled-code-right；
+   *  quote ≥12 字原文引文（脚本逐字校验存在于设计文档/裁决记录，防幻觉）；anchorRef=锚点章节；
+   *  reasoning=引文→结论推理链。聚焦复审每轮复跑引文断言，失 existence 即回退 contested */
+  arbiter?: { verdict: string; quote: string; anchorRef: string; reasoning: string };
+  /** suggestion 级 contested 被引擎按方向语义表默认改判 doc-right 的标记（终态列出备查） */
+  contestedDefaulted?: boolean;
 }
 
 /** 矩阵行台账（拼接历史） */
@@ -236,6 +276,19 @@ interface RoundStat {
   infoActive: number;
   contestedActive: number;
   fixGroups: number;
+}
+
+/** 争议仲裁步结构化返回（2026-11-03 授权新增：R1 聚合后、contested 分流前消解伪争议） */
+interface ArbiterVerdict {
+  /** settled = 设计原文/裁决记录已答（quote/anchorRef/reasoning 三字段必填，引文脚本逐字校验）；
+   *  genuinely-open = 默认态——引用不出或推理不成立一律回此值（宁停勿错） */
+  verdict: "settled-doc-right" | "settled-code-right" | "genuinely-open";
+  /** 设计文档/裁决记录原文引文（≥12 字逐字，防幻觉） */
+  quote?: string;
+  /** 引文所在锚点（设计章节号或裁决 id） */
+  anchorRef?: string;
+  /** 引文→结论的推理链 */
+  reasoning?: string;
 }
 
 /** 终态返回（引擎→主 agent 契约） */
@@ -269,6 +322,14 @@ interface SyncResult {
   /** 职责外申报条目（fixer delegated 申报累积；status=delegated 不计活跃，随终态呈报
    *  主 agent 重派或立项——F8-1 类跨职责条目空转死锁的防线，2026-09-29） */
   delegatedList: { id: string; location: string; reason: string }[];
+  /** 争议连坐冻结清单（2026-11-03 授权修订阻断半径：条目方向已定但与 must-fix 争议条目
+   *  同文件被一并冻结；blockedBy = 连坐到的争议条目 id 清单——用户裁决争议后随其一并处置） */
+  contestedBlockedList: { id: string; location: string; blockedBy: string[] }[];
+  /** 争议仲裁步改判清单（2026-11-03 授权新增：arbiter 按设计原文消解的伪争议——非用户
+   *  裁决，是「先修后审」：全部列出供用户抽查翻案，翻案即按新方向 attempt 递增重发） */
+  arbiterSettledList: { id: string; direction: string; quote: string; anchorRef: string; reasoning: string }[];
+  /** suggestion 级 contested 被方向语义表默认改判 doc-right 的条目（终态备查） */
+  contestedDefaultedList: { id: string; location: string }[];
   /** 残余活跃条目（stuck / *-failure 随终态呈报；设计 §7 停机线：清单随终态） */
   remaining: { id: string; severity: string; direction: string; location: string; gap: string }[];
   /** 工作区无人认领/多组冲突的残留改动（各组只对自己的改动负责，无人认领的不提交
@@ -290,6 +351,13 @@ interface NarrowedInputs {
    *  空串 = 未传，机械信号步跳过（不回退文档反引号抓取——抓取依赖「反引号 = 本项目符号」
    *  的隐式约定，2026-09-27 起词表是唯一扫描词源） */
   watchlist: string;
+  /** 可选：已裁决记录 json 绝对路径（元素 {id, direction, anchor, quote, source, commit?}）；
+   *  空串 = 未传，无裁决注入（2026-11-03 授权新增） */
+  rulings: string;
+  /** 可选：断点续跑先前 runDir 绝对路径（终态档案 final.json 所在）；空串 = 常规全量模式。
+   *  载入先前全量 ledger 按裁决重绑定、跳过 R1 全量重审直接进修复轮；指纹不一致或数据源
+   *  缺陷时降级/拒启（见 shared ④ 前置判定） */
+  resumeFrom: string;
   maxRounds: number;
   plannerTemplate: string;
   reviewerTemplate: string;

@@ -6,16 +6,24 @@
 
 ```
 CreateWorkflow saved: design-code-sync-loop
-args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath?, watchlist?, taskId?, executionId?, sampleType? }
+args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath?, watchlist, rulings?, attempt?, taskId?, executionId?, sampleType? }
 // statusPath = status.json 绝对路径——planner 职责②进度核对数据源；未传时降级单侧核对并在 frameworkFindings 的 note 注明
-// watchlist = 符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）——机械信号步唯一扫描词源；
-//   未传时机械步跳过并在日志注明（不回退文档反引号抓取——该路径依赖「反引号 = 本项目符号」隐式约定，已废除）
+// watchlist = 符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）——机械信号步唯一扫描词源，必传：
+//   缺失或与设计文档+impl-plan.md 反引号集不等集（词表过期）= setup-failure 拒启，不允许无词表/过期词表开审
+//   （不回退文档反引号抓取——该路径依赖「反引号 = 本项目符号」隐式约定，已废除）
+// rulings = 已裁决记录 json 绝对路径（可选）：顶层数组，元素 {id, direction: "doc-right"|"code-right", anchor, quote, source, commit?}
+//   ——设计决策与开发期裁决的机器可读清单，注入 planner 与全部模块 reviewer（已答问题不得标 contested）；
+//   读失败/格式畸形 = setup-failure 拒启（fail-closed：出错即拒启而非降级继续，防静默丢裁决）；未传不阻断（存量设计可后补）
+// attempt = 轮次目录后缀序号（可选）：显式传 ≤ runDir 已有最大序号 = setup-failure 拒启（防覆盖历史轮次产物）；
+//   省略时引擎自动取已有最大序号+1
 // taskId + executionId 同时传即启用阶段事件观测（SKILL「阶段事件观测」节）：taskId = D0 分配的任务标识（全段共用），
 //   executionId 建议 "D5-<发起时点短时间戳>"；不传业务照常。sampleType 可选（production 缺省 / selftest 测试执行）
 终态: converged / contested / stuck + setup/planner/review/fix/retire/io-failure
 ```
 
-**阶段事件观测步骤边界**（stage=D5，引擎写入；SKILL「阶段事件观测」节）：setup = 环境校验 / 矩阵初始化 / 框架对照规划（planner 失败随 setup 窗口补终态）；review = 机械信号扫描 + 并行模块审查（R1）或机械/清理对账 + 聚焦复审（R2+），round = 轮次；fix = 并行修复与组级 commit；retire = 退役判定（转清理条目回下轮修复时自然结束，converged / retire-failure 的 end 随终态统一补记）；finalize 仅在轮次耗尽兜底路径出现。
+**阶段事件观测步骤边界**（stage=D5，引擎写入；SKILL「阶段事件观测」节）：setup = 环境校验 / 三道前置硬校验（attempt 防覆盖 / 词表等集 / 裁决记录装载）/ 矩阵初始化 / 框架对照规划（planner 失败随 setup 窗口补终态）；review = 机械信号扫描 + 并行模块审查（R1）或机械/清理对账 + 聚焦复审（R2+），round = 轮次；fix = 并行修复与组级 commit；retire = 退役判定（转清理条目回下轮修复时自然结束，converged / retire-failure 的 end 随终态统一补记）；finalize 仅在轮次耗尽兜底路径出现。
+
+**setup 三道前置硬校验**（任一不过 = setup-failure，派发任何 reviewer 之前拒启）：① attempt 防覆盖——显式 attempt ≤ runDir 已有最大序号即拒启（防覆盖历史轮次产物）；② 词表等集校验（词表符号集与「设计文档 + impl-plan.md」反引号集完全一致才放行）——watchlist 缺失或词表过期即拒启，预检结果缓存供 R1 机械步立项消费；③ 裁决记录装载——传入 rulings 时读失败或格式畸形（非顶层数组 / 元素缺 id+direction / 有效元素为 0）即拒启（fail-closed：静默丢裁决 = 已裁项被重判为争议的直接通道）。
 
 引擎语义（两级审查拓扑 + 轮次收敛）：
 
@@ -26,6 +34,8 @@ phase 1  framework-scan（planner，1 agent）：
           ② 模块分解 ModulePlan[]（结构化，驱动 phase 2 fan-out）
 phase 2  module fan-out：modules.map(m => agent(`module-${m.id}`))——并行
    模块 reviewer：矩阵行填充 + 越权三问 + 注释口径 + findings
+   （prompt 注入 impl-plan 路径——其 notes 含历轮裁决处置记录，判方向前先查——与已裁决记录块；
+   planner prompt 同样注入已裁决记录块）
 phase 3+ 修复循环：双向修复 → 聚焦复审 →（轮）→ 退役判定 → 终态
 ```
 
@@ -39,7 +49,9 @@ phase 3+ 修复循环：双向修复 → 聚焦复审 →（轮）→ 退役判�
 |-----------|------|---------|
 | **doc-right** | 文档更合理（默认——设计文档过对抗审，是意图 SSOT；实现偏离默认视为漂移） | **修代码**（跑增量测试必须绿） |
 | **code-right** | 代码更合理（实现期发现的文档盲区/错误，实现行为有证据确认更合理） | **修文档**（过联动自检五处：正文/数据流图/错误规格/拆分清单/验收场景） |
-| **contested** | 两边有实质道理且影响公开 API / 行为语义 / 数据格式 | must-fix 级**停回用户**；suggestion 级默认 doc-right 并汇报列出 |
+| **contested** | 两边有实质道理且影响公开 API / 行为语义 / 数据格式 | must-fix 级须先过升级三要件与争议仲裁（见「争议仲裁与 contested 分流」节），真开放才冻结停回用户；suggestion 级不构成争议——引擎一律强制改判 doc-right（打 contestedDefaulted 标，随终态 contestedDefaultedList 呈报） |
+
+**must-fix 级 contested 升级三要件**（引擎机器校验，缺一 = 返回判无效回喂重派——结构化校验失败后把错误清单发回 reviewer 重派重试）：`consultedAnchors`（判争议前实际查过的锚点——本文锚点 = 原文位置引用：设计文档章节号 / 代码 file:line / 裁决记录条目 id）、`whyInsufficient`（已查锚点为何不构成答案）、`misleadScenario`（裁错方向会误导什么交付判断）。配套注入硬规则：凡设计文档或已裁决记录已明确回答的问题不得标 contested，按已裁方向给 direction，rationale 必须引用对应锚点（清单 id 或设计章节号）。
 
 **selfCheck 口径**：selfCheck 由聚焦复审消费（reviewer 复跑命令/核对预期），非引擎执行——复跑不过或无证据 = 条目回流重修；无测试套件的仓库可用 grep 断言，测试清单缺失如实呈现不虚构。
 
@@ -72,16 +84,24 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 - 修复组按模块分组并行（范围声明互斥 ≤5）；每组核验过即 commit（组级一笔）；subagent 禁 git 写
 - **聚焦复审**（R2+）：只审上轮修复成立 + 是否引入新差距，不重查已确认项
 
+## 争议仲裁与 contested 分流
+
+**争议仲裁**（R1 聚合后、contested 分流前执行）：对每条 must-fix 级 contested 条目派只读仲裁 agent（不修任何文件），消解「设计已答却被误报为争议」的伪争议。返回 `{verdict, quote, anchorRef, reasoning}`：verdict ∈ `settled-doc-right`（文档对→修代码）/ `settled-code-right`（代码对→修文档）/ `genuinely-open`（真开放，保留争议）。默认答案 = genuinely-open（宁停勿错）：只有逐字引用设计原文/裁决记录、并给出「引文说了什么→为何据此判向」完整推理链才允许 settled；settled 必须附 ≥12 字原文逐字引文（禁止转述/拼接），脚本对引文做逐字存在校验（比对源 = 设计文档 ∪ impl-plan 人读版 ∪ 裁决记录），校验不过按 genuinely-open 保留争议。仲裁返回结构化校验重试仍不合规时同样按 genuinely-open 保留（仲裁步不得成为新故障点）。改判条目打 arbiter 标随终态 `arbiterSettledList` 呈报——先修后审：改判即进修复轮，交付汇报列出供用户抽查翻案；R2+ 聚焦复审对含 arbiter 标条目复跑引文断言，引文不再逐字存在或推理链不成立 → 该条 reconciliation 填 regressed，并新立项 contested（rationale 注明 arbiter-revert 与断点位置）。
+
+**contested 分流**（仲裁后仍真开放的 must-fix 争议）：争议条目冻结（status=frozen，待用户裁决），冻结波及范围按文件划定——与其同文件的待修条目一并冻结（status=frozen-blocked，连坐清单随终态 `contestedBlockedList` 呈报，每条 blockedBy 指向冻结它的争议条目 id）。冻结条目退出活跃集，其余条目照常进修复轮——一条争议不阻断整轮。全清（非争议条目全部修复收敛）后若仍有冻结争议，终态仍为 contested 停回用户。
+
 ## 终态处置
 
 | 终态 | 主 agent 动作 |
 |------|--------------|
-| converged | 交付汇报：矩阵 + 收敛轨迹（各轮三等级计数）+ direction 分布 + contested 记录 + overdesignCandidates + 退役判定 |
-| contested | must-fix 级方向争议逐条呈报用户裁决；裁决后重新发起（runDir 自动 attempt 后缀不覆盖历史；重发起首轮 = planner 全量重审，上轮修复在重审对账中确认——条目不跨 run 延续） |
+| converged | 交付汇报：矩阵 + 收敛轨迹（各轮三等级计数）+ direction 分布 + contested 记录 + overdesignCandidates + 争议处置清单（arbiterSettledList / contestedDefaultedList / contestedBlockedList，空清单显式说无）+ 退役判定 |
+| contested | must-fix 级方向争议逐条呈报用户裁决（此时非争议条目已全部修复收敛；连坐冻结清单 contestedBlockedList 一并呈报，裁决后随争议条目处置）。恢复动作：用户逐条裁决后把结论写入裁决记录 json（rulings：元素 {id, direction, anchor, quote, source}），携 rulings 与 resumeFrom=<上轮 runDir> 重新发起（attempt 省略由引擎自动递增，不覆盖历史）——断点续跑校验终态文档指纹（run.json docFingerprints，比对 designDoc/implPlan 内容 sha256）：一致即载入上轮 final.json 全量条目清单、按裁决把 frozen 条目重绑定方向、同文件连坐条目随争议源解除冻结，直接进修复轮（跳过 R1 全量重审，条目 id 沿用上轮不重排；上轮修复经 R2 聚焦复审判 fixed 的不再重开）；指纹不一致（设计/计划在终态后变更）= WARN 并回落常规全量模式。未携 resumeFrom 的普通重发起仍为 planner 全量重审 |
 | stuck | must-fix ≥3 轮不收敛或单条 must-fix 超 2 轮 → 呈报残余差距矩阵（2026-09-26 用户裁决三 loop 统一 3 轮） |
-| `*-failure`（setup/planner/review/fix/retire/io） | 按 message 恢复动作：ResumeWorkflowRun 或 attempt 递增重发。fix-failure 的 commit 被钩子拒场景已先轮内修过（门禁合规修复 fixer + 原 message 重试 ≤2 轮）——仍终态 = 修不动（真代码问题转人工）或结构化不合规，接管前先 git status 盘点已 staged 内容 |
+| `*-failure`（setup/planner/review/fix/retire/io） | 按 message 恢复动作：ResumeWorkflowRun 或重新发起（attempt 省略由引擎自动递增——显式传 ≤ 已有最大序号会被拒启）。fix-failure 的 commit 被钩子拒场景已先轮内修过（门禁合规修复 fixer + 原 message 重试 ≤2 轮）——仍终态 = 修不动（真代码问题转人工）或结构化不合规，接管前先 git status 盘点已 staged 内容 |
 
-**处置记录义务**：终态处置表任一行的处置动作与结果（含用户对 contested / overdesignCandidates 的裁决），append 一笔到 `<name>.ledger.md`——引擎终态已写入未决清单（contested 待裁决 / overdesignCandidates 待裁决 / exemptList 待终审 / remaining 待呈报，含 final.json 指针），主 agent 处置一项即追加记录一项；W4 终态全量另在 `runDir/final.json`（attempt 不覆盖）。
+**处置记录义务**：终态处置表任一行的处置动作与结果（含用户对 contested / overdesignCandidates 的裁决），append 一笔到 `<name>.ledger.md`——引擎终态已写入未决清单（见下方终态清单字段），主 agent 处置一项即追加记录一项；W4 终态全量另在 `runDir/final.json`（attempt 不覆盖）。
+
+**终态清单字段**（final.json）：`contestedList`（contested 条目，待用户裁决）/ `contestedBlockedList`（连坐冻结条目，元素 {id, location, blockedBy: [争议条目 id]}，随争议一并处置）/ `arbiterSettledList`（仲裁改判条目，元素 {id, direction, quote, anchorRef, reasoning}，供用户抽查翻案）/ `contestedDefaultedList`（suggestion 级 contested 被引擎强制改判 doc-right 的条目，元素 {id, location}）/ `exemptList`（符号豁免待终审）/ `delegatedList`（职责域外待重派）/ `overdesignCandidates`（过度/存疑候选卡待裁决）/ `remaining`（open 残余条目）。
 
 **衔接**：W4 修复触及验收场景表覆盖行为时，主 agent 重跑受影响场景（局部重验，不重开整门）。
 
