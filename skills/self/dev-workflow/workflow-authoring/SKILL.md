@@ -189,11 +189,11 @@ node --test scripts/tests/workflow-observability.test.mjs   # 观测机制测试
   | `outcome`（可选） | 只出现在终态统一补记或异常补记的 end 上，值 = 本次执行终态词或 abandoned / script-error |
 
 - **平台 token 用量**：zcode 存 workflow 运行库、pi 存会话记录，两处存储经
-  `pi-session-reader usage` CLI 统一读取（zcode 后端 `--db`、pi 后端 `--agent-dir`，
-  用法见 `~/.agents/skills/pi-session-reader/SKILL.md`）。
+  `agent-session-reader usage` CLI 统一读取（zcode 后端 `--db`、pi 后端 `--agent-dir`，
+  用法见 `~/.agents/skills/agent-session-reader/SKILL.md`）。
 - **聚合报告**：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs` 汇总四技能
   （tech-design-wf / dev-flow-wf / dev-merge / pr-cr-fix）的耗时与 token——观测事件
-  直读观测根 JSONL，token 用量经 pi-session-reader 采集。`sample_type=production`
+  直读观测根 JSONL，token 用量经 agent-session-reader 采集。`sample_type=production`
   缺省计入、`selftest` 默认排除（`--include-selftest` 显式计入）；统计按事件 `skill`
   字段过滤，新 workflow 记得步 4 的 `SKILL_ALIASES` 登记。
 

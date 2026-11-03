@@ -3,8 +3,8 @@
 // 统一耗时与 token 统计命令
 //
 // 数据来源（只读，不直连任何数据库 / 会话文件）：
-//   1. `pi-session-reader usage --db --all --json`（zcode）与
-//      `pi-session-reader usage --agent-dir <dir> --all --json`（pi）——workflow run 级
+//   1. `agent-session-reader usage --db --all --json`（zcode）与
+//      `agent-session-reader usage --agent-dir <dir> --all --json`（pi）——workflow run 级
 //      明细与 CLI 重算 token（tokensInput/Output/CacheRead/CacheWrite/Reasoning/
 //      NoncacheInput/Total；不读 spent_tokens / tokensReported 自报值）
 //   2. ~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl
@@ -108,7 +108,7 @@ function parseArgs(argv) {
           "  node scripts/skill-usage-stats.mjs --format json --output /tmp/stats.json",
           "  node scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taiji/agent --group stage --group model",
           "",
-          "数据来源：pi-session-reader usage CLI（zcode --db / pi --agent-dir）+",
+          "数据来源：agent-session-reader usage CLI（zcode --db / pi --agent-dir）+",
           "~/.agents/skill-data/workflow-observability/ 阶段事件；本命令不修改任何会话/workflow 数据，",
           "唯一写入是 --output 指定的报告文件。",
           "口径：token 用 CLI 重算值（不读自报值）；observed（executionId 精确关联观测）与",
@@ -170,7 +170,7 @@ function parseArgs(argv) {
           real = realpathSync(expanded);
         } catch {
           fail(
-            `--pi-agent-dir 路径不存在：${value}（展开为 ${expanded}）——先确认目录存在（pi 桌面端常在 ~/.taiji/agent，可用 pi-session-reader doctor 核对数据目录）`,
+            `--pi-agent-dir 路径不存在：${value}（展开为 ${expanded}）——先确认目录存在（pi 桌面端常在 ~/.taiji/agent，可用 agent-session-reader doctor 核对数据目录）`,
             2,
           );
         }
@@ -291,19 +291,19 @@ function collectBackend(backend, since, until) {
   let res;
   try {
     // maxBuffer 放大到 512MB：--all 全量明细在大库上可达数十 MB，默认 1MB 直接 ENOBUFS
-    res = spawnSync("pi-session-reader", args, { encoding: "utf8", timeout: 600_000, maxBuffer: 512 * 1024 * 1024 });
+    res = spawnSync("agent-session-reader", args, { encoding: "utf8", timeout: 600_000, maxBuffer: 512 * 1024 * 1024 });
   } catch (e) {
-    fail(`调用 pi-session-reader 失败：${e && e.message ? e.message : String(e)}`, 1);
+    fail(`调用 agent-session-reader 失败：${e && e.message ? e.message : String(e)}`, 1);
   }
   if (res.error && res.error.code === "ENOENT") {
     fail(
-      "找不到 pi-session-reader 命令——本统计的唯一平台数据入口是它，不直连数据库。恢复动作：在 pi-session-reader 仓库执行 pnpm install && pnpm build && npm link 后重试；先跑 pi-session-reader --version 确认可用",
+      "找不到 agent-session-reader 命令——本统计的唯一平台数据入口是它，不直连数据库。恢复动作：在 agent-session-reader 仓库执行 pnpm install && pnpm build && npm link 后重试；先跑 agent-session-reader --version 确认可用",
       1,
     );
   }
   if (res.error) {
     fail(
-      `调用 pi-session-reader 失败（${res.error.code ?? "unknown"}）：${res.error.message ?? ""}——恢复动作：单独跑 pi-session-reader doctor 核对环境后重试`,
+      `调用 agent-session-reader 失败（${res.error.code ?? "unknown"}）：${res.error.message ?? ""}——恢复动作：单独跑 agent-session-reader doctor 核对环境后重试`,
       1,
     );
   }
@@ -316,20 +316,20 @@ function collectBackend(backend, since, until) {
     } catch {
       detail = (res.stdout || res.stderr || "").slice(0, 400);
     }
-    const probe = ["pi-session-reader", "usage", backend.kind === "zcode" ? "--db" : `--agent-dir ${backend.agentDir}`, "--limit", "3"].join(" ");
-    fail(`pi-session-reader usage 失败（exit ${res.status}，后端 ${backend.label}）：${detail}——恢复动作：先单独跑 ${probe} 确认 CLI 本身可用`, 1);
+    const probe = ["agent-session-reader", "usage", backend.kind === "zcode" ? "--db" : `--agent-dir ${backend.agentDir}`, "--limit", "3"].join(" ");
+    fail(`agent-session-reader usage 失败（exit ${res.status}，后端 ${backend.label}）：${detail}——恢复动作：先单独跑 ${probe} 确认 CLI 本身可用`, 1);
   }
   let payload;
   try {
     payload = JSON.parse(res.stdout);
   } catch (e) {
-    fail(`pi-session-reader usage 输出不是合法 JSON（后端 ${backend.label}）：${String(e).slice(0, 200)}——恢复动作：升级 pi-session-reader 后重试（usage --json 是本命令的硬依赖）`, 1);
+    fail(`agent-session-reader usage 输出不是合法 JSON（后端 ${backend.label}）：${String(e).slice(0, 200)}——恢复动作：升级 agent-session-reader 后重试（usage --json 是本命令的硬依赖）`, 1);
   }
   if (payload && payload.details && Array.isArray(payload.details.runs) && !Array.isArray(payload.runs)) {
     payload = payload.details; // 兼容 {content, details} 包裹形态
   }
   if (!payload || !Array.isArray(payload.runs)) {
-    fail(`pi-session-reader usage 输出缺少 runs 数组（后端 ${backend.label}）——恢复动作：升级 pi-session-reader（usage 契约要求 runs/totals/skipped 三段）后重试`, 1);
+    fail(`agent-session-reader usage 输出缺少 runs 数组（后端 ${backend.label}）——恢复动作：升级 agent-session-reader（usage 契约要求 runs/totals/skipped 三段）后重试`, 1);
   }
   return payload;
 }
@@ -1406,7 +1406,7 @@ function main() {
 
   if (!anyRuns && manualCount === 0) {
     fail(
-      `没有任何数据：各后端都零匹配且观测根无事件（观测根 ${obsRoot}）。恢复动作：① 放宽 --since/--until（示例 --since 2026-01-01）② 多 agentDir 机器用 --pi-agent-dir 显式指定（pi-session-reader doctor 可列数据目录）③ 确认 zcode 库存在（pi-session-reader doctor --db）`,
+      `没有任何数据：各后端都零匹配且观测根无事件（观测根 ${obsRoot}）。恢复动作：① 放宽 --since/--until（示例 --since 2026-01-01）② 多 agentDir 机器用 --pi-agent-dir 显式指定（agent-session-reader doctor 可列数据目录）③ 确认 zcode 库存在（agent-session-reader doctor --db）`,
       1,
     );
   }
@@ -1449,7 +1449,7 @@ function main() {
       observabilityRoot: obsRoot,
     },
     notes: [
-      "token 取 pi-session-reader usage 的重算字段（tokensInput 含缓存、tokensOutput 含 reasoning、tokensNoncacheInput=input−缓存、tokensTotal=input+output）；不读 spent_tokens / tokensReported 自报值",
+      "token 取 agent-session-reader usage 的重算字段（tokensInput 含缓存、tokensOutput 含 reasoning、tokensNoncacheInput=input−缓存、tokensTotal=input+output）；不读 spent_tokens / tokensReported 自报值",
       "token 总量对账以 run 级重算值为准：唯一 actor 会话（同 run 内 session 去重，空 session 行按独立执行计）合计不足且全部分项差额非负时，差额合成 role=未归 的用量记录补齐（actorsNoSession/会话缺失场景）；total 为负或任一分项差额为负则不合成，保留 actor 合计并进 dataQuality.tokenReconcileNegative",
       "elapsedMsUnion=证据区间（actor 会话窗+节点窗，run 窗兜底）并集=日历实际经过；durationSum=run durationMs 相加；actorDurationSum/nodeDurationSum=actor/节点时长相加——并行口径分开报",
       "attribution: observed=executionId 精确关联观测 JSONL；estimated=legacy 分类器（run 名+args+actor 名）估算，精度低于 observed，两者恒分开不得相加视为同精度",

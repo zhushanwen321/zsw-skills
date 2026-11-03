@@ -17,7 +17,7 @@
 //  12. JSON / table 输出形态；--output 落盘；空数据 exit 1
 //
 // 运行：node --test scripts/tests/skill-usage-stats.test.mjs
-// 测试自足：假 pi-session-reader + 临时 HOME 观测事件，不读真实用户数据。
+// 测试自足：假 agent-session-reader + 临时 HOME 观测事件，不读真实用户数据。
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = join(ROOT, "scripts", "skill-usage-stats.mjs");
 
-// ── 假 pi-session-reader：按 --db / --agent-dir 选 fixture，调用记录进日志 ──
+// ── 假 agent-session-reader：按 --db / --agent-dir 选 fixture，调用记录进日志 ──
 const FAKE_CLI = `#!/usr/bin/env node
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
@@ -39,7 +39,7 @@ if (process.env.FAKE_CLI_LOG) {
 }
 const mode = process.env.FAKE_CLI_MODE || "ok";
 if (mode === "error") {
-  console.log(JSON.stringify({ error: "db_read_failed", code: "db_read_failed", help: ["跑 pi-session-reader doctor --db"] }));
+  console.log(JSON.stringify({ error: "db_read_failed", code: "db_read_failed", help: ["跑 agent-session-reader doctor --db"] }));
   process.exit(1);
 }
 if (mode === "gibberish") {
@@ -55,7 +55,7 @@ process.stdout.write(JSON.stringify(payload));
 `;
 
 function makeFakeCli(binDir) {
-  const cliPath = join(binDir, "pi-session-reader");
+  const cliPath = join(binDir, "agent-session-reader");
   writeFileSync(cliPath, FAKE_CLI);
   chmodSync(cliPath, 0o755);
   return cliPath;
