@@ -1301,22 +1301,22 @@ async function runSlotPool<T, R>(items: T[], limit: number, run: (item: T) => Pr
     permits += 1;
     waiters.shift()?.();
   };
-  const launches = items.map((item) =>
-    acquire().then(async (): Promise<R> => {
-      if (failed) {
-        release(); // 未执行任务归还槽位，让剩余等待者排空后走同一失败出口
-        throw new Error(`任务未派发（池内已有失败，停止补派）`);
-      }
-      try {
-        return await run(item);
-      } catch (e) {
-        failed = true;
-        throw e;
-      } finally {
-        release();
-      }
-    }),
-  );
+  const runLaunched = async (item: T): Promise<R> => {
+    await acquire();
+    if (failed) {
+      release(); // 未执行任务归还槽位，让剩余等待者排空后走同一失败出口
+      throw new Error(`任务未派发（池内已有失败，停止补派）`);
+    }
+    try {
+      return await run(item);
+    } catch (e) {
+      failed = true;
+      throw e;
+    } finally {
+      release();
+    }
+  };
+  const launches = items.map((item) => runLaunched(item));
   return await Promise.all(launches);
 }
 
@@ -2229,56 +2229,52 @@ gateARetry: while (true) {
   };
 
   let fixesByGroup: { name: string; fix: FixReport }[];
+    // 单组修复执行体（池直接按组名派发——经任务对象中转 run 方法会让控制流分析器的
+    // 内联展开超线性膨胀，发起预检从亚秒级劣化到分钟级，写法约束见 dev-flow-wf SKILL）
+    const runFixGroup = async (name: string): Promise<{ name: string; fix: FixReport | null }> => {
+        const gItems = groupMap.get(name) ?? [];
+        log(`[${nowIso()}] 派发修复组 ${name}（${gItems.length} 条 unreasonable）`);
+        const prompt = [
+          `第 ${fixRound} 轮一致性修复（修复组：${name}；${gItems.length} 条 unreasonable，修复方向 = 让实现符合设计文档）。`,
+          "",
+          `第一步：Read 设计文档 ${info.designDocPath} 对应章节（章节定位见 impl-plan ${info.planPath} 的「0 章节映射」），核实条目属实后再动手。`,
+          "",
+          "待修条目清单：",
+          gItems.map(renderItem).join("\n"),
+          "",
+          "约束：",
+          "1. 只改条目指向文件及波及扫描命中的文件；小步修改。",
+          "2. 若你核实后确信某条是设计文档自身错误（实现是对的）：不要改代码，放 skipped 并在 reason 写明依据（file:line 证据 + 设计文档位置）——它会转 doc_errors 流回主 agent 裁决，不盲改。",
+          info.incremental
+            ? "2b. 自检硬门：修完必跑「改动触及的测试文件 + 所在包 typecheck」并全绿后才可返回（调试期只重跑失败的单个测试文件，禁止全套复跑；工作流会在你之后统一跑增量测试，不必重复跑全量）。返回 JSON 的 selfCheck 字段承载自检结果。"
+            : "2b. 本组无增量测试命令——自检硬门：修完必跑「改动触及的测试文件 + 所在包 typecheck」并全绿后才可返回（调试期只重跑失败的单个测试文件，禁止全套复跑）。返回 JSON 的 selfCheck 字段承载自检结果。",
+          "3. git 禁令：禁止 git add / commit / push / stash——提交由工作流引擎统一执行（组级一笔）。",
+          "4. 每条修复申报 affectedFiles（含波及文件，相对仓库根路径的纯路径——不得夹说明文字或 file:line 行号，引擎按值校验，杂质会被拒收回喂）；修不动 / 需上游裁决的条目放 skipped 带具体 reason，不静默跳过。",
+          "5. 其他并行修复组工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属；未申报的改动引擎不处置不阻塞，留盘随终态呈报主 agent 判归属）。",
+          "6. 职责外申报：条目属实、但修复动作属其他职责域（典型 = e2e/测试资产修复落在生产代码分区）——放入 delegated（reason 写修复动作属什么域），它将转升级呈报由主 agent 重派；职责内该修的照常修。",
+          foreignNote
+            ? ["", "工作区说明（存在无人申报的改动，引擎不处置不阻塞，留盘待认领；在现状基础上继续修复）：", foreignNote].join("\n")
+            : "",
+          "",
+          runlogDutyLine(`fix-${fileSafe(name)}-r${fixRound}`),
+          "",
+          "返回 JSON：{ fixes: [{ id, description, affectedFiles: [] }], skipped: [{ id, reason }], delegated?: [{ id, reason }], selfCheck: { typecheck: \"pass\", tests: \"<命令: 结果>\" } }（id 原样引用清单中的 U 编号；fixes 非空时 selfCheck 必填且 typecheck 须为 \"pass\"；delegated 仅职责外申报时使用，无申报可省略）。",
+        ]
+          .filter(Boolean)
+          .join("\n");
+        // 构造外提（契约见 askValidated 注释块）：防校验重试再入同名二次创建（2026-10-06 W3 首跑实炸点）
+        const fixAgent = agent(`修复-${name}-r${fixRound}`, FIX_PERSONA);
+        const fix = await askValidated(
+          validateFixReport,
+          (q) => fixAgent.ask<FixReport>(q),
+          prompt,
+        );
+        if (fix === null) throw new Error(`修复组 ${name} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
+        log(`[${nowIso()}] 修复组 ${name} 完成（fixes ${fix.fixes.length}、skipped ${fix.skipped.length}${(fix.delegated ?? []).length > 0 ? `、delegated ${(fix.delegated ?? []).length}` : ""}）`);
+        return { name, fix: normalizeFix(fix, `修复-${name}-r${fixRound}`) };
+    };
   try {
-    // 派发队列：代码组全量 + 文档组（门控放行时同池；相交时走池后串行段）。任务 run
-    // 内打逐组派发/完成行（内嵌引擎侧时刻，V1/V2 并行判据的取证来源）
-    const tasks: { run: () => Promise<{ name: string; fix: FixReport | null }> }[] = groupNames.map(
-      (name) => ({
-        run: async (): Promise<{ name: string; fix: FixReport | null }> => {
-          const gItems = groupMap.get(name) ?? [];
-          log(`[${nowIso()}] 派发修复组 ${name}（${gItems.length} 条 unreasonable）`);
-          const prompt = [
-            `第 ${fixRound} 轮一致性修复（修复组：${name}；${gItems.length} 条 unreasonable，修复方向 = 让实现符合设计文档）。`,
-            "",
-            `第一步：Read 设计文档 ${info.designDocPath} 对应章节（章节定位见 impl-plan ${info.planPath} 的「0 章节映射」），核实条目属实后再动手。`,
-            "",
-            "待修条目清单：",
-            gItems.map(renderItem).join("\n"),
-            "",
-            "约束：",
-            "1. 只改条目指向文件及波及扫描命中的文件；小步修改。",
-            "2. 若你核实后确信某条是设计文档自身错误（实现是对的）：不要改代码，放 skipped 并在 reason 写明依据（file:line 证据 + 设计文档位置）——它会转 doc_errors 流回主 agent 裁决，不盲改。",
-            info.incremental
-              ? "2b. 自检硬门：修完必跑「改动触及的测试文件 + 所在包 typecheck」并全绿后才可返回（调试期只重跑失败的单个测试文件，禁止全套复跑；工作流会在你之后统一跑增量测试，不必重复跑全量）。返回 JSON 的 selfCheck 字段承载自检结果。"
-              : "2b. 本组无增量测试命令——自检硬门：修完必跑「改动触及的测试文件 + 所在包 typecheck」并全绿后才可返回（调试期只重跑失败的单个测试文件，禁止全套复跑）。返回 JSON 的 selfCheck 字段承载自检结果。",
-            "3. git 禁令：禁止 git add / commit / push / stash——提交由工作流引擎统一执行（组级一笔）。",
-            "4. 每条修复申报 affectedFiles（含波及文件，相对仓库根路径的纯路径——不得夹说明文字或 file:line 行号，引擎按值校验，杂质会被拒收回喂）；修不动 / 需上游裁决的条目放 skipped 带具体 reason，不静默跳过。",
-            "5. 其他并行修复组工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属；未申报的改动引擎不处置不阻塞，留盘随终态呈报主 agent 判归属）。",
-            "6. 职责外申报：条目属实、但修复动作属其他职责域（典型 = e2e/测试资产修复落在生产代码分区）——放入 delegated（reason 写修复动作属什么域），它将转升级呈报由主 agent 重派；职责内该修的照常修。",
-            foreignNote
-              ? ["", "工作区说明（存在无人申报的改动，引擎不处置不阻塞，留盘待认领；在现状基础上继续修复）：", foreignNote].join("\n")
-              : "",
-            "",
-            runlogDutyLine(`fix-${fileSafe(name)}-r${fixRound}`),
-            "",
-            "返回 JSON：{ fixes: [{ id, description, affectedFiles: [] }], skipped: [{ id, reason }], delegated?: [{ id, reason }], selfCheck: { typecheck: \"pass\", tests: \"<命令: 结果>\" } }（id 原样引用清单中的 U 编号；fixes 非空时 selfCheck 必填且 typecheck 须为 \"pass\"；delegated 仅职责外申报时使用，无申报可省略）。",
-          ]
-            .filter(Boolean)
-            .join("\n");
-          // 构造外提（契约见 askValidated 注释块）：防校验重试再入同名二次创建（2026-10-06 W3 首跑实炸点）
-          const fixAgent = agent(`修复-${name}-r${fixRound}`, FIX_PERSONA);
-          const fix = await askValidated(
-            validateFixReport,
-            (q) => fixAgent.ask<FixReport>(q),
-            prompt,
-          );
-          if (fix === null) throw new Error(`修复组 ${name} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
-          log(`[${nowIso()}] 修复组 ${name} 完成（fixes ${fix.fixes.length}、skipped ${fix.skipped.length}${(fix.delegated ?? []).length > 0 ? `、delegated ${(fix.delegated ?? []).length}` : ""}）`);
-          return { name, fix: normalizeFix(fix, `修复-${name}-r${fixRound}`) };
-        },
-      }),
-    );
-    fixesByGroup = (await runSlotPool(tasks, MAX_CONCURRENCY, (t) => t.run())).filter(
+    fixesByGroup = (await runSlotPool(groupNames, MAX_CONCURRENCY, (name) => runFixGroup(name))).filter(
       (r): r is { name: string; fix: FixReport } => r.fix !== null,
     );
   } catch (e) {

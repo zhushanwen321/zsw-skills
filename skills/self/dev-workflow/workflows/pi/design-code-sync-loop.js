@@ -2253,7 +2253,8 @@ async function runSlotPool(items, limit, run) {
         permits += 1;
         waiters.shift()?.();
     };
-    const launches = items.map((item) => acquire().then(async () => {
+    const runLaunched = async (item) => {
+        await acquire();
         if (failed) {
             release(); // 未执行任务归还槽位，让剩余等待者排空后走同一失败出口
             throw new Error(`任务未派发（池内已有失败，停止补派）`);
@@ -2268,7 +2269,8 @@ async function runSlotPool(items, limit, run) {
         finally {
             release();
         }
-    }));
+    };
+    const launches = items.map((item) => runLaunched(item));
     return await Promise.all(launches);
 }
 function isObjArr(v) {

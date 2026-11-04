@@ -2422,22 +2422,22 @@ async function runSlotPool<T, R>(items: T[], limit: number, run: (item: T) => Pr
     permits += 1;
     waiters.shift()?.();
   };
-  const launches = items.map((item) =>
-    acquire().then(async (): Promise<R> => {
-      if (failed) {
-        release(); // 未执行任务归还槽位，让剩余等待者排空后走同一失败出口
-        throw new Error(`任务未派发（池内已有失败，停止补派）`);
-      }
-      try {
-        return await run(item);
-      } catch (e) {
-        failed = true;
-        throw e;
-      } finally {
-        release();
-      }
-    }),
-  );
+  const runLaunched = async (item: T): Promise<R> => {
+    await acquire();
+    if (failed) {
+      release(); // 未执行任务归还槽位，让剩余等待者排空后走同一失败出口
+      throw new Error(`任务未派发（池内已有失败，停止补派）`);
+    }
+    try {
+      return await run(item);
+    } catch (e) {
+      failed = true;
+      throw e;
+    } finally {
+      release();
+    }
+  };
+  const launches = items.map((item) => runLaunched(item));
   return await Promise.all(launches);
 }
 

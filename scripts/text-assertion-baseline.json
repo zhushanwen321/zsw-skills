@@ -97,19 +97,19 @@
    "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))"
   ],
   [
-   1842,
+   1838,
    "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));"
   ],
   [
-   1926,
+   1922,
    "f === \".tmp\" || f.startsWith(\".tmp/\") || f === \".pi\" || f.startsWith(\".pi/workflows/\");"
   ],
   [
-   1933,
+   1929,
    "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),"
   ],
   [
-   2365,
+   2361,
    "\"var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.sp"
   ]
  ],
