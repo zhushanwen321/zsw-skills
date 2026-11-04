@@ -885,26 +885,33 @@ for (let round = 1; round <= maxRounds; round++) {
   // 注：经 map 闭包赋值，显式 string 宽型防 TS 控制流窄化误判比较无交集
   let dirFixScope: string = "patch";
   let dirOneliner = "";
+  // agent(名字) 全 run 只允许注册一次（引擎约束：具名 subagent 名字 run 内唯一）——
+  // 先取引用，回喂重试经同一引用续聊（与下方修复者同款模式；闭包内重复 agent(同名)
+  // 在重试时二次注册同名被引擎拒绝，实测崩于 r2 聚合回喂）
+  const directionAgent = agent(`方向审-r${round}`, DIRECTION_PERSONA);
+  const mainAgent = agent(`主审-r${round}`, REVIEWER_PERSONA);
+  const impactAgent = agent(`影响面审-r${round}`, REVIEWER_PERSONA);
+  const simplicityAgent = agent(`简洁审-r${round}`, REVIEWER_PERSONA);
   try {
     const raw = await Promise.all([
       askValidated(
         validateDirectionVerdict,
-        (p) => agent(`方向审-r${round}`, DIRECTION_PERSONA).ask<DirectionVerdict>(p),
+        (p) => directionAgent.ask<DirectionVerdict>(p),
         reviewerPrompt(TRIALS[0]),
       ),
       askValidated(
         validateReviewerVerdict,
-        (p) => agent(`主审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(p),
+        (p) => mainAgent.ask<ReviewerVerdict>(p),
         reviewerPrompt(TRIALS[1]),
       ),
       askValidated(
         validateReviewerVerdict,
-        (p) => agent(`影响面审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(p),
+        (p) => impactAgent.ask<ReviewerVerdict>(p),
         reviewerPrompt(TRIALS[2]),
       ),
       askValidated(
         validateReviewerVerdict,
-        (p) => agent(`简洁审-r${round}`, REVIEWER_PERSONA).ask<ReviewerVerdict>(p),
+        (p) => simplicityAgent.ask<ReviewerVerdict>(p),
         reviewerPrompt(TRIALS[3]),
       ),
     ]);
@@ -971,10 +978,12 @@ for (let round = 1; round <= maxRounds; round++) {
     await obsBegin("aggregate", round);
     const rawRefs = roundProblems.map((pp) => pp.ref);
     let aggregation: AggregationOutcome | null;
+    // 同四席：agent(名字) 先注册一次，回喂重试经同一引用续聊（闭包内重复 agent(同名) 会被引擎拒绝）
+    const aggregator = agent(`聚合裁决-r${round}`, AGGREGATOR_PERSONA);
     try {
       aggregation = await askValidated(
         makeAggregationValidator(rawRefs),
-        (p2) => agent(`聚合裁决-r${round}`, AGGREGATOR_PERSONA).ask<AggregationOutcome>(p2),
+        (p2) => aggregator.ask<AggregationOutcome>(p2),
         [
           `聚合裁决（第 ${round} 轮，产物目录 ${roundAbs}）——四席评审已并行完成，把它们的发现合并为一份去重权威清单。`,
           "",
