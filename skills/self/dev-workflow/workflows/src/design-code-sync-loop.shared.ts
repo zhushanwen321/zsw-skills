@@ -1683,10 +1683,17 @@ function isStrArr(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === "string");
 }
 
-// 引擎侧时刻（逐任务/逐 owner 日志行与 RL6 记账行内容内嵌用，ISO8601 毫秒级）。行内时刻
-// 不承担 run.json startedAt 的跨 resume 稳定职责（NODE_PROBE_NOW 注释块）：日志行随重放
-// 整体重打、行内时刻同步刷新，行内自洽即可
-const nowIso = (): string => new Date().toISOString();
+// 引擎侧时刻（逐任务/逐 owner 日志行与 RL6 记账行内容内嵌用，ISO8601 毫秒级）。脚本
+// 沙箱禁无参 new Date() 与 Date.now()（重放一致性，NODE_PROBE_NOW 注释块）——时刻一律
+// 经 world.run 探针在 node 子进程内取（子进程不受沙箱限制），每次调用一条 journal 记录、
+// resume 重放回放首次值，行内时刻因此跨 resume 稳定而非仅行内自洽
+const NODE_PROBE_TS = "process.stdout.write(new Date().toISOString() + ' ' + Date.now())";
+const probeNow = async (): Promise<{ iso: string; ms: number }> => {
+  const r = await world.run("node", ["-e", NODE_PROBE_TS]);
+  const t = r.stdout.trim();
+  const sep = t.lastIndexOf(" ");
+  return { iso: t.slice(0, sep), ms: Number(t.slice(sep + 1)) };
+};
 
 /** 流式槽位池（≤limit 在途；先全部启动后统一 join——RL4：每个 future 自创建起即挂
  *  完成链条，启动与 join 之间无裸 await，未完成 future 的失败不丢）。槽位空出即派
@@ -2869,8 +2876,8 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       // 消除批间等最慢空闲）。逐任务派发/完成行内嵌引擎侧毫秒级时刻（V3 取证来源：
       // 第二批首个模块派发时刻 早于 第一批最慢模块完成时刻；替代原「模块审查批次 N/M」批举行）
       await runSlotPool(plan.modules, REVIEWER_BATCH, async (m) => {
-        const t0 = Date.now();
-        log(`  模块审查 ${m.id} 派发（${nowIso()}，t=${t0}）`);
+        const t0 = await probeNow();
+        log(`  模块审查 ${m.id} 派发（${t0.iso}，t=${t0.ms}）`);
         const a = moduleAgents.get(m.id);
         if (!a) throw new Error(`模块 agent 缺失：${m.id}`);
         const res = await askValidated(
@@ -2879,7 +2886,8 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
           reviewPrompt(m),
         );
         if (res === null) throw new Error(`模块 ${m.id} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
-        log(`  模块审查 ${m.id} 完成（${nowIso()}，t=${Date.now()}）`);
+        const t1 = await probeNow();
+        log(`  模块审查 ${m.id} 完成（${t1.iso}，t=${t1.ms}）`);
         reviews.push({ mid: m.id, res });
       });
     } catch (e) {
@@ -3001,8 +3009,8 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       // 逐 owner 派发/完成行为本次新造（该循环此前无任何 log 行，V8 取证来源：后一 owner
       // 派发时刻 早于 前一最慢 owner 完成时刻），内嵌引擎侧毫秒级时刻
       await runSlotPool(owners, REVIEWER_BATCH, async (owner) => {
-        const t0 = Date.now();
-        log(`  聚焦复审 ${owner} 派发（${nowIso()}，t=${t0}）`);
+        const t0 = await probeNow();
+        log(`  聚焦复审 ${owner} 派发（${t0.iso}，t=${t0.ms}）`);
         const a = owner === "planner" ? plannerAgent : moduleAgents.get(owner);
         if (!a) throw new Error(`聚焦复审 agent 缺失：${owner}`);
         const scopeFindings = lastDispatchedIds
@@ -3022,7 +3030,8 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
             .join("\n\n"),
         );
         if (res === null) throw new Error(`聚焦复审（${owner}）结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
-        log(`  聚焦复审 ${owner} 完成（${nowIso()}，t=${Date.now()}）`);
+        const t1 = await probeNow();
+        log(`  聚焦复审 ${owner} 完成（${t1.iso}，t=${t1.ms}）`);
         reviews.push({ owner, res });
       });
     } catch (e) {
@@ -3430,7 +3439,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     // 口径按 D5 重划）
     const accountUnit = async (unit: (typeof runs)[number][]): Promise<void> => {
       for (const r of unit) r.accounted = true; // 先置记账标记再判挂起（挂起条件含「存在未记账组」）
-      const now = Date.now(); // 记账执行时点（RL6 行要素，引擎侧毫秒级）
+      const now = (await probeNow()).ms; // 记账执行时点（RL6 行要素，引擎侧毫秒级）
       const snapUnion = new Set<string>();
       for (const r of unit) for (const p of r.snapshot!.keys()) snapUnion.add(p);
       // 差分基线读盘（D5 规则⑤）：读点 = 记账单元开始记账之时（等价可复算规则 = 读盘
@@ -3582,11 +3591,13 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
           }
           const snapAbs = [...parsePorcelain(snapRes.stdout).keys()].map((f) => pathUnderRoot(f));
           r.snapshot = await fingerprintFiles(snapAbs);
-          r.dispatchAt = Date.now();
-          log(`  修复组 ${r.g.id} 派发（${nowIso()}，t=${r.dispatchAt}）`);
+          const dt = await probeNow();
+          r.dispatchAt = dt.ms;
+          log(`  修复组 ${r.g.id} 派发（${dt.iso}，t=${r.dispatchAt}）`);
           r.outcome = await askFixOutcomeSelfHeal(r.g, activeById, round);
-          r.finishAt = Date.now();
-          log(`  修复组 ${r.g.id} 完成（${nowIso()}，t=${r.finishAt}）`);
+          const ft = await probeNow();
+          r.finishAt = ft.ms;
+          log(`  修复组 ${r.g.id} 完成（${ft.iso}，t=${r.finishAt}）`);
         } catch (e) {
           poolFailed = true; // 停止记账链消费新单元（失败批不记账）；在途组自然跑完不纳入记账
           throw e;

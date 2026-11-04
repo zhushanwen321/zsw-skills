@@ -1271,10 +1271,17 @@ async function mapBatch<T, R>(list: T[], fn: (item: T) => PromiseLike<R>): Promi
   return out;
 }
 
-// 引擎侧时刻（逐任务日志行内容内嵌用，ISO8601 毫秒级）。行内时刻不承担 run.json
-// startedAt 的跨 resume 稳定职责（NODE_PROBE_NOW 注释块）：日志行随重放整体重打、
-// 行内时刻同步刷新，行内自洽即可
-const nowIso = (): string => new Date().toISOString();
+// 引擎侧时刻（逐任务日志行内容内嵌用，ISO8601 毫秒级）。脚本沙箱禁无参 new Date() 与
+// Date.now()（重放一致性，NODE_PROBE_NOW 注释块）——时刻一律经 world.run 探针在 node
+// 子进程内取（子进程不受沙箱限制），每次调用一条 journal 记录、resume 重放回放首次值，
+// 行内时刻因此跨 resume 稳定而非仅行内自洽
+const NODE_PROBE_TS = "process.stdout.write(new Date().toISOString() + ' ' + Date.now())";
+const probeNow = async (): Promise<{ iso: string; ms: number }> => {
+  const r = await world.run("node", ["-e", NODE_PROBE_TS]);
+  const t = r.stdout.trim();
+  const sep = t.lastIndexOf(" ");
+  return { iso: t.slice(0, sep), ms: Number(t.slice(sep + 1)) };
+};
 
 /** 流式槽位池（≤limit 在途；先全部启动后统一 join——RL4：每个 future 自创建起即挂
  *  完成链条，启动与 join 之间无裸 await，未完成 future 的失败不丢）。槽位空出即派
@@ -2194,7 +2201,7 @@ gateARetry: while (true) {
   // fix-failure——与改造前一致；fix 为 null 含两义：结构化返回耗尽（WARN 行已打）与
   // 当场修复 0 条（完成行已打），两者均不入提交管线，与改造前 push 条件一致）
   const runDocGroup = async (docPromptText: string): Promise<{ name: string; fix: FixReport | null }> => {
-    log(`[${nowIso()}] 派发文档修复组（${docEntries.length} 条 doc_errors）`);
+    log(`[${(await probeNow()).iso}] 派发文档修复组（${docEntries.length} 条 doc_errors）`);
     const docAgent = agent(docGroupName, FIX_PERSONA);
     const docFix = await askValidated(
       validateFixReport,
@@ -2224,7 +2231,7 @@ gateARetry: while (true) {
       const bareGap = entry.gap.replace(/^fixer 申报留回流（[^）]*）：/, "");
       docErrorPool.set(s.id, { ...entry, gap: `fixer 申报留回流（${s.reason}）：${bareGap}` });
     }
-    log(`[${nowIso()}] 文档修复组：当场修复 ${fixedCount} 条，留池回流 ${docIds.size - fixedCount} 条（方向两可 / 实现侧错误）`);
+    log(`[${(await probeNow()).iso}] 文档修复组：当场修复 ${fixedCount} 条，留池回流 ${docIds.size - fixedCount} 条（方向两可 / 实现侧错误）`);
     return { name: docGroupName, fix: fixedCount > 0 ? docFix : null };
   };
 
@@ -2233,7 +2240,7 @@ gateARetry: while (true) {
     // 内联展开超线性膨胀，发起预检从亚秒级劣化到分钟级，写法约束见 dev-flow-wf SKILL）
     const runFixGroup = async (name: string): Promise<{ name: string; fix: FixReport | null }> => {
         const gItems = groupMap.get(name) ?? [];
-        log(`[${nowIso()}] 派发修复组 ${name}（${gItems.length} 条 unreasonable）`);
+        log(`[${(await probeNow()).iso}] 派发修复组 ${name}（${gItems.length} 条 unreasonable）`);
         const prompt = [
           `第 ${fixRound} 轮一致性修复（修复组：${name}；${gItems.length} 条 unreasonable，修复方向 = 让实现符合设计文档）。`,
           "",
@@ -2270,7 +2277,7 @@ gateARetry: while (true) {
           prompt,
         );
         if (fix === null) throw new Error(`修复组 ${name} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
-        log(`[${nowIso()}] 修复组 ${name} 完成（fixes ${fix.fixes.length}、skipped ${fix.skipped.length}${(fix.delegated ?? []).length > 0 ? `、delegated ${(fix.delegated ?? []).length}` : ""}）`);
+        log(`[${(await probeNow()).iso}] 修复组 ${name} 完成（fixes ${fix.fixes.length}、skipped ${fix.skipped.length}${(fix.delegated ?? []).length > 0 ? `、delegated ${(fix.delegated ?? []).length}` : ""}）`);
         return { name, fix: normalizeFix(fix, `修复-${name}-r${fixRound}`) };
     };
   try {

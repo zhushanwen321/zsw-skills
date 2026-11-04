@@ -77,39 +77,39 @@
    "if (p.startsWith(projectRoot + \"/\")) p = p.slice(projectRoot.length + 1);"
   ],
   [
-   878,
+   885,
    "d.gap.startsWith(\"[聚合升级/无组承接]\") || d.gap.startsWith(\"[职责外申报]\");"
   ],
   [
-   995,
+   1002,
    "for (const p of parts) if (p.files.includes(filePath)) return p.name;"
   ],
   [
-   1137,
+   1144,
    "if (GREP_CHECK_STUB_RE.test(cmd)) {"
   ],
   [
-   1151,
+   1158,
    "const impure = (f[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));"
   ],
   [
-   1359,
+   1366,
    "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))"
   ],
   [
-   1838,
+   1845,
    "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));"
   ],
   [
-   1922,
+   1929,
    "f === \".tmp\" || f.startsWith(\".tmp/\") || f === \".pi\" || f.startsWith(\".pi/workflows/\");"
   ],
   [
-   1929,
+   1936,
    "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),"
   ],
   [
-   2361,
+   2368,
    "\"var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.sp"
   ]
  ],
@@ -223,75 +223,75 @@
    ".filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)))"
   ],
   [
-   1943,
+   1950,
    "else if (typeof m[\"command\"] === \"string\" && ALWAYS_PASS_CMD_RE.test(m[\"command\"].trim())) badSc.push(`${i + 1}（selfCheck.command 须是对受影响文件的真实检查命令，不得是 shell 恒过/恒"
   ],
   [
-   1950,
+   1957,
    "const impure = (o[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));"
   ],
   [
-   2198,
+   2205,
    "if (src === designDoc || src === implPlan || src.startsWith(`${runDir}/`) || src.startsWith(`${retirementDestDir}/`)) {"
   ],
   [
-   2271,
+   2278,
    "return !pathUnderRoot(f).startsWith(`${retirementDestDir}/`);"
   ],
   [
-   2374,
+   2381,
    "if (!p.startsWith(`${projectRoot}/`)) {"
   ],
   [
-   2451,
+   2458,
    "const extraAbs = rep.fixed.filter((p2) => p2 !== \"\").map((p2) => (p2.startsWith(\"/\") ? p2 : `${projectRoot}/${p2}`));"
   ],
   [
-   2454,
+   2461,
    "if (!p2.startsWith(`${projectRoot}/`) || !(await pathExists(p2))) {"
   ],
   [
-   2551,
+   2558,
    "const blockers = loaded.filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)));"
   ],
   [
-   2622,
+   2629,
    "return n === null || !n.startsWith(`${projectRoot}/`);"
   ],
   [
-   2706,
+   2713,
    "terr.add(tok.startsWith(\"/\") ? tok : `${projectRoot}/${tok}`);"
   ],
   [
-   2717,
+   2724,
    "if (segs[i].includes(\"*\") || segs[i].endsWith(\"...\")) cut = i;"
   ],
   [
-   2727,
+   2734,
    "if (d.startsWith(fp)) return false;"
   ],
   [
-   2733,
+   2740,
    "if (d.startsWith(`${base}/`)) return false;"
   ],
   [
-   2981,
+   2989,
    "return !pathUnderRoot(hf).startsWith(`${retirementDestDir}/`);"
   ],
   [
-   3306,
+   3315,
    "if (!g.issueIds.includes(fx.issueId)) es.push(`fixes 引用未知条目 ${fx.issueId}`);"
   ],
   [
-   3309,
+   3318,
    "if (!g.issueIds.includes(d.issueId)) es.push(`deferred 引用未知条目 ${d.issueId}`);"
   ],
   [
-   3316,
+   3325,
    "if (!g.issueIds.includes(d.issueId)) es.push(`exempt 引用未知条目 ${d.issueId}`);"
   ],
   [
-   3321,
+   3330,
    "if (!g.issueIds.includes(d.issueId)) es.push(`delegated 引用未知条目 ${d.issueId}`);"
   ]
  ],
