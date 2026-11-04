@@ -3046,8 +3046,9 @@ if (resumeRaw !== null) {
         overdesignCandidates.push({ id: c.id, location: c.location ?? "", gap: c.gap ?? "", reason: c.reason });
     for (const t of normResumedRetireCleanup(resumeRaw.retireCleanup))
         retireCleanupTargets.set(t.id, { src: t.src, base: t.base });
-    // frozen 按裁决重绑定：id 精确匹配优先，location 包含匹配次选（裁决记录以锚点/位置
-    // 引用条目时）。消费制——一条裁决至多解冻一条（错向解冻比漏解冻危害大：fixer 会按
+    // frozen 按裁决重绑定：id 精确匹配优先，location 路径等值匹配次选（裁决记录以锚点/
+    // 位置引用条目时——双侧经 anchorPath 归一化为代码文件路径后等值判定，不做自由文本
+    // 互包含）。消费制——一条裁决至多解冻一条（错向解冻比漏解冻危害大：fixer 会按
     // 错方向改代码/文档）；未匹配保持 frozen 随终态 contestedList 再呈报，不静默丢弃
     const rulingsArr = rulingsRecs ?? [];
     const byId = new Map(rulingsArr.map((r) => [r.id, r]));
@@ -3061,14 +3062,17 @@ if (resumeRaw !== null) {
             consumed.add(rec.id);
         }
         else {
-            const loc = f.location.trim();
-            rec = loc === ""
+            // location 兜底绑定 = 结构化路径等值：双侧 anchorPath 归一化后等值判定。原实现
+            // 为自由文本双向互包含，可把短 location 误绑进任意 anchor——绑定结果决定解冻与
+            // 修复方向，按防回潮门禁裁决收紧为结构化等值（消歧仍以 id 精确匹配优先，仅兜底）
+            const locPath = anchorPath(f.location);
+            rec = locPath === ""
                 ? undefined
                 : rulingsArr.find((r) => {
                     if (consumed.has(r.id))
                         return false;
                     const needle = r.anchor.trim() !== "" ? r.anchor.trim() : r.id;
-                    return needle !== "" && (loc.includes(needle) || needle.includes(loc));
+                    return needle !== "" && anchorPath(needle) === locPath;
                 });
             if (rec !== undefined)
                 consumed.add(rec.id);
