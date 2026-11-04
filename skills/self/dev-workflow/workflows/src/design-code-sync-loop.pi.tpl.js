@@ -130,11 +130,12 @@ const SCHEMA_MatrixRowLite = {
   properties: {
     claim: { type: "string", description: "设计声明锚点（§N）" },
     impl: { type: "string", description: "代码实现锚点（file:line 或 未找到）" },
-    verdict: { type: "string", description: "一致 / 漏实现 / 越权实现" },
+    align: { type: "string", enum: ["match", "gap", "unevaluated"], description: "功能对照结论：match = 一致；gap = 有差距（gapDirection 必填）；unevaluated = 未评" },
+    gapDirection: { type: "string", enum: ["doc-right", "code-right"], description: "差距方向（仅 align=gap 必填）：doc-right = 设计有代码漏；code-right = 代码有设计漏" },
     note: { type: "string", description: "一句话说明" },
-    overdesign: { type: "string", description: "越权实现三问初评档位（合理/过度/存疑），仅越权行有" },
+    overdesign: { type: "string", enum: ["over", "suspect", "fine"], description: "越权实现三问初评档位（over = 过度 / suspect = 存疑 / fine = 合理），仅越权行有" },
   },
-  required: ["claim", "impl", "verdict", "note"],
+  required: ["claim", "impl", "align", "note"],
 };
 
 // planner 框架级发现（矩阵顶层行 + 台账条目）
@@ -193,8 +194,18 @@ const SCHEMA_Finding8 = {
 const SCHEMA_ArbiterVerdict = {
   type: "object",
   properties: {
-    verdict: { type: "string", enum: ["settled-doc-right", "settled-code-right", "genuinely-open"], description: "settled = 设计原文/裁决记录已答（必须给 quote+anchorRef+reasoning）；genuinely-open = 默认态——引用不出或推理不成立一律回此值（宁停勿错）" },
-    quote: { type: "string", description: "设计文档/裁决记录原文引文（≥12 字，脚本逐字校验存在，防幻觉；genuinely-open 可空）" },
+    verdict: { type: "string", enum: ["settled-doc-right", "settled-code-right", "genuinely-open"], description: "settled = 设计原文已答（必须给 quote+quoteLocation+anchorRef+reasoning）；genuinely-open = 默认态——引用不出或推理不成立一律回此值（宁停勿错）" },
+    quote: { type: "string", description: "设计文档/impl-plan 人读版原文引文（≥12 字逐字，防幻觉；genuinely-open 可空）" },
+    quoteLocation: {
+      type: "object",
+      properties: {
+        source: { type: "string", enum: ["design-doc", "impl-plan"], description: "引文来源文件（裁决记录不作为引文来源，已裁决事项的原文落到两文件对应行段）" },
+        lineStart: { type: "number", description: "引文起始行（1-based，含）" },
+        lineEnd: { type: "number", description: "引文结束行（1-based，含）" },
+      },
+      required: ["source", "lineStart", "lineEnd"],
+      description: "引文位置锚（引擎按行段读原文与 quote 归一化比对；genuinely-open 可空）",
+    },
     anchorRef: { type: "string", description: "引文所在锚点（设计章节号或裁决 id）" },
     reasoning: { type: "string", description: "引文→结论的推理链（引文说了什么、为何据此判定该修哪边）" },
   },
@@ -230,7 +241,17 @@ const SCHEMA_FixRecord = {
   properties: {
     issueId: { type: "string", description: "条目 id（与任务条目一致原样引用）" },
     description: { type: "string", description: "一句修复描述（含组外波及标注）" },
-    selfCheck: { type: "string", description: "自检：一条可复跑命令 + 预期结果" },
+    selfCheck: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["machine-check", "existence-check"], description: "machine-check = 适用一致性检查；existence-check = 旧表述零残留检索（预期零命中）" },
+        command: { type: "string", description: "实际执行的命令（引擎复跑比对输出）" },
+        expected: { type: "string", description: "预期输出" },
+        actual: { type: "string", description: "实际输出（非空）" },
+      },
+      required: ["kind", "command", "expected", "actual"],
+      description: "结构化自检——引擎按 command 复跑做输出等值比对，不再接受自由文本",
+    },
   },
   required: ["issueId", "description", "selfCheck"],
 };

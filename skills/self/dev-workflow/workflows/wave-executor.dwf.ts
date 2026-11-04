@@ -1456,12 +1456,28 @@ function validateInspectResult(v: unknown): Validated<InspectResult> {
  * （本次修复的根因形态）。文件缺失 / 不可解析 / 结论不一致 = 锚不成立。
  * artifactsDir 为空按锚通过（exec-plan 校验已要求 inspect 带 artifactsDir，防御性宽容）。
  */
+/** verdict.json 事实锚读取（严格 JSON.parse，2026-11-04 结构化改造——旧正则提值取文件里
+ *  第一个 verdict/status 同名键，判定书含嵌套同名键时取错值、合法通过被误拒）。只认
+ *  顶层 verdict 键（缺失回退顶层 status 键），解析失败/值非 pass|degraded = 锚不成立，
+ *  fail 方向安全 */
+async function readVerdictAnchorVerdict(artifactsDir: string): Promise<"pass" | "degraded" | null> {
+  const raw = await readTextViaNode(`${artifactsDir}/verdict.json`);
+  if (raw === null) return null;
+  try {
+    const o = JSON.parse(raw) as unknown;
+    if (o === null || typeof o !== "object" || Array.isArray(o)) return null;
+    const rec = o as Record<string, unknown>;
+    const v = typeof rec["verdict"] === "string" ? rec["verdict"] : typeof rec["status"] === "string" ? rec["status"] : "";
+    const lower = v.toLowerCase();
+    return lower === "pass" || lower === "degraded" ? lower : null;
+  } catch {
+    return null;
+  }
+}
+
 async function inspectVerdictAnchorOk(node: PlanNode, expected: "pass" | "degraded"): Promise<boolean> {
   if (node.artifactsDir === "") return true;
-  const raw = await readTextViaNode(`${node.artifactsDir}/verdict.json`);
-  if (raw === null) return false;
-  const m = raw.match(/"(?:verdict|status)"\s*:\s*"([^"]+)"/i);
-  return m !== null && m[1].toLowerCase() === expected;
+  return (await readVerdictAnchorVerdict(node.artifactsDir)) === expected;
 }
 
 function validateHealVerdict(v: unknown): Validated<HealVerdict> {
@@ -2745,12 +2761,10 @@ if (existingStatus === null) {
   for (const n of plan.nodes) {
     if (n.kind !== "inspect" || n.artifactsDir === "") continue;
     if (aligned[n.id]?.status !== "done") continue;
-    const raw = await readTextViaNode(`${n.artifactsDir}/verdict.json`);
-    const m = raw !== null ? raw.match(/"(?:verdict|status)"\s*:\s*"([^"]+)"/i) : null;
-    const v = m?.[1]?.toLowerCase();
-    if (v !== "pass" && v !== "degraded") {
+    const v = await readVerdictAnchorVerdict(n.artifactsDir);
+    if (v === null) {
       aligned[n.id] = { status: "pending", attempts: 0 };
-      log(`inspect 锚核对：${n.id} 的 status.json 记 done，但 ${n.artifactsDir}/verdict.json 缺失或结论非 pass/degraded——回 pending 重跑`);
+      log(`inspect 锚核对：${n.id} 的 status.json 记 done，但 ${n.artifactsDir}/verdict.json 缺失、不可解析或结论非 pass/degraded——回 pending 重跑`);
     }
   }
   for (const n of plan.nodes) {

@@ -38,4 +38,13 @@ if [ -n "$STAGED" ]; then
   fi
 fi
 
+# 段 2：断言路径文字匹配防回潮（2026-11-04 结构化断言改造配套）
+# workflow 单源新增 .includes/.test/indexOf 命中点必须归类：保留区更新基线并写明理由，
+# 证据扫描改结构化判定——脚本自身给出处置指引
+ASSERT_STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- 'skills/self/dev-workflow/workflows/src/' 'scripts/text-assertion-baseline.json')
+if [ -n "$ASSERT_STAGED" ]; then
+  echo "pre-commit[text-assertion]: staged 变更含 workflow 单源，跑文字匹配防回潮检查…"
+  node scripts/check-no-text-assertion.mjs || exit 1
+fi
+
 exit 0

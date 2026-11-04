@@ -86,7 +86,7 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 
 ## 争议仲裁与 contested 分流
 
-**争议仲裁**（R1 聚合后、contested 分流前执行）：对每条 must-fix 级 contested 条目派只读仲裁 agent（不修任何文件），消解「设计已答却被误报为争议」的伪争议。返回 `{verdict, quote, anchorRef, reasoning}`：verdict ∈ `settled-doc-right`（文档对→修代码）/ `settled-code-right`（代码对→修文档）/ `genuinely-open`（真开放，保留争议）。默认答案 = genuinely-open（宁停勿错）：只有逐字引用设计原文/裁决记录、并给出「引文说了什么→为何据此判向」完整推理链才允许 settled；settled 必须附 ≥12 字原文逐字引文（禁止转述/拼接），脚本对引文做逐字存在校验（比对源 = 设计文档 ∪ impl-plan 人读版 ∪ 裁决记录），校验不过按 genuinely-open 保留争议。仲裁返回结构化校验重试仍不合规时同样按 genuinely-open 保留（仲裁步不得成为新故障点）。改判条目打 arbiter 标随终态 `arbiterSettledList` 呈报——先修后审：改判即进修复轮，交付汇报列出供用户抽查翻案；R2+ 聚焦复审对含 arbiter 标条目复跑引文断言，引文不再逐字存在或推理链不成立 → 该条 reconciliation 填 regressed，并新立项 contested（rationale 注明 arbiter-revert 与断点位置）。
+**争议仲裁**（R1 聚合后、contested 分流前执行）：对每条 must-fix 级 contested 条目派只读仲裁 agent（不修任何文件），消解「设计已答却被误报为争议」的伪争议。返回 `{verdict, quote, quoteLocation: {source, lineStart, lineEnd}, anchorRef, reasoning}`：verdict ∈ `settled-doc-right`（文档对→修代码）/ `settled-code-right`（代码对→修文档）/ `genuinely-open`（真开放，保留争议）。默认答案 = genuinely-open（宁停勿错）：只有逐字引用设计文档/impl-plan 人读版原文（给 quoteLocation 文件与 1-based 行段）、并给出「引文说了什么→为何据此判向」完整推理链才允许 settled；settled 必须附 ≥12 字原文逐字引文（禁止转述/拼接；裁决记录只作推理依据不作引文来源），引擎按 quoteLocation 行段读原文与引文做归一化空白后的等值校验（位置错或内容不等 = 校验不过），校验不过按 genuinely-open 保留争议。仲裁返回结构化校验重试仍不合规时同样按 genuinely-open 保留（仲裁步不得成为新故障点）。改判条目打 arbiter 标随终态 `arbiterSettledList` 呈报——先修后审：改判即进修复轮，交付汇报列出供用户抽查翻案；R2+ 聚焦复审对含 arbiter 标条目复跑引文断言，引文不再逐字存在或推理链不成立 → 该条 reconciliation 填 regressed，并新立项 contested（rationale 注明 arbiter-revert 与断点位置）。
 
 **contested 分流**（仲裁后仍真开放的 must-fix 争议）：争议条目冻结（status=frozen，待用户裁决），冻结波及范围按文件划定——与其同文件的待修条目一并冻结（status=frozen-blocked，连坐清单随终态 `contestedBlockedList` 呈报，每条 blockedBy 指向冻结它的争议条目 id）。冻结条目退出活跃集，其余条目照常进修复轮——一条争议不阻断整轮。全清（非争议条目全部修复收敛）后若仍有冻结争议，终态仍为 contested 停回用户。
 
@@ -101,13 +101,13 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 
 **处置记录义务**：终态处置表任一行的处置动作与结果（含用户对 contested / overdesignCandidates 的裁决），append 一笔到 `<name>.ledger.md`——引擎终态已写入未决清单（见下方终态清单字段），主 agent 处置一项即追加记录一项；W4 终态全量另在 `runDir/final.json`（attempt 不覆盖）。
 
-**终态清单字段**（final.json）：`contestedList`（contested 条目，待用户裁决）/ `contestedBlockedList`（连坐冻结条目，元素 {id, location, blockedBy: [争议条目 id]}，随争议一并处置）/ `arbiterSettledList`（仲裁改判条目，元素 {id, direction, quote, anchorRef, reasoning}，供用户抽查翻案）/ `contestedDefaultedList`（suggestion 级 contested 被引擎强制改判 doc-right 的条目，元素 {id, location}）/ `exemptList`（符号豁免待终审）/ `delegatedList`（职责域外待重派）/ `overdesignCandidates`（过度/存疑候选卡待裁决）/ `remaining`（open 残余条目）。
+**终态清单字段**（final.json）：`contestedList`（contested 条目，待用户裁决）/ `contestedBlockedList`（连坐冻结条目，元素 {id, location, blockedBy: [争议条目 id]}，随争议一并处置）/ `arbiterSettledList`（仲裁改判条目，元素 {id, direction, quote, quoteLocation?: {source, lineStart, lineEnd}, anchorRef, reasoning}，供用户抽查翻案——quoteLocation 是引文行段锚，复审按它核对引文仍成立）/ `contestedDefaultedList`（suggestion 级 contested 被引擎强制改判 doc-right 的条目，元素 {id, location}）/ `exemptList`（符号豁免待终审）/ `delegatedList`（职责域外待重派）/ `overdesignCandidates`（过度/存疑候选卡待裁决）/ `remaining`（open 残余条目）。
 
 **衔接**：W4 修复触及验收场景表覆盖行为时，主 agent 重跑受影响场景（局部重验，不重开整门）。
 
 ## 伴生产物退役判定（converged 时）
 
-本设计相关产物去留：已在 `~/.agents/skill-data/` 的（设计文档/impl-plan/审查报告）合规无需处理；残留在 docs/ 的伴生产物（旧惯例 `.review*` / probe）→ 移入项目内 `.tmp/design-doc-retirement/`（引用验证：按完整文件名全仓 grep，任一命中不退役；移动后反向复验悬空链接）；被整体取代的旧设计文档零外部引用 → 同目录退役。退役移动结果与依据记入 final.json 的 retirement 字段；退役目录同时写 README.md 索引（文件名/日期/依据/找回方式）。判定结果进交付汇报（退役 N / 保留 N 含依据 / 无可退役显式说）。
+本设计相关产物去留：已在 `~/.agents/skill-data/` 的（设计文档/impl-plan/审查报告）合规无需处理；残留在 docs/ 的伴生产物（旧惯例 `.review*` / probe）→ 移入项目内 `.tmp/design-doc-retirement/`（引用验证：按文件名词干全仓检索，命中 = 存在引用，先产清理条目修掉引用、清零后才移动——2026-09-27 裁决后的现行为，不再有「命中即不退役」门禁；移动后反向复验悬空链接）；被整体取代的旧设计文档零外部引用 → 同目录退役。退役移动结果与依据记入 final.json 的 retirement 字段；退役目录同时写 README.md 索引（文件名/日期/依据/找回方式）。判定结果进交付汇报（退役 N / 保留 N 含依据 / 无可退役显式说）。
 
 ## 手工降级路径
 

@@ -55,7 +55,7 @@
 - **依赖**：默认 = 对应开发单元已提交（唯一无需说明的真实前提）；填其他依赖（另一验收项 id）必须附一句理由——功能先后或共享不可重置状态；编号顺序/顺手连跑不构成依赖
 - **优化判定**：可降级（L4→L3）/ 可合并 / 可脚本化 / L0 可消化；L4 行必须声明「机器判不了的部分是什么」，声明不出 = 拆行或降级
 - **e2e 影响面圈定 [MANDATORY]**：先按标题逐字检索渲染视图 `<name>.rendered.md` 的「e2e 影响面评估」子节（标题由渲染脚本固定输出，章节 JSON 对应字段 = s4-accept.json e2eImpact）——**子节不存在 → 停下来交回补文档（按 write.md Step 4 补写后重进本步），禁止按空集继承**（空集会让下游静默生成零个验证节点，全链无报错）；子节存在但清单为空且无「无受影响项（依据）」显式声明 → 同样交回。继承落清单后逐项「跑（执行时点 = 单元 committed 后 / 阶段 5，空载串行；该项由 dev-flow-wf D0 编译为 verify 节点（deps=所属 dev 单元）在 D1 内执行）/ 不跑（理由）」；有 `docs/testing/e2e-map.json` 登记表的项目与 `node scripts/select-affected-e2e.mjs --base <基线>` 输出双向对账（差异逐条披露；脚本看不见设计语义，最终清单以人工裁决为准）
-- **验证资产来源判定（仅 L3 行；项目无 verification skill 时本列统一填「-」，流程零变化）**：项目 verification skill = 项目技能目录（`.agents/skills/` 等各宿主的项目技能目录）下 `verify-*` 前缀、SKILL.md 含 Launch 与 Drive 驱动节的技能；多候选以项目 AGENTS.md 的显式声明消歧；无命中 = 该项目没有，本列填「-」。命中后读其覆盖矩阵（能力/场景对账表，入口见其 SKILL.md），逐 L3 行标三态：
+- **验证资产来源判定（仅 L3 行；项目无 verification skill 时本列统一填「-」，流程零变化）**：项目 verification skill 以**项目 AGENTS.md 的显式声明为唯一来源**（SSOT 清单——项目 AGENTS.md 写明哪些技能属 verification skill）；AGENTS.md 未声明 = 该项目没有，本列填「-」并在计划备注提示项目补一行声明（**禁止**按技能目录前缀或 SKILL.md 内容特征现场探测——前缀与驱动节措辞跨项目常见，误认率最高，2026-11-04 起废除特征探测改声明制）。命中后读其覆盖矩阵（能力/场景对账表，入口见其 SKILL.md），逐 L3 行标三态：
   - `reuse: <场景 id>` —— 矩阵该功能行已是可执行剧本态，验收项语义被现成剧本覆盖；场景 id 必须真实存在于其场景清单（编造的 id 在自检第 4 条被拦）
   - `new: <一句功能定位>` —— 矩阵该行为能力条目态或无覆盖：D0 按其能力原语组装新剧本（写好跑通后入其场景库，下次交付即可 reuse）
   - `inspect-only` —— 机器判不了、写不出确定性剧本：该行改判 L4（与「方式」列联动改）
@@ -92,19 +92,23 @@
 
 设计文档（含 impl-plan.md）会被下游 design-code-sync 的机械扫描消费：扫描器**只读本节产出的词表**、不自行抓取反引号词——哪些词该扫由本节的语义分析裁决，扫描器与文档作者之间无隐式形态约定。下游 design-code-sync 的输入适配（消费设计目录 / 渲染视图的新形态）登记为待办，由其侧改造落地后对齐；本节先按现行词表协议产出。
 
-1. **抓草稿**：`node <本技能>/scripts/extract-backticks.mjs ~/.agents/skill-data/tech-design/<project-slug>/<name>/<name>.rendered.md ~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.md`（stdout = JSON 词数组；提取规则与扫描器逐字同源，勿手抄手补。输入取渲染视图而非章节 JSON：渲染视图格式由渲染脚本固定生成，反引号提取稳定；章节 JSON 的一堆字段名 / 枚举值不是「文档里反引号包裹的符号」语义，进入词表只会制造 skip 噪音）
+1. **抓草稿**：`node <本技能>/scripts/extract-backticks.mjs ~/.agents/skill-data/tech-design/<project-slug>/<name>/<name>.rendered.md ~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.md`（stdout = JSON 对象：`sourceFingerprints`（各输入文件的 sha256 指纹）/ `words`（提取词数组）/ `dropped`（被过滤词与剔除规则，漏报可审计）；提取规则与扫描器逐字同源，勿手抄手补。输入取渲染视图而非章节 JSON：渲染视图格式由渲染脚本固定生成，反引号提取稳定；章节 JSON 的一堆字段名 / 枚举值不是「文档里反引号包裹的符号」语义，进入词表只会制造 skip 噪音）
 2. **语义甄别**：对照设计文档逐词判定——`scan` = 本项目代码里可定位、悬空时应被揪出的符号；`skip` = 其余一切（外部/上游包符号、shell 命令、协议词、JSON 字段名、纯排版标注……），每个 skip 词必须带一句理由（典型：「上游包符号，非本项目代码」「命令行示例」）。拿不准的词归 skip——漏扫的代价由下游 LLM 语义审查兜底，误扫的代价是下游误报死循环
 3. **落盘**：`~/.agents/skill-data/tech-design/<project-slug>/<name>.symbol-watchlist.json`（与设计目录同级），格式：
 
 ```jsonc
 {
   "designDoc": "~/.agents/skill-data/tech-design/<project-slug>/<name>",
+  "sourceFingerprints": {
+    "~/.agents/skill-data/tech-design/<project-slug>/<name>/<name>.rendered.md": "<sha256，抄自草稿输出>",
+    "~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.md": "<sha256>"
+  },
   "scan": ["exitPlanMode", "u-foundation"],
   "skip": [{ "word": "executeToolCallsSequential", "reason": "上游包符号，非本项目代码" }]
 }
 ```
 
-**一致性**：scan ∪ skip 的词集必须等于渲染视图（+impl-plan.md）当前反引号词全集——design-code-sync 发起时机器复验等集，不等即跳过扫描并呈报「词表过期，回 T3 重产」。文档在本节之后有改动 → 重跑本节（脚本 + 甄别合计分钟级）。
+**一致性（指纹制）**：词表的 `sourceFingerprints` 必须与两份输入文档的当前内容指纹一致——design-code-sync 发起时机器复验（文档任何改动都会使指纹不等，比旧「反引号词集等集」更严），不等即拒启并呈报「源文档已改而词表未重生成，回 T3 重产」。文档在本节之后有改动 → 重跑本节（脚本 + 甄别合计分钟级）。
 
 ## 计划自检 [MANDATORY]
 

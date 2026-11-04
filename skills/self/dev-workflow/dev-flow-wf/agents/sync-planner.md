@@ -41,10 +41,10 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第一级（framew
     路径必须是仓库内既有文件——绝对路径以 <cwd> 为前缀；相对路径解析后落在
     仓库内；且磁盘已存在。禁止仓库外路径（如 /tmp 下目录）与计划性待建文件
     （impl-plan 声明但不存在的文件应作为 frameworkFindings 立项，不塞进 files）
-5. 越权行三问初评：verdict = 越权实现的行，对实现侧做「过度/存疑/合理」三问
-   初评（小取舍？大简化？核心价值不变？），结论写进 matrixRow.overdesign——
-   引擎按该字段判过度/存疑档转候选卡呈报（用户裁决后才动删码），字段缺失或
-   写「合理」= 按默认方向进修复
+5. 越权行三问初评：align = gap 且 gapDirection = code-right（越权实现）的行，对实现侧做
+   三问初评（小取舍？大简化？核心价值不变？），结论写进 matrixRow.overdesign（枚举：
+   over = 过度 / suspect = 存疑 / fine = 合理）——引擎按该字段判 over/suspect 档转候选卡
+   呈报（用户裁决后才动删码），字段缺失或写 fine = 按默认方向进修复
 5a. 已裁决记录核对（任务 prompt 注入已裁决记录块时逐条查阅）：凡记录或设计文档
    已明确回答的问题不得作为未决差距重复立项——命中已裁决区域的差异按已裁方向
    处置（方向与裁决一致且尚未落地的照常立项；裁决后已落地的不再立项；方向推导
@@ -57,12 +57,14 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第一级（framew
    一行 `[HH:MM] 类型: 一句话事实`（类型 ∈ 待办/裁决/观察）；不影响正常执行与返回
 输出（json 代码块）：
 {
-  "frameworkFindings": [ { "id": "FF1", "matrixRow": { "claim": "设计声明§N", "impl": "file:line 或 未找到", "verdict": "一致|漏实现|越权实现", "overdesign": "过度|存疑|（合理可留空）", "note": "…" }, "severity": "must-fix|suggestion|info" } ],
+  "frameworkFindings": [ { "id": "FF1", "matrixRow": { "claim": "设计声明§N", "impl": "file:line 或 未找到", "align": "match|gap|unevaluated", "gapDirection": "doc-right|code-right（仅 align=gap 必填）", "overdesign": "over|suspect|fine（仅越权行有）", "note": "…" }, "severity": "must-fix|suggestion|info" } ],
   "modules": [ { "id": "m1", "module": "路径/名", "files": ["核对文件集"], "focus": "对照设计章节锚点 + 审查重点" } ]
 }
 验收：frameworkFindings 每条可回溯章节与文件位置；modules 的 files 是文件
   路径数组（供确定性分组校验）；某职责无发现显式说明
-verdict 枚举约束（引擎按词判定）：verdict ∈ {一致, 漏实现, 越权实现}——
-  「一致」行不立项、「漏」→ doc-right、其余 → code-right；越权行的三问
-  初评过度/存疑（matrixRow.overdesign 字段承载）由引擎转候选卡呈报，不进修复
+matrixRow 枚举约束（引擎按字段值判定，中文措辞会被校验器拒绝回喂）：
+  align ∈ {match, gap, unevaluated}——match 行不立项；gap 行 gapDirection 必填
+  （doc-right = 设计有代码漏 → 修代码；code-right = 代码有设计漏 → 修文档）；
+  unevaluated = 判定无依据（不立项，人工复核）；越权行的三问初评 over/suspect
+  （matrixRow.overdesign 枚举承载）由引擎转候选卡呈报，不进修复
 ```

@@ -204,13 +204,16 @@ if (problems.length > 0) {
     "",
   );
 }
+// 穷举声明单元格（2026-11-04 字段化渲染）：exhaustive=true 显示「穷举 + 检索命令」，
+// 缺省显示「—」——方向审按该列定位重跑对账对象
+const exhCell = (r) => (r?.exhaustive === true ? `穷举${typeof r?.searchCmd === "string" && r.searchCmd.trim() !== "" ? `：${r.searchCmd}` : "（缺 searchCmd）"}` : "—");
 const assumptions = arr(s2.assumptions);
 if (assumptions.length > 0) {
   section("### 2.4 前提清单");
   out.push(
     table(
-      ["id", "前提陈述", "状态", "核实动作", "不成立时的影响"],
-      assumptions.map((a) => [a?.id, a?.statement, label(ENUM_LABELS.status, a?.status), a?.evidence, a?.impactIfFalse]),
+      ["id", "前提陈述", "状态", "核实动作", "不成立时的影响", "穷举声明"],
+      assumptions.map((a) => [a?.id, a?.statement, label(ENUM_LABELS.status, a?.status), a?.evidence, a?.impactIfFalse, exhCell(a)]),
     ),
     "",
   );
@@ -220,8 +223,8 @@ if (assumptionExclusions.length > 0) {
   section("#### 否定性断言排除记录");
   out.push(
     table(
-      ["断言", "候选写者", "排除证据"],
-      assumptionExclusions.map((x) => [x?.assertion, x?.candidateWriters, x?.exclusionEvidence]),
+      ["断言", "候选写者", "排除证据", "穷举声明"],
+      assumptionExclusions.map((x) => [x?.assertion, x?.candidateWriters, x?.exclusionEvidence, exhCell(x)]),
     ),
     "",
   );
@@ -233,7 +236,7 @@ if (stateCopies.length > 0) {
   section("### 2.5 状态副本清单");
   out.push(
     table(
-      ["id", "状态", "持有位置", "性质", "同步机制", "排除依据"],
+      ["id", "状态", "持有位置", "性质", "同步机制", "排除依据", "穷举声明"],
       stateCopies.map((c) => [
         c?.id,
         c?.state,
@@ -241,6 +244,7 @@ if (stateCopies.length > 0) {
         label(ENUM_LABELS.nature, c?.nature),
         c?.excluded === true ? "—" : c?.sync,
         c?.excluded === true ? c?.exclusionNote : "—",
+        exhCell(c),
       ]),
     ),
     "",

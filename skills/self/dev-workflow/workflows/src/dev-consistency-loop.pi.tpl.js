@@ -62,6 +62,7 @@ const SCHEMA_ReasonableEntry = {
   properties: {
     location: { type: "string", description: "位置 file:line 或文件路径" },
     summary: { type: "string", description: "一句话：为何属合理演化（实现优于设计 / 不破坏设计目标）" },
+    kind: { type: "string", enum: ["content", "process"], description: "条目类别：process = 提交完整性/流程类发现（不计停机线不派修复组）；content = 内容类（缺省）" },
     docSyncSuggestion: { type: "string", description: "文档同步建议（终态回流主 agent，D5 终态同步消费）" },
   },
   required: ["location", "summary", "docSyncSuggestion"],
@@ -72,13 +73,15 @@ const SCHEMA_GapEntry = {
   properties: {
     location: { type: "string", description: "问题位置 file:line（或文件路径）" },
     gap: { type: "string", description: "一句话差距：违背设计 / 遗漏未做 / 越权多做 / 文档自身错误" },
-    affectsDecision: { type: "string", description: "影响决策（模板两必填字段之一）：「是——<违背哪条机制决策，不修则落空>」或「否——<半句理由>」" },
-    affectsDelivery: { type: "string", description: "影响交付（模板两必填字段之二）：「<环节>——<什么会出错>」，环节 = 开发/测试/验收/文档登记/无" },
+    decisionAffecting: { type: "boolean", description: "影响决策（引擎分流判据）：true = 违背机制决策（不修则落空）；false = 不影响" },
+    deliveryAffecting: { type: "boolean", description: "影响交付（引擎分流判据之二）：true = 任一环节（开发/测试/验收/文档登记）会出错；false = 不影响" },
+    impactNote: { type: "string", description: "影响说明（人读）：决策违背哪条（D几/§几）/ 交付哪个环节会出错——只作展示" },
+    kind: { type: "string", enum: ["content", "process"], description: "条目类别：content = 内容类（缺省）；process = 流程类（提交完整性等，不计停机线）" },
     severity: { type: "string", enum: ["high", "medium", "low"], description: "严重度：high 预留给破坏数据/崩溃级" },
     fixHint: { type: "string", description: "一句可执行修复建议" },
     prevId: { type: "string", description: "R2+ 复审专属：延续上批条目时原样填其 U 编号（引擎按它刷新条目描述，不按文字匹配）；新问题不填" },
   },
-  required: ["location", "gap", "affectsDecision", "affectsDelivery", "severity", "fixHint"],
+  required: ["location", "gap", "decisionAffecting", "deliveryAffecting", "impactNote", "severity", "fixHint"],
 };
 
 const SCHEMA_ReconEntry = {

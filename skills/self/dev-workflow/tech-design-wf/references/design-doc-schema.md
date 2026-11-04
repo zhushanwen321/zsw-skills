@@ -105,7 +105,9 @@
 | id | string | 必填 | 前提 id（建议 `AS` 前缀） |
 | statement | string | 必填 | 前提陈述 |
 | status | string 枚举 | 必填 | `verified`（已核实）/ `pending`（待核实） |
-| evidence | string | verified 时必填 | 核实动作：读了什么位置（file:line / 探针 / 排除记录）。否定性断言（「无 X」形态）的核实范围必须覆盖全部写入方与持有方，只查读侧不算核实；statement 含「唯一 / 限于 / 全集」穷举措辞时本行须含检索命令与命中清单（穷举断言可复算；缺失时 check-design-doc.mjs 规则 8 warning + 方向审 must-fix） |
+| evidence | string | verified 时必填 | 核实动作：读了什么位置（file:line / 探针 / 排除记录）。否定性断言（「无 X」形态）的核实范围必须覆盖全部写入方与持有方，只查读侧不算核实 |
+| exhaustive | boolean | 缺省 false | 声明本条陈述是穷举断言（「唯一 / 全集 / 限于」式前提，被反例击穿即推翻）——true 时 searchCmd 必填，方向审按「重跑检索命令对账」审查（check-design-doc.mjs 规则 8 对 true 且缺 searchCmd 发 warning + 方向审 must-fix）；缺省 = 未声明穷举，语义兜底在方向审 |
+| searchCmd | string | exhaustive=true 时必填 | 取得该断言的检索命令（含路径范围）与命中清单，使审查可重跑对账（R2+ 方向审重跑同一命令核对新增命中） |
 | impactIfFalse | string | 必填 | 该前提不成立时的影响 |
 
 ### 5.3b assumptionExclusions 行内字段 —— 否定性断言排除记录
@@ -116,7 +118,9 @@
 |---|---|---|---|
 | assertion | string | 必填 | 被排除登记的否定性断言原文（与 assumptions 中对应条目的陈述呼应） |
 | candidateWriters | string | 必填 | 候选写者 / 持有者枚举：谁可能写入或持有 X——跨包跨进程、含写者侧，先枚举再排除 |
-| exclusionEvidence | string | 必填 | 逐个候选的排除依据（读了哪里、确认什么），全部排除完才允许断言成立；含「唯一 / 限于 / 全集」措辞时须含检索命令（含路径范围）与命中清单（穷举断言可复算；缺失时 check-design-doc.mjs 规则 8 warning + 方向审 must-fix） |
+| exclusionEvidence | string | 必填 | 逐个候选的排除依据（读了哪里、确认什么），全部排除完才允许断言成立 |
+| exhaustive | boolean | 缺省 false | 声明排除结论是穷举断言（枚举了全部候选写者/持有者）——true 时 searchCmd 必填（check-design-doc.mjs 规则 8 对 true 且缺 searchCmd 发 warning + 方向审 must-fix） |
+| searchCmd | string | exhaustive=true 时必填 | 取得排除结论的检索命令（含路径范围）与命中清单，使审查可重跑对账 |
 
 ### 5.4 artifactTables.stateCopies —— 状态副本清单
 
@@ -134,7 +138,9 @@ P2 权威唯一原则的产物表（触发条件：设计涉及持久化状态�
 | nature | string 枚举 | 必填 | `authority`（权威）/ `projection`（派生视图）/ `cache`（缓存）。每份状态必须恰好一行权威；出现两行权威、或多行互相对齐 = 多份权威，设计未完成。排除行（excluded=true）同样必填枚举值 |
 | sync | string | excluded=false 时必填 | 该副本靠什么跟随权威（单读源 / 事件订阅 / 重建）；靠对齐代码维持一致的必须单独标注并给出追查结论 |
 | excluded | boolean | 必填 | 该候选位置是否存在副本：false = 存在，true = 不存在（排除记录行） |
-| exclusionNote | string | excluded=true 时必填 | 排除依据一句话（覆盖全部写入方的检索结论）；含「唯一 / 限于 / 全集」措辞时须含检索命令与命中清单（穷举断言可复算；缺失时 check-design-doc.mjs 规则 8 warning + 方向审 must-fix） |
+| exclusionNote | string | excluded=true 时必填 | 排除依据一句话（覆盖全部写入方的检索结论） |
+| exhaustive | boolean | 缺省 false | 声明排除结论是穷举断言（检索已覆盖全部候选位置）——true 时 searchCmd 必填（check-design-doc.mjs 规则 8 对 true 且缺 searchCmd 发 warning + 方向审 must-fix） |
+| searchCmd | string | exhaustive=true 时必填 | 取得排除结论的检索命令（含路径范围）与命中清单，使审查可重跑对账 |
 
 ### 5.5 artifactTables.signalImplications —— 信号-蕴涵表
 

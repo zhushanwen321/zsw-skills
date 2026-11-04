@@ -25,14 +25,16 @@ description: "dev-flow-wf D2 的一致性审查 agent：审查 git diff 区间�
    声称事实前必须 read 原文件核实到行级；禁止凭目录名想象；只审本分区，
    禁止引用其他 reviewer 结论
 3. 三分类输出，每条附 file:line 或 diff hunk 证据 + 两必填字段：
-   reasonable[]    实现优于设计/合理演化且不破坏设计目标 — 每条字段 {location, summary, docSyncSuggestion}（引擎按字段名消费，缺失即丢弃）
+   reasonable[]    实现优于设计/合理演化且不破坏设计目标 — 每条字段 {location, summary, kind, docSyncSuggestion}（kind ∈ content|process，提交完整性类用 process；引擎按字段名消费，缺失即丢弃）
    unreasonable[]  违背设计 / 遗漏未做 / 越权多做设计外功能 — 每条含 severity（high/medium/low，high = 影响主链路行为）+ 修复建议；R2+ 延续上批条目时带 prevId（其 U 编号）
    doc_errors[]    文档自身错了（实现是对的）— 应修正处（引擎文档修复组当场修）
-   两字段判定口径（unreasonable 与 doc_errors 必填）：
-   - 影响决策：`是——<违背哪条机制决策（D几/§几），不修则该决策落空>` 或 `否——<半句理由>`
-   - 影响交付：`<环节>——<什么会出错>`；环节 = 开发/测试/验收/文档登记/无
-   ——引擎按「否」「无」前缀分流：影响决策=否 且 影响交付=无 的双无条目
-   降级登记项不进修复
+   影响两字段判定口径（unreasonable 与 doc_errors 必填，布尔 + 说明）：
+   - decisionAffecting（布尔 true/false）：true = 违背机制决策（不修则该决策落空）
+   - deliveryAffecting（布尔 true/false）：true = 任一环节（开发/测试/验收/文档登记）会出错
+   - impactNote（字符串）：影响说明——决策违背哪条（D几/§几）/ 交付哪个环节会出错；
+     两布尔均 false 时填为何不影响
+   ——引擎按两布尔字段分流：均为 false 的双无条目降级登记项不进修复
+   （旧中文措辞字段 affectsDecision/affectsDelivery 已退役，返回它们会被校验器拒绝回喂）
    定性分界（报前逐条自查——归类错误的条目会在聚合轮被改判退回，白耗轮次）：
    - 实现未履行设计要求的登记/同步义务（设计文件地图要求的 ADR/CONTEXT/
      登记表条目、随改动应更新的注释与登记）= unreasonable，修复 = 补登记/
@@ -45,8 +47,8 @@ description: "dev-flow-wf D2 的一致性审查 agent：审查 git diff 区间�
      HEAD 未含某内容 / 工作区仍有未提交改动 / 提交原子性（如测试已入库而实现未
      提交）」判为 unreasonable——提交面由引擎在轮末 settle 统一收编（引擎自身
      提交、无需 agent 参与）；此类现象若你认为有价值，写入 reasonable 且
-     summary 以 `[process]` 开头（引擎按该前缀识别为流程类：不计入停机线、
-     不派修复组）。对账（fixed/not-fixed）以**工作区实际内容**为准——改动是否
+     kind = "process"（引擎按该字段识别为流程类：不计入停机线、不派修复组）。
+     对账（fixed/not-fixed）以**工作区实际内容**为准——改动是否
      已提交不影响判定（禁止因「未提交」判 not-fixed）
    测试核实口径（R1 审查与 R2+ 复审通用的实跑门槛）：
    - 默认不实跑：「测试仍绿」引用最近一次绿灯记录（Gate A 日志路径 / 上轮

@@ -55,6 +55,10 @@ interface ReasonableEntry {
   location: string;
   /** 一句话：为何属合理演化（实现优于设计 / 不破坏设计目标） */
   summary: string;
+  /** 条目类别（2026-11-04 字段化，替代旧 `[process]` 前缀约定——前缀靠措辞自觉、
+   *  漏打即误入停机线）：process = 提交完整性/流程类发现（不计停机线不派修复组）；
+   *  content = 内容类（缺省） */
+  kind?: "content" | "process";
   /** 文档同步建议（终态回流主 agent，D5 终态同步消费） */
   docSyncSuggestion: string;
 }
@@ -64,10 +68,17 @@ interface GapEntry {
   location: string;
   /** 一句话差距：违背设计 / 遗漏未做 / 越权多做 / 文档自身错误 */
   gap: string;
-  /** 影响决策（模板两必填字段之一）：「是——<违背哪条机制决策，不修则落空>」或「否——<半句理由>」 */
-  affectsDecision: string;
-  /** 影响交付（模板两必填字段之二）：「<环节>——<什么会出错>」，环节 = 开发/测试/验收/文档登记/无 */
-  affectsDelivery: string;
+  /** 影响决策（布尔判据，2026-11-04 字段化——引擎按它分流双无降级，中文措辞不再参与判定）：
+   *  true = 违背机制决策（不修则落空） */
+  decisionAffecting: boolean;
+  /** 影响交付（布尔判据之二）：true = 任一环节（开发/测试/验收/文档登记）会出错 */
+  deliveryAffecting: boolean;
+  /** 影响说明（人读）：决策违背哪条（D几/§几）/ 交付哪个环节会出错——只作展示，不参与分流 */
+  impactNote: string;
+  /** 条目类别（可选，引擎归一对缺失恒产 content）：process = 流程类（提交完整性等，
+   *  不计停机线）；content = 内容类。流程类发现应走 reasonable，出现于此 = reviewer
+   *  违规申报，引擎按它排除停机线计数 */
+  kind?: "content" | "process";
   /** 严重度：high 预留给破坏数据/崩溃级 */
   severity: "high" | "medium" | "low";
   /** 一句可执行修复建议 */
@@ -164,8 +175,15 @@ interface ItemRecord {
   key: string;
   location: string;
   gap: string;
-  affectsDecision: string;
-  affectsDelivery: string;
+  /** 影响决策布尔判据（2026-11-04 字段化——引擎按它分流双无降级，不再解析中文措辞前缀） */
+  decisionAffecting: boolean;
+  /** 影响交付布尔判据之二 */
+  deliveryAffecting: boolean;
+  /** 影响说明（人读，只作展示不参与分流） */
+  impactNote: string;
+  /** 条目类别（2026-11-04 字段化）：process = 流程类（提交完整性等——不计停机线）；
+   *  content = 内容类（缺省）。reviewer 违规把流程类写进 unreasonable 时引擎按它排除停机线计数 */
+  kind: "content" | "process";
   severity: string;
   fixHint: string;
   /** 所属修复组（入池时 = 分区边界；聚合定性路由后可被覆盖为跨分区组名） */
@@ -238,7 +256,7 @@ interface FinalResult {
   /** 单条停机线升级清单（1+2 次 fixer 后复审仍报，设计 §8.6 ③） */
   escalated: { id: string; location: string; gap: string; uncleanRounds: number }[];
   /** 必填字段分流降级条目（影响决策=否 且 影响交付=无——不进修复批次，随终态回流主 agent 登记残留风险；含聚合升级/职责外申报条目——ledger 中单列升级呈报行） */
-  deferredLedger: { id: string; location: string; gap: string; affectsDecision: string; affectsDelivery: string }[];
+  deferredLedger: { id: string; location: string; gap: string; impactNote: string }[];
   /** 终态仍活跃条目（stuck / fix-failure 在场） */
   remaining: { id: string; location: string; gap: string; severity: string; group: string }[];
   /** 分区概览（诊断） */
@@ -904,50 +922,61 @@ const NODE_RUN_CMD = [
   "console.log(JSON.stringify({ code: code, stdoutHead: head(out), stderrHead: head(err) }));",
 ].join("\n");
 
-// Gate A / 产物命令输出的零容忍绕过扫描（设计 §6.1 条目 1）：全文扫描落盘日志，命中
-// 「N skipped」汇总（测试跳过计数 > 0 的确定信号——比源码 grep 误伤低：用例名回显
-// 不含此形态）或 eslint-disable（lint 输出几乎不会合法出现）即失败项。全文的正确性
-// 前提 = 日志文件是单命令单次覆盖写（NODE_RUN_CMD 用 writeFileSync 全量覆盖，一份
-// 日志只含本次命令输出）——若改成追加写复用多轮，历史轮次的证据行会被误报，改动
-// 写入方式时必须连带复核本扫描。曾只读尾 150 行：多包聚合命令逐包各出一段汇总，
-// 只有最后一包落在窗口内，中间包的跳过证据全部漏扫。
-// SKIP_* 环境变量形态不做输出扫描：环境侧已被结构性隔离（node 执行器只透传 argv），
-// 输出扫描用例名含 SKIP_ 字样的合法测试会误伤（权衡注释见 §6.1 对齐条目）。
-// skipped 计数只认非零：全过输出的「0 skipped, 0 failed」是正常证据行，命中即误报
-// （实测 perf-diff-harness 的 `19 run, 19 passed, 0 skipped, 0 failed` 曾被判 gate-a-failed）。
-// skipped 计数只认 vitest 计数行形态（竖线分隔 `| N skipped`）：被测代码的业务日志键值对
-// （taiji 实测 `[reattach] done: restored=1 skipped=0` / `imported=2 skipped=0`——原词边界把
-// 「restored=1 skipped」中的「1 skipped」误认）不构成跳过证据；vitest 文件级
-// `(N tests | M skipped)` 与汇总 `Tests  X passed | M skipped` 均含竖线形态，收紧不漏拦。
-const NODE_SKIP_SCAN = [
-  "var fs = require('fs');",
-  "try {",
-  "  var t = String(fs.readFileSync(process.argv[1], 'utf8'));",
-  "  var lines = t.split('\\n');",
-  "  var hits = [];",
-  "  for (var i = 0; i < lines.length; i++) {",
-  "    var l = lines[i];",
-  "    if (/\\|\\s*[1-9]\\d*\\s+skipped\\b/i.test(l) || l.indexOf('eslint-disable') >= 0) hits.push(l.trim());",
+// Gate A 绕过检测（方向 A，2026-11-04 裁决）：检查对象是本批 diff 的新增行（git 产的
+// 确定性结构），不是测试运行输出——运行输出里的 skipped 计数原理上区分不了「执行者
+// 绕过」与「分层测试策略的设计内标签跳过」（taiji 实测：全量输出恒含 `| N skipped`，
+// 输出侧扫描每轮必误伤，曾把真实全绿判成 gate-a-failed；同判据对齐 pr-cr-fix PS10
+// 「不解析输出 skip 标记」）。模式集是引擎持有常量（非 agent 供 pattern）：显式跳过
+// API（.skip / .todo）、反向绕过（.only）、lint 禁用（eslint-disable）。skipIf 门控跳过
+// 是分层测试策略的正规载体（门控登记纪律），不入模式集——新增带门控的用例属合法
+// 产出。判定域口径：diff 新增行属机器产确定性结构，此处的字面匹配是引擎判据的实现
+// 细节，不属「自由文本找证据」断言（与 porcelain 解析同类边界）。
+const NODE_DIFF_BYPASS_SCAN = [
+  "var cp = require('child_process');",
+  "var projectRoot = process.argv[1], baseline = process.argv[2];",
+  "var BYPASS_PATTERNS = ['.skip(', '.todo', '.only(', 'eslint-disable'];",
+  "var out;",
+  "try { out = cp.execFileSync('git', ['diff', baseline + '..HEAD', '--unified=0'], { cwd: projectRoot, encoding: 'utf8', maxBuffer: 67108864 }); }",
+  "catch (e) { console.log(JSON.stringify({ error: 'git diff 失败: ' + String((e.stderr || '') + (e.message || e)).slice(0, 400) })); process.exit(0); }",
+  "var curFile = '', hits = [];",
+  "var lines = out.split('\\n');",
+  "for (var i = 0; i < lines.length; i++) {",
+  "  var l = lines[i];",
+  "  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }",
+  "  if (l.charAt(0) !== '+') continue;",
+  "  var content = l.slice(1);",
+  "  for (var j = 0; j < BYPASS_PATTERNS.length; j++) {",
+  "    if (content.indexOf(BYPASS_PATTERNS[j]) >= 0) { hits.push({ file: curFile, pattern: BYPASS_PATTERNS[j], line: content.trim().slice(0, 160) }); break; }",
   "  }",
-  "  console.log(JSON.stringify(hits.slice(0, 10)));",
-  "} catch (e) { console.log(JSON.stringify({ error: String((e && e.message) || e) })); }",
+  "  if (hits.length >= 10) break;",
+  "}",
+  "console.log(JSON.stringify(hits));",
 ].join("\n");
 
-/** 零容忍绕过扫描：命中返回证据行；读取失败返回 null（扫描器自身故障只 WARN 不拦
+/** Gate A 绕过检测：命中返回证据清单；执行失败返回 null（检测器自身故障只 WARN 不拦
  *  合法绿——「发现即失败」，发现不了不算发现） */
-async function scanSkipEvidence(logPath: string, label: string): Promise<string[] | null> {
-  const r = await world.run("node", ["-e", NODE_SKIP_SCAN, logPath]);
+async function scanDiffBypassEvidence(
+  projectRoot: string,
+  baseline: string,
+  label: string,
+): Promise<{ file: string; pattern: string; line: string }[] | null> {
+  const r = await world.run("node", ["-e", NODE_DIFF_BYPASS_SCAN, projectRoot, baseline]);
   if (r.exitCode !== 0) {
-    log(`WARN ${label} 零容忍扫描器执行失败（exit ${r.exitCode}）——本次未扫描，人工抽查 ${logPath}`);
+    log(`WARN ${label} 绕过检测器执行失败（exit ${r.exitCode}）——本次未检测，人工抽查 diff ${baseline}..HEAD`);
     return null;
   }
   try {
     const parsed = JSON.parse(r.stdout) as unknown;
-    if (Array.isArray(parsed)) return parsed.filter((x): x is string => typeof x === "string");
-    log(`WARN ${label} 零容忍扫描器输出异常——本次未扫描，人工抽查 ${logPath}`);
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (x): x is { file: string; pattern: string; line: string } =>
+          typeof x === "object" && x !== null && typeof (x as { file?: unknown }).file === "string",
+      );
+    }
+    log(`WARN ${label} 绕过检测器输出异常——本次未检测，人工抽查 diff ${baseline}..HEAD`);
     return null;
   } catch {
-    log(`WARN ${label} 零容忍扫描器输出解析失败——本次未扫描，人工抽查 ${logPath}`);
+    log(`WARN ${label} 绕过检测器输出解析失败——本次未检测，人工抽查 diff ${baseline}..HEAD`);
     return null;
   }
 }
@@ -980,18 +1009,20 @@ const itemKey = (e: { location: string; gap: string }): string =>
 // location（file:line 形态）→ 文件路径
 const fileOf = (location: string): string => location.trim().split(":")[0] ?? location.trim();
 
-// fixer 申报路径清洗（学 rfl 实测教训：申报值可能带中文说明文字；实测探针补充两个
-// 形态——全角括号紧贴路径时 \s 切不开、申报值可能带 file:line 行号）：取首个空白
-// token，从全角括号/引号起截断说明（半角 ( 是合法路径字符不截），剥行号尾缀，剥
-// projectRoot 前缀归一为仓库根相对路径（与 git status 口径对齐）
+// fixer 申报路径归一（2026-11-04 收窄职责）：杂质形态（空白说明/全角括注/行号尾缀）改由
+// validateFixReport 校验拒收回喂——旧静默清洗在杂质切错位置时对账错位（含空格路径被切、
+// 括注位置误判，改造分析「自己出题自己判」同族）。本函数只保留确定性归一：剥
+// projectRoot 前缀对齐 porcelain 口径
 const makeToRel = (projectRoot: string) => (raw: string): string => {
-  let p = (raw.trim().split(/\s+/)[0] ?? "")
-    .replace(/[（「『“"'].*$/, "")
-    .replace(/^\.\//, "")
-    .replace(/:\d+(-\d+)?$/, "");
+  let p = raw.trim();
+  if (p.startsWith("./")) p = p.slice(2);
   if (p.startsWith(projectRoot + "/")) p = p.slice(projectRoot.length + 1);
   return p;
 };
+
+/** affectedFiles 申报杂质形态（格式校验保留区）：空白分隔的说明文字、全角括注、
+ *  引号、file:line 行号尾缀——校验拒收回喂自纠，不再引擎静默清洗 */
+const IMPURE_PATH_RE = /[\s（「『“”"']|:\d+(?:-\d+)?$/;
 
 // reviewer 返回畸形防御（学 rfl：null 元素丢弃、字段字符串化；三数组结构缺失
 // fail-closed——降级兜底会把真实残留判成空 = 假清零，宁诚实终止）
@@ -1020,7 +1051,7 @@ function normalizeReview(raw: unknown, source: string): ReviewResult {
       dropped += 1;
       return [];
     }
-    return [{ location, summary, docSyncSuggestion: normStr(r.docSyncSuggestion) }];
+    return [{ location, summary, kind: r.kind === "process" ? "process" : "content", docSyncSuggestion: normStr(r.docSyncSuggestion) }];
   });
   const mkGaps = (arr: unknown[]): GapEntry[] =>
     (arr as unknown[]).flatMap((e): GapEntry[] => {
@@ -1040,8 +1071,12 @@ function normalizeReview(raw: unknown, source: string): ReviewResult {
         {
           location,
           gap,
-          affectsDecision: normStr(g.affectsDecision),
-          affectsDelivery: normStr(g.affectsDelivery),
+          // 布尔缺失兜底 true = 保守进修复（validate 必填拦截在前，此处防 validate 漏网
+          // 时条目被误降级踢出修复——漏降级多烧一轮修复，误降级会漏修）
+          decisionAffecting: g.decisionAffecting !== false,
+          deliveryAffecting: g.deliveryAffecting !== false,
+          impactNote: normStr(g.impactNote),
+          kind: g.kind === "process" ? "process" : "content",
           severity: normSeverity(g.severity),
           fixHint: normStr(g.fixHint),
           ...(prevId !== "" ? { prevId } : {}),
@@ -1455,7 +1490,7 @@ const RE_PERSONA =
 const AGGREGATE_PERSONA =
   "你是审查发现聚合定性员：只读分析、绝不修改任何文件；对审查发现的条目清单做四步裁决——" +
   "①去重：同一根因的多条合并为一条（保留全部 location 证据）；" +
-  "②定性：逐条按三分类定义复核归类，错误定性当场改判（实现未履行登记/同步义务 = unreasonable；文档/注释内容与已提交实现冲突 = doc_errors——方向已明确（修文档侧），引擎文档修复组当场修，方向两可的不归 doc_errors；**提交完整性/HEAD 自洽性类发现一律不计入 unreasonable**——引擎轮末 settle 收编，此类发现归 reasonable 且 summary 以 `[process]` 开头）；" +
+  "②定性：逐条按三分类定义复核归类，错误定性当场改判（实现未履行登记/同步义务 = unreasonable；文档/注释内容与已提交实现冲突 = doc_errors——方向已明确（修文档侧），引擎文档修复组当场修，方向两可的不归 doc_errors；**提交完整性/HEAD 自洽性类发现一律不计入 unreasonable**——引擎轮末 settle 收编，此类发现归 reasonable 且 kind=\"process\"）；" +
   "③分组：按「预期改动文件无交集」构造修复组，预期文件相交的条目必须同组；" +
   "④路由：条目修复动作与分区职责域不匹配时重派到匹配职责域的组，无任何组可承接时升级呈报。" +
   "清单中每个条目都必须出现在输出中（含 keep），漏报的条目由引擎按原分区机械分组兜底。" +
@@ -1513,8 +1548,19 @@ function validateReviewResult(v: unknown): Validated<ReviewResult> {
   const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
   const errors: string[] = [];
   if (!isObjArr(o["reasonable"])) errors.push("reasonable 须为对象数组（无发现时显式 []）");
-  if (!isObjArr(o["unreasonable"])) errors.push("unreasonable 须为对象数组（无发现时显式 []）");
-  if (!isObjArr(o["docErrors"])) errors.push("docErrors 须为对象数组（无发现时显式 []）");
+  const gapBad: string[] = [];
+  for (const [key, label] of [["unreasonable", "unreasonable"], ["docErrors", "docErrors"]] as const) {
+    if (!isObjArr(o[key])) {
+      errors.push(`${label} 须为对象数组（无发现时显式 []）`);
+      continue;
+    }
+    (o[key] as Record<string, unknown>[]).forEach((g, i) => {
+      if (typeof g["decisionAffecting"] !== "boolean" || typeof g["deliveryAffecting"] !== "boolean") {
+        gapBad.push(`${label} 第 ${i + 1} 条（decisionAffecting/deliveryAffecting 须布尔——引擎按它分流双无降级，不再接受中文措辞字段）`);
+      }
+    });
+  }
+  errors.push(...gapBad);
   if (!isObjArr(o["reconciliation"])) errors.push("reconciliation 须为对象数组（每条 { prevId, status, evidence }；R1 无对账义务时显式 []）");
   else {
     const bad: string[] = [];
@@ -1533,13 +1579,31 @@ function validateReviewResult(v: unknown): Validated<ReviewResult> {
 function validateFixReport(v: unknown): Validated<FixReport> {
   const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
   const errors: string[] = [];
+  // grepChecks 结构校验（2026-11-04 字段化——文档组自检的结构化申报位，可选数组；
+  // 给了就必须成体系：每条 {desc, command, expected, actual} 非空字符串）
+  if (o["selfCheck"] !== null && typeof o["selfCheck"] === "object" && Array.isArray((o["selfCheck"] as Record<string, unknown>).grepChecks)) {
+    const gc = (o["selfCheck"] as Record<string, unknown>).grepChecks as unknown[];
+    const badGc: string[] = [];
+    gc.forEach((g, i) => {
+      const m = g as Record<string, unknown>;
+      if (g === null || typeof g !== "object" || typeof m["command"] !== "string" || m["command"].trim() === "" || typeof m["actual"] !== "string") {
+        badGc.push(`第 ${i + 1} 条（须 {desc, command, expected, actual}，command/actual 非空）`);
+      }
+    });
+    if (badGc.length > 0) errors.push(`selfCheck.grepChecks 畸形：${badGc.join("；")}`);
+  }
   if (!isObjArr(o["fixes"])) errors.push("fixes 须为对象数组（每条 { id, description, affectedFiles }）");
   else {
     const bad: string[] = [];
     o["fixes"].forEach((f, i) => {
-      if (typeof f["id"] !== "string" || !isStrArr(f["affectedFiles"])) bad.push(String(i + 1));
+      if (typeof f["id"] !== "string" || !isStrArr(f["affectedFiles"])) {
+        bad.push(String(i + 1));
+        return;
+      }
+      const impure = (f["affectedFiles"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));
+      if (impure.length > 0) bad.push(`${i + 1}（affectedFiles 须纯路径，不得夹说明/行号——含杂质的值：${impure.map((p) => p.trim().slice(0, 60)).join("；")}；说明文字放 description）`);
     });
-    if (bad.length > 0) errors.push(`fixes 第 ${bad.join("、")} 条畸形（id 须字符串、affectedFiles 须字符串数组）`);
+    if (bad.length > 0) errors.push(`fixes 第 ${bad.join("、")} 条畸形（id 须字符串、affectedFiles 须纯路径字符串数组）`);
   }
   if (!isObjArr(o["skipped"])) errors.push("skipped 须为对象数组（每条 { id, reason }）");
   else {
@@ -1627,9 +1691,9 @@ function r1Prompt(p: { name: string; files: string[] }): string {
     "",
     "若 impl-plan 章节映射失效（映射指向的节不存在或与节名对不上）：docErrors 放一条映射失效说明（location = impl-plan 的章节映射节，gap = 失效详情），其余两分类返回空数组，禁止按猜的节继续审。",
     "",
-    "提交口径（2026-10-04 裁决）：**不得**把「改动未提交 / HEAD 未含某内容 / 工作区仍有未提交改动 / 提交原子性」判为 unreasonable——提交完整性由引擎在轮末 settle 统一收编；此类现象若你认为有价值，写入 reasonable 且 summary 以 `[process]` 开头（引擎按该前缀识别为流程类，不计入停机线，也不派修复组）。对账（fixed/not-fixed）以**工作区实际内容**为准，改动未提交不影响判定。",
+    "提交口径（2026-10-04 裁决）：**不得**把「改动未提交 / HEAD 未含某内容 / 工作区仍有未提交改动 / 提交原子性」判为 unreasonable——提交完整性由引擎在轮末 settle 统一收编；此类现象若你认为有价值，写入 reasonable 且 kind=\"process\"（引擎按该字段识别为流程类，不计入停机线，也不派修复组；旧 `[process]` 前缀写法已退役）。对账（fixed/not-fixed）以**工作区实际内容**为准，改动未提交不影响判定。",
     "",
-    "返回 JSON：{ reasonable, unreasonable, docErrors, reconciliation }——unreasonable / docErrors 每条 { location, gap, affectsDecision, affectsDelivery, severity, fixHint }（两必填字段按模板口径填写），reasonable 每条 { location, summary, docSyncSuggestion }；reconciliation 本轮（R1）固定返回 []（无对账义务）；空数组必须显式返回 []（表示「在本分区未发现」，含糊的整体性断言无效）。",
+    "返回 JSON：{ reasonable, unreasonable, docErrors, reconciliation }——unreasonable / docErrors 每条 { location, gap, decisionAffecting, deliveryAffecting, impactNote, kind, severity, fixHint }（decisionAffecting/deliveryAffecting 必须是布尔 true/false，引擎按它分流降级；impactNote 写影响说明：违背哪条决策（D几/§几）或交付哪个环节会出错；kind ∈ content|process，流程类发现不进这两数组），reasonable 每条 { location, summary, kind, docSyncSuggestion }（kind ∈ content|process，提交完整性类用 process）；reconciliation 本轮（R1）固定返回 []（无对账义务）；空数组必须显式返回 []（表示「在本分区未发现」，含糊的整体性断言无效）。",
   ].join("\n");
 }
 
@@ -1682,8 +1746,10 @@ for (const v of r1Norm) {
       key,
       location: u.location,
       gap: u.gap,
-      affectsDecision: u.affectsDecision,
-      affectsDelivery: u.affectsDelivery,
+      decisionAffecting: u.decisionAffecting,
+      deliveryAffecting: u.deliveryAffecting,
+      impactNote: u.impactNote,
+      kind: u.kind ?? "content",
       severity: u.severity,
       fixHint: u.fixHint,
       group: partitionOf(fileOf(u.location)),
@@ -1712,8 +1778,7 @@ function renderItem(it: ItemRecord): string {
   const lines = [
     `- ${it.id} [${it.severity}] ${it.location}`,
     `  差距：${it.gap}`,
-    `  影响决策：${it.affectsDecision}`,
-    `  影响交付：${it.affectsDelivery}`,
+    `  影响：决策=${it.decisionAffecting ? "是" : "否"} 交付=${it.deliveryAffecting ? "是" : "否"}${it.impactNote !== "" ? `——${it.impactNote}` : ""}`,
   ];
   if (it.fixHint) lines.push(`  修复建议：${it.fixHint}`);
   if (it.fixHistory.length > 0) {
@@ -1771,24 +1836,21 @@ gateARetry: while (true) {
   await obsBegin("aggregate", fixRound);
   reviewRound = fixRound + 1;
   const roundActiveAll = activeItems();
-  // 必填字段分流（老一致性纪律保留）：影响决策=否 且 影响交付=无 → 降级登记项，
-  // 不进修复批次（低价值条目不烧修复轮次），随终态 deferredLedger 回流主 agent 登记残留风险
+  // 影响分流（老一致性纪律保留，2026-11-04 改布尔判据）：影响决策=否 且 影响交付=否 →
+  // 降级登记项，不进修复批次（低价值条目不烧修复轮次），随终态 deferredLedger 回流主
+  // agent 登记残留风险（旧中文措辞前缀匹配已退役——「无法判断——」近形词误入、
+  // startsWith("无") 命中「无法…」两类措辞事故随字段化消失）
   const roundActive: ItemRecord[] = [];
   for (const it of roundActiveAll) {
-    // 前缀精确匹配：「否」「否——理由」合法命中；「无法判断——」等近形词不得误入
-    // 降级登记项（曾用 startsWith("无") 会命中「无法…」形态）
-    const noDecision = /^否(?:$|[—\-:：\s])/.test(it.affectsDecision.trim());
-    const noDelivery = /^无(?:$|[—\-:：\s])/.test(it.affectsDelivery.trim());
-    if (noDecision && noDelivery) {
+    if (!it.decisionAffecting && !it.deliveryAffecting) {
       it.active = false;
       deferredLedger.push({
         id: it.id,
         location: it.location,
         gap: it.gap,
-        affectsDecision: it.affectsDecision,
-        affectsDelivery: it.affectsDelivery,
+        impactNote: it.impactNote,
       });
-      log(`条目 ${it.id} 双无（影响决策=否、影响交付=无）→ 降级登记项，不进修复批次`);
+      log(`条目 ${it.id} 双无（影响决策=否、影响交付=否）→ 降级登记项，不进修复批次`);
     } else {
       roundActive.push(it);
     }
@@ -1865,8 +1927,10 @@ gateARetry: while (true) {
         addDocError({
           location: it.location,
           gap: `聚合定性改判 doc_error（${a.reason ?? ""}）：${it.gap}`,
-          affectsDecision: it.affectsDecision,
-          affectsDelivery: it.affectsDelivery,
+          decisionAffecting: it.decisionAffecting,
+          deliveryAffecting: it.deliveryAffecting,
+          impactNote: it.impactNote,
+          kind: it.kind,
           severity: normSeverity(it.severity),
           fixHint: it.fixHint,
         });
@@ -1877,8 +1941,7 @@ gateARetry: while (true) {
           id: it.id,
           location: it.location,
           gap: `[聚合升级/无组承接] ${a.reason ?? ""}：${it.gap}`,
-          affectsDecision: it.affectsDecision,
-          affectsDelivery: it.affectsDelivery,
+          impactNote: it.impactNote,
         });
         log(`条目 ${it.id} 聚合升级呈报（无组承接）：${a.reason ?? ""}`);
       } else if (a.action === "keep" && typeof a.group === "string" && a.group !== "") {
@@ -1959,13 +2022,13 @@ gateARetry: while (true) {
       "约束：",
       "1. 修复对象 = 文档与注释（设计文档 / docs/ 项目文档 / 代码注释）；禁止为对齐失真描述去改实现——若你核实后确信实现才错了（文档是对的），该条放 skipped 并写明实现侧证据（file:line），它将回流主 agent 裁决，不盲改。",
       "2. 波及扫描：每修一处 grep 同模式实例（同类失真表述 / 同键引用 / 同族计数口径），组内实例一并修；组外文件在 description 标注「组外波及：<位置>」。",
-      "3. 联动自检（替代代码组的测试硬门）：修完跑适用的一致性检查（如改 style.css 投影段跑 python3 .githooks/check_css_token_ssot.py、改 i18n 文案跑 python3 .githooks/check_i18n_locale_sync.py）；无适用检查时 grep 复核旧表述零残留。selfCheck.typecheck 填 \"pass\"（纯文档改动无编译面），tests 字段如实写自检命令与结果。",
+      "3. 联动自检（替代代码组的测试硬门，结构化申报）：修完跑适用的一致性检查（如改 style.css 投影段跑 python3 .githooks/check_css_token_ssot.py、改 i18n 文案跑 python3 .githooks/check_i18n_locale_sync.py）——selfCheck.grepChecks 每条 {desc, command, expected, actual} 记实际执行的检查命令与输出（existence-check 类 = 旧表述零残留检索，expected 填零命中预期）；无适用检查时对旧表述做零残留检索同款申报。selfCheck.typecheck 填 \"pass\"（纯文档改动无编译面）。命令与输出必须可复算（引擎按值校验，不含可复算命令的空申报会被校验拒绝）。",
       "4. git 禁令同代码组：禁止 git add / commit / push / stash——提交由工作流引擎统一执行。",
-      "5. affectedFiles 如实申报每个改动文件（含设计文档——无论在仓库内还是 ~/.agents/skill-data/ 下都如实申报，引擎按申报核验归属；仓库外与 gitignored 文件提交时自然落空不阻塞）。",
+      "5. affectedFiles 如实申报每个改动文件（含设计文档——无论在仓库内还是 ~/.agents/skill-data/ 下都如实申报，引擎按申报核验归属；仓库外与 gitignored 文件提交时自然落空不阻塞）。路径必须纯路径（不得夹说明文字或 file:line 行号——引擎按值校验，杂质会被拒收回喂；说明放 description）。",
       "",
       runlogDutyLine(`fix-docs-r${fixRound}`),
       "",
-      "返回 JSON：{ fixes: [{ id, description, affectedFiles: [] }], skipped: [{ id, reason }], selfCheck: { typecheck: \"pass\", tests: \"<自检: 结果>\" } }（id 用清单中的 DE 编号）。",
+      "返回 JSON：{ fixes: [{ id, description, affectedFiles: [] }], skipped: [{ id, reason }], selfCheck: { typecheck: \"pass\", tests: \"<自检: 结果>\", grepChecks?: [{desc, command, expected, actual}] } }（id 用清单中的 DE 编号；grepChecks = 联动自检的结构化申报位，每条记实际执行的检查命令与输出）。",
     ].join("\n");
   }
   const groupNames = [...groupMap.keys()];
@@ -1993,7 +2056,7 @@ gateARetry: while (true) {
             ? "2b. 自检硬门：修完必跑「改动触及的测试文件 + 所在包 typecheck」并全绿后才可返回（调试期只重跑失败的单个测试文件，禁止全套复跑；工作流会在你之后统一跑增量测试，不必重复跑全量）。返回 JSON 的 selfCheck 字段承载自检结果。"
             : "2b. 本组无增量测试命令——自检硬门：修完必跑「改动触及的测试文件 + 所在包 typecheck」并全绿后才可返回（调试期只重跑失败的单个测试文件，禁止全套复跑）。返回 JSON 的 selfCheck 字段承载自检结果。",
           "3. git 禁令：禁止 git add / commit / push / stash——提交由工作流引擎统一执行（组级一笔）。",
-          "4. 每条修复申报 affectedFiles（含波及文件，相对仓库根路径）；修不动 / 需上游裁决的条目放 skipped 带具体 reason，不静默跳过。",
+          "4. 每条修复申报 affectedFiles（含波及文件，相对仓库根路径的纯路径——不得夹说明文字或 file:line 行号，引擎按值校验，杂质会被拒收回喂）；修不动 / 需上游裁决的条目放 skipped 带具体 reason，不静默跳过。",
           "5. 其他并行修复组工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属；未申报的改动引擎不处置不阻塞，留盘随终态呈报主 agent 判归属）。",
           "6. 职责外申报：条目属实、但修复动作属其他职责域（典型 = e2e/测试资产修复落在生产代码分区）——放入 delegated（reason 写修复动作属什么域），它将转升级呈报由主 agent 重派；职责内该修的照常修。",
           foreignNote
@@ -2070,8 +2133,10 @@ gateARetry: while (true) {
       addDocError({
         location: it.location,
         gap: `fixer 申报 skipped（${s.reason}）：${it.gap}`,
-        affectsDecision: it.affectsDecision,
-        affectsDelivery: it.affectsDelivery,
+        decisionAffecting: it.decisionAffecting,
+        deliveryAffecting: it.deliveryAffecting,
+        impactNote: it.impactNote,
+        kind: it.kind,
         severity: normSeverity(it.severity),
         fixHint: it.fixHint,
       });
@@ -2091,8 +2156,7 @@ gateARetry: while (true) {
         id: it.id,
         location: it.location,
         gap: `[职责外申报] ${d.reason}：${it.gap}`,
-        affectsDecision: it.affectsDecision,
-        affectsDelivery: it.affectsDelivery,
+        impactNote: it.impactNote,
       });
       log(`条目 ${it.id} 被 fixer 申报职责外（${d.reason}）——转升级呈报由主 agent 重派`);
     }
@@ -2338,7 +2402,7 @@ gateARetry: while (true) {
             ctxBlock,
             `上批修复改动可能部分留在工作区未提交——除 git diff ${info.baseline}..HEAD 外，用 git status --porcelain 与 git diff 补充查看未提交改动（**仅供你判断修复是否落地**，不得据此判 unreasonable）。`,
             "",
-    "提交口径（2026-10-04 裁决）：**不得**把「改动未提交 / HEAD 未含某内容 / 工作区仍有未提交改动 / 提交原子性」判为 unreasonable——提交完整性由引擎在轮末 settle 统一收编；此类现象若你认为有价值，写入 reasonable 且 summary 以 `[process]` 开头（引擎按该前缀识别为流程类，不计入停机线，也不派修复组）。对账（fixed/not-fixed）以**工作区实际内容**为准，改动未提交不影响判定。",
+    "提交口径（2026-10-04 裁决）：**不得**把「改动未提交 / HEAD 未含某内容 / 工作区仍有未提交改动 / 提交原子性」判为 unreasonable——提交完整性由引擎在轮末 settle 统一收编；此类现象若你认为有价值，写入 reasonable 且 kind=\"process\"（引擎按该字段识别为流程类，不计入停机线，也不派修复组；旧 `[process]` 前缀写法已退役）。对账（fixed/not-fixed）以**工作区实际内容**为准，改动未提交不影响判定。",
             "",
             "本分区复审文件集（上批条目指向文件 + 修复申报文件）：",
             files.join("\n"),
@@ -2503,8 +2567,10 @@ gateARetry: while (true) {
         key: itemKey(u),
         location: u.location,
         gap: u.gap,
-        affectsDecision: u.affectsDecision,
-        affectsDelivery: u.affectsDelivery,
+        decisionAffecting: u.decisionAffecting,
+        deliveryAffecting: u.deliveryAffecting,
+        impactNote: u.impactNote,
+        kind: u.kind ?? "content",
         severity: u.severity,
         fixHint: u.fixHint,
         group: partitionOf(fileOf(u.location)),
@@ -2533,16 +2599,17 @@ gateARetry: while (true) {
     //    后复审仍报）的活跃条目在 stuck 消息中标注，随 escalated 字段呈报用户裁决。
     //    2026-09-26 二次裁决：无人申报改动不再作废轮次（每轮都走提交+复审，轮轮有效），
     //    计数回归单线 reviewRound；无人申报的改动留盘待认领、终态随 residualFiles 呈报）──
-    // 停机线只对**内容类**条目计数（2026-10-04 裁决）：`[process]` 前缀标记的流程类发现
-    //（提交/登记完整性）由引擎轮末 settle 收编，不占停机判据——防流程债堆积触发假 stuck。
-    const contentActive = activeAfter.filter((i) => !String(i.gap ?? "").trim().startsWith("[process]"));
+    // 停机线只对**内容类**条目计数（2026-10-04 裁决，2026-11-04 改 kind 字段判定）：
+    // kind="process" 的流程类发现（提交/登记完整性）由引擎轮末 settle 收编，不占停机
+    // 判据——防流程债堆积触发假 stuck（旧 `[process]` 前缀匹配随字段化退役）
+    const contentActive = activeAfter.filter((i) => i.kind !== "process");
     const processActiveCount = activeAfter.length - contentActive.length;
     const stubborn = contentActive.filter((i) => i.uncleanRounds >= 2);
     if (contentActive.length > 0 && (reviewRound >= 3 || contentActive.length > prevActiveCount)) {
       const why =
         contentActive.length > prevActiveCount
-          ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${contentActive.length}${processActiveCount > 0 ? `，已排除 ${processActiveCount} 条 [process] 流程类` : ""}）`
-          : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${contentActive.length} 条${processActiveCount > 0 ? `，另有 ${processActiveCount} 条 [process] 流程类` : ""}）`;
+          ? `unreasonable 活跃数不减反增（${prevActiveCount} → ${contentActive.length}${processActiveCount > 0 ? `，已排除 ${processActiveCount} 条流程类` : ""}）`
+          : `审查累计 ${reviewRound} 轮仍未收敛（活跃 ${contentActive.length} 条${processActiveCount > 0 ? `，另有 ${processActiveCount} 条流程类` : ""}）`;
       stuckPendingReason = `计数停机线触发：${why}${stubborn.length > 0 ? `；顽固条目（≥2 轮修复未清，优先人工裁决）：${stubborn.map((i) => `${i.id}（${i.location}，${i.uncleanRounds} 轮）`).join("、")}` : ""}——残留清单见 remaining / 顽固清单见 escalated 字段；常见根因：修复互相打架 / 条目定性争议（该转 doc_errors 的被反复当 unreasonable 修）`;
       // break 跳过循环体尾的观测补记——此处显式补记本步 end 再跳出。break 前必须递增
       // fixRound：Gate A 回注（分诊/产物/瞬态）continue 进本循环时 for 条件用当前值判定，
@@ -2556,7 +2623,7 @@ gateARetry: while (true) {
   }
 }
 
-const contentActiveFinal = activeItems().filter((i) => !String(i.gap ?? "").trim().startsWith("[process]"));
+const contentActiveFinal = activeItems().filter((i) => i.kind !== "process");
 if (contentActiveFinal.length > 0 && stuckPendingReason === null) {
   stuckPendingReason = `修复轮次上限 ${maxRounds + gateARounds}（含 Gate A 回注轮）耗尽仍有 ${contentActiveFinal.length} 条 unreasonable 活跃——残留清单见 remaining 字段；恢复动作：主 agent 人工裁决残留条目（定性争议转 doc_errors / 需重设计的走设计流程），不要盲目重跑本工作流`;
 }
@@ -2650,8 +2717,10 @@ if (info.artifacts.length > 0) {
         key: artKey,
         location: `产物构建 ${a.id}（${a.command.program} ${a.command.args.join(" ")}）`,
         gap: `[gate-a 产物] 构建失败 exit ${r.exitCode}/code ${artCode}，重跑仍败——读构建日志归因（产物过期未自愈 / 产物脚本或基建真坏），修复后引擎随轮重建`,
-        affectsDecision: "是——Gate A 验证类条目依赖该产物",
-        affectsDelivery: "有——产物缺失全量门无法执行",
+        decisionAffecting: true,
+        deliveryAffecting: true,
+        impactNote: "Gate A 验证类条目依赖该产物；产物缺失全量门无法执行",
+        kind: "content",
         severity: "must",
         fixHint: `构建日志：${artifactLogOf(a.id)}（Read 它定位失败原因；修复对象 = 产物脚本/构建基建，按日志报错修）`,
         group: "gate-a",
@@ -2665,14 +2734,22 @@ if (info.artifacts.length > 0) {
       log(`产物 ${a.id} 构建失败回注修复轮（第 ${gateARounds} 轮，fixRound ${fixRound} 续跑）`);
       continue gateARetry;
     }
-    const artSkipHits = await scanSkipEvidence(artifactLogOf(a.id), `产物 ${a.id}`);
-    if (artSkipHits !== null && artSkipHits.length > 0) {
-      return await finishGateA(
-        `产物类命令输出命中零容忍绕过证据（${a.id}）：${artSkipHits.join("；")}——发现即失败项不自动归因（日志 ${artifactLogOf(a.id)}），由主 agent 归因处置后重跑`,
-      );
-    }
+    // 产物构建命令不做绕过检测：绕过对象是测试改动（本批 diff 全量覆盖，Gate A 前
+    // 统一检测），产物日志的 skipped 字样是构建工具的合法输出形态
   }
   log(`产物类全部就绪：${info.artifacts.map((a) => `${a.id}（日志 ${artifactLogOf(a.id)}）`).join("、")}`);
+}
+
+// 绕过检测（方向 A）：跑全量之前先查本批 diff 新增行——绕过存在时不浪费全量测试
+// （挂检测器每轮重跑：diff 随修复轮变化，回注轮的改动同样受检）
+phase("Gate A 绕过检测（diff 新增行）");
+const bypassHits = await scanDiffBypassEvidence(info.projectRoot, info.baseline, "Gate A");
+if (bypassHits !== null && bypassHits.length > 0) {
+  return await finishGateA(
+    `Gate A 绕过检测命中：本批 diff（${info.baseline}..HEAD）新增行出现测试跳过/仅跑部分/lint 禁用形态——${bypassHits
+      .map((h) => `${h.file}：${h.pattern}（${h.line}）`)
+      .join("；")}。发现即失败项不自动归因（绕过检测不是分诊的解释对象），由主 agent 归因处置后重跑`,
+  );
 }
 
 phase("跑全量测试 Gate A");
@@ -2705,9 +2782,9 @@ try {
 
 if (gateCode !== 0) {
   // Gate A 红不再直接终态：归因分诊（≤MAX_GATE_A_TRIAGE_ROUNDS 轮）——本批回归回注修复轮、
-  // 瞬态重跑、存量红/基建缺陷带报告终态。分诊不是零容忍绕过对象（那是 skipped/disable 假绿，
-  // 见下方扫描）；对真实失败段做「该谁修」的分派是修复循环的自然延伸。分诊轮耗尽保留
-  // 直接终态出口（原文指引不变）
+  // 瞬态重跑、存量红/基建缺陷带报告终态。分诊不是绕过检测的解释对象（绕过检测已前移到
+  // 跑全量之前、按本批 diff 判定，见上方）；对真实失败段做「该谁修」的分派是修复循环的
+  // 自然延伸。分诊轮耗尽保留直接终态出口（原文指引不变）
   if (gateARounds >= MAX_GATE_A_TRIAGE_ROUNDS) {
     return await finishGateA(
       `${gateNote || `全量测试退出码 ${gateCode}`}。Gate A 分诊轮已耗尽（${MAX_GATE_A_TRIAGE_ROUNDS}）。日志：${gateALogPath}。归因指引：读日志定位失败用例（单测红 = 修复回归；编译/类型红 = 一致性残留漂移；超时 = 用例预算问题），由主 agent 派归因补修后重跑本工作流或全量测试`,
@@ -2756,8 +2833,10 @@ if (gateCode !== 0) {
         key: tKey,
         location: t.testRef,
         gap: `[gate-a 分诊] ${t.evidence}`,
-        affectsDecision: "是——Gate A 全量测试红",
-        affectsDelivery: "有——全量门未过",
+        decisionAffecting: true,
+        deliveryAffecting: true,
+        impactNote: "Gate A 全量测试红；全量门未过",
+        kind: "content",
         severity: "must",
         fixHint: t.fixHint,
         group: "gate-a", // 聚合定性正常时会被路由覆盖；聚合回退时落独立组
@@ -2780,14 +2859,8 @@ if (gateCode !== 0) {
     `${gateNote || `全量测试退出码 ${gateCode}`}。Gate A 归因分诊（第 ${gateARounds} 轮）——存量红/测试基建自身缺陷不属本批修复范围（分诊报告如下，由主 agent 裁决：调整 full-suite 清单后 attempt+1 重发，或登记存量债务；日志 ${gateALogPath}）：\n${triage.items.map((t) => `- [${t.kind}] ${t.testRef}——${t.evidence}`).join("\n")}`,
   );
 }
-// 零容忍绕过扫描（exit 0 之后；设计 §6.1 条目 1）：日志尾部 skipped 汇总 > 0 或
-// eslint-disable 命中 = 有测试被跳过 / lint 被禁用——绿不豁免
-const gateSkipHits = await scanSkipEvidence(gateALogPath, "Gate A");
-if (gateSkipHits !== null && gateSkipHits.length > 0) {
-  return await finishGateA(
-    `Gate A 输出命中零容忍绕过证据：${gateSkipHits.join("；")}——测试被跳过或 lint 被禁用即失败项，不自动归因（日志 ${gateALogPath}），由主 agent 归因处置后重跑`,
-  );
-}
+// exit 0 即 Gate A 绿——输出侧不做任何 skip 标记解析（设计内分层跳过是合法输出，
+// 与 pr-cr-fix PS10 同判据）；绕过检测已前移（跑全量之前的 diff 新增行检查）
 gateOutcome = "pass";
 if (stuckPendingReason !== null) {
   return await finish(

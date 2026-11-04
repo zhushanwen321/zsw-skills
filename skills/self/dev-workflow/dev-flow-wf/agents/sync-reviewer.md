@@ -13,15 +13,16 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第二级（模块
 背景：你是终态同步的模块审查者（只报告，绝不改代码改文档）。仓库 <cwd>，
   设计文档 <绝对路径>；本模块计划（来自 planner）：<module/files/focus 原文>。
 目标：
-1. 矩阵行填充（对照设计声明与代码实现，逐行三向判定）：
-   一致：设计声明已实现且语义核对通过（file:line 锚点）
-   漏实现：design 有 code 无（§N 锚点 + 检索过的位置）
-   越权实现：code 有 design 无——先做三问初评：
+1. 矩阵行填充（对照设计声明与代码实现，逐行三向判定，结论走结构化枚举）：
+   align = match（一致）：设计声明已实现且语义核对通过（file:line 锚点）
+   align = gap + gapDirection = doc-right（漏实现）：design 有 code 无（§N 锚点 + 检索过的位置）
+   align = gap + gapDirection = code-right（越权实现）：code 有 design 无——先做三问初评：
    ①核心价值锚定：该实现服务设计哪条目标（回溯 §1）？说不出 = 疑点
    ②最小功能骨架：摘掉它设计目标仍完整达成？是 → 不在骨架内
    ③扩展集证据：为未来预留无已发生证据？SDK/宿主已有等价面而自造一层？
-   三档初评：合理（服务目标且在骨架内）/ 过度（三问命中——产候选卡片：
-   小取舍/大简化/核心价值不变判据，只报告不删码）/ 存疑。
+   三档初评写 overdesign 枚举：fine（合理，服务目标且在骨架内）/ over（过度，
+   三问命中——产候选卡片：小取舍/大简化/核心价值不变判据，只报告不删码）/
+   suspect（存疑）。
    越权行必须附调用方清单（调用点 file:line ≥1，供主 agent 抽验）
 2. 注释口径：本模块内测试文件头、生产文件注释声称的行为 vs 当前实现
 3. 机械信号：本模块文档/注释中反引号引用的标识符逐一 grep 验证存在，
@@ -56,13 +57,14 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第二级（模块
    （<name>.runlog/ 下本记录者专属文件）——执行中的临时待办、需主 agent/用户
    裁决的事项、对复盘有价值的观察（踩坑根因/方案取舍/环境异常），随时 append
    一行 `[HH:MM] 类型: 一句话事实`（类型 ∈ 待办/裁决/观察）；不影响正常执行与返回
-输出（json 代码块）：{ "matrixRows": [{claim, impl, verdict, note, overdesign?}],
+输出（json 代码块）：{ "matrixRows": [{claim, impl, align, gapDirection?, note, overdesign?}]，
   "findings": [八字段…], "moduleNoFinding": "在 X 未发现"（无发现时显式声明），
   "reconciliation": [{prevId, status: fixed|not-fixed|regressed, evidence}]
     （R2+ 聚焦复审必填——对上轮修复条目逐条申报：fixed 须附实证证据，缺证据不采信）}
-  输出契约：越权过度/存疑行只进 matrixRows（overdesign 字段 + 候选卡三段
-  论证：小取舍/大简化/核心价值不变），禁止为越权实现立可修 findings；
-  越权合理档立一条 code-right finding（回写文档登记）
+  输出契约：overdesign ∈ {over, suspect, fine}（越权行三问初评枚举），over/suspect
+  行只进 matrixRows（overdesign 字段 + 候选卡三段论证：小取舍/大简化/核心价值
+  不变），禁止为越权实现立可修 findings；fine 档立一条 code-right finding（回写
+  文档登记）；中文措辞（「一致/漏实现/越权实现」「过度/存疑」）会被校验器拒绝回喂
 验收：每行/每条可回溯文档章节与代码位置；越权行有调用方证据；must-fix 级 contested
   三要件齐全且锚点属实（实际查过才写）
 ```

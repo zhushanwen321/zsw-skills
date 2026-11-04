@@ -1,0 +1,262 @@
+{
+ "skills/self/dev-workflow/workflows/src/dev-consistency-loop.shared.ts": [
+  [
+   148,
+   "\"if (ALLOWED.indexOf(fsuite.program) < 0) die('testPlan.fullSuite.program 不在白名单 ' + ALLOWED.join('/') + ': ' + fsuite.program);\","
+  ],
+  [
+   156,
+   "\"    if (ALLOWED.indexOf(at.command.program) < 0) die('testPlan.artifacts[' + ai + '].command.program 不在白名单: ' + at.command.program);\","
+  ],
+  [
+   162,
+   "\"  if (ALLOWED.indexOf(ep.testPlan.incremental.program) < 0) die('testPlan.incremental.program 不在白名单: ' + ep.testPlan.incremental.program);\","
+  ],
+  [
+   166,
+   "\"if (!/^[0-9a-f]{7,40}$/i.test(bl)) die('baseline 非 git hash 形态: ' + bl);\","
+  ],
+  [
+   179,
+   "\"var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);\","
+  ],
+  [
+   277,
+   "\"  var idx = p.indexOf(' -> ');\","
+  ],
+  [
+   282,
+   "\"var untracked = entries.filter(function (e) { return e.code.indexOf('?') >= 0; }).map(function (e) { return e.path; });\","
+  ],
+  [
+   283,
+   "\"var foreign = changed.filter(function (f) { return pool.indexOf(f) < 0; });\","
+  ],
+  [
+   284,
+   "\"var foreignUntracked = foreign.filter(function (f) { return untracked.indexOf(f) >= 0; });\","
+  ],
+  [
+   306,
+   "\"      if (m.indexOf('index.lock') >= 0 && i < 6) { sleep(200 + i * 300); continue; }\","
+  ],
+  [
+   371,
+   "\"  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }\","
+  ],
+  [
+   375,
+   "\"    if (content.indexOf(BYPASS_PATTERNS[j]) >= 0) { hits.push({ file: curFile, pattern: BYPASS_PATTERNS[j], line: content.trim().slice(0, 160) }); break; }\","
+  ],
+  [
+   884,
+   "for (const p of parts) if (p.files.includes(filePath)) return p.name;"
+  ],
+  [
+   1029,
+   "const impure = (f[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));"
+  ],
+  [
+   1237,
+   "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))"
+  ],
+  [
+   1669,
+   "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));"
+  ],
+  [
+   1760,
+   "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/design-code-sync-loop.shared.ts": [
+  [
+   156,
+   "\"  if(/^## /.test(ln)){cur=null;continue}\","
+  ],
+  [
+   158,
+   "\"  var isStd=false;for(var s of std){if(ln.indexOf(s)===0){isStd=true;break}}\","
+  ],
+  [
+   507,
+   "if (!affected.includes(abs)) affected.push(abs);"
+  ],
+  [
+   701,
+   "if (fi.some((f) => fj.includes(f))) {"
+  ],
+  [
+   724,
+   "if (rest.includes(\" -> \")) {"
+  ],
+  [
+   741,
+   "if (token.length < 3 || !token.includes(\"/\")) return \"\";"
+  ],
+  [
+   742,
+   "return /\\.[A-Za-z0-9]+$/.test(token) ? token : \"\";"
+  ],
+  [
+   927,
+   "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +"
+  ],
+  [
+   931,
+   "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;"
+  ],
+  [
+   1285,
+   "if (m) for (const fp of m.files) if (!base.includes(fp)) base.push(fp);"
+  ],
+  [
+   1489,
+   ".filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)))"
+  ],
+  [
+   1771,
+   "const impure = (o[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));"
+  ],
+  [
+   2336,
+   "return needle !== \"\" && (loc.includes(needle) || needle.includes(loc));"
+  ],
+  [
+   2357,
+   "const blockers = loaded.filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)));"
+  ],
+  [
+   2992,
+   "if (!g.issueIds.includes(fx.issueId)) es.push(`fixes 引用未知条目 ${fx.issueId}`);"
+  ],
+  [
+   2995,
+   "if (!g.issueIds.includes(d.issueId)) es.push(`deferred 引用未知条目 ${d.issueId}`);"
+  ],
+  [
+   3002,
+   "if (!g.issueIds.includes(d.issueId)) es.push(`exempt 引用未知条目 ${d.issueId}`);"
+  ],
+  [
+   3007,
+   "if (!g.issueIds.includes(d.issueId)) es.push(`delegated 引用未知条目 ${d.issueId}`);"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/wave-executor.shared.ts": [
+  [
+   251,
+   "\"try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',claimAny=process.argv[5]==='claim"
+  ],
+  [
+   267,
+   "\"const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));\" +"
+  ],
+  [
+   270,
+   "\"if(hit){const h=hit.slice(0,hit.indexOf('\\\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（'+(claimAny?'前缀+词边界认领（stat"
+  ],
+  [
+   350,
+   "const mixed = entries.filter((t) => /\\s/.test(t) || /[()（）]/.test(t));"
+  ],
+  [
+   365,
+   "const arrow = p.indexOf(\" -> \");"
+  ],
+  [
+   375,
+   "const isTmpArtifact = (f: string): boolean => /^(\\.\\.\\/)*\\.tmp\\//.test(f);"
+  ],
+  [
+   532,
+   "if (!(TEST_WHITELIST as readonly string[]).includes(tc.program)) {"
+  ],
+  [
+   631,
+   "if (!commitTemplate.includes(\"{unitId}\") || !commitTemplate.includes(\"{summary}\")) {"
+  ],
+  [
+   1001,
+   "if (n.deps.includes(cur) && !seen.has(n.id)) {"
+  ],
+  [
+   1263,
+   "node.designRef !== \"\" && !summary.includes(node.designRef) ? `${node.designRef} ${summary}` : summary;"
+  ],
+  [
+   1517,
+   "if (!failedIds.includes(nid)) errors.push(`item ${it[\"id\"]}：nodeIds 含未知/已 disputed 节点 ${nid}（幻觉 ref）`);"
+  ],
+  [
+   1532,
+   "const conflicted = [...covered].filter((id) => fixCovered.has(id) && items.some((it) => it[\"action\"] === \"disputed\" && isStrArr(it[\"nodeIds\"]) && (it[\"nodeIds\"]"
+  ],
+  [
+   1546,
+   "const files = items.filter((it) => ids.includes(it[\"id\"] as string)).flatMap((it) => (isStrArr(it[\"files\"]) ? (it[\"files\"] as string[]) : []));"
+  ],
+  [
+   1553,
+   "const inter = groupFiles[i].filter((f) => groupFiles[j].includes(f));"
+  ],
+  [
+   1675,
+   "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);"
+  ],
+  [
+   1705,
+   "fixItems.filter((it) => commitGateFailures.some((cf) => cf.nodeIds.some((nid) => it.nodeIds.includes(nid)))).map((it) => it.id),"
+  ],
+  [
+   1711,
+   "const gItems = fixItems.filter((it) => g.itemIds.includes(it.id));"
+  ],
+  [
+   1713,
+   "const gNodes = plan.nodes.filter((n) => gItems.some((it) => it.nodeIds.includes(n.id)));"
+  ],
+  [
+   1778,
+   "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);"
+  ],
+  [
+   1802,
+   "const node = plan.nodes.find((n) => cf.nodeIds.includes(n.id));"
+  ],
+  [
+   1804,
+   "const fixFiles = rep.fixes.filter((f) => f.itemId !== \"\" && cf.nodeIds.some((nid) => (fixItems.find((it) => it.id === f.itemId)?.nodeIds.includes(nid) ?? false)"
+  ],
+  [
+   1808,
+   "const cfIdx = commitGateFailures.indexOf(cf);"
+  ],
+  [
+   1809,
+   "const dcIdx = deferredCommits.findIndex((dc) => cf.nodeIds.includes(dc.id) && dc.message === cf.message);"
+  ],
+  [
+   1954,
+   "for (const t of n.territory) if (!list.includes(t)) list.push(t);"
+  ],
+  [
+   2332,
+   "for (const n of plan.nodes) if (n.kind === \"dev\") for (const t of n.territory) if (!allTerr.includes(t)) allTerr.push(t);"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/tech-review-loop.shared.ts": [
+  [
+   578,
+   "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +"
+  ],
+  [
+   582,
+   "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;"
+  ],
+  [
+   1257,
+   "lastCheckReport.includes(\"[precheck]\")"
+  ]
+ ]
+}

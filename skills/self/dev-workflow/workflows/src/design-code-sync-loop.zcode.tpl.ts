@@ -88,12 +88,15 @@ interface MatrixRowLite {
   claim: string;
   /** 代码实现锚点（file:line 或 未找到） */
   impl: string;
-  /** 一致 / 漏实现 / 越权实现 */
-  verdict: string;
+  /** 功能对照结论（结构化枚举，2026-11-04 替代旧中文措辞 verdict——措辞出枚举即修错侧）：
+   *  match = 一致；gap = 有差距（gapDirection 必填）；unevaluated = 未评 */
+  align: "match" | "gap" | "unevaluated";
+  /** 差距方向（仅 align=gap 必填）：doc-right = 设计有代码漏；code-right = 代码有设计漏 */
+  gapDirection?: "doc-right" | "code-right";
   /** 一句话说明 */
   note: string;
-  /** 越权实现三问初评档位（合理/过度/存疑），仅越权行有 */
-  overdesign?: string;
+  /** 越权实现三问初评档位（结构化枚举）：over = 过度；suspect = 存疑；fine = 合理；缺省 = 未评 */
+  overdesign?: "over" | "suspect" | "fine";
 }
 
 /** planner 框架级发现（矩阵顶层行 + 台账条目） */
@@ -175,8 +178,10 @@ interface FixRecord {
   issueId: string;
   /** 一句修复描述（含组外波及标注） */
   description: string;
-  /** 自检：一条可复跑命令 + 预期结果 */
-  selfCheck: string;
+  /** 结构化自检（2026-11-04 字段化，替代自由文本）：kind ∈ machine-check（适用一致性
+   *  检查）| existence-check（旧表述零残留检索，预期零命中）；引擎复跑 command 做
+   *  输出等值比对（expected/actual 全等，非模式命中） */
+  selfCheck: { kind: "machine-check" | "existence-check"; command: string; expected: string; actual: string };
 }
 
 /** 修复组 agent 结构化返回 */
@@ -232,6 +237,9 @@ interface FindingRecord {
   owner: string;
   location: string;
   gap: string;
+  /** 机械信号条目专属：词表符号（owner=mechanical 立项时直写字段，对账/豁免按字段读——
+   *  旧从 gap 文本回提取的正则随字段化退役，gap 改写不再导致条目永不清） */
+  symbol?: string;
   direction: "doc-right" | "code-right" | "contested";
   severity: "must-fix" | "suggestion" | "info";
   impact: string;
@@ -254,7 +262,7 @@ interface FindingRecord {
   /** 争议仲裁步改判记录（2026-11-03 授权新增）：verdict=settled-doc-right/settled-code-right；
    *  quote ≥12 字原文引文（脚本逐字校验存在于设计文档/裁决记录，防幻觉）；anchorRef=锚点章节；
    *  reasoning=引文→结论推理链。聚焦复审每轮复跑引文断言，失 existence 即回退 contested */
-  arbiter?: { verdict: string; quote: string; anchorRef: string; reasoning: string };
+  arbiter?: { verdict: string; quote: string; quoteLocation?: { source: "design-doc" | "impl-plan"; lineStart: number; lineEnd: number }; anchorRef: string; reasoning: string };
   /** suggestion 级 contested 被引擎按方向语义表默认改判 doc-right 的标记（终态列出备查） */
   contestedDefaulted?: boolean;
 }
@@ -278,12 +286,26 @@ interface RoundStat {
 }
 
 /** 争议仲裁步结构化返回（2026-11-03 授权新增：R1 聚合后、contested 分流前消解伪争议） */
+interface ArbiterQuoteLocation {
+  /** 引文来源：design-doc = 设计文档人读版 / impl-plan = impl-plan 人读版（裁决记录不作为
+   *  引文来源——json 形态文本含转义，逐字引不可靠；已裁决事项的原文落到两文件对应行段） */
+  source: "design-doc" | "impl-plan";
+  /** 引文起始行（1-based，含） */
+  lineStart: number;
+  /** 引文结束行（1-based，含） */
+  lineEnd: number;
+}
+
+/** 争议仲裁步结构化返回（2026-11-03 授权新增：R1 聚合后、contested 分流前消解伪争议） */
 interface ArbiterVerdict {
-  /** settled = 设计原文/裁决记录已答（quote/anchorRef/reasoning 三字段必填，引文脚本逐字校验）；
-   *  genuinely-open = 默认态——引用不出或推理不成立一律回此值（宁停勿错） */
+  /** settled = 设计原文已答（quote + quoteLocation + anchorRef + reasoning 必填，引擎按
+   *  quoteLocation 行段读原文与 quote 归一化比对）；genuinely-open = 默认态——引用不出或
+   *  推理不成立一律回此值（宁停勿错） */
   verdict: "settled-doc-right" | "settled-code-right" | "genuinely-open";
-  /** 设计文档/裁决记录原文引文（≥12 字逐字，防幻觉） */
+  /** 设计文档/impl-plan 人读版原文引文（≥12 字逐字，防幻觉） */
   quote?: string;
+  /** 引文位置锚（引擎行段等值校验与聚焦复审复核的机器锚点）——settled 必填 */
+  quoteLocation?: ArbiterQuoteLocation;
   /** 引文所在锚点（设计章节号或裁决 id） */
   anchorRef?: string;
   /** 引文→结论的推理链 */
@@ -326,7 +348,7 @@ interface SyncResult {
   contestedBlockedList: { id: string; location: string; blockedBy: string[] }[];
   /** 争议仲裁步改判清单（2026-11-03 授权新增：arbiter 按设计原文消解的伪争议——非用户
    *  裁决，是「先修后审」：全部列出供用户抽查翻案，翻案即按新方向 attempt 递增重发） */
-  arbiterSettledList: { id: string; direction: string; quote: string; anchorRef: string; reasoning: string }[];
+  arbiterSettledList: { id: string; direction: string; quote: string; quoteLocation?: { source: "design-doc" | "impl-plan"; lineStart: number; lineEnd: number }; anchorRef: string; reasoning: string }[];
   /** suggestion 级 contested 被方向语义表默认改判 doc-right 的条目（终态备查） */
   contestedDefaultedList: { id: string; location: string }[];
   /** 残余活跃条目（stuck / *-failure 随终态呈报；设计 §7 停机线：清单随终态） */

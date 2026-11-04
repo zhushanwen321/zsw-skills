@@ -22,7 +22,7 @@ args: { execPlan: "<path>.exec-plan.json",
 - **R2+**：定向复审（只审上批修复影响面）——对上批待对账条目逐条 reconciliation 申报裁决（{prevId, status: fixed|not-fixed, evidence}，fixed 必须带 file:line 证据；仍存在的条目同时在 unreasonable 带 prevId 重新描述；新问题不带 prevId）；**清零判定唯一采信 reconciliation 的 fixed+证据申报，漏报/not-fixed 保持活跃下轮再核**（fail-closed，条目身份按引擎 U 编号对账，不按文本匹配）；另审修复引入新问题/新 diff 新偏差；复审目标 = 有改动/测试挂的组 ∪ 仍有活跃条目的组（防漏报条目零改动后失去再核机会）
 - **停止线**：审查轮累计 3 轮仍未收敛，或 unreasonable 活跃数不减反增（高于前轮）→ stuck（终态随 remaining 呈报残留清单 + escalated 呈报顽固清单——≥2 轮修复未清的活跃条目在 stuck 消息逐条标注，优先人工裁决）
 - **Gate A**（清零后）：world.run 全量测试（fullSuite = D0 从项目配置真实读取合成的全量命令（含 lint/typecheck），引擎单命令执行；产物类条目 = testPlan.artifacts，引擎自动执行（compile.md §5），无需人工排布——Gate A 前第一波并行预备；代码修复后测试产物可能过期，分诊回注轮随轮重建），输出落 `<name>.gate-a.log`
-- **Gate A 归因分诊**（独立 phase，红后触发，≤2 轮）：分诊 agent 读 gate-a 日志 + 基线 diff，逐失败段四分类——batch-regression（本批回归）条目（GA-<轮>-<序> id）回注修复轮（聚合定性合池重新分组再修，产物预备与 Gate A 随轮重跑）；flaky 直接重跑 Gate A；legacy（存量红）/ script-defect（测试基建自身缺陷，如段退出码累计传播假红）不属本批修复范围——带分诊报告终态 gate-a-failed，由主 agent 裁决（调整 full-suite 清单 attempt+1 重发 / 登记存量债务）。零容忍绕过扫描（skipped/eslint-disable 假绿）不经分诊，维持直接终态
+- **Gate A 归因分诊**（独立 phase，红后触发，≤2 轮）：分诊 agent 读 gate-a 日志 + 基线 diff，逐失败段四分类——batch-regression（本批回归）条目（GA-<轮>-<序> id）回注修复轮（聚合定性合池重新分组再修，产物预备与 Gate A 随轮重跑）；flaky 直接重跑 Gate A；legacy（存量红）/ script-defect（测试基建自身缺陷，如段退出码累计传播假红）不属本批修复范围——带分诊报告终态 gate-a-failed，由主 agent 裁决（调整 full-suite 清单 attempt+1 重发 / 登记存量债务）。绕过检测（本批 diff 新增行的跳过/仅跑部分/lint 禁用形态）不经分诊维持直接终态——检测挂在跑全量之前、按 diff 判定，不解析测试输出里的 skip 汇总（设计内分层跳过是合法输出，与 pr-cr-fix PS10 同判据）
 - **产物构建失败**（不再直接终态）：先引擎重跑一次自愈（产物过期是最常见因，重建即愈），仍败登记 GA 条目回注修复轮（fixer 读构建日志修产物脚本/基建——产物是本轮声明依赖、无豁免语义，不派分诊）；回注轮与分诊轮共用 ≤2 上限，耗尽才终态
 - **终态回写 status.json events**：consistency 终态一笔 + gate-a pass/fail 一笔——D3 入口门「Gate A 绿证据可查」即查 gate-a-pass 事件；**终态同时写 `<name>.ledger.md` 未决清单一笔**（docErrors / reasonable / deferredLedger / escalated / remaining / 残留改动，带 attempt 标识——主会话中断后仍可从盘上恢复待处置清单）
 - doc_errors（文档错了）**进文档修复组在审出它的轮次当场修**（方向 = 改文档对齐实现；每组修复批次后引擎派一个文档修复组承接当轮全部 doc_errors，纯文档改动不跑增量测试不派定向复审）；fixer 核实方向两可或实现侧错误的条目随终态回流主 agent 裁决（2026-10-06 裁决：哪个阶段审出来就在哪个阶段修）。reasonable（合理演化）**不进修复循环**，随终态回流主 agent 写入 impl-plan 合理偏差登记表（`.impl-plan.md` §5 + json notes）
@@ -34,7 +34,7 @@ args: { execPlan: "<path>.exec-plan.json",
 3. **结论处理**：unreasonable 按范围声明分组并行修（组内串行组间并行 ≤5；每组三段式 task 附全组条目 + file:line 证据；组完成先到先核验先 commit）；`影响决策 = 是` 的条目优先（先评估是否须改设计文档再修代码）；`影响交付 = 验收` 的条目修复后重核对应验收场景可检验性；doc_errors 派文档修复组当场修（未清回流）、reasonable 写入登记表
 4. **微修复合并**：单条小修（<5min）攒入下一修复批次，仅当它是 Gate 通过唯一阻塞项才单独派发并即刻重验
 5. **R2+ 定向复审**：每组修完即派只审该组影响面的复审，不攒轮；未清零回 3
-6. **Gate A**：主 agent 直跑全量段（命令从项目配置真实读取；输出落 gate-a.log）——**零容忍绕过**（发现即失败项；workflow 形态的机器落点 = 环境结构性隔离（不传环境变量）+ Gate A/产物日志尾部扫描 skipped 汇总与 eslint-disable，手工形态逐项人审 SKIP_*/test.skip/禁用 lint 规则）；有 failures 派归因 subagent 读落盘输出逐条归因（回 D1 补修 / 用户签认转残留风险登记）；**覆盖矩阵**：单元范围声明 × 实际用例列无人认领改动区（补测试或登记理由）；**产物类前置**：产物构建/fixture 生成第一波并行启动，禁现用现建
+6. **Gate A**：主 agent 直跑全量段（命令从项目配置真实读取；输出落 gate-a.log）——**绕过检测**（发现即失败项；workflow 形态的机器落点 = 环境结构性隔离（不传环境变量）+ Gate A 跑全量之前对本批 diff 新增行检测 `.skip(` / `.only(` / `.todo` / `eslint-disable` 形态，手工形态逐项人审本批 diff 是否新增 SKIP_*/test.skip/仅跑部分/禁用 lint 规则；不解析测试输出里的 skip 汇总——设计内分层跳过是合法输出，与 pr-cr-fix PS10 同判据）；有 failures 派归因 subagent 读落盘输出逐条归因（回 D1 补修 / 用户签认转残留风险登记）；**覆盖矩阵**：单元范围声明 × 实际用例列无人认领改动区（补测试或登记理由）；**产物类前置**：产物构建/fixture 生成第一波并行启动，禁现用现建
 7. Gate A 绿 → status.json 记一笔（命令 + 关键输出行，不产生 commit）→ 进 `flow/acceptance.md`
 
 ## 终态处置表

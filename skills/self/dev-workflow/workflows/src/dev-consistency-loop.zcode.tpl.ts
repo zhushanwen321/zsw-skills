@@ -55,6 +55,10 @@ interface ReasonableEntry {
   location: string;
   /** 一句话：为何属合理演化（实现优于设计 / 不破坏设计目标） */
   summary: string;
+  /** 条目类别（2026-11-04 字段化，替代旧 `[process]` 前缀约定——前缀靠措辞自觉、
+   *  漏打即误入停机线）：process = 提交完整性/流程类发现（不计停机线不派修复组）；
+   *  content = 内容类（缺省） */
+  kind?: "content" | "process";
   /** 文档同步建议（终态回流主 agent，D5 终态同步消费） */
   docSyncSuggestion: string;
 }
@@ -64,10 +68,17 @@ interface GapEntry {
   location: string;
   /** 一句话差距：违背设计 / 遗漏未做 / 越权多做 / 文档自身错误 */
   gap: string;
-  /** 影响决策（模板两必填字段之一）：「是——<违背哪条机制决策，不修则落空>」或「否——<半句理由>」 */
-  affectsDecision: string;
-  /** 影响交付（模板两必填字段之二）：「<环节>——<什么会出错>」，环节 = 开发/测试/验收/文档登记/无 */
-  affectsDelivery: string;
+  /** 影响决策（布尔判据，2026-11-04 字段化——引擎按它分流双无降级，中文措辞不再参与判定）：
+   *  true = 违背机制决策（不修则落空） */
+  decisionAffecting: boolean;
+  /** 影响交付（布尔判据之二）：true = 任一环节（开发/测试/验收/文档登记）会出错 */
+  deliveryAffecting: boolean;
+  /** 影响说明（人读）：决策违背哪条（D几/§几）/ 交付哪个环节会出错——只作展示，不参与分流 */
+  impactNote: string;
+  /** 条目类别（可选，引擎归一对缺失恒产 content）：process = 流程类（提交完整性等，
+   *  不计停机线）；content = 内容类。流程类发现应走 reasonable，出现于此 = reviewer
+   *  违规申报，引擎按它排除停机线计数 */
+  kind?: "content" | "process";
   /** 严重度：high 预留给破坏数据/崩溃级 */
   severity: "high" | "medium" | "low";
   /** 一句可执行修复建议 */
@@ -164,8 +175,15 @@ interface ItemRecord {
   key: string;
   location: string;
   gap: string;
-  affectsDecision: string;
-  affectsDelivery: string;
+  /** 影响决策布尔判据（2026-11-04 字段化——引擎按它分流双无降级，不再解析中文措辞前缀） */
+  decisionAffecting: boolean;
+  /** 影响交付布尔判据之二 */
+  deliveryAffecting: boolean;
+  /** 影响说明（人读，只作展示不参与分流） */
+  impactNote: string;
+  /** 条目类别（2026-11-04 字段化）：process = 流程类（提交完整性等——不计停机线）；
+   *  content = 内容类（缺省）。reviewer 违规把流程类写进 unreasonable 时引擎按它排除停机线计数 */
+  kind: "content" | "process";
   severity: string;
   fixHint: string;
   /** 所属修复组（入池时 = 分区边界；聚合定性路由后可被覆盖为跨分区组名） */
@@ -238,7 +256,7 @@ interface FinalResult {
   /** 单条停机线升级清单（1+2 次 fixer 后复审仍报，设计 §8.6 ③） */
   escalated: { id: string; location: string; gap: string; uncleanRounds: number }[];
   /** 必填字段分流降级条目（影响决策=否 且 影响交付=无——不进修复批次，随终态回流主 agent 登记残留风险；含聚合升级/职责外申报条目——ledger 中单列升级呈报行） */
-  deferredLedger: { id: string; location: string; gap: string; affectsDecision: string; affectsDelivery: string }[];
+  deferredLedger: { id: string; location: string; gap: string; impactNote: string }[];
   /** 终态仍活跃条目（stuck / fix-failure 在场） */
   remaining: { id: string; location: string; gap: string; severity: string; group: string }[];
   /** 分区概览（诊断） */

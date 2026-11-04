@@ -347,36 +347,40 @@ arr(s5?.units).forEach((u, i) => {
 });
 
 // ── 规则 8：穷举断言可复算 warning（不阻塞；义务执行靠方向审 D2 按 must-fix 处置） ──
-// 历次方向审打回的主形态即「唯一 / 限于 / 全集」断言被逐轮反例击穿（写者侧未穷举）；
-// 断言附检索命令后审查从「重新发现」降为「重跑对账」
-const EXHAUSTIVE_RE = /唯一|全集|限于/;
-const SEARCH_CMD_RE = /\bgrep\b|\brg\b|ripgrep|检索命令|检索式/;
-const rowText = (o) =>
-  Object.values(o ?? {})
-    .filter((v) => typeof v === "string")
-    .join(" ");
-arr(s2?.assumptions).forEach((a, i) => {
-  if (EXHAUSTIVE_RE.test(String(a?.statement ?? "")) && !SEARCH_CMD_RE.test(rowText(a))) {
-    warnings.push(
-      `[穷举可复算] s2-status.json assumptions[${i}]（${a?.id ?? "缺 id"}）statement 含「唯一 / 全集 / 限于」穷举措辞但整行无检索命令——在 evidence 登记取得该断言的检索命令（含路径范围）与命中清单，使审查可重跑对账（不阻塞，方向审按 must-fix 处置）`,
-    );
-  }
-});
-arr(s2?.assumptionExclusions).forEach((x, i) => {
-  const text = rowText(x);
-  if (EXHAUSTIVE_RE.test(text) && !SEARCH_CMD_RE.test(text)) {
-    warnings.push(
-      `[穷举可复算] s2-status.json assumptionExclusions[${i}] 含穷举措辞但整行无检索命令——在 exclusionEvidence 登记检索命令（含路径范围）与命中清单（不阻塞，方向审按 must-fix 处置）`,
-    );
-  }
-});
-arr(s2?.artifactTables?.stateCopies).forEach((row, i) => {
-  if (EXHAUSTIVE_RE.test(String(row?.exclusionNote ?? "")) && !SEARCH_CMD_RE.test(rowText(row))) {
-    warnings.push(
-      `[穷举可复算] s2-status.json artifactTables.stateCopies[${i}]（${row?.id ?? "缺 id"}）exclusionNote 含穷举措辞但整行无检索命令——在 exclusionNote 登记检索命令与命中清单（不阻塞，方向审按 must-fix 处置）`,
-    );
-  }
-});
+// 历次方向审打回的主形态即穷举断言被逐轮反例击穿（写者侧未穷举）；断言附检索命令后
+// 审查从「重新发现」降为「重跑对账」。2026-11-04 字段化：声明义务 = exhaustive（布尔）
+// + searchCmd（结构化字段），纯字段判定——旧的措辞扫描（唯一/全集/限于）与「整行任一
+// 字段含 grep 字样即豁免」的整行匹配同时退役（后者有漏警面：无关字段偶然含检索字样
+// 会豁免真穷举行）。exhaustive 缺省 false（存量设计包兼容：未声明 = 未声明穷举，语义
+// 兜底在方向审的语义审查）；首次扫完无一处 exhaustive 字段时发一条存量提示引导补声明
+const exhaustiveWarnings = (rows, label, anchorField, anchorNote) => {
+  rows.forEach((r, i) => {
+    if (r?.exhaustive === true && (typeof r?.searchCmd !== "string" || r.searchCmd.trim() === "")) {
+      warnings.push(
+        `[穷举可复算] s2-status.json ${label}[${i}]（${r?.[anchorField] ?? "缺 id"}）声明 exhaustive=true 但 searchCmd 空——登记取得该断言的检索命令（含路径范围）与命中清单（登记在 ${anchorNote}），使审查可重跑对账（不阻塞，方向审按 must-fix 处置）`,
+      );
+    }
+  });
+};
+let anyExhaustiveDeclared = false;
+const noteExhaustiveDeclared = (rows) => {
+  if (rows.some((r) => r?.exhaustive !== undefined)) anyExhaustiveDeclared = true;
+};
+// 局部名带 ex 前缀：规则 6 已在同名作用域声明过 assumptions/stateCopies（行数校验用），避免重复声明
+const exAssumptions = arr(s2?.assumptions);
+noteExhaustiveDeclared(exAssumptions);
+exhaustiveWarnings(exAssumptions, "assumptions", "id", "searchCmd/evidence 字段");
+const exExclusions = arr(s2?.assumptionExclusions);
+noteExhaustiveDeclared(exExclusions);
+exhaustiveWarnings(exExclusions, "assumptionExclusions", "assertion", "searchCmd/exclusionEvidence 字段");
+const exStateCopies = arr(s2?.artifactTables?.stateCopies);
+noteExhaustiveDeclared(exStateCopies);
+exhaustiveWarnings(exStateCopies, "artifactTables.stateCopies", "id", "searchCmd/exclusionNote 字段");
+if (exAssumptions.length + exExclusions.length + exStateCopies.length > 0 && !anyExhaustiveDeclared) {
+  warnings.push(
+    `[穷举声明] s2-status.json 的 assumptions / assumptionExclusions / stateCopies 均未声明 exhaustive 字段（存量设计包兼容形态，缺省 = 未声明穷举）——断言含穷举前提（唯一 / 全集 / 限于式）时按 schema 声明 exhaustive=true 并登记 searchCmd 检索命令，使审查可重跑对账（不阻塞本判定）`,
+  );
+}
 
 // ── 规则 9：渲染产物过期 warning（不阻塞） ──
 

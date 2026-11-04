@@ -21,6 +21,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import vm from "node:vm";
@@ -624,10 +625,12 @@ function makeSyncScaffold(home) {
   const reviewerTemplate = join(tplDir, "reviewer.md");
   writeFileSync(plannerTemplate, "# planner\n");
   writeFileSync(reviewerTemplate, "# reviewer\n");
-  // 空词表（scan/skip 皆空）：setup 的词表等集预检要求 watchlist 必传且与文档反引号集
-  // 等集——脚手架文档零反引号，空集即等集，机械步零立项保持原用例的收敛语义
+  // 空词表（scan/skip 皆空）+ 源指纹（2026-11-04 指纹制）：setup 的词表指纹预检要求
+  // watchlist 必传且 sourceFingerprints 与两份源文档当前内容一致——脚手架文档零反引号
+  // 零词表词，机械步零立项保持原用例的收敛语义
   const watchlist = join(home, "wl.json");
-  writeFileSync(watchlist, JSON.stringify({ scan: [], skip: [] }));
+  const sha = (p) => createHash("sha256").update(readFileSync(p, "utf8")).digest("hex");
+  writeFileSync(watchlist, JSON.stringify({ sourceFingerprints: { [designDoc]: sha(designDoc), [implPlan]: sha(implPlan) }, scan: [], skip: [] }));
   return { designDoc, implPlan, projectRoot, plannerTemplate, reviewerTemplate, codeFile, watchlist };
 }
 
@@ -771,7 +774,7 @@ test("D5 zcode：must-fix 修复轮（maxRounds=1）——fix 自然 end + 轮�
         modules: [{ id: "m1", module: "pkg/mod.ts", files: [s.codeFile], focus: "对照 §1" }],
       },
       "模块审查-m1": {
-        matrixRows: [{ claim: "§1 值为 1", impl: "pkg/mod.ts:1", verdict: "一致", note: "核对通过" }],
+        matrixRows: [{ claim: "§1 值为 1", impl: "pkg/mod.ts:1", align: "match", note: "核对通过" }],
         findings: [{
           id: "F1",
           location: "pkg/mod.ts:1",
@@ -785,7 +788,7 @@ test("D5 zcode：must-fix 修复轮（maxRounds=1）——fix 自然 end + 轮�
         moduleNoFinding: "",
       },
       "同步修复-R1-G1": {
-        fixes: [{ issueId: "F1-1", description: "按 fix-hint 修复", selfCheck: "grep 断言通过" }],
+        fixes: [{ issueId: "F1-1", description: "按 fix-hint 修复", selfCheck: { kind: "existence-check", command: "grep -c 导出常量 pkg/mod.ts || true", expected: "0", actual: "0" } }],
         affectedFiles: [],
         deferred: [],
         exempt: [],
