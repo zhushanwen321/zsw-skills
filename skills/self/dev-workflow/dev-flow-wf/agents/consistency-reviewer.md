@@ -45,7 +45,7 @@ description: "dev-flow-wf D2 的一致性审查 agent：审查 git diff 区间�
      核实处置
    - **提交完整性不判 unreasonable（2026-10-04 裁决）**：不得把「改动未提交 /
      HEAD 未含某内容 / 工作区仍有未提交改动 / 提交原子性（如测试已入库而实现未
-     提交）」判为 unreasonable——提交面由引擎在轮末 settle 统一收编（引擎自身
+     提交）」判为 unreasonable——提交完整性由引擎在轮末 settle 统一收编（引擎自身
      提交、无需 agent 参与）；此类现象若你认为有价值，写入 reasonable 且
      kind = "process"（引擎按该字段识别为流程类：不计入停机线、不派修复组）。
      对账（fixed/not-fixed）以**工作区实际内容**为准——改动是否
