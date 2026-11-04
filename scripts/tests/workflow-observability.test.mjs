@@ -624,12 +624,17 @@ function makeSyncScaffold(home) {
   const reviewerTemplate = join(tplDir, "reviewer.md");
   writeFileSync(plannerTemplate, "# planner\n");
   writeFileSync(reviewerTemplate, "# reviewer\n");
-  return { designDoc, implPlan, projectRoot, plannerTemplate, reviewerTemplate, codeFile };
+  // 空词表（scan/skip 皆空）：setup 的词表等集预检要求 watchlist 必传且与文档反引号集
+  // 等集——脚手架文档零反引号，空集即等集，机械步零立项保持原用例的收敛语义
+  const watchlist = join(home, "wl.json");
+  writeFileSync(watchlist, JSON.stringify({ scan: [], skip: [] }));
+  return { designDoc, implPlan, projectRoot, plannerTemplate, reviewerTemplate, codeFile, watchlist };
 }
 
 const syncBaseArgs = (s) => ({
   designDoc: s.designDoc,
   implPlan: s.implPlan,
+  watchlist: s.watchlist,
   projectRoot: s.projectRoot,
   plannerTemplate: s.plannerTemplate,
   reviewerTemplate: s.reviewerTemplate,
@@ -648,7 +653,9 @@ function syncAgentStub(map) {
   };
 }
 
-/** 全清快乐路径返回桩：planner 单模块零框架发现 + reviewer 零发现 + retire 零候选 */
+/** 全清快乐路径返回桩：planner 单模块零框架发现 + reviewer 零发现 + retire 零候选。
+ *  「争议仲裁」在 setup 注册（contested 分流前实例化，全清路径不会被 ask）——桩须登记
+ *  该实例名，注册即触发桩调用 */
 const convergeStubMap = (s) => ({
   "框架对照规划": {
     frameworkFindings: [],
@@ -656,6 +663,7 @@ const convergeStubMap = (s) => ({
   },
   "模块审查-m1": { matrixRows: [], findings: [], moduleNoFinding: "在 pkg/mod.ts 未发现" },
   "伴生产物判定": { candidates: [], kept: [{ path: s.designDoc, reason: "合规放置" }] },
+  "争议仲裁": { verdict: "genuinely-open", quote: "", anchorRef: "", reasoning: "全清路径不触发" },
 });
 
 test("D5 zcode：全清 converged 路径——setup/review 自然 end（无 outcome），retire 保持打开由终态统一补记（outcome=converged）", async () => {
@@ -725,7 +733,10 @@ test("D5 zcode：planner 调用失败——setup 保持打开由终态补记（o
   try {
     const s = makeSyncScaffold(home);
     const agent = (name) => {
-      assert.ok(String(name).includes("框架对照规划"), `未预期的 agent 实例：${name}`);
+      assert.ok(
+        String(name).includes("框架对照规划") || String(name).includes("争议仲裁"),
+        `未预期的 agent 实例：${name}`,
+      );
       return { ask: async () => { throw new Error("planner ask 失败（测试桩）"); } };
     };
     const { result } = await runZcodeArtifact(
@@ -780,6 +791,8 @@ test("D5 zcode：must-fix 修复轮（maxRounds=1）——fix 自然 end + 轮�
         exempt: [],
         delegated: [],
       },
+      // 顶层注册实例（contested 分流前，本用例 findings 为 doc-right 不触发 ask）
+      "争议仲裁": { verdict: "genuinely-open", quote: "", anchorRef: "", reasoning: "不触发" },
     });
     const { result } = await runZcodeArtifact(
       home,

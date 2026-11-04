@@ -39,10 +39,14 @@ description: >-
 构建与产物（构建器 `node scripts/build-workflows.mjs`，默认全部 workflow）：
 
 ```
-workflows/<name>.dwf.ts          zcode 产物 = 壳 + 观测层 + shared 原文（零转换）
-workflows/pi/<name>.js           pi 产物 = 壳 + 改写管线处理后的 shared
+workflows/<name>.dwf.ts          zcode 产物 = 壳 + 启动校验层 + 观测层 + shared 原文（零转换）
+workflows/pi/<name>.js           pi 产物 = 壳 + 改写管线处理后的 shared（含启动校验层
+                                 函数定义但不调用——pi 无 ~/.zcode 部署目录）
 ~/.zcode/workflows/<name>.dwf.ts zcode saved 副本（CreateWorkflow 的 saved 发现目录，
                                  与仓内产物同内容，由构建器一并写入）
+~/.zcode/workflows/<name>.manifest.json
+                                 来源登记文件（manifest）：记录生成该 saved 副本的仓
+                                 检出根与仓内产物相对路径，供启动校验层运行时读取
 ```
 
 - **拼接**：壳里恰好一个 `@@STITCH@@` 标记行，构建器把它替换为观测层与 shared 全文
@@ -62,6 +66,13 @@ workflows/pi/<name>.js           pi 产物 = 壳 + 改写管线处理后的 shar
 - **saved 副本滞后 = 执行旧版**：zcode 的 CreateWorkflow 从 `~/.zcode/workflows/`
   发现 saved workflow，它滞后于仓内产物时实际执行的是旧脚本——构建器因此一并同步，
   `--check` 一并校验。
+- **启动校验（saved 副本防漂移门禁）**：`src/provenance.shared.ts` 由构建器拼进全部
+  zcode 产物最前（发起即执行，无从跳过），按来源登记文件记录的路径逐字节比对 saved
+  副本与仓内产物——不一致直接抛错终止（恢复动作在报错消息里）；登记文件或检出根
+  缺失打 WARN 放行（本机无该仓检出时不硬拦发起）。会话直改 saved 副本（三次事故
+  形态）由此在发起瞬间拦下，不依赖流程纪律或定时检查。刻意只比「副本 vs 仓内产物」
+  不含 src/ 源：源的在途未构建改动归 pre-commit 的 `build --check` 管辖，混进启动
+  校验会误拦正常发起——误拦会逼出绕行，门禁就废了。
 
 ## 3. zcode 引擎与 GUI 硬约束
 
@@ -108,7 +119,8 @@ run 因脚本 bug 崩溃后改脚本续跑：新 run 导入原 run 已完成节�
    AmendWorkflow；续跑后核对 setup 日志的 attempt 值与原值一致。
 
 **禁止直接改 saved 副本**（`~/.zcode/workflows/`）：在跑的 run 用的是发起时的脚本
-快照，改副本救不了它；改副本只会让下次发起执行「副本新、仓内源旧」的漂移版本。要改
+快照，改副本救不了它；改副本只会让下次发起执行「副本新、仓内源旧」的漂移版本——
+且直改副本会被启动校验在下次发起时当场拦下（见第 2 节）。要改
 下次发起的行为 = 改 `src/` 源 + 跑构建器（构建器同步三处产物，见第 2 节）。
 
 ## 5. 观测接入五步

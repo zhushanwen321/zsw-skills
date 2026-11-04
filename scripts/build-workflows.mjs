@@ -29,7 +29,7 @@
 // 已修但 run 仍写旧版行为），故 build 一并同步、--check 一并拦截
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -38,6 +38,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WF = join(ROOT, "skills/self/dev-workflow/workflows");
 const SRC = join(WF, "src");
 const SAVED_DIR = join(homedir(), ".zcode", "workflows");
+// 启动校验层（provenance.shared.ts）：拼在观测层之前，随产物部署；层尾顶层 await 是
+// 校验入口（zcode 发起即比对 saved 副本与仓内产物，漂移即抛错——机制与刻意不比 src/
+// 源的理由见层文件头注）
+const PROV_LAYER_PATH = join(SRC, "provenance.shared.ts");
 const NAMES = ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop"];
 // 观测门禁豁免名单：shared 源无 initObservation 调用点且登记在此的 workflow 跳过观测
 // 契约检查（跳过时打一行说明，不静默）。豁免是显式决定不是默认沉默——登记格式 = 双引号
@@ -332,13 +336,31 @@ for (const name of names) {
       throw new Error(`${name}: 已接入观测但缺 ${OBS_LAYER_PATH.slice(ROOT.length + 1)}——观测层单一构建输入不可缺失`);
     }
   })();
+  // 启动校验层（全部 workflow 无条件拼接；层内不得派 agent）：__PROV_WF_NAME__ 占位符
+  // 按 workflow 名替换；pi 侧剥除层尾的顶层调用行、保留函数定义（两侧业务字符串同源）——
+  // pi 无 ~/.zcode saved 部署目录，调用无从校验
+  const provLayerRaw = (() => {
+    try {
+      return readFileSync(PROV_LAYER_PATH, "utf8");
+    } catch {
+      throw new Error(`缺 ${PROV_LAYER_PATH.slice(ROOT.length + 1)}——启动校验层单一构建输入不可缺失`);
+    }
+  })();
+  if (/agent\(/.test(provLayerRaw)) {
+    throw new Error(`${name}: 启动校验层中出现 agent( 调用点（不应发生——校验层不派 agent）`);
+  }
+  const provZc = provLayerRaw.replaceAll("__PROV_WF_NAME__", name);
+  const provPi = provZc.replace(/\nawait provenanceCheck\(\);\s*$/, "\n");
+  if (provZc === provPi) {
+    throw new Error(`${name}: 启动校验层尾部缺少顶层调用行（await provenanceCheck();）——pi 剥除规则失效`);
+  }
   const sharedFull = obsLayer !== "" ? `${obsLayer}\n${shared}` : shared;
   const rewrittenFull = obsLayer !== "" ? rewriteAgentCalls(sharedFull) : rewritten;
   if (obsLayer !== "" && rewrittenFull.count !== rewritten.count) {
     throw new Error(`${name}: 观测层中出现 agent( 调用点（不应发生——观测层不派 agent）`);
   }
-  const piShared = stripTs(rewrittenFull.text);
-  const zcOut = stitch(zcTpl, sharedFull);
+  const piShared = stripTs(`${provPi}\n${rewrittenFull.text}`);
+  const zcOut = stitch(zcTpl, `${provZc}\n${sharedFull}`);
   const piOut = stitch(piTpl, piShared);
 
   // 观测契约核对（构建期门禁：stage/step 词表、事件字段、终态统一补记出口、两侧调用点一致）
@@ -354,6 +376,10 @@ for (const name of names) {
     [join(WF, "pi", `${name}.js`), piOut],
     // zcode saved 副本与仓内产物同内容（CreateWorkflow 的 saved 发现目录）
     [join(SAVED_DIR, `${name}.dwf.ts`), zcOut],
+    // 来源登记文件（manifest）：saved 副本的来源指针——记录生成它的仓检出根与仓内产物
+    // 相对路径，供产物内启动校验层运行时读取比对。sourceRoot 是本机绝对路径：它是运行
+    // 时反查检出根的唯一来源，属机器本地功能数据（与 saved 副本同目录、不入仓）
+    [join(SAVED_DIR, `${name}.manifest.json`), `${JSON.stringify({ name, sourceRoot: ROOT, productRelPath: relative(ROOT, join(WF, `${name}.dwf.ts`)) }, null, 2)}\n`],
   ];
   for (const [path, content] of targets) {
     const rel = path.startsWith(ROOT) ? path.slice(ROOT.length + 1) : path.replace(homedir(), "~");

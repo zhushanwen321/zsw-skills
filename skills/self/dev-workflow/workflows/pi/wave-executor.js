@@ -235,27 +235,60 @@ async function obsAppend(filePath, line) {
 }
 
 // ============================================================================
-// observability.shared.ts — workflow 阶段事件观测层（单一构建输入）
-// 已接入观测的 workflow（正文含 initObservation 调用点）由 scripts/build-workflows.mjs
-// 把本文件全文拼进其两侧产物（先于业务正文——obsCtx 为 let，业务顶层赋值依赖声明在前）；
-// 未接入的 workflow 不拼。本文件与业务 shared 一起过词法改写与 TS 剥离管线，无 import。
+// provenance.shared.ts — saved 副本启动校验层（单一构建输入）
+// 构建器把本文件拼在观测层与业务正文之前，随产物部署；文件尾的顶层 await 即校验
+// 入口——zcode 产物发起即执行，无从跳过。pi 产物拼入函数但不调用（构建器剥除调用
+// 行）：pi 侧无 ~/.zcode saved 部署目录，无从校验，保留函数使两侧业务字符串同源。
 //
-// 事件契约（改字段须同步 scripts/build-workflows.mjs 的 OBS_EVENT_FIELDS 与
-// scripts/workflow-observe.mjs）：
-//   {execution_id, task_id, skill, stage, step, round, attempt, event, timestamp,
-//    sample_type[, outcome]}
-// 落点 ~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl——
-// 每次执行独立文件，并发执行互不干扰。
-// 启用条件 = args.taskId 与 args.executionId 同时提供；都不传 = 观测关闭（可选兼容，
-// 业务照常）；只传其一 / ID 含路径不安全字符 / sampleType 非法 → 告警并关闭（错误可
-// 操作，不静默吞）；写失败 → 告警（同文件只告警一次）不改业务终态——观测是辅助功能，
-// 故障不拖垮主流程。观测只记归属与边界，不采集 token。
-// IO 通道经壳的 obsNow/obsAppend 平台钩子（zcode = world.run journal 语义，resume 重放
-// 回放首次记录值；pi = world.run，其 shim 内为 spawnSync，无 journal 重放语义，每次
-// run 实写）。
-// attempt 字段语义 = 事件发生时点的重发起序号：启动早期（自动检测未完成）为 null，
-// 检测确定后由调用方回填 obsCtx.attempt，其后的事件带值。
+// 机制：构建器写 saved 副本（~/.zcode/workflows/<name>.dwf.ts）时同步写来源登记
+// 文件（<name>.manifest.json，记录生成该副本的仓检出根与仓内产物相对路径——本机
+// 绝对路径是运行时反查检出根的唯一来源，属机器本地功能数据，不入仓）。启动时读
+// 登记文件并逐字节比对 saved 副本与仓内产物：不一致 = 副本被仓外直接编辑或仓内
+// 产物被手改（都意味着本次执行的脚本不是构建器产出的那一版），抛错终止，消息含
+// 恢复动作；登记文件 / saved 副本 / 检出根任一缺失 = WARN 放行（本机无该仓检出时
+// 不硬拦发起，降级可见）。
+// 刻意只比「副本 vs 仓内产物」、不含 src/ 源：源的在途未构建改动归 pre-commit 的
+// build --check 管辖，混进启动校验会误拦正常发起——误拦会逼出绕行，校验就废了。
 // ============================================================================
+const PROV_WF_NAME = "wave-executor";
+const PROV_PROBE = "try{" +
+    "var fs=require('fs'),path=require('path'),crypto=require('crypto'),os=require('os');" +
+    "var dir=path.join(os.homedir(),'.zcode','workflows');" +
+    "var mf=path.join(dir,process.argv[1]+'.manifest.json');" +
+    "var sp=path.join(dir,process.argv[1]+'.dwf.ts');" +
+    "var out=function(o){process.stdout.write(JSON.stringify(o))};" +
+    "var raw;try{raw=fs.readFileSync(mf,'utf8')}catch(e){out({skip:'no-manifest'});return}" +
+    "var m;try{m=JSON.parse(raw)}catch(e){out({skip:'no-manifest',reason:'unparsable'});return}" +
+    "if(!m||typeof m.sourceRoot!=='string'||m.sourceRoot.charAt(0)!=='/'||typeof m.productRelPath!=='string'||m.productRelPath.indexOf('..')>=0){out({skip:'no-manifest',reason:'fields'});return}" +
+    "var pp=path.join(m.sourceRoot,m.productRelPath);" +
+    "var a,b;try{a=fs.readFileSync(sp)}catch(e){out({skip:'no-saved'});return}" +
+    "try{b=fs.readFileSync(pp)}catch(e){out({skip:'no-repo',product:pp});return}" +
+    "var h=function(x){return crypto.createHash('sha256').update(x).digest('hex').slice(0,12)};" +
+    "out({ok:a.length===b.length&&crypto.timingSafeEqual(Buffer.from(a),Buffer.from(b)),savedH:h(a),productH:h(b)});" +
+    "}catch(e){process.stdout.write(JSON.stringify({skip:'probe-error',reason:String(e&&e.message||e)}))}";
+/** saved 副本启动校验（机制见文件头注）：读来源登记文件并逐字节比对 saved 副本与
+ *  仓内产物；不一致抛错终止（恢复动作在消息内），登记文件/副本/检出根缺失 WARN 放行 */
+async function provenanceCheck() {
+    const r = await world.run("node", ["-e", PROV_PROBE, PROV_WF_NAME]);
+    let v;
+    try {
+        v = JSON.parse(r.stdout.trim());
+    }
+    catch {
+        log(`WARN: 启动校验探针输出不可解析（exit ${r.exitCode}：${(r.stderr !== "" ? r.stderr : r.stdout).trim().slice(0, 200)}）——跳过本次启动校验`);
+        return;
+    }
+    if (v.skip !== undefined) {
+        const detail = v.reason !== undefined ? `（${v.reason}）` : "";
+        log(`WARN: 来源登记文件或检出根缺失（${v.skip}${detail}）——跳过启动校验，本次发起未验证部署副本一致性`);
+        return;
+    }
+    if (v.ok === true) {
+        log(`启动校验通过：saved 副本与仓内产物一致（${PROV_WF_NAME}）`);
+        return;
+    }
+    throw new Error(`saved 副本漂移：${PROV_WF_NAME} 的部署副本与仓内产物不一致（副本 sha256 前 12 位 ${v.savedH}，仓内产物 ${v.productH}）——副本被仓外直接编辑或仓内产物被手改，本次发起的不是构建器产出版本。恢复动作：在仓检出根跑 node scripts/build-workflows.mjs 重建并同步三处产物后重新发起；修订续跑配方与禁止直改副本见 workflow-authoring 第 4 节`);
+}
 let obsCtx = null;
 /** ID 路径安全窄化：task-id 是观测根下的目录名、execution-id 是文件名主干——仅放行
  *  字母数字开头、只含字母/数字/点/连字符/下划线、≤128 字符、无连续点与结尾点的值，
