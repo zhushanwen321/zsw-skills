@@ -3378,6 +3378,18 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         // declared 存在以 territory 归一路径 + "/" 为前缀的文件即视为已列（目录声明的语义
         // 本就是覆盖其下全部文件）；前缀须带路径段边界，否则 packages/shared 会错误覆盖
         // packages/shared-utils 同形前缀条目
+        // 文件族形态分派（round-2 MF-2-2）：契约常态还含 glob/文件族形态（compile.md
+        // 「粒度到目录或文件族即可」；实测 impl-plan 样本 9 单元中 3 单元为 `**` 形态）——
+        // 条目含 `*` 或以 `...` 结尾时 base 带元字符字面段，精确命中与目录前缀命中恒不成立
+        // （真实文件路径不含元字符段）→ false missed、WARN 每轮必发。分派规则：此类条目
+        // 不进两级匹配，改取最后一个元字符段之前的路径段为前缀判前缀覆盖
+        // （packages/state-machine/** → 前缀 <root>/packages/state-machine/；
+        // src/*.test.ts → 前缀 <root>/src/），declared 存在该前缀条目即视为已列；
+        // 元字符段落在首段（前缀退化为 /）时不降级、照常走两级匹配，防前缀全量命中。
+        // 边界（声明取舍，不强行机械匹配）：带中文括注描述后缀的条目（archive.ts（新建）、
+        // services/archive/**（服务/状态机/自愈/测试））按原文是否含元字符照常分派——
+        // 括注与 glob 粘连会让前缀变粗、括注让非 glob 条目两级匹配落空，都交 WARN 人工
+        // 核对，弱信号可接受
         const planRead = await world.run(
           "node",
           ["-e", "try{process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8'))}catch(e){process.exit(1)}", implPlan],
@@ -3402,8 +3414,27 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
                 }
               }
               const declared = new Set(plan.modules.flatMap((m) => m.files));
+              // 文件族条目（含 glob 元字符或 ... 尾缀）取最后一个元字符段之前的路径段为
+              // 前缀；cut <= 0 = 元字符段在首段（前缀退化为 / 全量命中面），返回 null 照常
+              // 走两级匹配（分派规则与边界见上方对账块注释）
+              const familyPrefix = (p: string): string | null => {
+                const segs = p.split("/");
+                let cut = -1;
+                for (let i = 0; i < segs.length; i++) {
+                  if (segs[i].includes("*") || segs[i].endsWith("...")) cut = i;
+                }
+                return cut > 0 ? `${segs.slice(0, cut).join("/")}/` : null;
+              };
               const missed = [...terr].filter((p) => {
                 const base = p.replace(/\/+$/, "");
+                const fp = familyPrefix(base);
+                if (fp !== null) {
+                  // 文件族条目语义本就是覆盖其匹配的文件族：前缀覆盖即视为已列
+                  for (const d of declared) {
+                    if (d.startsWith(fp)) return false;
+                  }
+                  return true;
+                }
                 if (declared.has(base)) return false;
                 for (const d of declared) {
                   if (d.startsWith(`${base}/`)) return false;
