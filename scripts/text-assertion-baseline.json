@@ -143,155 +143,155 @@
    "\"  var isStd=false;for(var s of std){if(ln.indexOf(s)===0){isStd=true;break}}\","
   ],
   [
-   304,
+   305,
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
   ],
   [
-   310,
+   311,
    "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");"
   ],
   [
-   354,
+   355,
    "const abs = p.startsWith(\"/\");"
   ],
   [
-   451,
+   452,
    ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));"
-  ],
-  [
-   591,
-   "const abs = tok.startsWith(\"/\") ? tok : `${rootDir}/${tok}`;"
   ],
   [
    592,
+   "const abs = tok.startsWith(\"/\") ? tok : `${rootDir}/${tok}`;"
+  ],
+  [
+   593,
    "if (!affected.includes(abs)) affected.push(abs);"
   ],
   [
-   712,
+   713,
    ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));"
   ],
   [
-   793,
+   794,
    "if (fi.some((f) => fj.includes(f))) {"
   ],
   [
-   815,
+   816,
    "if (rest.startsWith(\"\\\"\") && rest.endsWith(\"\\\"\") && rest.length >= 2) rest = rest.slice(1, -1);"
   ],
   [
-   816,
+   817,
    "if (rest.includes(\" -> \")) {"
   ],
   [
-   833,
+   834,
    "if (token.length < 3 || !token.includes(\"/\")) return \"\";"
   ],
   [
-   834,
+   835,
    "return /\\.[A-Za-z0-9]+$/.test(token) ? token : \"\";"
   ],
   [
-   903,
+   904,
    "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${homeDir}/${p.slice(2)}` : p);"
   ],
   [
-   1023,
+   1024,
    "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +"
   ],
   [
-   1024,
+   1025,
    "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +"
   ],
   [
-   1028,
+   1029,
    "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;"
   ],
   [
-   1277,
+   1278,
    "const rel = (p: string): string => (p.startsWith(`${projectRoot}/`) ? p.slice(projectRoot.length + 1) : p);"
   ],
   [
-   1278,
+   1279,
    "const pathUnderRoot = (p: string): string => (p.startsWith(\"/\") ? p : `${projectRoot}/${p}`);"
   ],
   [
-   1387,
+   1388,
    "if (m) for (const fp of m.files) if (!base.includes(fp)) base.push(fp);"
   ],
   [
-   1591,
+   1592,
    ".filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)))"
   ],
   [
-   1950,
+   1951,
    "else if (typeof m[\"command\"] === \"string\" && ALWAYS_PASS_CMD_RE.test(m[\"command\"].trim())) badSc.push(`${i + 1}（selfCheck.command 须是对受影响文件的真实检查命令，不得是 shell 恒过/恒"
   ],
   [
-   1957,
+   1958,
    "const impure = (o[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));"
   ],
   [
-   2205,
+   2206,
    "if (src === designDoc || src === implPlan || src.startsWith(`${runDir}/`) || src.startsWith(`${retirementDestDir}/`)) {"
   ],
   [
-   2278,
+   2279,
    "return !pathUnderRoot(f).startsWith(`${retirementDestDir}/`);"
   ],
   [
-   2381,
+   2382,
    "if (!p.startsWith(`${projectRoot}/`)) {"
   ],
   [
-   2458,
+   2459,
    "const extraAbs = rep.fixed.filter((p2) => p2 !== \"\").map((p2) => (p2.startsWith(\"/\") ? p2 : `${projectRoot}/${p2}`));"
   ],
   [
-   2461,
+   2462,
    "if (!p2.startsWith(`${projectRoot}/`) || !(await pathExists(p2))) {"
   ],
   [
-   2558,
+   2559,
    "const blockers = loaded.filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)));"
   ],
   [
-   2629,
+   2630,
    "return n === null || !n.startsWith(`${projectRoot}/`);"
   ],
   [
-   2713,
+   2714,
    "terr.add(tok.startsWith(\"/\") ? tok : `${projectRoot}/${tok}`);"
   ],
   [
-   2724,
+   2725,
    "if (segs[i].includes(\"*\") || segs[i].endsWith(\"...\")) cut = i;"
   ],
   [
-   2734,
+   2735,
    "if (d.startsWith(fp)) return false;"
   ],
   [
-   2740,
+   2741,
    "if (d.startsWith(`${base}/`)) return false;"
   ],
   [
-   2989,
+   2990,
    "return !pathUnderRoot(hf).startsWith(`${retirementDestDir}/`);"
   ],
   [
-   3315,
+   3316,
    "if (!g.issueIds.includes(fx.issueId)) es.push(`fixes 引用未知条目 ${fx.issueId}`);"
   ],
   [
-   3318,
+   3319,
    "if (!g.issueIds.includes(d.issueId)) es.push(`deferred 引用未知条目 ${d.issueId}`);"
   ],
   [
-   3325,
+   3326,
    "if (!g.issueIds.includes(d.issueId)) es.push(`exempt 引用未知条目 ${d.issueId}`);"
   ],
   [
-   3330,
+   3331,
    "if (!g.issueIds.includes(d.issueId)) es.push(`delegated 引用未知条目 ${d.issueId}`);"
   ]
  ],

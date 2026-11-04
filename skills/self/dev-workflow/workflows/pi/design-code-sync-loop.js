@@ -675,8 +675,8 @@ async function obsCloseExecution(outcome) {
 //    修复落在生产代码组）→ delegated 申报置终态不计活跃，随终态 delegatedList 呈报
 //    主 agent 重派——防跨职责条目在本组空转到 stuck（实测 F8-1 单条空转 6 轮）
 //  - 修复全等级当轮修完不留尾巴（must-fix/suggestion/info）；组核验（改动 ⊆ 组文件并集
-//    ∪ 如实申报的 affectedFiles，批改动检测 = 内容指纹差分——批前已改文件被 fixer 再改
-//    后状态码不变，指纹直读内容无盲区）→ 引擎组级一笔 commit（gitignore 产物留盘不提交）
+//    ∪ 如实申报的 affectedFiles，组改动检测 = 记账单元级内容指纹差分——组派发前已脏
+//    文件被 fixer 再改后状态码不变，指纹直读内容无盲区）→ 引擎组级一笔 commit（gitignore 产物留盘不提交）
 //  - 退役闭环（收敛点，2026-09-27 裁决：决定权 = 判定 agent 的内容判断，机器引用扫描
 //    不否决）：agent 判定清单（零候选也显式返回）→ 引擎词干全仓扫描（含未跟踪文件）→
 //    有命中转清理条目（owner=retire-cleanup）回修复循环先修引用，清零后执行 git mv /
@@ -871,9 +871,10 @@ const NODE_WRITE_RUN_JSON = "var fs=require('fs'),pt=require('path');" +
     "try{var oldRun=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(oldRun&&typeof oldRun.startedAt==='string'&&oldRun.startedAt!==process.argv[3]){fs.renameSync(process.argv[1],pt.join(pt.dirname(process.argv[1]),'run-'+oldRun.startedAt.replace(/:/g,'-')+'.json'))}}catch(e){}" +
     "fs.writeFileSync(process.argv[1],process.argv[2])";
 // argv: [...绝对路径] → stdout JSON 同序数组 [{f, h}]（h = sha256(工作区内容)，文件不
-// 存在 = null）。批改动检测的内容指纹快照用：porcelain 状态码是「工作区相对 index/HEAD
-// 的状态分类」，不是内容身份——批前已改文件（如用户未提交的修改）被 fixer 再改后分类
-// 不变（M→M），状态码差分永远看不见；指纹差分直读内容本身，一套判据覆盖全部文件
+// 存在 = null）。组级账务的内容指纹快照用（每组派发前一次，取代改造前批前快照）：
+// porcelain 状态码是「工作区相对 index/HEAD 的状态分类」，不是内容身份——组派发前已
+// 脏文件（如用户未提交的修改）被 fixer 再改后分类不变（M→M），状态码差分永远看不见；
+// 指纹差分直读内容本身，一套判据覆盖全部文件
 const NODE_FILE_FINGERPRINTS = "var fs=require('fs'),crypto=require('crypto');var out=[];for(var i=1;i<process.argv.length;i++){var f=process.argv[i];var h=null;try{h=crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex')}catch(e){}out.push({f:f,h:h})}process.stdout.write(JSON.stringify(out))";
 /** 文件集 → 内容指纹 Map（一次 node -e 批量算）；文件不存在 = null 哨兵（删除也是改动） */
 async function fingerprintFiles(absFiles) {
