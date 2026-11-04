@@ -3221,8 +3221,10 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
                 // 元字符段落在首段（前缀退化为 /）时不降级、照常走两级匹配，防前缀全量命中。
                 // 边界（声明取舍，不强行机械匹配）：带中文括注描述后缀的条目（archive.ts（新建）、
                 // services/archive/**（服务/状态机/自愈/测试））按原文是否含元字符照常分派——
-                // 括注与 glob 粘连会让前缀变粗、括注让非 glob 条目两级匹配落空，都交 WARN 人工
-                // 核对，弱信号可接受
+                // 括注粘在 glob 段上（含内嵌斜杠）时与元字符段一并截掉，前缀仍落在元字符段父目录
+                // （services/archive/**（服务/…）→ 前缀 <root>/services/archive/，行为探针实证）；
+                // 非 glob 括注条目（archive.ts（新建））两级匹配落空 → 交 WARN 人工核对，弱信号
+                // 可接受
                 const planRead = await world.run("node", ["-e", "try{process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8'))}catch(e){process.exit(1)}", implPlan]);
                 if (planRead.exitCode !== 0) {
                     log(`WARN: 覆盖对账读取 impl-plan 失败（exit ${planRead.exitCode}）——本轮跳过 planner 漏列检查`);
@@ -3248,8 +3250,8 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
                             }
                             const declared = new Set(plan.modules.flatMap((m) => m.files));
                             // 文件族条目（含 glob 元字符或 ... 尾缀）取最后一个元字符段之前的路径段为
-                            // 前缀；cut <= 0 = 元字符段在首段（前缀退化为 / 全量命中面），返回 null 照常
-                            // 走两级匹配（分派规则与边界见上方对账块注释）
+                            // 前缀；cut <= 0 = 元字符段在首段（前缀退化为 /，会全量命中仓库内一切文件），
+                            // 返回 null 照常走两级匹配（分派规则与边界见上方对账块注释）
                             const familyPrefix = (p) => {
                                 const segs = p.split("/");
                                 let cut = -1;

@@ -606,12 +606,13 @@ const NODE_PREP = [
     "var ALLOWED = ['pnpm', 'npm', 'node', 'bash'];",
     // 恒绿形态拒收（assertion-residue MF-1-1）：白名单放行 bash/node，恒绿命令借道白名单
     // 即可让全量门秒绿（bash -c "true" 的 stub 落在 arg 位，故判据按完整命令串 + 逐 arg
-    // 双粒度应用）。-c 的 arg 是整段 shell 程序文本，逐 arg 只扫整段不扫段内组合——
-    // bash -c ': true' / 'exit 0' / 'true x' 穿透原判据（round-1 MF-1-1，探针实跑恒绿）：
-    // 命中 -c 时剥一层对称外引号取命令串，连同 ;/&& 切片并入候选，切片候选（下标 >
-    // args.length 的扩展候选）额外过 STUB_HEAD（stub 词头带参数形态——只新增拒收方向，
-    // RUNNER 豁免语义不变）。四式正则字面量与 wave-executor 侧 NOOP_CMD_* 保持逐字一致
-    // （两侧改动须同步）
+    // 双粒度应用）。-c 的 arg 是整段 shell 程序文本，逐 arg 只扫整段不扫段内组合；-c 还
+    // 可并入短旗标簇（bash -lc 'exit 0'，裸 '-c' 精确匹配拦不住）——判据按
+    // /^-[a-uw-z]*c/i 找首个短旗标簇元素（单短横开头、簇尾为 c 时后随 arg 才是命令串；
+    // 排除 -- 长选项形态），命中取该元素后随 arg 为命令串，剥一层对称外引号，连同 ;/&&
+    // 切片并入候选，切片候选（下标 > args.length 的扩展候选）额外过 STUB_HEAD（stub 词头
+    // 带参数形态——只新增拒收方向，RUNNER 豁免语义不变）。簇判据与四式正则字面量与
+    // wave-executor 侧 NOOP_CMD_* 保持逐字一致（两侧改动须同步）
     "var SQ = String.fromCharCode(39);",
     "var SHELL_QUOTE = function (s) { return /^[A-Za-z0-9_\\/:.,@%^+=-]+$/.test(s) ? s : SQ + s.split(SQ).join(SQ + '\\\\' + SQ + SQ) + SQ; };",
     "var STUB_RE = /^\\s*(true|false|:)\\s*$/;",
@@ -621,14 +622,18 @@ const NODE_PREP = [
     "var noopCmdErr = function (label, program, args) {",
     "  var full = [program].concat(args).map(SHELL_QUOTE).join(' ');",
     "  var cands = [full].concat(args);",
-    "  if ((program === 'bash' || program === 'sh') && args.indexOf('-c') >= 0) {",
-    "    var cRaw = args[args.indexOf('-c') + 1];",
-    "    if (typeof cRaw === 'string' && cRaw.length > 0) {",
-    "      var cCmd = cRaw;",
-    "      if (cCmd.length > 1 && (cCmd.charCodeAt(0) === 39 || cCmd.charCodeAt(0) === 34) && cCmd.charCodeAt(cCmd.length - 1) === cCmd.charCodeAt(0)) cCmd = cCmd.slice(1, -1);",
-    "      cands.push(cCmd);",
-    "      var cSegs = cCmd.split(/;|&&/);",
-    "      for (var csi = 0; csi < cSegs.length; csi++) cands.push(cSegs[csi]);",
+    "  if (program === 'bash' || program === 'sh') {",
+    "    var fci = -1;",
+    "    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-uw-z]*c/i.test(args[fai])) { fci = fai; break; } }",
+    "    if (fci >= 0) {",
+    "      var cRaw = args[fci + 1];",
+    "      if (typeof cRaw === 'string' && cRaw.length > 0) {",
+    "        var cCmd = cRaw;",
+    "        if (cCmd.length > 1 && (cCmd.charCodeAt(0) === 39 || cCmd.charCodeAt(0) === 34) && cCmd.charCodeAt(cCmd.length - 1) === cCmd.charCodeAt(0)) cCmd = cCmd.slice(1, -1);",
+    "        cands.push(cCmd);",
+    "        var cSegs = cCmd.split(/;|&&/);",
+    "        for (var csi = 0; csi < cSegs.length; csi++) cands.push(cSegs[csi]);",
+    "      }",
     "    }",
     "  }",
     "  for (var ci = 0; ci < cands.length; ci++) {",

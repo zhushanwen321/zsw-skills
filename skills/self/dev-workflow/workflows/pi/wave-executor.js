@@ -499,11 +499,13 @@ const VERIFY_SCRIPT_TIMEOUT_MS = 3600000; // 验收剧本兜底墙钟（任务�
 const TEST_WHITELIST = ["pnpm", "npm", "node", "git", "bash"];
 // 恒绿形态拒收（assertion-residue MF-1-1）：白名单放行 bash/node，恒绿命令借道白名单即可
 // 让节点核验秒绿（bash -c "true" 的 stub 落在 arg 位，故判据按完整命令串 + 逐 arg 双粒度
-// 应用）。-c 的 arg 是整段 shell 程序文本，逐 arg 只扫整段不扫段内组合——bash -c ': true' /
-// 'exit 0' / 'true x' 穿透原判据（round-1 MF-1-1，探针实跑恒绿）：命中 -c 时剥一层对称外
-// 引号取命令串，连同 ;/&& 切片并入候选，切片候选（下标 > args.length 的扩展候选）额外过
-// STUB_HEAD（stub 词头带参数形态——只新增拒收方向，RUNNER 豁免语义不变）。四式正则字面量
-// 与 dev-consistency-loop NODE_PREP 侧 noopCmdErr 保持逐字一致（两侧改动须同步）
+// 应用）。-c 的 arg 是整段 shell 程序文本，逐 arg 只扫整段不扫段内组合；-c 还可并入短旗
+// 标簇（bash -lc 'exit 0'，裸 '-c' 精确匹配拦不住）——判据按 /^-[a-uw-z]*c/i 找首个短旗
+// 标簇元素（单短横开头、簇尾为 c 时后随 arg 才是命令串；排除 -- 长选项形态），命中取该
+// 元素后随 arg 为命令串，剥一层对称外引号，连同 ;/&& 切片并入候选，切片候选（下标 >
+// args.length 的扩展候选）额外过 STUB_HEAD（stub 词头带参数形态——只新增拒收方向，RUNNER
+// 豁免语义不变）。簇判据与四式正则字面量与 dev-consistency-loop NODE_PREP 侧 noopCmdErr
+// 保持逐字一致（两侧改动须同步）
 const NOOP_CMD_STUB_RE = /^\s*(true|false|:)\s*$/;
 const NOOP_CMD_RUNNER_RE = /(vitest|jest|pnpm(?:-m)?\s+(?:run\s+)?test|npm\s+(?:run\s+)?test|yarn\s+test|make\s+test)/;
 const NOOP_CMD_ECHO_RE = /^\s*(echo|printf)\b/;
@@ -516,14 +518,17 @@ function shellQuoteArg(s) {
 function noopCommandError(label, program, args) {
     const full = [program, ...args].map(shellQuoteArg).join(" ");
     const cands = [full, ...args];
-    if ((program === "bash" || program === "sh") && args.includes("-c")) {
-        const raw = args[args.indexOf("-c") + 1];
-        if (typeof raw === "string" && raw.length > 0) {
-            let cmd = raw;
-            if (cmd.length > 1 && (cmd.charCodeAt(0) === 39 || cmd.charCodeAt(0) === 34) && cmd.charCodeAt(cmd.length - 1) === cmd.charCodeAt(0)) {
-                cmd = cmd.slice(1, -1);
+    if (program === "bash" || program === "sh") {
+        const flagIdx = args.findIndex((a) => /^-[a-uw-z]*c/i.test(a));
+        if (flagIdx >= 0) {
+            const raw = args[flagIdx + 1];
+            if (typeof raw === "string" && raw.length > 0) {
+                let cmd = raw;
+                if (cmd.length > 1 && (cmd.charCodeAt(0) === 39 || cmd.charCodeAt(0) === 34) && cmd.charCodeAt(cmd.length - 1) === cmd.charCodeAt(0)) {
+                    cmd = cmd.slice(1, -1);
+                }
+                cands.push(cmd, ...cmd.split(/;|&&/));
             }
-            cands.push(cmd, ...cmd.split(/;|&&/));
         }
     }
     for (let i = 0; i < cands.length; i++) {
