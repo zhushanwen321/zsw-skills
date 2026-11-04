@@ -135,6 +135,7 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 1. 改完必须先 `node scripts/build-workflows.mjs` 再提交——pre-commit 自动核对构建一致性 / 双平台对等 / 类型三道门，产物过期即拦。
 2. **结构化返回接口两侧同 commit 同步**：改 zcode 壳（`.zcode.tpl.ts`）的 interface 顶层字段或 required 时，同步四个 pi 壳（`.pi.tpl.js`）对应 `SCHEMA_*` 的 properties 键与 required 数组；`check-workflow-parity.mjs` 按字段名机器核对，红灯 = 漏同步（描述文本两侧允许不同，不比对）。
 3. 跨拷贝契约分层归宿判据（同一条规则在多处存在拷贝时按此选层）：拷贝是过渡态（已有收敛方向裁决）→ 不建共享基建，用不变量检查器守住过渡期，检查器随收敛自然退役；稳态且语义全同 → 物理收敛或构建期派生单一来源；稳态且存在合法变异 → 检查器断言共同不变量，变异留在各拷贝局部；纯文字范围 → 义务句 + 消费方按可观察特征分支（承认是愿望式约定，不是被强制执行的契约）。「机制要有已发生证据支撑」只约束机制复杂度（生成器 / 推导器 / 抽象层），不约束简单确定性断言——断言只需合理的失败路径。
+4. **workflow 脚本写法约束（防 CreateWorkflow 发起预检爆炸）**：预检会全量分析脚本控制流图，两种写法让边数组指数爆炸——轻则预检劣化到分钟级，重则大数组展开超限抛 "Maximum call stack size exceeded" 把整个回合带崩（2026-11-04 dev-consistency-loop 实测：边 54 万条必崩，改后 618ms 通过）：① 迭代回调里链 `.then()`（`items.map((item) => acquire().then(async () => {...}))`）——回调被内联进扇形区域、throw 跳转边按入口事实数成倍克隆；改写为 `const runOne = async (item) => { await acquire(); ... }` + `items.map((item) => runOne(item))`，语义等价（acquire 仍在 map 序同步调用，微任务顺序与释放/错误路径不变）。② 派发经过任务对象中转（`names.map((n) => ({ run: async () => {...} }))` + `pool(tasks, N, (t) => t.run())`）——对象方法间接调用让内联展开超线性；改为池直接按条目派发 `pool(names, N, (n) => runOne(n))`，执行体提为命名 async 函数。两处各消一个乘法因子，只改一处不够（单改实测 47~72s，同改才回亚秒）。
 
 ## 关键约束
 
