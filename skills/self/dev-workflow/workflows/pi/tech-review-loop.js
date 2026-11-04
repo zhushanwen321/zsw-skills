@@ -25,8 +25,7 @@ parameters:
       description: 自定义 reviewer 模板绝对路径数组，按文件 basename 覆盖同名维度（tech-design-direction-review.md / tech-design-review.md / tech-design-impact-review.md / tech-design-simplicity-review.md）；未匹配任何维度的条目忽略并告警
     attempt:
       type: number
-      default: 1
-      description: 重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）
+      description: 重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）。不得设 default——default 数值会被引擎物化成显式值、吞掉「未传」形态，自动检测失效，重发起时轮次目录无 attempt 后缀、覆盖首轮产物（实测：省略参数 → 引擎填 1）
     taskId:
       type: string
       description: "观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」"
@@ -1246,12 +1245,19 @@ for (let round = 1; round <= maxRounds; round++) {
     // 注：经 map 闭包赋值，显式 string 宽型防 TS 控制流窄化误判比较无交集
     let dirFixScope = "patch";
     let dirOneliner = "";
+    // agent(名字) 全 run 只允许注册一次（引擎约束：具名 subagent 名字 run 内唯一）——
+    // 先取引用，回喂重试经同一引用续聊（与下方修复者同款模式；闭包内重复 agent(同名)
+    // 在重试时二次注册同名被引擎拒绝，实测崩于 r2 聚合回喂）
+    const directionAgent = wfAgent(`方向审-r${round}`, DIRECTION_PERSONA);
+    const mainAgent = wfAgent(`主审-r${round}`, REVIEWER_PERSONA);
+    const impactAgent = wfAgent(`影响面审-r${round}`, REVIEWER_PERSONA);
+    const simplicityAgent = wfAgent(`简洁审-r${round}`, REVIEWER_PERSONA);
     try {
         const raw = await Promise.all([
-            askValidated(validateDirectionVerdict, (p) => wfAgent(`方向审-r${round}`, DIRECTION_PERSONA).ask("DirectionVerdict", p), reviewerPrompt(TRIALS[0])),
-            askValidated(validateReviewerVerdict, (p) => wfAgent(`主审-r${round}`, REVIEWER_PERSONA).ask("ReviewerVerdict", p), reviewerPrompt(TRIALS[1])),
-            askValidated(validateReviewerVerdict, (p) => wfAgent(`影响面审-r${round}`, REVIEWER_PERSONA).ask("ReviewerVerdict", p), reviewerPrompt(TRIALS[2])),
-            askValidated(validateReviewerVerdict, (p) => wfAgent(`简洁审-r${round}`, REVIEWER_PERSONA).ask("ReviewerVerdict", p), reviewerPrompt(TRIALS[3])),
+            askValidated(validateDirectionVerdict, (p) => directionAgent.ask("DirectionVerdict", p), reviewerPrompt(TRIALS[0])),
+            askValidated(validateReviewerVerdict, (p) => mainAgent.ask("ReviewerVerdict", p), reviewerPrompt(TRIALS[1])),
+            askValidated(validateReviewerVerdict, (p) => impactAgent.ask("ReviewerVerdict", p), reviewerPrompt(TRIALS[2])),
+            askValidated(validateReviewerVerdict, (p) => simplicityAgent.ask("ReviewerVerdict", p), reviewerPrompt(TRIALS[3])),
         ]);
         const badNull = raw.findIndex((v) => v === null);
         if (badNull >= 0) {
@@ -1303,8 +1309,10 @@ for (let round = 1; round <= maxRounds; round++) {
         await obsBegin("aggregate", round);
         const rawRefs = roundProblems.map((pp) => pp.ref);
         let aggregation;
+        // 同四席：agent(名字) 先注册一次，回喂重试经同一引用续聊（闭包内重复 agent(同名) 会被引擎拒绝）
+        const aggregator = wfAgent(`聚合裁决-r${round}`, AGGREGATOR_PERSONA);
         try {
-            aggregation = await askValidated(makeAggregationValidator(rawRefs), (p2) => wfAgent(`聚合裁决-r${round}`, AGGREGATOR_PERSONA).ask("AggregationOutcome", p2), [
+            aggregation = await askValidated(makeAggregationValidator(rawRefs), (p2) => aggregator.ask("AggregationOutcome", p2), [
                 `聚合裁决（第 ${round} 轮，产物目录 ${roundAbs}）——四席评审已并行完成，把它们的发现合并为一份去重权威清单。`,
                 "",
                 "第一步：Read 四份评审报告（证据与完整上下文）：",

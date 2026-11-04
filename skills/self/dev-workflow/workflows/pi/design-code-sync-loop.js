@@ -41,8 +41,7 @@ parameters:
       description: "模块 reviewer agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/sync-reviewer.md）"
     attempt:
       type: number
-      default: 1
-      description: "重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）"
+      description: "重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）。不得设 default——default 数值会被引擎物化成显式值、吞掉「未传」形态，自动检测失效且防覆盖校验将把缺省值当显式值拒启（实测：runDir 已有 attempt1 产物时省略参数 → 引擎填 1 → 拒启）"
     rulings:
       type: string
       default: ""

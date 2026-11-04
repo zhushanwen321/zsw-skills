@@ -39,8 +39,9 @@ args:
     type: number
     description: 重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；
       缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取
-      已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）
-    default: 1
+      已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）。不得设 default——
+      default 数值会被引擎物化成显式值、吞掉「未传」形态，自动检测失效，重发起时
+      轮次目录无 attempt 后缀、覆盖首轮产物（实测：省略参数 → 引擎填 1）
   taskId:
     type: string
     description: 观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其

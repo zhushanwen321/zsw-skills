@@ -51,13 +51,12 @@ args:
     type: number
     description: 重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；
       缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取
-      已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）
-    default: 1
+      已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）。不得设 default——
+      default 数值会被引擎物化成显式值、吞掉「未传」形态，自动检测失效且防覆盖校验
+      将把缺省值当显式值拒启（实测：runDir 已有 attempt1 产物时省略参数 → 引擎填 1 → 拒启）
   rulings:
     type: string
-    description: 已裁决记录 json 绝对路径（可选；顶层数组，元素 {id, direction: 'doc-right'|
-      'code-right', anchor, quote, source}）——设计决策与开发期裁决的机器可读清单，注入全部
-      reviewer（已答问题不得标 contested）；断点续跑（resumeFrom）时按它把冻结条目重绑定方向
+    description: "已裁决记录 json 绝对路径（可选；顶层数组，元素 {id, direction: doc-right 或 code-right, anchor, quote, source}）——设计决策与开发期裁决的机器可读清单，注入全部 reviewer（已答问题不得标 contested）；断点续跑（resumeFrom）时按它把冻结条目重绑定方向"
     default: ""
   resumeFrom:
     type: string

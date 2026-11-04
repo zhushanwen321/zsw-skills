@@ -32,8 +32,8 @@ args:
   attempt:
     type: number
     description: 重发起序号（status.json events 追加保留历史不覆盖；attempt > 1 时
-      Gate A 日志命名带 .attemptM 后缀防覆盖上轮日志）
-    default: 1
+      Gate A 日志命名带 .attemptM 后缀防覆盖上轮日志）。不得设 default——引擎会把
+      default 物化成显式值、吞掉「未传」形态（本参数未传时 shared 自带归 1 兜底）
   taskId:
     type: string
     description: 观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其

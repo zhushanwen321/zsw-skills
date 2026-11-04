@@ -21,8 +21,7 @@ parameters:
       description: "一致性审查 agent 模板路径（缺省用 dev-flow-wf skill 内置模板）"
     attempt:
       type: number
-      default: 1
-      description: "重发起序号（status.json events 追加保留历史不覆盖；attempt > 1 时 Gate A 日志命名带 .attemptM 后缀防覆盖上轮日志）"
+      description: "重发起序号（status.json events 追加保留历史不覆盖；attempt > 1 时 Gate A 日志命名带 .attemptM 后缀防覆盖上轮日志）。不得设 default——引擎会把 default 物化成显式值、吞掉「未传」形态（本参数未传时 shared 自带归 1 兜底）"
     taskId:
       type: string
       description: "观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」"
