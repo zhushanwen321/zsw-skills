@@ -1488,6 +1488,9 @@ for (let round = 1; round <= maxRounds; round++) {
     let revisionSummary = "";
     let lastCheckReport = "";
     let checkPassed = false;
+    // 机器预检失败布尔态：与最后一次 lastCheckReport 赋值同步更新（blocked 残缺路径重置），
+    // 终态分支用它判定，不回查自产文本里的 "[precheck]" 字面量
+    let isPrecheckFailure = false;
     for (let fixAttempt = 1; fixAttempt <= FIX_RETRY_MAX && !checkPassed; fixAttempt++) {
         const instructions = fixAttempt === 1
             ? baseFixInstructions
@@ -1515,6 +1518,7 @@ for (let round = 1; round <= maxRounds; round++) {
         if (fixStatus === "blocked" && blocked === null) {
             lastCheckReport =
                 'status="blocked" 但 blocked 字段缺失或全空。二选一修正：有卡点 → 补全 blocked { items: 至少一条卡住的问题, reason: 为什么需要用户裁决 }；无卡点 → status 改为 "done" 且返回体不含 blocked 字段。';
+            isPrecheckFailure = false;
             continue;
         }
         if (blocked !== null) {
@@ -1571,8 +1575,10 @@ for (let round = 1; round <= maxRounds; round++) {
         if (missedOutstanding.length > 0) {
             errLines.push(`- [outstanding] 上轮遗留条目 ${missedOutstanding.map((d) => `${d.id}（${d.title}）`).join("、")} 未出现在本轮处置表（延续条目必须复用原 id 处置——含登记不修/归档形态）`);
         }
-        if (precheckErr !== "")
+        if (precheckErr !== "") {
             errLines.push(`- [precheck] ${precheckErr}`);
+            isPrecheckFailure = true;
+        }
         lastCheckReport = errLines.join("\n");
         // 失败留档：原始返回 + 校验报告（终态后接管者可对账——修复者的原始 dispositions
         // 只存在于返回值里，不落盘即无处可寻）
@@ -1581,7 +1587,7 @@ for (let round = 1; round <= maxRounds; round++) {
         log(`WARN: 修复者处置表第 ${fixAttempt} 次未过校验（${errLines.length} 项）${fixAttempt < FIX_RETRY_MAX ? "，回喂校验报告重试" : "，重试预算耗尽"}`);
     }
     if (!checkPassed) {
-        return await finish("fix-failure", round, lastCheckReport.includes("[precheck]")
+        return await finish("fix-failure", round, isPrecheckFailure
             ? `机器预检 ${FIX_RETRY_MAX} 次未通过（章节 JSON/渲染红——非处置表问题）：\n${lastCheckReport}\n原始返回与校验报告已留档 ${roundAbs}/raw-fix-return-*.json；按报告修复对应章节 JSON 后重跑 node ${renderCliAbs} ${designDoc} 再校验。恢复动作：人工修 JSON 后 args.attempt 递增重新发起（在途修订已留磁盘，接管前先盘点 ${designDoc}）`
             : `处置表校验 ${FIX_RETRY_MAX} 次未通过（初始 1 次 + 回喂重试）：\n${lastCheckReport}\n原始返回与校验报告已留档 ${roundAbs}/raw-fix-return-*.json；文档修订已留磁盘（修复内容通常有效，仅结构化返回不合规），接管前先盘点 ${designDoc}。恢复动作：人工按校验报告补正后落 ${roundAbs}/dispositions.json 续下轮，或 args.attempt 递增重新发起`);
     }

@@ -497,6 +497,43 @@ const TAIL_LINES = 40; // 失败输出贴入打回 prompt 的行数上限
 const TEST_TIMEOUT_MS = 1800000; // 节点测试命令兜底墙钟（单元级=数十分钟；world.run 默认 300s 会误杀大仓单测）
 const VERIFY_SCRIPT_TIMEOUT_MS = 3600000; // 验收剧本兜底墙钟（任务级=小时级，按超时默认原则校准）
 const TEST_WHITELIST = ["pnpm", "npm", "node", "git", "bash"];
+// 恒绿形态拒收（assertion-residue MF-1-1）：白名单放行 bash/node，恒绿命令借道白名单即可
+// 让节点核验秒绿（bash -c "true" 的 stub 落在 arg 位，故判据按完整命令串 + 逐 arg 双粒度
+// 应用）。-c 的 arg 是整段 shell 程序文本，逐 arg 只扫整段不扫段内组合——bash -c ': true' /
+// 'exit 0' / 'true x' 穿透原判据（round-1 MF-1-1，探针实跑恒绿）：命中 -c 时剥一层对称外
+// 引号取命令串，连同 ;/&& 切片并入候选，切片候选（下标 > args.length 的扩展候选）额外过
+// STUB_HEAD（stub 词头带参数形态——只新增拒收方向，RUNNER 豁免语义不变）。四式正则字面量
+// 与 dev-consistency-loop NODE_PREP 侧 noopCmdErr 保持逐字一致（两侧改动须同步）
+const NOOP_CMD_STUB_RE = /^\s*(true|false|:)\s*$/;
+const NOOP_CMD_RUNNER_RE = /(vitest|jest|pnpm(?:-m)?\s+(?:run\s+)?test|npm\s+(?:run\s+)?test|yarn\s+test|make\s+test)/;
+const NOOP_CMD_ECHO_RE = /^\s*(echo|printf)\b/;
+const NOOP_CMD_STUB_HEAD_RE = /^\s*(true|false|:|exit)(\s|$)/;
+const SHELL_SAFE_ARG_RE = /^[A-Za-z0-9_/:.,@%^+=-]+$/;
+function shellQuoteArg(s) {
+    return SHELL_SAFE_ARG_RE.test(s) ? s : "'" + s.split("'").join("'\\''") + "'";
+}
+/** dev 节点 testCommand 恒绿形态判定：命中返回拒收文案（含恢复动作），未命中返回 null */
+function noopCommandError(label, program, args) {
+    const full = [program, ...args].map(shellQuoteArg).join(" ");
+    const cands = [full, ...args];
+    if ((program === "bash" || program === "sh") && args.includes("-c")) {
+        const raw = args[args.indexOf("-c") + 1];
+        if (typeof raw === "string" && raw.length > 0) {
+            let cmd = raw;
+            if (cmd.length > 1 && (cmd.charCodeAt(0) === 39 || cmd.charCodeAt(0) === 34) && cmd.charCodeAt(cmd.length - 1) === cmd.charCodeAt(0)) {
+                cmd = cmd.slice(1, -1);
+            }
+            cands.push(cmd, ...cmd.split(/;|&&/));
+        }
+    }
+    for (let i = 0; i < cands.length; i++) {
+        const c = cands[i];
+        if (NOOP_CMD_STUB_RE.test(c) || (i > args.length && NOOP_CMD_STUB_HEAD_RE.test(c)) || (NOOP_CMD_ECHO_RE.test(c) && !NOOP_CMD_RUNNER_RE.test(c))) {
+            return `${label} 是恒绿形态命令（${full}）——不构成真实测试证据（恢复：检查 testPlan.fullSuite / testPlan.artifacts[n].command / testPlan.incremental / 节点 testCommand 是否为真实测试命令）`;
+        }
+    }
+    return null;
+}
 /** verify 剧本合法扩展名（启动 fail-fast；解释器分派判据 = .sh→bash、其余→node——
  *  调整本集合须同步核对 runVerifyScript 的分派） */
 const VERIFY_SCRIPT_EXTS = new Set([".sh", ".mjs", ".js", ".cjs"]);
@@ -917,6 +954,9 @@ function validatePlan(raw) {
                 if (!TEST_WHITELIST.includes(tc.program)) {
                     errors.push(`dev 节点 ${id} 的 testCommand.program "${tc.program}" 不在白名单（${TEST_WHITELIST.join("/")}）`);
                 }
+                const noopErr = noopCommandError(`dev 节点 ${id} 的 testCommand`, tc.program, tc.args);
+                if (noopErr !== null)
+                    errors.push(noopErr);
                 node.testCommand = { program: tc.program, args: tc.args };
             }
         }

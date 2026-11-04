@@ -755,8 +755,8 @@ async function obsCloseExecution(outcome: string): Promise<void> {
 
 // ── 常量（控制流专用，不内插进任何 ask 文本） ──
 const DEFAULT_MAX_ROUNDS = 10;
-const REVIEWER_BATCH = 4; // 模块 fan-out 分批（全局 subagent 并发 ≤5 约束）
-const FIXER_CONCURRENCY = 3; // 修复组并行批大小（rfl 同款；范围声明互斥由闭包合并保证）
+const REVIEWER_BATCH = 4; // 模块审查与聚焦复审批次常数（2026-11-04 D3：数值不变改流式池上限语义——全局 subagent 并发 ≤5 约束）
+const FIXER_CONCURRENCY = 3; // 修复组并行批常数（rfl 同款；2026-11-04 D3：数值不变改流式池上限语义；范围声明互斥由闭包合并保证）
 const STUCK_STALL_ROUNDS = 3; // 停机线：must-fix 连续 N 轮不降判 stuck（2026-09-26 用户裁决三 loop 统一 3 轮；原设计 §7 为 4）
 const STUCK_PER_FINDING_ROUNDS = 2; // 停机线：单条活跃存活超过 N 轮判 stuck（设计 §7：单条超 2 轮）
 const VALID_ARG_KEYS = new Set([
@@ -789,16 +789,23 @@ const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/sync-review
 const RETIREMENT_DIR = ".tmp/design-doc-retirement"; // 退役候选移动目标（projectRoot 相对，gitignore 产物）
 
 // 机械信号步（§7.1 符号词表 grep——[HISTORICAL] 悬空引用防线，机器产确定性信号）：
-// argv: [projectRoot, watchlistPath, ...docPaths] → 读 T3 产出的符号词表（scan/skip 两桶，
+// argv: [projectRoot, watchlist] → 读 T3 产出的符号词表（scan/skip 两桶，
 // skip 带理由——语义甄别在 tech-design 写词表时完成，扫描器不做任何词源猜测）→ 复验词表
-// 词表带 sourceFingerprints 指纹（文档改动 = 词表过期，脚本层直接判不通过）→ scan 词分批单进程多
-// pattern 验证（git grep -oh -F -e s1 -e s2… 一次查批内全部，-o 输出实际命中，与 scan 差集
-// = 零命中清单）→ stdout = JSON { ok, missing } 或 { ok: false, reason, ...差异 }。
+// 词表带 sourceFingerprints 指纹（文档改动 = 词表过期，脚本层直接判不通过——硬门）→
+// 指纹通过后按指纹键重提取文档反引号词集，与 scan∪skip 差集经 wordsDrift 字段输出
+// （2026-11-04 恢复为软监测：指纹只护「词表与源文档同步」，词表自身 scan/skip 被改写
+// 机器无感；差集非空不拒启，由解析侧 WARN 指路回 T3 重新甄别。主信号 =
+// inDocNotInWatchlist（文档有、词表无——词表未覆盖新增引用）；反向
+// inWatchlistNotInDoc 属词表甄别的合法形态（免扫词/上游符号），只提示不暗示缺陷）→
+// scan 词分批单进程多 pattern 验证（git grep -oh -F -e s1 -e s2… 一次查批内全部，-o 输出
+// 实际命中，与 scan 差集 = 零命中清单）→ stdout = JSON
+// { ok:true, missing, wordsDrift:{inDocNotInWatchlist, inWatchlistNotInDoc} }
+// 或 { ok: false, reason, ...差异 }。
 // 2026-09-27 重建：旧版自行抓取文档反引号并假设「反引号 = 本项目符号」——上游符号
 // （如 pi dist 内部函数）零命中被误立项且修复闭环死锁（正确处置 = 文档保留词 + 解释，
 // 与「报警消失」判据永不同时成立，10 轮耗尽）。词表把「该不该扫」的裁决前移到 T3 语义
-// 分析，扫描器回归纯机械定位。批 git 错误（exit 128）保守跳过不立项（机器信号只报
-// 确定性悬空）。
+// 分析，扫描器回归纯机械定位——反引号集因此只作词表完整性软监测，不再作为扫描词源。
+// 批 git 错误（exit 128）保守跳过不立项（机器信号只报确定性悬空）。
 const NODE_BACKTICK_GREP = [
   "var fs=require('fs'),cp=require('child_process'),crypto=require('crypto');",
   "var root=process.argv[1],wl=process.argv[2];",
@@ -809,11 +816,14 @@ const NODE_BACKTICK_GREP = [
   "if(scan===null||skip===null){out({ok:false,reason:'词表缺 scan 数组或 skip 数组：'+wl});process.exit(0)}",
   "var badSkip=skip.filter(function(s){return !s||typeof s.word!=='string'||s.word===''||typeof s.reason!=='string'||s.reason.trim()===''});",
   "if(badSkip.length>0){out({ok:false,reason:'词表 skip 元素畸形（须 {word, reason 非空}）'+badSkip.length+' 条'});process.exit(0)}",
-  // 指纹校验（2026-11-04 结构化改造，替代旧「文档反引号集与 scan∪skip 等集」比对——旧
-  // 等集只捕获反引号措辞增删且对措辞形态强门禁，指纹捕获源文档任何改动、语义更强；
-  // 反引号重提取随之退役）。sourceFingerprints = { <输入文档路径>: sha256 }，由
-  // extract-backticks 生成、T3 甄别时原样抄入 watchlist；缺失 = 旧版词表，不等 =
-  // 文档已改词表未重生成——两者都拒启指路重产
+  // 指纹校验（2026-11-04 结构化改造，硬门）：sourceFingerprints = { <输入文档路径>:
+  // sha256 }，由 extract-backticks 生成、T3 甄别时原样抄入 watchlist；缺失 = 旧版词表，
+  // 不等 = 文档已改词表未重生成——两者都拒启指路重产。指纹通过后按指纹键重提取反引号
+  // 词集做等集软监测（2026-11-04 恢复，过滤逻辑自 dc0d0ae^ 历史版取回）：指纹只护「词表
+  // 与源文档同步」，词表自身 scan/skip 被改写时指纹照样通过——差集经 wordsDrift 字段
+  // 输出，ok 仍 true 不拒启（旧等集硬门对措辞形态过强、曾致修复死锁，其退役语义保留；
+  // 完整性监测降级为解析侧 WARN 指路重甄别）。文档路径不另传 argv——指纹键即 extract-
+  // backticks 的输入文档集，重提取与指纹校验同源
   "var fps=wlRaw.sourceFingerprints;",
   "if(fps===null||typeof fps!=='object'||Array.isArray(fps)||Object.keys(fps).length===0){out({ok:false,reason:'词表缺 sourceFingerprints 字段（旧版生成器产物或手写词表）——回 tech-design-wf T3 重新生成词表'});process.exit(0)}",
   "var fpBad=[];",
@@ -823,7 +833,26 @@ const NODE_BACKTICK_GREP = [
   "  }catch(e){fpBad.push(fp+'（不可读）');}",
   "}",
   "if(fpBad.length>0){out({ok:false,reason:'源文档已改而词表未重生成（指纹不等）：'+fpBad.join('、')+'——回 tech-design-wf flow/plan.md「符号词表」节重跑（脚本+甄别）'});process.exit(0)}",
-  "if(scan.length===0){out({ok:true,missing:[]});process.exit(0)}",
+  // 词集软监测（2026-11-04 恢复，过滤逻辑自 dc0d0ae^ 历史版逐条取回）：反引号重提取
+  // （2-60 字符、ASCII 可见、不含 / 与空格、符号段 ≤4、非版本号形态）→ 与 scan∪skip
+  // 差集 wordsDrift。只输出不拒启——硬门语义在指纹段，等集完整性由解析侧 WARN 承接
+  "var words=new Set();",
+  "for (var dp in fps){",
+  "  try{ var t=fs.readFileSync(dp,'utf8');",
+  "    var m=t.match(/`([^`\\n]{2,60})`/g)||[];",
+  "    for (var s of m){ var v=s.slice(1,-1).trim();",
+  "      if(!v||!/^[\\x20-\\x7e]+$/.test(v))continue;",
+  "      if(v.indexOf('/')>=0||v.indexOf(' ')>=0)continue;",
+  "      if(v.split(/[^A-Za-z0-9_.\\-]+/).length>4)continue;",
+  "      if(/v?\\d+(\\.\\d+)+/i.test(v))continue;",
+  "      words.add(v); }",
+  "  }catch(e){}",
+  "}",
+  "var declared=new Set(scan);for (var s2 of skip)declared.add(s2.word);",
+  "var under=[...words].filter(function(w){return !declared.has(w)});",
+  "var over=scan.filter(function(w){return !words.has(w)}).concat(skip.filter(function(s){return !words.has(s.word)}).map(function(s){return s.word}));",
+  "var wd={inDocNotInWatchlist:under,inWatchlistNotInDoc:over};",
+  "if(scan.length===0){out({ok:true,missing:[],wordsDrift:wd});process.exit(0)}",
   "var hit=new Set();",
   "for (var b=0; b<scan.length; b+=100){",
   "  var pat=[];",
@@ -832,14 +861,28 @@ const NODE_BACKTICK_GREP = [
   "  if (r.status === 128) { console.error('WARN: 批 '+b+' git 错误，该批符号保守跳过不立项'); continue; }",
   "  if (r.stdout) { for (var ln of r.stdout.split('\\n')) { var tt=ln.trim(); if (tt) hit.add(tt); } }",
   "}",
-  "out({ok:true,missing:scan.filter(function(s){return !hit.has(s)})});",
+  "out({ok:true,missing:scan.filter(function(s){return !hit.has(s)}),wordsDrift:wd});",
 ].join("\n");
 
 // node -e 通道（argv 传参，无 shell 注入面；node 代码不受脚本 facade 限制）
 const NODE_WRITE_FILE =
   "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2])";
-const NODE_CHECK_EXISTS =
-  "const fs=require('fs');const missing=process.argv.slice(1).filter(p=>!fs.existsSync(p));if(missing.length>0){process.stdout.write(missing.join(' | '));process.exit(1)}";
+// argv: [...路径] → 全部存在且为常规文件 = exit 0；否则 exit 1 + stdout JSON
+// {missing:[...], invalid:[...]}（missing = statSync 失败即不存在；invalid = 存在但是目录
+// 或非常规文件——existsSync 对目录同样返回 true，纯存在性探针会让目录名混过校验（2026-11-04
+// 修复：原 existsSync filter 形态对目录返回 true）。两类由调用侧分述，均进打回清单。
+// 「resolve 后越界」不在此探针覆盖——仓库内约束属 check4b 的词法归一层（normPosixPath），
+// 本探针保持通用：setup/resume 调用点的必读文件（skill-data 产物）合法地落在仓库外
+const NODE_CHECK_EXISTS = [
+  "var fs=require('fs');",
+  "var missing=[],invalid=[];",
+  "for(var i=1;i<process.argv.length;i++){",
+  "  var p=process.argv[i],st=null;",
+  "  try{st=fs.statSync(p)}catch(e){missing.push(p);continue}",
+  "  if(!st.isFile())invalid.push(p);",
+  "}",
+  "if(missing.length>0||invalid.length>0){process.stdout.write(JSON.stringify({missing:missing,invalid:invalid}));process.exit(1)}",
+].join("\n");
 const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
 const NODE_RENAME_FILE =
   "require('fs').mkdirSync(require('path').dirname(process.argv[2]),{recursive:true});require('fs').renameSync(process.argv[1],process.argv[2])";
@@ -1008,6 +1051,48 @@ function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
 
 function asStr(v: unknown, d = ""): string {
   return typeof v === "string" ? v : d;
+}
+
+/** 字符串级 POSIX 路径归一（主脚本无 node API，等价 path.posix.normalize 的词法部分）：
+ *  逐段消化 "." 与 "seg/.."。绝对路径（/ 开头）返回归一形态；穿越到根以上（归一后无段
+ *  可弹出）返回 null = 非法。只做词法归一不触盘——symlink 逃逸不在覆盖面（4b 探针的
+ *  statSync 层同样不解 symlink，两侧同一边界，注释即为该边界的显式登记）。check4b 的
+ *  仓库内前缀校验用归一后路径判定——否则 projectRoot/sub/../../outside 穿越形态靠
+ *  首段子串命中即可绕过前缀检查 */
+function normPosixPath(p: string): string | null {
+  const abs = p.startsWith("/");
+  const out: string[] = [];
+  for (const seg of p.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (out.length === 0) {
+        if (abs) return null;
+        return "..";
+      }
+      out.pop();
+      continue;
+    }
+    out.push(seg);
+  }
+  return (abs ? "/" : "") + out.join("/");
+}
+
+/** NODE_CHECK_EXISTS 的 stdout JSON 解析（exit 1 时消费）：missing/invalid 两类分述。
+ *  非 JSON 形态（探针输出演进期间的旧 " | " 分隔文本兜底）全量归 missing——调用侧两类
+ *  都进打回清单，归类偏差不影响打回语义 */
+function parseExistsProbe(stdout: string): { missing: string[]; invalid: string[] } {
+  try {
+    const v: unknown = JSON.parse(stdout);
+    if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+      const o = v as Record<string, unknown>;
+      const arr = (k: string): string[] =>
+        Array.isArray(o[k]) ? (o[k] as unknown[]).filter((x): x is string => typeof x === "string") : [];
+      return { missing: arr("missing"), invalid: arr("invalid") };
+    }
+  } catch {
+    // 落到旧文本形态兜底
+  }
+  return { missing: stdout.split(" | ").filter((s) => s.trim() !== ""), invalid: [] };
 }
 
 /** severity 畸形归 suggestion（中间档，fail-soft：must-fix 误降会漏拦截、info 误升会
@@ -1528,9 +1613,14 @@ const expandTilde = (p: string): string => (p.startsWith("~/") ? `${homeDir}/${p
 const plannerTplAbs = expandTilde(inputs.plannerTemplate);
 const reviewerTplAbs = expandTilde(inputs.reviewerTemplate);
 
-// 必读文件存在性探针：设计文档 / impl-plan / 两模板
+// 必读文件存在性探针：设计文档 / impl-plan / 两模板（目录与非常规文件形态同被拒收）
 const probe = await world.run("node", ["-e", NODE_CHECK_EXISTS, designDoc, implPlan, plannerTplAbs, reviewerTplAbs]);
 if (probe.exitCode !== 0) {
+  const pp = parseExistsProbe(probe.stdout);
+  const probeBad = [
+    ...pp.missing.map((p) => `${p}（不存在）`),
+    ...pp.invalid.map((p) => `${p}（是目录或非常规文件）`),
+  ];
   await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
@@ -1543,7 +1633,7 @@ if (probe.exitCode !== 0) {
     contestedList: [],
     overdesignCandidates: [],
     remaining: [],
-    message: `必读文件缺失：${probe.stdout.trim()}。恢复动作：核对 designDoc/implPlan/agent 模板路径（模板默认 ~/.agents/skills/dev-flow-wf/agents/，可经 args.plannerTemplate/reviewerTemplate 覆盖）后重新发起`,
+    message: `必读文件缺失或不合规：${probeBad.length > 0 ? probeBad.join("；") : probe.stdout.trim() || "（探针无输出）"}。恢复动作：核对 designDoc/implPlan/agent 模板路径（模板默认 ~/.agents/skills/dev-flow-wf/agents/，可经 args.plannerTemplate/reviewerTemplate 覆盖）后重新发起`,
   };
 }
 
@@ -1762,8 +1852,13 @@ if (resumeFrom !== "") {
   const prevFinalPath = `${resumeFrom}/final.json`;
   const resumeExists = await world.run("node", ["-e", NODE_CHECK_EXISTS, resumeFrom, prevFinalPath]);
   if (resumeExists.exitCode !== 0) {
+    const pp = parseExistsProbe(resumeExists.stdout);
+    const probeBad = [
+      ...pp.missing.map((p) => `${p}（不存在）`),
+      ...pp.invalid.map((p) => `${p}（是目录或非常规文件）`),
+    ];
     const bad = await setupFail(
-      `resumeFrom 指向的 runDir 或其 final.json 不存在（${resumeFrom}，缺失：${resumeExists.stdout.trim()}）。恢复动作：核对先前一次运行的 runDir（终态 message 与 run.json 所在目录）后重新发起，或去掉 resumeFrom 按常规全量模式发起`,
+      `resumeFrom 指向的 runDir 或其 final.json 不存在或不合规（${probeBad.length > 0 ? probeBad.join("；") : resumeExists.stdout.trim()}）。恢复动作：核对先前一次运行的 runDir（终态 message 与 run.json 所在目录）后重新发起，或去掉 resumeFrom 按常规全量模式发起`,
     );
     return bad;
   }
@@ -2297,14 +2392,64 @@ function isStrArr(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === "string");
 }
 
+// 引擎侧时刻（逐任务/逐 owner 日志行与 RL6 记账行内容内嵌用，ISO8601 毫秒级）。行内时刻
+// 不承担 run.json startedAt 的跨 resume 稳定职责（NODE_PROBE_NOW 注释块）：日志行随重放
+// 整体重打、行内时刻同步刷新，行内自洽即可
+const nowIso = (): string => new Date().toISOString();
+
+/** 流式槽位池（≤limit 在途；先全部启动后统一 join——RL4：每个 future 自创建起即挂
+ *  完成链条，启动与 join 之间无裸 await，未完成 future 的失败不丢）。槽位空出即派
+ *  下一任务（任一任务完成即释放槽位并补派，批间无屏障等待）；任一任务抛错后停止
+ *  补派新任务（failed 标志），在途任务自然跑完、首个真实失败向上抛。在途计数超
+ *  上限 fail-fast 断言内建（RL1——构造性不可能触发，兜实现回归）。W3 修复派发与
+ *  W4 三处派发各存一份同形实现（平台禁 import，同形同改两处，改动须两处同步） */
+async function runSlotPool<T, R>(items: T[], limit: number, run: (item: T) => PromiseLike<R>): Promise<R[]> {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`流式池上限非法（${limit}）——恢复：核对池上限常数取值（W4 侧 = REVIEWER_BATCH / FIXER_CONCURRENCY）`);
+  }
+  let permits = limit; // 剩余槽位许可（counting semaphore；单线程事件循环内 acquire/release 无交错窗口）
+  let inFlight = 0; // 在途计数器（RL1 断言本体）
+  let failed = false;
+  const waiters: (() => void)[] = [];
+  const acquire = async (): Promise<void> => {
+    if (permits <= 0) await new Promise<void>((res) => waiters.push(res));
+    permits -= 1;
+    if (inFlight >= limit) throw new Error(`流式池在途计数 ${inFlight} 超上限 ${limit}（RL1）——恢复：核对池上限常数与派发点`);
+    inFlight += 1;
+  };
+  const release = (): void => {
+    inFlight -= 1;
+    permits += 1;
+    waiters.shift()?.();
+  };
+  const launches = items.map((item) =>
+    acquire().then(async (): Promise<R> => {
+      if (failed) {
+        release(); // 未执行任务归还槽位，让剩余等待者排空后走同一失败出口
+        throw new Error(`任务未派发（池内已有失败，停止补派）`);
+      }
+      try {
+        return await run(item);
+      } catch (e) {
+        failed = true;
+        throw e;
+      } finally {
+        release();
+      }
+    }),
+  );
+  return await Promise.all(launches);
+}
+
 function isObjArr(v: unknown): v is Record<string, unknown>[] {
   return Array.isArray(v) && v.every((x) => typeof x === "object" && x !== null && !Array.isArray(x));
 }
 
 /** 机械信号步共用执行器（R1 立项与 R2+ 对账同源，2026-11 修复）：argv 拼装 + NODE_BACKTICK_GREP
- *  两种返回形状（{ok:true,missing} / {ok:false,reason}）的统一解析。
+ *  两种返回形状（{ok:true,missing,wordsDrift} / {ok:false,reason}）的统一解析。
  *  返回三态——
- *  - ran：扫描成功，missing = 词表符号在代码库零命中清单（可空）
+ *  - ran：扫描成功，missing = 词表符号在代码库零命中清单（可空）；wordsDrift 差集非空
+ *    时在函数内打 WARN（词表完整性软监测——不改变返回三态，不拒启）
  *  - skipped：扫描器显式拒扫（词表不可读/缺数组/指纹不等或缺失等 ok:false 路径），
  *    或未传 watchlist——属「本轮无有效机械信号」，不是执行故障
  *  - failed：node 执行失败或输出不可解析——调用方必须 fail-closed（R2+ 对账一律不对账、
@@ -2317,8 +2462,8 @@ async function runMechanicalScan(): Promise<
   if (watchlist === "") {
     return { kind: "skipped", reason: "未传 watchlist（符号词表）" };
   }
-  // 词表指纹已含设计文档与 impl-plan.md 两路来源（extract-backticks 的输入即两文档）
-  const implMdPath = implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md");
+  // 词表指纹已含设计文档与 impl-plan.md 两路来源（extract-backticks 的输入即两文档——
+  // NODE_BACKTICK_GREP 内词集重提取按指纹键读取，文档路径不经 argv 传递）
   const res = await world.run("node", ["-e", NODE_BACKTICK_GREP, projectRoot, watchlist]);
   if (res.exitCode !== 0) {
     return { kind: "failed", reason: `node 执行失败（exit ${res.exitCode}）：${res.stderr.trim().slice(0, 200)}` };
@@ -2327,6 +2472,21 @@ async function runMechanicalScan(): Promise<
     const parsed: unknown = JSON.parse(res.stdout);
     const rec = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
     if (rec["ok"] === true && isStrArr(rec["missing"])) {
+      // 词集软监测消费（2026-11-04 恢复配套）：差集非空打 WARN 指路重甄别。主信号 =
+      // inDocNotInWatchlist（文档有、词表无——词表未覆盖新增引用，悬空防线漏词方向）；
+      // 反向 inWatchlistNotInDoc 属词表甄别的合法形态（免扫词/上游符号），只提示不暗示缺陷
+      const wd = rec["wordsDrift"];
+      if (wd !== null && typeof wd === "object" && !Array.isArray(wd)) {
+        const d = wd as Record<string, unknown>;
+        const inDoc = isStrArr(d["inDocNotInWatchlist"]) ? d["inDocNotInWatchlist"] : [];
+        const inWl = isStrArr(d["inWatchlistNotInDoc"]) ? d["inWatchlistNotInDoc"] : [];
+        if (inDoc.length > 0) {
+          log(`WARN: 词集漂移（文档反引号词 ${inDoc.length} 个不在词表 scan∪skip：${inDoc.slice(0, 8).join("、")}${inDoc.length > 8 ? " 等" : ""}）——词表未覆盖文档新增引用，回 tech-design-wf T3 重新甄别词表后重发`);
+        }
+        if (inWl.length > 0) {
+          log(`WARN: 词集漂移（词表 scan∪skip ${inWl.length} 个词不在文档反引号集：${inWl.slice(0, 8).join("、")}${inWl.length > 8 ? " 等" : ""}）——词表有而文档无（免扫词/上游符号属词表甄别的合法形态），仅提示非缺陷`);
+        }
+      }
       return { kind: "ran", missing: rec["missing"] };
     }
     if (rec["ok"] === false && typeof rec["reason"] === "string" && rec["reason"] !== "") {
@@ -2461,6 +2621,17 @@ async function readQuoteSlice(filePath: string, lineStart: number, lineEnd: numb
   return r.stdout;
 }
 
+/** 引文来源路径映射（quoteLocation.source → 文件）：两份人读版 md。裁决记录（rulings
+ *  json）不作为引文来源——json 形态文本含引号/转义，旧全文 haystack 子串比对对含引号
+ *  引文结构性必败（2026-11-04 结构化改造撤销 haystack 机制，改 quoteLocation 行段等值）；
+ *  已裁决事项的引文落到两文件对应行段，裁决记录只作推理依据（anchorRef 引裁决 id）。
+ *  2026-11-04 自仲裁段提取为顶层共享：仲裁段与 R2+ 引文复跑兜底读同一映射（改判条目
+ *  的引文行段两处读同一文件）。时序安全：消费点全在主循环内（顶层 const 此时已初始化）；
+ *  runMechanicalScan 的指纹注释与之同源不同义（其函数体不引用本值） */
+const implMdPath = implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md");
+const quoteSourcePath = (source: "design-doc" | "impl-plan"): string =>
+  source === "design-doc" ? designDoc : implMdPath;
+
 /** 修复组返回校验：fixes 对象数组 + affectedFiles 纯路径字符串数组（杂质形态拒收回喂，
  *  2026-11-04 字段化——申报杂质不再引擎静默清洗）+ deferred/exempt/delegated 对象数组 */
 function validateFixOutcome(v: unknown): Validated<FixOutcome> {
@@ -2478,6 +2649,7 @@ function validateFixOutcome(v: unknown): Validated<FixOutcome> {
       const m = sc as Record<string, unknown>;
       if (m["kind"] !== "machine-check" && m["kind"] !== "existence-check") badSc.push(`${i + 1}（selfCheck.kind 须 machine-check|existence-check）`);
       else if (typeof m["command"] !== "string" || m["command"].trim() === "" || typeof m["actual"] !== "string") badSc.push(`${i + 1}（selfCheck 须 command（实际执行的命令）与 actual（实际输出）非空——引擎会复跑比对）`);
+      else if (typeof m["command"] === "string" && ALWAYS_PASS_CMD_RE.test(m["command"].trim())) badSc.push(`${i + 1}（selfCheck.command 须是对受影响文件的真实检查命令，不得是 shell 恒过/恒输出形态（true/false/:/echo/printf/exit 开头）——这类命令的复跑输出与自行申报的 actual 必然等值，自检证据结构性无效）`);
     });
     if (badSc.length > 0) errors.push(`fixes selfCheck 畸形：${badSc.join("；")}`);
   }
@@ -2496,6 +2668,17 @@ function validateFixOutcome(v: unknown): Validated<FixOutcome> {
 /** affectedFiles 申报杂质形态（格式校验保留区）：空白分隔的说明文字、全角括注、
  *  引号、file:line 行号尾缀——校验拒收回喂自纠（W3 同款判据） */
 const IMPURE_PATH_RE = /[\s（「『“”"']|:\d+(?:-\d+)?$/;
+
+/** selfCheck.command 恒过/恒输出形态（2026-11-04 修复）：true/false 裸命令恒 exit 0、
+ *  : 是 shell 空命令、echo/printf 恒输出任意可申报文本、exit 带码退出（exit 0 复跑
+ *  code=0/输出空串，与申报 actual 空串等值畅通——round-1 MF-1-2 补入候选组）——这些
+ *  形态的复跑输出与 fixer 自行申报的 actual 必然等值（actual 是自己挑的），复跑等值
+ *  比对被结构性架空。判据字面量与 dev-consistency-loop 侧同族校验（grepChecks 恒过拒收）
+ *  保持一致（两引擎同判据，聚合裁决固化同一字面量——单侧不得改动）。「command 文本须引用
+ *  affectedFiles 至少一个路径基名」的跨文件强校验因误伤面大（合法自检常跨多文件聚合统计）
+ *  不实装，恒过形态拒收是两引擎共同取舍。已知边界：\b 词边界对「:」开头形态（裸「:」/
+ *  「: cmd」）不成立会漏——冒号形态申报占比极低，跨引擎字面一致优先，不单侧扩大覆盖面 */
+const ALWAYS_PASS_CMD_RE = /^(true|false|:|echo|printf|exit)\b/;
 
 // 文件名安全化（模块/组名可含路径分隔符与空白——runlog 文件名不能展开成子目录）
 const fileSafe = (s: string): string => s.replace(/[^a-zA-Z0-9._\-\u4e00-\u9fa5]+/g, "-");
@@ -3136,20 +3319,27 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       // 引用续 ask，≤2 轮；frameworkFindings 一并重给保持整单自洽）
       const check4b = (p: PlannerResult): { bad: string[]; reason: string } => {
         const files = [...new Set(p.modules.flatMap((m) => m.files))];
-        const outside = files.filter((fp) => !fp.startsWith(`${projectRoot}/`));
-        if (outside.length > 0) return { bad: outside, reason: "以下路径不在仓库内（须以项目根为前缀）" };
+        // 词法归一后再验前缀：projectRoot/sub/../../outside 穿越形态的首段子串命中可绕过
+        // 纯 startsWith 前缀检查——归一消化 .. 段后越界路径现出原形（2026-11-04 修复；
+        // symlink 逃逸不在词法层覆盖面，见 normPosixPath 注释）
+        const outside = files.filter((fp) => {
+          const n = normPosixPath(fp);
+          return n === null || !n.startsWith(`${projectRoot}/`);
+        });
+        if (outside.length > 0) return { bad: outside, reason: "以下路径不在仓库内（须以项目根为前缀；../ 穿越形态按越界计）" };
         return { bad: files, reason: "" };
       };
       for (let fb = 0; fb < 2 && plan !== null; fb++) {
         const c = check4b(plan);
         const missProbe = c.reason === "" ? await world.run("node", ["-e", NODE_CHECK_EXISTS, ...c.bad]) : null;
-        const missing = missProbe !== null && missProbe.exitCode !== 0 ? missProbe.stdout.trim().split(" | ") : [];
-        if (c.reason === "" && missing.length === 0) break;
-        const badList = c.reason !== "" ? c.bad : missing;
-        log(`WARN: planner 计划 4b 校验不过（${badList.length} 条 files ${c.reason !== "" ? "落在仓库外" : "不存在于磁盘"}）——整单打回重产（第 ${fb + 1}/2 轮）`);
+        const probeParsed = missProbe !== null && missProbe.exitCode !== 0 ? parseExistsProbe(missProbe.stdout) : null;
+        const probeBad = probeParsed !== null ? [...probeParsed.missing, ...probeParsed.invalid] : [];
+        if (c.reason === "" && probeBad.length === 0) break;
+        const badList = c.reason !== "" ? c.bad : probeBad;
+        log(`WARN: planner 计划 4b 校验不过（${badList.length} 条 files ${c.reason !== "" ? "落在仓库外" : "不存在或是目录/非常规文件"}）——整单打回重产（第 ${fb + 1}/2 轮）`);
         const fbRaw = await plannerAgent.ask<PlannerResult>(
           [
-            `你上一轮计划的 modules.files 存在性校验不过（引擎机器校验——sync-planner.md 4b 硬性约束）。${c.reason !== "" ? c.reason : "以下路径不在磁盘"}：`,
+            `你上一轮计划的 modules.files 存在性校验不过（引擎机器校验——sync-planner.md 4b 硬性约束）。${c.reason !== "" ? c.reason : "以下路径不存在或是目录/非常规文件"}：`,
             ...badList.map((p) => `- ${p}`),
             "",
             "规则：files 只能填仓库内既有文件（绝对路径以项目根为前缀，相对路径解析后落在仓库内，禁止仓库外路径如 /tmp 下目录）；impl-plan 声明但未创建的文件作为 frameworkFindings 立项（align=gap + gapDirection=doc-right），不塞进 files。重新返回完整 JSON（frameworkFindings + modules 全量重给，不是增量补丁）。",
@@ -3166,7 +3356,66 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         const c = check4b(plan);
         if (c.reason !== "") throw new Error(`4b 校验 ${c.bad.length} 条 files 打回 2 轮仍落仓库外`);
         const missProbe = await world.run("node", ["-e", NODE_CHECK_EXISTS, ...c.bad]);
-        if (missProbe.exitCode !== 0) throw new Error(`4b 校验打回 2 轮后仍有 files 不在磁盘：${missProbe.stdout.trim().slice(0, 300)}`);
+        if (missProbe.exitCode !== 0) {
+          const pp = parseExistsProbe(missProbe.stdout);
+          const probeBad = [...pp.missing, ...pp.invalid];
+          throw new Error(
+            `4b 校验打回 2 轮后仍有 files 不合规（缺失或是目录/非常规文件）：${(probeBad.length > 0 ? probeBad.join("、") : missProbe.stdout.trim()).slice(0, 300)}`,
+          );
+        }
+        // planner 覆盖对账（2026-11-04 修复）：modules.files 并集 vs impl-plan 单元表
+        // units[].territory 并集（territory = 仓库根相对路径数组，实测字段名）的差集——
+        // planner 少列文件会让审查范围缩窄、朝假收敛方向漂移，此前无任何对账。只 WARN
+        // 不打回：纯文档单元随 frameworkFindings 立项属正常取舍，差集是弱信号交人工
+        // 核对；impl-plan 无 units 键 = 结构探测不匹配，静默跳过。
+        // 两级匹配（round-1 MF-1-3）：契约允许目录粒度声明（compile.md「粒度到目录或文件族
+        // 即可」「目录级前缀可接受」）——目录条目在精确文件集合中恒无字面匹配，纯集合差会
+        // 把契约允许的常态误报成漏列、WARN 每轮必发。精确未命中的条目再判前缀覆盖：
+        // declared 存在以 territory 归一路径 + "/" 为前缀的文件即视为已列（目录声明的语义
+        // 本就是覆盖其下全部文件）；前缀须带路径段边界，否则 packages/shared 会错误覆盖
+        // packages/shared-utils 同形前缀条目
+        const planRead = await world.run(
+          "node",
+          ["-e", "try{process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8'))}catch(e){process.exit(1)}", implPlan],
+        );
+        if (planRead.exitCode !== 0) {
+          log(`WARN: 覆盖对账读取 impl-plan 失败（exit ${planRead.exitCode}）——本轮跳过 planner 漏列检查`);
+        } else {
+          try {
+            const pj: unknown = JSON.parse(planRead.stdout);
+            const units =
+              pj !== null && typeof pj === "object" && !Array.isArray(pj) ? (pj as Record<string, unknown>)["units"] : null;
+            if (Array.isArray(units)) {
+              const terr = new Set<string>();
+              for (const u of units) {
+                if (u === null || typeof u !== "object") continue;
+                const t = (u as Record<string, unknown>)["territory"];
+                if (!Array.isArray(t)) continue;
+                for (const tp of t) {
+                  if (typeof tp !== "string" || tp.trim() === "") continue;
+                  const tok = tp.trim();
+                  terr.add(tok.startsWith("/") ? tok : `${projectRoot}/${tok}`);
+                }
+              }
+              const declared = new Set(plan.modules.flatMap((m) => m.files));
+              const missed = [...terr].filter((p) => {
+                const base = p.replace(/\/+$/, "");
+                if (declared.has(base)) return false;
+                for (const d of declared) {
+                  if (d.startsWith(`${base}/`)) return false;
+                }
+                return true;
+              });
+              if (missed.length > 0) {
+                log(
+                  `WARN: 覆盖对账：impl-plan 单元表 territory 有 ${missed.length} 个文件未出现在任何 modules[].files（${missed.slice(0, 10).map((p) => rel(p)).join("、")}${missed.length > 10 ? " 等" : ""}）——planner 模块分解可能漏列（审查范围缩窄 → 假收敛方向），人工核对；纯文档单元随 frameworkFindings 立项属正常取舍`,
+                );
+              }
+            }
+          } catch {
+            // impl-plan JSON 畸形（setup 入口门已验合法、planner 只读不改盘——防御性跳过）
+          }
+        }
       }
     } catch (e) {
       planErr = String(e);
@@ -3288,24 +3537,23 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     for (const m of plan.modules) moduleAgents.set(m.id, agent(`模块审查-${m.id}`, REVIEWER_PERSONA));
     const reviews: { mid: string; res: ModuleReview }[] = [];
     try {
-      for (let i = 0; i < plan.modules.length; i += REVIEWER_BATCH) {
-        const batch = plan.modules.slice(i, i + REVIEWER_BATCH);
-        log(`  模块审查批次 ${Math.floor(i / REVIEWER_BATCH) + 1}/${Math.ceil(plan.modules.length / REVIEWER_BATCH)}：${batch.map((m) => m.id).join("、")}`);
-        const part = await Promise.all(
-          batch.map(async (m) => {
-            const a = moduleAgents.get(m.id);
-            if (!a) throw new Error(`模块 agent 缺失：${m.id}`);
-            const res = await askValidated(
-              validateModuleReview,
-              (q) => a.ask<ModuleReview>(q),
-              reviewPrompt(m),
-            );
-            if (res === null) throw new Error(`模块 ${m.id} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
-            return { mid: m.id, res };
-          }),
+      // 流式槽位池（2026-11-04 D2/D3：上限 REVIEWER_BATCH 数值不变，槽位空出即派下一模块，
+      // 消除批间等最慢空闲）。逐任务派发/完成行内嵌引擎侧毫秒级时刻（V3 取证来源：
+      // 第二批首个模块派发时刻 早于 第一批最慢模块完成时刻；替代原「模块审查批次 N/M」批举行）
+      await runSlotPool(plan.modules, REVIEWER_BATCH, async (m) => {
+        const t0 = Date.now();
+        log(`  模块审查 ${m.id} 派发（${nowIso()}，t=${t0}）`);
+        const a = moduleAgents.get(m.id);
+        if (!a) throw new Error(`模块 agent 缺失：${m.id}`);
+        const res = await askValidated(
+          validateModuleReview,
+          (q) => a.ask<ModuleReview>(q),
+          reviewPrompt(m),
         );
-        reviews.push(...part);
-      }
+        if (res === null) throw new Error(`模块 ${m.id} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
+        log(`  模块审查 ${m.id} 完成（${nowIso()}，t=${Date.now()}）`);
+        reviews.push({ mid: m.id, res });
+      });
     } catch (e) {
       finalResult = finish("review-failure", round, `模块审查 fan-out 失败：${String(e)}。恢复动作：按 runDir 各轮留档定位失败模块，attempt 递增重新发起`);
       break;
@@ -3327,6 +3575,32 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     // ── R2+：聚焦复审（同 agent 续聊，只审上轮修复影响面）──
     phase("聚焦复审");
     await obsBegin("review", round);
+    // 引文行段引擎复跑兜底（2026-11-04 修复）：仲裁改判条目的引文断言此前只在仲裁时点
+    // 校验一次（readQuoteSlice 仅仲裁消费），复审核对不起 reReviewPrompt 文本自觉——复审
+    // 偷懒无兜底。此处引擎侧对带 quoteLocation 的 arbiter 条目逐条复跑行段等值：失配
+    // （文档已改、行段原文与仲裁引文不再等值）= 裁决依据失效 → direction 回退 contested、
+    // status 回 open + fixHistory 记一行，随本轮争议分流重新仲裁或停回；读取失败 =
+    // 基础设施故障不回退（与机械对账 fail-closed 同语义：异常不动条目状态，WARN 下轮
+    // 再验）；等值通过一行 log 备查
+    for (const f of ledger) {
+      const arb = f.arbiter;
+      const loc = arb?.quoteLocation;
+      if (arb === undefined || loc === undefined) continue;
+      const slice = await readQuoteSlice(quoteSourcePath(loc.source), loc.lineStart, loc.lineEnd);
+      if (slice === null) {
+        log(`WARN: 引文复跑（${f.id}）：${loc.source} L${loc.lineStart}-L${loc.lineEnd} 读取失败——不回退，条目保持现状下轮再验`);
+        continue;
+      }
+      if (normQuoteText(slice) === normQuoteText(arb.quote)) {
+        log(`引文复跑（${f.id}）：行段等值仍成立（${loc.source} L${loc.lineStart}-L${loc.lineEnd}）`);
+        continue;
+      }
+      if (!Array.isArray(f.fixHistory)) f.fixHistory = [];
+      f.fixHistory.push(`第${round}轮引擎引文复跑失配：arbiter-revert（引文行段失配：文档已改，${loc.source} L${loc.lineStart}-L${loc.lineEnd} 与仲裁引文不等值）——direction 回退 contested`);
+      f.direction = "contested";
+      f.status = "open";
+      log(`WARN: 引文复跑（${f.id}）：${loc.source} L${loc.lineStart}-L${loc.lineEnd} 与仲裁引文不等值（文档已改）——arbiter-revert：direction 回退 contested、status 回 open，随本轮争议分流重新仲裁/停回`);
+    }
     // 机械条目（owner=mechanical）不走 LLM 复审——引擎机械对账：重跑机械步，
     // 上轮机械条目的符号已不在悬空清单 = 修好（fixed）；仍悬空 = 保留 open 进下轮修复组
     const mechPrev = lastDispatchedIds
@@ -3394,34 +3668,35 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     }
     const reviews: { owner: string; res: ModuleReview }[] = [];
     try {
-      for (let i = 0; i < owners.length; i += REVIEWER_BATCH) {
-        const batch = owners.slice(i, i + REVIEWER_BATCH);
-        const part = await Promise.all(
-          batch.map(async (owner) => {
-            const a = owner === "planner" ? plannerAgent : moduleAgents.get(owner);
-            if (!a) throw new Error(`聚焦复审 agent 缺失：${owner}`);
-            const scopeFindings = lastDispatchedIds
-              .map((id) => ledgerById(id))
-              .filter((f): f is FindingRecord => f !== undefined && f.owner === owner);
-            const mm = owner !== "planner" ? moduleById.get(owner) : undefined;
-            const res = await askValidated(
-              validateModuleReview,
-              (q) => a.ask<ModuleReview>(q),
-              [
-                resumeMode
-                  ? resumeReReviewPrelude(owner, mm)
-                  : r2PrevContextBlock(owner, mm, projectRoot, designDoc, implPlan, headHash, plannerTplAbs, reviewerTplAbs, rel),
-                reReviewPrompt(round, scopeFindings),
-              ]
-                .filter(Boolean)
-                .join("\n\n"),
-            );
-            if (res === null) throw new Error(`聚焦复审（${owner}）结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
-            return { owner, res };
-          }),
+      // 流式槽位池（2026-11-04 D2/D3：上限 REVIEWER_BATCH 数值不变，槽位空出即派下一
+      // owner，消除批间等最慢空闲；语义 join 不变——聚焦复审仍在全部修复组完成之后）。
+      // 逐 owner 派发/完成行为本次新造（该循环此前无任何 log 行，V8 取证来源：后一 owner
+      // 派发时刻 早于 前一最慢 owner 完成时刻），内嵌引擎侧毫秒级时刻
+      await runSlotPool(owners, REVIEWER_BATCH, async (owner) => {
+        const t0 = Date.now();
+        log(`  聚焦复审 ${owner} 派发（${nowIso()}，t=${t0}）`);
+        const a = owner === "planner" ? plannerAgent : moduleAgents.get(owner);
+        if (!a) throw new Error(`聚焦复审 agent 缺失：${owner}`);
+        const scopeFindings = lastDispatchedIds
+          .map((id) => ledgerById(id))
+          .filter((f): f is FindingRecord => f !== undefined && f.owner === owner);
+        const mm = owner !== "planner" ? moduleById.get(owner) : undefined;
+        const res = await askValidated(
+          validateModuleReview,
+          (q) => a.ask<ModuleReview>(q),
+          [
+            resumeMode
+              ? resumeReReviewPrelude(owner, mm)
+              : r2PrevContextBlock(owner, mm, projectRoot, designDoc, implPlan, headHash, plannerTplAbs, reviewerTplAbs, rel),
+            reReviewPrompt(round, scopeFindings),
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
         );
-        reviews.push(...part);
-      }
+        if (res === null) throw new Error(`聚焦复审（${owner}）结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
+        log(`  聚焦复审 ${owner} 完成（${nowIso()}，t=${Date.now()}）`);
+        reviews.push({ owner, res });
+      });
     } catch (e) {
       finalResult = finish("review-failure", round, `聚焦复审失败：${String(e)}。恢复动作：按 runDir 各轮留档定位失败归属，attempt 递增重新发起`);
       break;
@@ -3503,13 +3778,8 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
   // 可抽查翻案）；聚焦复审复跑引文断言（reReviewPrompt 规则），引文消失即回退 contested ──
   if (contestedMust.length > 0) {
     phase("争议仲裁");
-    // 引文来源路径表（quoteLocation.source → 文件）：两份人读版 md。裁决记录（rulings
-    // json）不作为引文来源——json 形态文本含引号/转义，旧全文 haystack 子串比对对含引号
-    // 引文结构性必败（2026-11-04 结构化改造撤销 haystack 机制，改 quoteLocation 行段等值）；
-    // 已裁决事项的引文落到两文件对应行段，裁决记录只作推理依据（anchorRef 引裁决 id）
-    const implMdPath = implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md");
-    const quoteSourcePath = (source: "design-doc" | "impl-plan"): string =>
-      source === "design-doc" ? designDoc : implMdPath;
+    // quoteSourcePath（quoteLocation.source → 文件）已提取为顶层共享（readQuoteSlice 后
+    // 定义）——仲裁段与 R2+ 引文复跑兜底读同一映射（2026-11-04 提取，原局部定义退役）
     let settledCount = 0;
     for (const f of contestedMust) {
       const verdict = await askValidated(
@@ -3745,7 +4015,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         (q) => fixerAgent.ask<FixOutcome>(q),
         prompt,
       );
-      if (o === null) throw new Error(`组 ${g.id} fixer 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`);
+      if (o === null) throw new Error(`组 ${g.id} fixer 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规。恢复动作：在途编辑已留工作区未提交，接管前先 git status 盘点；按 runDir 各轮留档（round-${round}/）定位该组后 attempt 递增重新发起`);
       const norm = normFixOutcome(o, projectRoot);
       const es = esCheckGroup(g, norm);
       if (es.length === 0) {
@@ -3776,71 +4046,156 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     }
   }
   try {
-    for (let i = 0; i < groups.length; i += FIXER_CONCURRENCY) {
-      const batch = groups.slice(i, i + FIXER_CONCURRENCY);
-      log(`  修复批次 ${Math.floor(i / FIXER_CONCURRENCY) + 1}/${Math.ceil(groups.length / FIXER_CONCURRENCY)}：${batch.map((g) => g.id).join("、")}`);
-      const snapRes = await world.run("git", ["-C", projectRoot, "status", "--porcelain"]);
-      if (snapRes.exitCode !== 0) {
-        throw new Error(`git status 快照失败（exit ${snapRes.exitCode}）：${snapRes.stderr.trim()}`);
+    // ── 流式槽位池派发 + 组级账务按重叠关闭集重划（2026-11-04 D2/D3/D5）──
+    // 组运行状态表：每组的派发前快照（取代批前快照）、执行窗口 [dispatchAt, finishAt]
+    // （重叠关闭集判定的时序数据）、记账状态。queued = 已入记账队列（防并发完成事件把
+    // 同一就绪组重复入队——accounted 在记账执行时才置位，判定不能只看它）
+    const runs = groups.map((g) => ({
+      g,
+      snapshot: null as Map<string, string | null> | null,
+      outcome: null as { g: FixGroup; o: FixOutcome } | null,
+      dispatchAt: null as number | null,
+      finishAt: null as number | null,
+      queued: false,
+      accounted: false,
+    }));
+    const pendingUnclaimed = new Set<string>(); // 挂起的无认领脏文件（绝对路径，D5 挂起规则）
+    let poolFailed = false; // ask/快照失败已发生（停止记账链消费新单元——失败批不记账）
+    let accountError: unknown = null; // 首个记账失败（worker 取下一任务前检查，停派发）
+    // G 的重叠关闭集内最慢成员完成时刻（D5 操作性定义）：关闭集 = 与 G 执行窗口
+    // [dispatchAt, finishAt] 重叠的全部组（含 G 自身；端点相接不算重叠——两窗口须有
+    // 同时在途的交集），含已完成但尚未记账的重叠组；成员必已在 G 完成前派发，故 G 完成
+    // 之时关闭集即完全确定。返回 null = 关闭集含在途成员、尚未就绪
+    const closeSlowest = (r: (typeof runs)[number]): number | null => {
+      if (r.finishAt === null) return null; // 未完成组自身尚未有完成时刻——关闭集必未就绪
+      let slowest: number | null = r.finishAt;
+      for (const o of runs) {
+        if (o === r || o.dispatchAt === null) continue; // 未派发组不在任何已完成组的关闭集内
+        if (o.dispatchAt >= r.finishAt) continue; // o 派发不早于 r 完成——端点相接不算重叠
+        if (o.finishAt !== null && o.finishAt <= r.dispatchAt!) continue; // o 完成不晚于 r 派发——同上
+        if (o.finishAt === null) return null; // 重叠成员仍在途——关闭集未就绪
+        slowest = Math.max(slowest, o.finishAt);
       }
-      // 批前快照 = 脏文件集的内容指纹（不是状态码——批前已改文件被 fixer 再改后状态
-      // 分类不变（M→M），状态码差分对它全盲；指纹直读内容，无论申报与否都被看见）
-      const snapAbs = [...parsePorcelain(snapRes.stdout).keys()].map((f) => pathUnderRoot(f));
-      const snapshot = await fingerprintFiles(snapAbs);
-      const outcomes = await Promise.all(batch.map((g) => askFixOutcomeSelfHeal(g, activeById, round)));
-      // 批级 ES 断言——逐组校验已前移进 askFixOutcomeSelfHeal 的 run 内自愈纠正环，
-      // 此处退化为不变量防线：仅当自愈耗尽后由自愈函数自身抛出，理论恒过；保留以兜底
-      // 未来改动破坏该不变式
-      const es = outcomes.flatMap(({ g, o }) => esCheckGroup(g, o).map((v) => `${g.id} ${v}`));
-      if (es.length > 0) {
-        throw new Error(`ES 校验违规：${es.join("；")}。恢复动作：检查 fixer 返回 issueId 引用；在途编辑已留工作区未提交，接管前先 git status 盘点`);
-      }
-      // 范围声明核验：改动 ⊆ 组文件并集 ∪ 如实申报的 affectedFiles；无组认领 / 多组认领均为违规
+      return slowest;
+    };
+    // 组完成事件的就绪判定（D5 跨记账单元规则④求值顺序：先确定重叠关闭集、再执行就绪
+    // 记账）：对全部「已完成、未入队、未记账」组判定关闭集就绪（关闭集内最慢成员完成
+    // 之时已到，等价于重叠成员全部完成）；同一时刻就绪的各组成同一记账单元
+    const readyUnit = (): (typeof runs)[number][] =>
+      runs.filter((r) => r.finishAt !== null && !r.queued && !r.accounted && closeSlowest(r) !== null);
+    // 记账串行链：worker 完成事件入队、独立串行消费——记账期间不暂停派发（暂停会把
+    // 流式改回批式屏障，D5）；链内错误存 accountError，worker 取下一任务前检查停派
+    let accountChain: Promise<void> = Promise.resolve();
+    const enqueueAccounting = (unit: (typeof runs)[number][]): void => {
+      if (unit.length === 0) return;
+      for (const r of unit) r.queued = true; // 入队即标记，防后续完成事件重复入队
+      accountChain = accountChain.then(async () => {
+        if (poolFailed || accountError !== null) return; // 失败置位后不再消费新记账单元
+        try {
+          await accountUnit(unit);
+        } catch (e) {
+          accountError = e;
+        }
+      });
+    };
+    // 记账执行体：单元内各组的差分、归属判定与按组提交（判定语义三态不变，读点与候选
+    // 口径按 D5 重划）
+    const accountUnit = async (unit: (typeof runs)[number][]): Promise<void> => {
+      for (const r of unit) r.accounted = true; // 先置记账标记再判挂起（挂起条件含「存在未记账组」）
+      const now = Date.now(); // 记账执行时点（RL6 行要素，引擎侧毫秒级）
+      const snapUnion = new Set<string>();
+      for (const r of unit) for (const p of r.snapshot!.keys()) snapUnion.add(p);
+      // 差分基线读盘（D5 规则⑤）：读点 = 记账单元开始记账之时（等价可复算规则 = 读盘
+      // 动作发生在记账执行之前、行内容可复算）
       const curRes = await world.run("git", ["-C", projectRoot, "status", "--porcelain"]);
       if (curRes.exitCode !== 0) {
         throw new Error(`git status 复查失败（exit ${curRes.exitCode}）：${curRes.stderr.trim()}`);
       }
-      // 批后指纹覆盖「批前 ∪ 批后」文件集：新增文件（批前无）与删除文件（批后无）经
-      // 集合差捕获，两侧都在但内容变（含批前已改文件被改回与 HEAD 一致的「归零」修复）
-      // 经指纹差捕获
       const curAbs = [...parsePorcelain(curRes.stdout).keys()].map((f) => pathUnderRoot(f));
-      const union = [...new Set([...snapshot.keys(), ...curAbs])];
+      // RL6 补建行（D5 跨记账单元规则④）：每次记账一行，含记账执行时点、单元成员集合、
+      // 各成员关闭集最慢成员完成时刻、各成员派发/完成时刻、读盘内容（快照并集 + 记账
+      // 之时脏文件集）——V4 判红二条复算的取证来源；引擎侧不写盘
+      log(
+        `[记账] t=${now} 单元=[${unit.map((r) => r.g.id).join("、")}] 成员=${unit
+          .map((r) => `${r.g.id}:派发${r.dispatchAt} 完成${r.finishAt} 关闭集最慢${closeSlowest(r)}`)
+          .join("；")} 快照并集=[${[...snapUnion].map(rel).join("、") || "∅"}] 记账读盘=[${curAbs.map(rel).join("、") || "∅"}]`,
+      );
+      // diff 文件集合（D5）：单元内各组派发前 snapshot.keys() 并集 ∪ 记账之时脏文件集
+      // ∪ 各组完整申报并集（scope + affectedFiles）——只对该集合做指纹差
+      const claimSet = new Set<string>();
+      for (const r of unit) for (const p of [...r.g.files, ...r.outcome!.o.affectedFiles]) claimSet.add(p);
+      const union = [...new Set([...snapUnion, ...curAbs, ...claimSet])];
       const current = await fingerprintFiles(union);
-      // 口径统一：指纹键为绝对路径，claims（组 files/affectedFiles）同为绝对路径直接比对
+      // changed = 「任一持有组快照值 ≠ 当前指纹」（多组同持文件按任一快照不同判——恢复
+      // 改造前「批前 ∪ 批后」并集覆盖：新增文件经读盘捕获、删除文件经快照有读盘无捕获、
+      // 归零修复经指纹差捕获）∪ 派发后申报文件存在性 ∪ 挂起集合重判（先前单元无认领的
+      // 文件可能已被本单元组认领，须重新走三态判定）
       const changed = new Set<string>();
       for (const p of union) {
-        if (snapshot.get(p) !== current.get(p)) changed.add(p);
+        for (const r of unit) {
+          if (r.snapshot!.has(p) && r.snapshot!.get(p) !== current.get(p)) {
+            changed.add(p);
+            break;
+          }
+        }
       }
-      for (const { o } of outcomes) {
-        for (const p of o.affectedFiles) {
+      for (const r of unit) {
+        for (const p of r.outcome!.o.affectedFiles) {
           if (await pathExists(p)) changed.add(p);
         }
       }
-      const claims = outcomes.map(({ g, o }) => ({ gid: g.id, files: new Set([...g.files, ...o.affectedFiles]) }));
+      for (const p of pendingUnclaimed) changed.add(p);
+      // 范围声明核验（三态判定语义不变）：改动 ⊆ 组文件并集 ∪ 如实申报的 affectedFiles；
+      // 无组认领 / 多组认领均为违规
+      const claims = unit.map((r) => ({ gid: r.g.id, files: new Set([...r.g.files, ...r.outcome!.o.affectedFiles]) }));
       const attributed = new Map<string, string>();
-      let unclaimed = 0;
+      let unclaimed = 0; // 本单元记账即留盘呈报的无认领数（挂起条件已不成立）
+      let hung = 0; // 挂起待后续记账单元重判的无认领数
       let conflicted = 0;
       for (const p of changed) {
         const owners = claims.filter((c) => c.files.has(p)).map((c) => c.gid);
         if (owners.length === 0) {
-          // 无组认领：不提交留盘、不阻塞本批（2026-09-26 用户裁决——每个组只对自己的
-          // 改动负责，无人认领的改动随终态 residualFiles 呈报主 agent 判归属处置）
-          residualFiles.add(rel(p));
-          unclaimed += 1;
+          pendingUnclaimed.delete(p);
+          // 挂起规则（D5）：池内仍有未记账组（已派发未记账，含队列未派完的组）→ 不判
+          // residualFiles、挂起至下一记账单元重判；该轮最后一次记账（全部组已记账）才
+          // 进 residualFiles——把「排除关闭集外改动」从读点时点解耦，记账之时在途的非
+          // 本单元组改动不会被误判「无认领」
+          if (runs.some((r) => !r.accounted)) {
+            pendingUnclaimed.add(p);
+            hung += 1;
+          } else {
+            // 无组认领：不提交留盘、不阻塞本单元（2026-09-26 用户裁决——每个组只对
+            // 自己的改动负责，无人认领的改动随终态 residualFiles 呈报主 agent 判归属处置）
+            residualFiles.add(rel(p));
+            unclaimed += 1;
+          }
         } else if (owners.length > 1) {
+          pendingUnclaimed.delete(p);
           // 多组认领（并行冲突）：提交任何一版都会丢另一组的工作——不提交留盘，
           // 相关条目经下轮聚焦复审自然重派对账，冲突文件随终态呈报人工合并
           residualFiles.add(`${rel(p)}（${owners.join("/")} 多组认领冲突）`);
           conflicted += 1;
-        } else attributed.set(p, owners[0] ?? "");
+        } else {
+          pendingUnclaimed.delete(p);
+          attributed.set(p, owners[0] ?? "");
+        }
       }
-      if (unclaimed > 0 || conflicted > 0) {
+      if (unclaimed > 0 || hung > 0 || conflicted > 0) {
         log(
-          `WARN: 本批 ${unclaimed} 项无组认领 + ${conflicted} 项多组认领冲突——不提交留盘（认领唯一的各组照常提交），随终态 residualFiles 呈报`,
+          `WARN: 本记账单元 ${unclaimed} 项无组认领留盘 + ${hung} 项无认领挂起（池内仍有未记账组，随后续记账单元重判）+ ${conflicted} 项多组认领冲突——不提交留盘（认领唯一的各组照常提交），随终态 residualFiles 呈报`,
         );
       }
-      // 组级一笔 commit（引擎执行，fixer 全程无 git 写）
-      for (const { g, o } of outcomes) {
+      // ES 断言——逐组校验已前移进 askFixOutcomeSelfHeal 的 run 内自愈纠正环，此处
+      // 退化为不变量防线：仅当自愈耗尽后由自愈函数自身抛出，理论恒过；保留以兜底
+      // 未来改动破坏该不变式
+      const es = unit.flatMap(({ g, outcome }) => esCheckGroup(g, outcome!.o).map((v) => `${g.id} ${v}`));
+      if (es.length > 0) {
+        throw new Error(`ES 校验违规：${es.join("；")}。恢复动作：检查 fixer 返回 issueId 引用；在途编辑已留工作区未提交，接管前先 git status 盘点`);
+      }
+      // 组级一笔 commit（引擎执行，fixer 全程无 git 写）+ 申报消费——与改造前逐批一致，
+      // 仅执行粒度从批换记账单元
+      for (const { g, outcome } of unit) {
+        const o = outcome!.o;
         roundFixes.push(...o.fixes);
         // defer 申报消费（§7.3 机器落点）：条目转 deferred 终态，不进聚焦复审对账，随终态呈报
         for (const d of o.deferred) {
@@ -3885,6 +4240,55 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         await commitGroupFiles(round, g.id, g.issueIds.length, files);
         await auditJson(`${roundDir}/fixer-${g.id}.json`, JSON.stringify(o, null, 2));
       }
+    };
+    let poolError: unknown = null;
+    try {
+      await runSlotPool(runs, FIXER_CONCURRENCY, async (r) => {
+        if (accountError !== null) throw new Error(`修复记账已失败，停止补派新组`);
+        try {
+          // 组派发前快照（D5：取代批前快照——指纹直读内容，派发前已脏文件被 fixer
+          // 再改后状态码不变（M→M），指纹无论申报与否都被看见，AS5）
+          const snapRes = await world.run("git", ["-C", projectRoot, "status", "--porcelain"]);
+          if (snapRes.exitCode !== 0) {
+            throw new Error(`git status 快照失败（exit ${snapRes.exitCode}）：${snapRes.stderr.trim()}`);
+          }
+          const snapAbs = [...parsePorcelain(snapRes.stdout).keys()].map((f) => pathUnderRoot(f));
+          r.snapshot = await fingerprintFiles(snapAbs);
+          r.dispatchAt = Date.now();
+          log(`  修复组 ${r.g.id} 派发（${nowIso()}，t=${r.dispatchAt}）`);
+          r.outcome = await askFixOutcomeSelfHeal(r.g, activeById, round);
+          r.finishAt = Date.now();
+          log(`  修复组 ${r.g.id} 完成（${nowIso()}，t=${r.finishAt}）`);
+        } catch (e) {
+          poolFailed = true; // 停止记账链消费新单元（失败批不记账）；在途组自然跑完不纳入记账
+          throw e;
+        }
+        enqueueAccounting(readyUnit());
+      });
+    } catch (e) {
+      poolError = e; // ask/快照真实失败或记账失败后的合成停派错误——主流程下方统一裁决
+    }
+    await accountChain; // 排空：已开始的记账完成（commit 中途不被遗弃），失败置位后的入队单元被 skip
+    if (accountError !== null || poolError !== null) {
+      // 失败路径收尾判定（D5）：在途组不纳入记账 ⟹ 其改动不会再被任何记账单元认领，
+      // 挂起集合此刻判「无认领」是终局判定而非提前误判——并入 residualFiles 随终态
+      // ledger 呈报，呈报完备性不低于改造前（改造前失败批前已记账批次的无认领文件
+      // 照常随终态 ledger 呈报）
+      if (pendingUnclaimed.size > 0) {
+        for (const p of pendingUnclaimed) residualFiles.add(rel(p));
+        log(`WARN: 修复失败收尾判定：挂起的无认领脏文件 ${pendingUnclaimed.size} 项并入 residualFiles 呈报（失败路径池排空不可达——在途组改动不会再被认领，此刻判定为终局）`);
+        pendingUnclaimed.clear();
+      }
+      // 记账失败优先呈报（真实根因）；poolError 为合成停派错误时被真实根因覆盖
+      throw (accountError ?? poolError)!;
+    }
+    // 正常路径兜底：该轮最后一次记账已按挂起规则释放全部无认领文件；仍非空 = 挂起文件
+    // 漏出后续全部 changed 判定的极端形态（如被改回 HEAD 一致后不再出现在任何读盘）——
+    // 呈报不留静默丢失（W4 无终态 git status 兜底，漏出即无人看见）
+    if (pendingUnclaimed.size > 0) {
+      for (const p of pendingUnclaimed) residualFiles.add(rel(p));
+      log(`WARN: 该轮修复组全部记账完毕，仍挂起的无认领文件 ${pendingUnclaimed.size} 项进 residualFiles 呈报`);
+      pendingUnclaimed.clear();
     }
   } catch (e) {
     finalResult = finish("fix-failure", round, `修复失败：${String(e)}`);

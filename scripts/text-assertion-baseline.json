@@ -5,241 +5,293 @@
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
   ],
   [
-   148,
+   155,
+   "\"var SHELL_QUOTE = function (s) { return /^[A-Za-z0-9_\\\\/:.,@%^+=-]+$/.test(s) ? s : SQ + s.split(SQ).join(SQ + '\\\\\\\\' + SQ + SQ) + SQ; };\","
+  ],
+  [
+   163,
+   "\"  if ((program === 'bash' || program === 'sh') && args.indexOf('-c') >= 0) {\","
+  ],
+  [
+   164,
+   "\"    var cRaw = args[args.indexOf('-c') + 1];\","
+  ],
+  [
+   175,
+   "\"    if (STUB_RE.test(cc) || (ci > args.length && STUB_HEAD_RE.test(cc)) || (NOOP_RE.test(cc) && !RUNNER_RE.test(cc))) return label + ' 是恒绿形态命令（' + full + '）——不"
+  ],
+  [
+   181,
    "\"if (ALLOWED.indexOf(fsuite.program) < 0) die('testPlan.fullSuite.program 不在白名单 ' + ALLOWED.join('/') + ': ' + fsuite.program);\","
   ],
   [
-   156,
+   190,
    "\"    if (ALLOWED.indexOf(at.command.program) < 0) die('testPlan.artifacts[' + ai + '].command.program 不在白名单: ' + at.command.program);\","
   ],
   [
-   162,
+   197,
    "\"  if (ALLOWED.indexOf(ep.testPlan.incremental.program) < 0) die('testPlan.incremental.program 不在白名单: ' + ep.testPlan.incremental.program);\","
   ],
   [
-   166,
+   202,
    "\"if (!/^[0-9a-f]{7,40}$/i.test(bl)) die('baseline 非 git hash 形态: ' + bl);\","
   ],
   [
-   179,
+   215,
    "\"var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);\","
   ],
   [
-   187,
+   223,
    "\"    var m = line.match(/^(\\\\d+|-)\\\\s+(\\\\d+|-)\\\\s+(.+)$/);\","
   ],
   [
-   277,
+   313,
    "\"  var idx = p.indexOf(' -> ');\","
   ],
   [
-   282,
+   318,
    "\"var untracked = entries.filter(function (e) { return e.code.indexOf('?') >= 0; }).map(function (e) { return e.path; });\","
   ],
   [
-   283,
+   319,
    "\"var foreign = changed.filter(function (f) { return pool.indexOf(f) < 0; });\","
   ],
   [
-   284,
+   320,
    "\"var foreignUntracked = foreign.filter(function (f) { return untracked.indexOf(f) >= 0; });\","
   ],
   [
-   306,
+   342,
    "\"      if (m.indexOf('index.lock') >= 0 && i < 6) { sleep(200 + i * 300); continue; }\","
   ],
   [
-   379,
+   415,
    "\"  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }\","
   ],
   [
-   383,
+   419,
    "\"    if (BYPASS_RE[j][0].test(content)) { hits.push({ file: curFile, pattern: BYPASS_RE[j][1], line: content.trim().slice(0, 160) }); break; }\","
   ],
   [
-   452,
+   501,
    "if (p.startsWith(\"./\")) p = p.slice(2);"
   ],
   [
-   453,
+   502,
    "if (p.startsWith(projectRoot + \"/\")) p = p.slice(projectRoot.length + 1);"
   ],
   [
-   775,
+   873,
    "d.gap.startsWith(\"[聚合升级/无组承接]\") || d.gap.startsWith(\"[职责外申报]\");"
   ],
   [
-   892,
+   990,
    "for (const p of parts) if (p.files.includes(filePath)) return p.name;"
   ],
   [
-   1037,
+   1132,
+   "if (GREP_CHECK_STUB_RE.test(cmd)) {"
+  ],
+  [
+   1146,
    "const impure = (f[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));"
   ],
   [
-   1245,
+   1354,
    "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))"
   ],
   [
-   1677,
+   1837,
    "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));"
   ],
   [
-   1761,
+   1921,
    "f === \".tmp\" || f.startsWith(\".tmp/\") || f === \".pi\" || f.startsWith(\".pi/workflows/\");"
   ],
   [
-   1768,
+   1928,
    "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),"
   ],
   [
-   2200,
+   2360,
    "\"var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.sp"
   ]
  ],
  "skills/self/dev-workflow/workflows/src/design-code-sync-loop.shared.ts": [
   [
-   154,
+   133,
+   "\"    var m=t.match(/`([^`\\\\n]{2,60})`/g)||[];\","
+  ],
+  [
+   135,
+   "\"      if(!v||!/^[\\\\x20-\\\\x7e]+$/.test(v))continue;\","
+  ],
+  [
+   136,
+   "\"      if(v.indexOf('/')>=0||v.indexOf(' ')>=0)continue;\","
+  ],
+  [
+   138,
+   "\"      if(/v?\\\\d+(\\\\.\\\\d+)+/i.test(v))continue;\","
+  ],
+  [
+   197,
    "\"  var h=/^### (\\\\S+)/.exec(ln);\","
   ],
   [
-   156,
+   199,
    "\"  if(/^## /.test(ln)){cur=null;continue}\","
   ],
   [
-   158,
+   201,
    "\"  var isStd=false;for(var s of std){if(ln.indexOf(s)===0){isStd=true;break}}\","
   ],
   [
-   261,
+   304,
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
   ],
   [
-   267,
+   310,
    "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");"
   ],
   [
-   366,
+   354,
+   "const abs = p.startsWith(\"/\");"
+  ],
+  [
+   451,
    ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));"
   ],
   [
-   506,
+   591,
    "const abs = tok.startsWith(\"/\") ? tok : `${rootDir}/${tok}`;"
   ],
   [
-   507,
+   592,
    "if (!affected.includes(abs)) affected.push(abs);"
   ],
   [
-   627,
+   712,
    ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));"
   ],
   [
-   708,
+   793,
    "if (fi.some((f) => fj.includes(f))) {"
   ],
   [
-   730,
+   815,
    "if (rest.startsWith(\"\\\"\") && rest.endsWith(\"\\\"\") && rest.length >= 2) rest = rest.slice(1, -1);"
   ],
   [
-   731,
+   816,
    "if (rest.includes(\" -> \")) {"
   ],
   [
-   748,
+   833,
    "if (token.length < 3 || !token.includes(\"/\")) return \"\";"
   ],
   [
-   749,
+   834,
    "return /\\.[A-Za-z0-9]+$/.test(token) ? token : \"\";"
   ],
   [
-   818,
+   903,
    "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${homeDir}/${p.slice(2)}` : p);"
   ],
   [
-   933,
+   1023,
    "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +"
   ],
   [
-   934,
+   1024,
    "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +"
   ],
   [
-   938,
+   1028,
    "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;"
   ],
   [
-   1182,
+   1277,
    "const rel = (p: string): string => (p.startsWith(`${projectRoot}/`) ? p.slice(projectRoot.length + 1) : p);"
   ],
   [
-   1183,
+   1278,
    "const pathUnderRoot = (p: string): string => (p.startsWith(\"/\") ? p : `${projectRoot}/${p}`);"
   ],
   [
-   1292,
+   1387,
    "if (m) for (const fp of m.files) if (!base.includes(fp)) base.push(fp);"
   ],
   [
-   1496,
+   1591,
    ".filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)))"
   ],
   [
-   1778,
+   1943,
+   "else if (typeof m[\"command\"] === \"string\" && ALWAYS_PASS_CMD_RE.test(m[\"command\"].trim())) badSc.push(`${i + 1}（selfCheck.command 须是对受影响文件的真实检查命令，不得是 shell 恒过/恒"
+  ],
+  [
+   1950,
    "const impure = (o[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));"
   ],
   [
-   2015,
+   2198,
    "if (src === designDoc || src === implPlan || src.startsWith(`${runDir}/`) || src.startsWith(`${retirementDestDir}/`)) {"
   ],
   [
-   2088,
+   2271,
    "return !pathUnderRoot(f).startsWith(`${retirementDestDir}/`);"
   ],
   [
-   2191,
+   2374,
    "if (!p.startsWith(`${projectRoot}/`)) {"
   ],
   [
-   2268,
+   2451,
    "const extraAbs = rep.fixed.filter((p2) => p2 !== \"\").map((p2) => (p2.startsWith(\"/\") ? p2 : `${projectRoot}/${p2}`));"
   ],
   [
-   2271,
+   2454,
    "if (!p2.startsWith(`${projectRoot}/`) || !(await pathExists(p2))) {"
   ],
   [
-   2343,
+   2526,
    "return needle !== \"\" && (loc.includes(needle) || needle.includes(loc));"
   ],
   [
-   2364,
+   2547,
    "const blockers = loaded.filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)));"
   ],
   [
-   2430,
-   "const outside = files.filter((fp) => !fp.startsWith(`${projectRoot}/`));"
+   2618,
+   "return n === null || !n.startsWith(`${projectRoot}/`);"
   ],
   [
-   2670,
+   2688,
+   "terr.add(tok.startsWith(\"/\") ? tok : `${projectRoot}/${tok}`);"
+  ],
+  [
+   2696,
+   "if (d.startsWith(`${base}/`)) return false;"
+  ],
+  [
+   2944,
    "return !pathUnderRoot(hf).startsWith(`${retirementDestDir}/`);"
   ],
   [
-   2999,
+   3269,
    "if (!g.issueIds.includes(fx.issueId)) es.push(`fixes 引用未知条目 ${fx.issueId}`);"
   ],
   [
-   3002,
+   3272,
    "if (!g.issueIds.includes(d.issueId)) es.push(`deferred 引用未知条目 ${d.issueId}`);"
   ],
   [
-   3009,
+   3279,
    "if (!g.issueIds.includes(d.issueId)) es.push(`exempt 引用未知条目 ${d.issueId}`);"
   ],
   [
-   3014,
+   3284,
    "if (!g.issueIds.includes(d.issueId)) es.push(`delegated 引用未知条目 ${d.issueId}`);"
   ]
  ],
@@ -249,127 +301,143 @@
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
   ],
   [
-   251,
+   66,
+   "return SHELL_SAFE_ARG_RE.test(s) ? s : \"'\" + s.split(\"'\").join(\"'\\\\''\") + \"'\";"
+  ],
+  [
+   73,
+   "if ((program === \"bash\" || program === \"sh\") && args.includes(\"-c\")) {"
+  ],
+  [
+   74,
+   "const raw = args[args.indexOf(\"-c\") + 1];"
+  ],
+  [
+   85,
+   "if (NOOP_CMD_STUB_RE.test(c) || (i > args.length && NOOP_CMD_STUB_HEAD_RE.test(c)) || (NOOP_CMD_ECHO_RE.test(c) && !NOOP_CMD_RUNNER_RE.test(c))) {"
+  ],
+  [
+   290,
    "\"try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',claimAny=process.argv[5]==='claim"
   ],
   [
-   267,
+   306,
    "\"const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));\" +"
   ],
   [
-   270,
+   309,
    "\"if(hit){const h=hit.slice(0,hit.indexOf('\\\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（'+(claimAny?'前缀+词边界认领（stat"
   ],
   [
-   317,
+   356,
    "if (rel.startsWith(\"/\")) return rel;"
   ],
   [
-   318,
+   357,
    "const trimmed = base.endsWith(\"/\") ? base.slice(0, -1) : base;"
   ],
   [
-   331,
+   370,
    "const prefix = t.endsWith(\"/\") ? t : `${t}/`;"
   ],
   [
-   332,
+   371,
    "if (file === t || file.startsWith(prefix)) return true;"
   ],
   [
-   346,
+   385,
    "const abs = entries.filter((t) => t.startsWith(\"/\"));"
   ],
   [
-   350,
+   389,
    "const mixed = entries.filter((t) => /\\s/.test(t) || /[()（）]/.test(t));"
   ],
   [
-   365,
+   404,
    "const arrow = p.indexOf(\" -> \");"
   ],
   [
-   375,
+   414,
    "const isTmpArtifact = (f: string): boolean => /^(\\.\\.\\/)*\\.tmp\\//.test(f);"
   ],
   [
-   532,
+   571,
    "if (!(TEST_WHITELIST as readonly string[]).includes(tc.program)) {"
   ],
   [
-   631,
+   672,
    "if (!commitTemplate.includes(\"{unitId}\") || !commitTemplate.includes(\"{summary}\")) {"
   ],
   [
-   1001,
+   1042,
    "if (n.deps.includes(cur) && !seen.has(n.id)) {"
   ],
   [
-   1014,
+   1055,
    "const interpreter = node.script.endsWith(\".sh\") ? \"bash\" : \"node\";"
   ],
   [
-   1263,
+   1304,
    "node.designRef !== \"\" && !summary.includes(node.designRef) ? `${node.designRef} ${summary}` : summary;"
   ],
   [
-   1517,
+   1558,
    "if (!failedIds.includes(nid)) errors.push(`item ${it[\"id\"]}：nodeIds 含未知/已 disputed 节点 ${nid}（幻觉 ref）`);"
   ],
   [
-   1532,
+   1573,
    "const conflicted = [...covered].filter((id) => fixCovered.has(id) && items.some((it) => it[\"action\"] === \"disputed\" && isStrArr(it[\"nodeIds\"]) && (it[\"nodeIds\"]"
   ],
   [
-   1546,
+   1587,
    "const files = items.filter((it) => ids.includes(it[\"id\"] as string)).flatMap((it) => (isStrArr(it[\"files\"]) ? (it[\"files\"] as string[]) : []));"
   ],
   [
-   1553,
+   1594,
    "const inter = groupFiles[i].filter((f) => groupFiles[j].includes(f));"
   ],
   [
-   1675,
+   1716,
    "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);"
   ],
   [
-   1705,
+   1746,
    "fixItems.filter((it) => commitGateFailures.some((cf) => cf.nodeIds.some((nid) => it.nodeIds.includes(nid)))).map((it) => it.id),"
   ],
   [
-   1711,
+   1752,
    "const gItems = fixItems.filter((it) => g.itemIds.includes(it.id));"
   ],
   [
-   1713,
+   1754,
    "const gNodes = plan.nodes.filter((n) => gItems.some((it) => it.nodeIds.includes(n.id)));"
   ],
   [
-   1778,
+   1819,
    "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);"
   ],
   [
-   1802,
+   1843,
    "const node = plan.nodes.find((n) => cf.nodeIds.includes(n.id));"
   ],
   [
-   1804,
+   1845,
    "const fixFiles = rep.fixes.filter((f) => f.itemId !== \"\" && cf.nodeIds.some((nid) => (fixItems.find((it) => it.id === f.itemId)?.nodeIds.includes(nid) ?? false)"
   ],
   [
-   1808,
+   1849,
    "const cfIdx = commitGateFailures.indexOf(cf);"
   ],
   [
-   1809,
+   1850,
    "const dcIdx = deferredCommits.findIndex((dc) => cf.nodeIds.includes(dc.id) && dc.message === cf.message);"
   ],
   [
-   1954,
+   1995,
    "for (const t of n.territory) if (!list.includes(t)) list.push(t);"
   ],
   [
-   2332,
+   2373,
    "for (const n of plan.nodes) if (n.kind === \"dev\") for (const t of n.territory) if (!allTerr.includes(t)) allTerr.push(t);"
   ]
  ],
@@ -401,10 +469,6 @@
   [
    582,
    "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;"
-  ],
-  [
-   1257,
-   "lastCheckReport.includes(\"[precheck]\")"
   ]
  ]
 }
