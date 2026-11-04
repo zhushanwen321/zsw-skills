@@ -10,7 +10,7 @@
   ],
   [
    166,
-   "\"    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-uw-z]*c/i.test(args[fai])) { fci = fai; break; } }\","
+   "\"    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-z]*c/i.test(args[fai])) { fci = fai; break; } }\","
   ],
   [
    180,
@@ -306,7 +306,7 @@
   ],
   [
    76,
-   "const flagIdx = args.findIndex((a) => /^-[a-uw-z]*c/i.test(a));"
+   "const flagIdx = args.findIndex((a) => /^-[a-z]*c/i.test(a));"
   ],
   [
    90,

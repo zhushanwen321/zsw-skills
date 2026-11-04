@@ -608,7 +608,7 @@ const NODE_PREP = [
     // 即可让全量门秒绿（bash -c "true" 的 stub 落在 arg 位，故判据按完整命令串 + 逐 arg
     // 双粒度应用）。-c 的 arg 是整段 shell 程序文本，逐 arg 只扫整段不扫段内组合；-c 还
     // 可并入短旗标簇（bash -lc 'exit 0'，裸 '-c' 精确匹配拦不住）——判据按
-    // /^-[a-uw-z]*c/i 找首个短旗标簇元素（单短横开头、簇尾为 c 时后随 arg 才是命令串；
+    // /^-[a-z]*c/i 找首个短旗标簇元素（单短横开头、簇尾为 c 时后随 arg 才是命令串；
     // 排除 -- 长选项形态），命中取该元素后随 arg 为命令串，剥一层对称外引号，连同 ;/&&
     // 切片并入候选，切片候选（下标 > args.length 的扩展候选）额外过 STUB_HEAD（stub 词头
     // 带参数形态——只新增拒收方向，RUNNER 豁免语义不变）。簇判据与四式正则字面量与
@@ -624,7 +624,7 @@ const NODE_PREP = [
     "  var cands = [full].concat(args);",
     "  if (program === 'bash' || program === 'sh') {",
     "    var fci = -1;",
-    "    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-uw-z]*c/i.test(args[fai])) { fci = fai; break; } }",
+    "    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-z]*c/i.test(args[fai])) { fci = fai; break; } }",
     "    if (fci >= 0) {",
     "      var cRaw = args[fci + 1];",
     "      if (typeof cRaw === 'string' && cRaw.length > 0) {",

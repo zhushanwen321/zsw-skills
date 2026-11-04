@@ -567,7 +567,7 @@ const TEST_WHITELIST = ["pnpm", "npm", "node", "git", "bash"] as const;
 // 恒绿形态拒收（assertion-residue MF-1-1）：白名单放行 bash/node，恒绿命令借道白名单即可
 // 让节点核验秒绿（bash -c "true" 的 stub 落在 arg 位，故判据按完整命令串 + 逐 arg 双粒度
 // 应用）。-c 的 arg 是整段 shell 程序文本，逐 arg 只扫整段不扫段内组合；-c 还可并入短旗
-// 标簇（bash -lc 'exit 0'，裸 '-c' 精确匹配拦不住）——判据按 /^-[a-uw-z]*c/i 找首个短旗
+// 标簇（bash -lc 'exit 0'，裸 '-c' 精确匹配拦不住）——判据按 /^-[a-z]*c/i 找首个短旗
 // 标簇元素（单短横开头、簇尾为 c 时后随 arg 才是命令串；排除 -- 长选项形态），命中取该
 // 元素后随 arg 为命令串，剥一层对称外引号，连同 ;/&& 切片并入候选，切片候选（下标 >
 // args.length 的扩展候选）额外过 STUB_HEAD（stub 词头带参数形态——只新增拒收方向，RUNNER
@@ -588,7 +588,7 @@ function noopCommandError(label: string, program: string, args: string[]): strin
   const full = [program, ...args].map(shellQuoteArg).join(" ");
   const cands: string[] = [full, ...args];
   if (program === "bash" || program === "sh") {
-    const flagIdx = args.findIndex((a) => /^-[a-uw-z]*c/i.test(a));
+    const flagIdx = args.findIndex((a) => /^-[a-z]*c/i.test(a));
     if (flagIdx >= 0) {
       const raw = args[flagIdx + 1];
       if (typeof raw === "string" && raw.length > 0) {
