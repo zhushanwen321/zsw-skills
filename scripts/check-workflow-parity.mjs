@@ -57,12 +57,12 @@ const WHITELIST = new Set([
   "退役判定 agent 返回无效（␘）。恢复动作：同步修复成果已在工作区/commit 中，AmendWorkflow 修订退役 prompt 后重跑",
   "退役判定 agent 返回无效（␘）。恢复动作：同步修复成果已在工作区/commit 中，修订脚本退役 prompt 后重跑",
   // —— 迁移期活条目（W3/W4 未切分，整句 G 措辞仍在产物中；四对全迁完后删除） ——
-  "参数校验失败：␘。恢复动作：修正参数后经 CreateWorkflow 重新发起（注意 AmendWorkflow 不透传 args——修订脚本时参数值需写进脚本常量后 amend）",
+  "参数校验失败：␘。恢复动作：修正参数后经 CreateWorkflow 重新发起；若修订续跑（AmendWorkflow）：args 不透传、attempt 留空会自动递增使节点缓存零命中从头重跑——参数值与 attempt 原值一并固化进脚本常量再 amend",
   "参数校验失败：␘。恢复动作：修正参数后重新 workflow run 发起（pi runs 一次性：修订脚本后重跑即可，防产物覆盖用 attempt 递增）",
   // —— 拼接壳 G 常量（恢复指引拆为壳常量后两侧措辞各自成串；W1 已迁移） ——
   "修 prompt 后 AmendWorkflow，或 args.attempt 递增重新发起",
   "修订脚本 prompt 后重新 run，或 args.attempt 递增重新发起",
-  "修正参数后经 CreateWorkflow 重新发起（注意 AmendWorkflow 不透传 args——修订脚本时参数值需写进脚本常量后 amend）",
+  "修正参数后经 CreateWorkflow 重新发起；若修订续跑（AmendWorkflow）：args 不透传、attempt 留空会自动递增使节点缓存零命中从头重跑——参数值与 attempt 原值一并固化进脚本常量再 amend",
   "修正参数后重新 workflow run 发起（pi runs 一次性：修订脚本后重跑即可，防产物覆盖用 attempt 递增）",
 
   // —— 拼接壳 W1 修复者重试钩子（F 区：zcode 同 actor 续聊只需说明，pi 新 agent 须自包含前情） ——

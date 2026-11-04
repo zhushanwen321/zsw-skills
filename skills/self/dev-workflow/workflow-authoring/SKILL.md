@@ -6,14 +6,15 @@ description: >-
   触发词：「写 workflow」「新建双平台 workflow」「改 workflow 脚本」「观测接入」
   「观测 JSONL」「构建器报错」。Not for 发起/运行已有 workflow（用 CreateWorkflow 与
   dev-flow-wf / tech-design-wf 的流程文档）、查询某次执行的观测数据（直接读落盘
-  JSONL 或跑统计脚本，见第 6 节）。
+  JSONL 或跑统计脚本，见第 7 节）。
 ---
 
 # workflow-authoring — 双平台 workflow 撰写与观测接入
 
 本仓 `skills/self/dev-workflow/workflows/` 下每对双平台 workflow 脚本由三份源码经构建器
 生成，阶段事件观测层在构建时拼进产物。本文是撰写与接入的操作规范：新建 workflow 从第 2 节
-搭结构，接入观测走第 4 节五步，提交前过第 5 节门禁。
+搭结构，引擎约束见第 3 节，run 崩溃后的修订续跑配方见第 4 节，接入观测走第 5 节五步，
+提交前过第 6 节门禁。
 
 ## 1. 适用范围
 
@@ -62,8 +63,15 @@ workflows/pi/<name>.js           pi 产物 = 壳 + 改写管线处理后的 shar
   发现 saved workflow，它滞后于仓内产物时实际执行的是旧脚本——构建器因此一并同步，
   `--check` 一并校验。
 
-## 3. zcode GUI 硬约束
+## 3. zcode 引擎与 GUI 硬约束
 
+- **agent() 每 run 每名字只注册一次**。具名 subagent 的名字是引擎在修订续跑
+  （AmendWorkflow，见第 4 节）里匹配缓存的身份，run 内必须唯一。回喂重试
+  （结构化校验失败把错误清单发回重问）的闭包里重新调用 `agent(name, persona)` 会
+  注册同名第二个实例，引擎以 `DuplicateActorName` 拒绝整个 run——重试只准经已取得的
+  引用续 ask。实装形态：`const x = agent(name, persona)` 注册一次取引用，循环内换名
+  用带轮次/节点后缀的新名（如 `` `主审-r${round}` ``），同名续聊（R2+ 聚焦复审）经
+  同一引用追问。参照 tech-review-loop.shared.ts 四席/聚合/修复者注册段。
 - **字面 `agent(` 调用点不得被包装函数遮蔽**。zcode GUI 泳道（GUI 里展示本次执行各
   subagent 的通道）按编译期静态分析预建，只认字面 `agent(name, persona)` 调用点：
   包一层函数再调用会让泳道失明，变量开头的 agent 名（如 `` `${t.label}-r${round}` ``）
@@ -78,11 +86,36 @@ workflows/pi/<name>.js           pi 产物 = 壳 + 改写管线处理后的 shar
 - 双平台产物对账（`scripts/check-workflow-parity.mjs`）把「agent 名模板静态文本序列
   按出现顺序两侧相等」列为零容忍强信号——agent 名在两侧产物必须逐点一致。
 
-## 4. 观测接入五步
+## 4. 修订续跑（AmendWorkflow）配方
+
+run 因脚本 bug 崩溃后改脚本续跑：新 run 导入原 run 已完成节点为缓存，只重付改动部分。
+缓存按 agent 名 + 节点输入匹配，以下每一步都在防缓存被打穿或调用被拒：
+
+1. **先在本会话加载 `dynamic-workflows` skill** 再调 AmendWorkflow——未加载过时调用
+   直接被拒。
+2. **参数固化**：AmendWorkflow 不透传 args，续跑 run 收到的参数为空——把原发起的全部
+   参数值写进脚本常量（tech-review-loop 只在 `deriveInputs(args)` 与 `initObservation`
+   读值；其他脚本先 grep `args.` 找全读值点）。
+3. **attempt 固化**：attempt 留空会按磁盘历史自动递增，轮次目录全部改名
+   （`round-1` → `round-1.attempt2`）→ 各节点的输入随之改变 → 缓存零命中、从头重跑。
+   固化为原 run 实际值——原值从 runDir 已有轮次目录名读出（无后缀 = 1、
+   `.attemptN` = N）。tech-review-loop 在自动递增发生时会在就绪日志提示缓存会失效。
+   （design-code-sync-loop 例外：断点恢复走 CreateWorkflow + `resumeFrom` 参数，本来
+   就开新 attempt 不依赖 amend 缓存；其「显式 attempt ≤ 已有最大序号拒启」防覆盖门禁
+   也会拒绝固化原值——不要对它走本配方。）
+4. **编辑对象是 run 的草稿文件**（CreateWorkflow 结果点名的
+   `.zcode/workflow-drafts/<run 名>.dwf.ts`，相对项目根），改完以 `path` 提交
+   AmendWorkflow；续跑后核对 setup 日志的 attempt 值与原值一致。
+
+**禁止直接改 saved 副本**（`~/.zcode/workflows/`）：在跑的 run 用的是发起时的脚本
+快照，改副本救不了它；改副本只会让下次发起执行「副本新、仓内源旧」的漂移版本。要改
+下次发起的行为 = 改 `src/` 源 + 跑构建器（构建器同步三处产物，见第 2 节）。
+
+## 5. 观测接入五步
 
 阶段事件观测回答「一次执行各阶段何时开始、何时结束、归哪个任务」。事件层公共实现在
 `workflows/src/observability.shared.ts`（单一构建输入，业务 shared 禁止拷贝其副本），
-构建时按第 2 节拼进产物。未接入观测的 workflow 会被构建器门禁报错（见第 5 节）。
+构建时按第 2 节拼进产物。未接入观测的 workflow 会被构建器门禁报错（见第 6 节）。
 
 **步 1：shared 源调观测 API**。按执行顺序：
 
@@ -155,7 +188,7 @@ node --test scripts/tests/workflow-observability.test.mjs   # 观测机制测试
 的 outcome 正确）、不传观测参数静默关闭（业务照常、无 JSONL）、pi 与 zcode 事件序列
 一致（除 timestamp）。
 
-## 5. 检查门禁
+## 6. 检查门禁
 
 `node scripts/build-workflows.mjs --check` 的观测契约检查（构建时逐 workflow 执行）：
 
@@ -174,7 +207,7 @@ node --test scripts/tests/workflow-observability.test.mjs   # 观测机制测试
   parity、types（wave-executor 相关变更另跑提交契约往返测试）。hook 启用前提：
   `git config core.hooksPath .githooks`。
 
-## 6. 数据落盘与读取
+## 7. 数据落盘与读取
 
 - **事件 JSONL**：每次执行一个文件
   `~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl`，
@@ -197,7 +230,7 @@ node --test scripts/tests/workflow-observability.test.mjs   # 观测机制测试
   缺省计入、`selftest` 默认排除（`--include-selftest` 显式计入）；统计按事件 `skill`
   字段过滤，新 workflow 记得步 4 的 `SKILL_ALIASES` 登记。
 
-## 7. 参照实装索引
+## 8. 参照实装索引
 
 四个已接入观测的 workflow，按「想抄什么」选参照（各 shared 的 initObservation 调用点
 与 obsBegin/withStage 分布可直接搜函数名定位）：

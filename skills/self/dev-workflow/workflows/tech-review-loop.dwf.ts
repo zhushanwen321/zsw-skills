@@ -198,7 +198,7 @@ interface NarrowedInputs {
 
 
 // ── 平台恢复指引（G 区：机制词两侧平台化，公共体经常量引用） ──
-const HINT_RELAUNCH_WITH_ARGS = "修正参数后经 CreateWorkflow 重新发起（注意 AmendWorkflow 不透传 args——修订脚本时参数值需写进脚本常量后 amend）";
+const HINT_RELAUNCH_WITH_ARGS = "修正参数后经 CreateWorkflow 重新发起；若修订续跑（AmendWorkflow）：args 不透传、attempt 留空会自动递增使节点缓存零命中从头重跑——参数值与 attempt 原值一并固化进脚本常量再 amend";
 const HINT_REVIEW_BAD_COUNT = "修 prompt 后 AmendWorkflow，或 args.attempt 递增重新发起";
 
 // ── 修复者重试前情补丁（F 区钩子）：zcode 同 actor 续 ask，上下文天然可见，重试指令
@@ -1241,7 +1241,13 @@ artifact.chart("trajectory", {
 // 方向审与三审同轮并行、同一对账契约：patch 档发现（前提层/产物表/措辞级——问题定义
 // 与方案主干不动）进当轮问题清单，由文档修复者随全部发现一并处置；rewrite 档（问题
 // 定义/方案主干/分型被击穿）整循环立即终止回 T1（gate 语义保留在真正需要外溢的形态）
-log(`审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttemptMax > 0 ? `（检测到历史 attempt 后缀至 ${prevAttemptMax}，历史产物不覆盖）` : ""}）；四席并行（方向审 + 三审）`);
+// attempt 自动递增 = 轮次目录全部改名 → AmendWorkflow 按 agent 名 + 节点输入匹配的
+// 缓存零命中、从头重跑（2026-11-04 实例：amend 续跑未固化 attempt，白烧 43M token）——
+// 递增发生时当场提示应固化原值，防操作方不知情
+const attemptAutoBumped = inputs.attempt === null && prevAttemptMax > 0;
+log(
+  `审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttemptMax > 0 ? `（检测到历史 attempt 后缀至 ${prevAttemptMax}，历史产物不覆盖）` : ""}${attemptAutoBumped ? `；注意：自动递增使轮次目录改名、AmendWorkflow 缓存会零命中从头重跑——修订续跑应在脚本内固化 attempt=${prevAttemptMax}` : ""}）；四席并行（方向审 + 三审）`,
+);
 
 // ── 审查-修复主循环 ──
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
