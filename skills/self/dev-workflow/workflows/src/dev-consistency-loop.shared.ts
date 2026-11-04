@@ -1706,10 +1706,22 @@ gateARetry: while (true) {
         log(`[${(await probeNow()).iso}] 修复组 ${name} 完成（fixes ${fix.fixes.length}、skipped ${fix.skipped.length}${(fix.delegated ?? []).length > 0 ? `、delegated ${(fix.delegated ?? []).length}` : ""}）`);
         return { name, fix: normalizeFix(fix, `修复-${name}-r${fixRound}`) };
     };
+  // 混合派发队列（D1 同池并行）：代码组在前保序；门控判不相交（docPrompt!==null &&
+  // !docSerial）时文档组作为池内一员追加队尾——池内占用 1 个槽位，在途合计仍 ≤
+  // MAX_CONCURRENCY=5（RL1 断言不变）；相交分支不入队，走下方阶段 A2 池外串行段
+  // （V2 对照基准）。Promise.all 保序：文档组结果仍在全部代码组之后，fixesByGroup
+  // 顺序与改造前一致。条目只携纯数据（kind + name/prompt），池回调按判别字段直派
+  // 命名执行体——不经任务对象方法中转（发起预检形态约束，见 dev-flow-wf SKILL 写法约束）
+  const fixPoolItems: ({ kind: "code"; name: string } | { kind: "doc"; prompt: string })[] = [
+    ...groupNames.map((name) => ({ kind: "code" as const, name })),
+  ];
+  if (docPrompt !== null && !docSerial) fixPoolItems.push({ kind: "doc", prompt: docPrompt });
   try {
-    fixesByGroup = (await runSlotPool(groupNames, MAX_CONCURRENCY, (name) => runFixGroup(name))).filter(
-      (r): r is { name: string; fix: FixReport } => r.fix !== null,
-    );
+    fixesByGroup = (
+      await runSlotPool(fixPoolItems, MAX_CONCURRENCY, (item) =>
+        item.kind === "code" ? runFixGroup(item.name) : runDocGroup(item.prompt),
+      )
+    ).filter((r): r is { name: string; fix: FixReport } => r.fix !== null);
   } catch (e) {
     return await finish("fix-failure", reviewRound, `第 ${fixRound} 轮修复失败：${String(e)}——在途改动可能留在工作区，接管前先 git status 盘点`);
   }
