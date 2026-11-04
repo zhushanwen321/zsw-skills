@@ -809,15 +809,23 @@ const NODE_RUN_CMD = [
 // 确定性结构），不是测试运行输出——运行输出里的 skipped 计数原理上区分不了「执行者
 // 绕过」与「分层测试策略的设计内标签跳过」（taiji 实测：全量输出恒含 `| N skipped`，
 // 输出侧扫描每轮必误伤，曾把真实全绿判成 gate-a-failed；同判据对齐 pr-cr-fix PS10
-// 「不解析输出 skip 标记」）。模式集是引擎持有常量（非 agent 供 pattern）：显式跳过
-// API（.skip / .todo）、反向绕过（.only）、lint 禁用（eslint-disable）。skipIf 门控跳过
-// 是分层测试策略的正规载体（门控登记纪律），不入模式集——新增带门控的用例属合法
-// 产出。判定域口径：diff 新增行属机器产确定性结构，此处的字面匹配是引擎判据的实现
+// 「不解析输出 skip 标记」）。模式集是引擎持有常量（非 agent 供 pattern）：词边界正则
+// 覆盖显式跳过 API 全形（it.skip/describe.skip 与 xit/xdescribe 简写）、.todo、反向绕过
+// （.only）、["skip"] 间接形态、skipIf 调用与 lint 禁用（eslint-disable）。skipIf 的
+// 「恒真门控」与合法门控登记在字面层不可分（语义在表达式里），入集会把分层测试的正规
+// 门控载体一并误伤——本检测对 skipIf 只报形态供人工归因，恒真判定交给语义审查层。
+// 判定域口径：diff 新增行属机器产确定性结构，此处的模式匹配是引擎判据的实现
 // 细节，不属「自由文本找证据」断言（与 porcelain 解析同类边界）。
 const NODE_DIFF_BYPASS_SCAN = [
     "var cp = require('child_process');",
     "var projectRoot = process.argv[1], baseline = process.argv[2];",
-    "var BYPASS_PATTERNS = ['.skip(', '.todo', '.only(', 'eslint-disable'];",
+    "var BYPASS_RE = [",
+    "  [/\\b(?:xit|xdescribe)\\s*\\(/, 'xit/xdescribe 跳过简写'],",
+    "  [/\\b(?:it|test|describe)\\s*\\.\\s*(?:skip|todo|only)\\b/, 'skip/todo/only 跳过标记'],",
+    "  [/\\[\\s*['\"]skip['\"]\\s*\\]\\s*\\(/, '[\"skip\"] 间接跳过'],",
+    "  [/\\bskipIf\\s*\\(/, 'skipIf 条件跳过（门控语义需人工归因）'],",
+    "  [/eslint-disable/, 'eslint-disable lint 禁用'],",
+    "];",
     "var out;",
     "try { out = cp.execFileSync('git', ['diff', baseline + '..HEAD', '--unified=0'], { cwd: projectRoot, encoding: 'utf8', maxBuffer: 67108864 }); }",
     "catch (e) { console.log(JSON.stringify({ error: 'git diff 失败: ' + String((e.stderr || '') + (e.message || e)).slice(0, 400) })); process.exit(0); }",
@@ -828,8 +836,8 @@ const NODE_DIFF_BYPASS_SCAN = [
     "  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }",
     "  if (l.charAt(0) !== '+') continue;",
     "  var content = l.slice(1);",
-    "  for (var j = 0; j < BYPASS_PATTERNS.length; j++) {",
-    "    if (content.indexOf(BYPASS_PATTERNS[j]) >= 0) { hits.push({ file: curFile, pattern: BYPASS_PATTERNS[j], line: content.trim().slice(0, 160) }); break; }",
+    "  for (var j = 0; j < BYPASS_RE.length; j++) {",
+    "    if (BYPASS_RE[j][0].test(content)) { hits.push({ file: curFile, pattern: BYPASS_RE[j][1], line: content.trim().slice(0, 160) }); break; }",
     "  }",
     "  if (hits.length >= 10) break;",
     "}",
@@ -1838,7 +1846,7 @@ gateARetry: while (true) {
                 "约束：",
                 "1. 修复对象 = 文档与注释（设计文档 / docs/ 项目文档 / 代码注释）；禁止为对齐失真描述去改实现——若你核实后确信实现才错了（文档是对的），该条放 skipped 并写明实现侧证据（file:line），它将回流主 agent 裁决，不盲改。",
                 "2. 波及扫描：每修一处 grep 同模式实例（同类失真表述 / 同键引用 / 同族计数口径），组内实例一并修；组外文件在 description 标注「组外波及：<位置>」。",
-                "3. 联动自检（替代代码组的测试硬门，结构化申报）：修完跑适用的一致性检查（如改 style.css 投影段跑 python3 .githooks/check_css_token_ssot.py、改 i18n 文案跑 python3 .githooks/check_i18n_locale_sync.py）——selfCheck.grepChecks 每条 {desc, command, expected, actual} 记实际执行的检查命令与输出（existence-check 类 = 旧表述零残留检索，expected 填零命中预期）；无适用检查时对旧表述做零残留检索同款申报。selfCheck.typecheck 填 \"pass\"（纯文档改动无编译面）。命令与输出必须可复算（引擎按值校验，不含可复算命令的空申报会被校验拒绝）。",
+                "3. 联动自检（替代代码组的测试硬门，结构化申报）：修完跑适用的一致性检查（如改 style.css 投影段跑 python3 .githooks/check_css_token_ssot.py、改 i18n 文案跑 python3 .githooks/check_i18n_locale_sync.py）——selfCheck.grepChecks 每条 {desc, command, expected, actual} 记实际执行的检查命令与输出（existence-check 类 = 旧表述零残留检索，expected 填零命中预期）；无适用检查时对旧表述做零残留检索同款申报。selfCheck.typecheck 填 \"pass\"（纯文档改动无编译面）。命令与输出必须可复算（引擎做结构校验：grepChecks 每条须含非空 command 与 actual；当前引擎不复跑文档组自检命令——聚焦复审按申报的 command/actual 线索聚焦核验）。",
                 "4. git 禁令同代码组：禁止 git add / commit / push / stash——提交由工作流引擎统一执行。",
                 "5. affectedFiles 如实申报每个改动文件（含设计文档——无论在仓库内还是 ~/.agents/skill-data/ 下都如实申报，引擎按申报核验归属；仓库外与 gitignored 文件提交时自然落空不阻塞）。路径必须纯路径（不得夹说明文字或 file:line 行号——引擎按值校验，杂质会被拒收回喂；说明放 description）。",
                 "",
@@ -2545,6 +2553,31 @@ gateARetry: while (true) {
         return await finishGateA(`Gate A 绕过检测命中：本批 diff（${info.baseline}..HEAD）新增行出现测试跳过/仅跑部分/lint 禁用形态——${bypassHits
             .map((h) => `${h.file}：${h.pattern}（${h.line}）`)
             .join("；")}。发现即失败项不自动归因（绕过检测不是分诊的解释对象），由主 agent 归因处置后重跑`);
+    }
+    // untracked 测试文件探针（红队 A3 补强）：diff 检测只覆盖已提交区间，untracked 的新测试
+    // 文件不在其中——含 describe.only 的未申报测试文件会被 vitest 默认 include 吃进全量、
+    // 只跑 only 块即假绿。工作区存在 untracked 测试文件 = Gate A 绿证据不完备（全量未覆盖
+    // 全部测试资产），fail-closed 拒绝判绿（foreign/untracked 的「登记不阻塞」原则在此不适用：
+    // 那是修复归属协调原则，这里是验证完备性问题——测试资产不齐时全量门没有判定资格）
+    phase("Gate A 前置探针（untracked 测试文件）");
+    {
+        const utProbe = await world.run("node", [
+            "-e",
+            "var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.split('\\n').forEach(function(l){if(l.indexOf('??')!==0)return;var p=l.slice(3).trim();if(/\\.(?:test|spec)\\.[cm]?[jt]sx?$/.test(p)||p.indexOf('__tests__')>=0)hits.push(p)});console.log(JSON.stringify(hits.slice(0,10)))",
+            info.projectRoot,
+        ]);
+        let untrackedTests = [];
+        try {
+            const parsedU = JSON.parse(utProbe.stdout);
+            if (Array.isArray(parsedU))
+                untrackedTests = parsedU.filter((x) => typeof x === "string");
+        }
+        catch {
+            log(`WARN: untracked 测试文件探针输出不可解析——本项检测跳过（人工抽查 git status）`);
+        }
+        if (untrackedTests.length > 0) {
+            return await finishGateA(`Gate A 前置探针：工作区存在未跟踪（untracked）测试文件——${untrackedTests.join("；")}。全量测试不覆盖未纳入版本控制的测试资产（其中可能含 only/跳过形态且绕过 diff 检测），绿证据不完备即失败项：把文件纳入本批（git add + commit 后重跑）或确认删除后重跑`);
+        }
     }
     phase("跑全量测试 Gate A");
     const gateLog = info.gateALog;

@@ -33,7 +33,7 @@
 2. 最终 commit（可复用 e2e spec、文档登记；impl-plan/exec-plan/status 落 `~/.agents/skill-data/`，HOME 下天然不入 git）
 3. **功能分级登记同步**：新功能/新用例或「挂掉后果」变化 → 同 commit 更新（如 `docs/FEATURE-PRIORITIES.md`）；纯重构不触发；零触发也须汇报注明
 4. **文档资产更新检查**：对照项目 AGENTS.md 文档索引按变更内容判定同 commit 更新（产品→PRODUCT / 拓扑→ARCHITECTURE / 术语→CONTEXT / 视觉→DESIGN / 规范→STANDARDS / 测试→TEST-STRATEGY / 排障→TROUBLESHOOTING；采样管道资产同 commit 回写）；verification skill 触达时转第 5 步专用流程，不在本步泛化处理；零触发注明「文档资产零同步」
-5. **verification skill 同步检查（项目存在 verification skill 时执行，零触发注明「verification skill 零同步」）**：发现规则同 tech-design-wf T3（`verify-*` 前缀 + SKILL.md 含 Launch 与 Drive 驱动节，项目 AGENTS.md 显式声明优先）。触发 = 本次交付改动文件触达其覆盖矩阵登记的功能行：
+5. **verification skill 同步检查（项目存在 verification skill 时执行，零触发注明「verification skill 零同步」）**：发现规则同 tech-design-wf T3（项目 AGENTS.md 显式声明为唯一来源；2026-11-04 起废除 verify-* 前缀与 SKILL.md 内容特征探测）。触发 = 本次交付改动文件触达其覆盖矩阵登记的功能行：
    - 触达行增量回写：行为变化 → 改对应能力文档的断言/坑登记；新功能面 → 补条目；场景剧本与覆盖矩阵行状态同步——全部随最终 commit 同笔
    - 影响面实跑：只重跑本次被修改过的场景剧本（经其 runner 直跑，verdict 落新 run 目录）；未修改的剧本引用 D3 verdict 证据路径，零重跑——全量覆盖是维护 pass 的职责，D4 不做
    - 系统性漂移（多处能力文档与实现不符 / 本次大重构跨多域）→ 不在 D4 内修，登记 ledger 并在交付汇总建议单独跑项目维护技能全量 pass（如 `/maintain-verification-skill`，其目标发现规则与本条同源）；产品缺陷走 D3 的 product-bug 熔断语义，不混入 skill 同步

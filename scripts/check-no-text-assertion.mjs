@@ -29,7 +29,9 @@ const TARGETS = [
   "skills/self/dev-workflow/workflows/src/wave-executor.shared.ts",
   "skills/self/dev-workflow/workflows/src/tech-review-loop.shared.ts",
 ];
-const API_RE = /\.includes\(|\.test\(|\.indexOf\(/;
+// 覆盖六类字面匹配 API（2026-11-04 审查缺陷 7 修正：只扫三类会漏 .match/.exec/
+// startsWith/endsWith 回潮——本次退役的判定点恰有 /词表符号.../.exec 与 startsWith("[process]") 形态）
+const API_RE = /\.includes\(|\.test\(|\.indexOf\(|\.match\(|\.exec\(|\.startsWith\(|\.endsWith\(/;
 
 const scanFile = (rel) => {
   const out = [];

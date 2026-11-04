@@ -1,6 +1,10 @@
 {
  "skills/self/dev-workflow/workflows/src/dev-consistency-loop.shared.ts": [
   [
+   37,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
+  ],
+  [
    148,
    "\"if (ALLOWED.indexOf(fsuite.program) < 0) die('testPlan.fullSuite.program 不在白名单 ' + ALLOWED.join('/') + ': ' + fsuite.program);\","
   ],
@@ -19,6 +23,10 @@
   [
    179,
    "\"var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);\","
+  ],
+  [
+   187,
+   "\"    var m = line.match(/^(\\\\d+|-)\\\\s+(\\\\d+|-)\\\\s+(.+)$/);\","
   ],
   [
    277,
@@ -41,35 +49,59 @@
    "\"      if (m.indexOf('index.lock') >= 0 && i < 6) { sleep(200 + i * 300); continue; }\","
   ],
   [
-   371,
+   379,
    "\"  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }\","
   ],
   [
-   375,
-   "\"    if (content.indexOf(BYPASS_PATTERNS[j]) >= 0) { hits.push({ file: curFile, pattern: BYPASS_PATTERNS[j], line: content.trim().slice(0, 160) }); break; }\","
+   383,
+   "\"    if (BYPASS_RE[j][0].test(content)) { hits.push({ file: curFile, pattern: BYPASS_RE[j][1], line: content.trim().slice(0, 160) }); break; }\","
   ],
   [
-   884,
+   452,
+   "if (p.startsWith(\"./\")) p = p.slice(2);"
+  ],
+  [
+   453,
+   "if (p.startsWith(projectRoot + \"/\")) p = p.slice(projectRoot.length + 1);"
+  ],
+  [
+   775,
+   "d.gap.startsWith(\"[聚合升级/无组承接]\") || d.gap.startsWith(\"[职责外申报]\");"
+  ],
+  [
+   892,
    "for (const p of parts) if (p.files.includes(filePath)) return p.name;"
   ],
   [
-   1029,
+   1037,
    "const impure = (f[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));"
   ],
   [
-   1237,
+   1245,
    "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))"
   ],
   [
-   1669,
+   1677,
    "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));"
   ],
   [
-   1760,
+   1761,
+   "f === \".tmp\" || f.startsWith(\".tmp/\") || f === \".pi\" || f.startsWith(\".pi/workflows/\");"
+  ],
+  [
+   1768,
    "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),"
+  ],
+  [
+   2200,
+   "\"var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.sp"
   ]
  ],
  "skills/self/dev-workflow/workflows/src/design-code-sync-loop.shared.ts": [
+  [
+   154,
+   "\"  var h=/^### (\\\\S+)/.exec(ln);\","
+  ],
   [
    156,
    "\"  if(/^## /.test(ln)){cur=null;continue}\","
@@ -79,71 +111,143 @@
    "\"  var isStd=false;for(var s of std){if(ln.indexOf(s)===0){isStd=true;break}}\","
   ],
   [
+   261,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
+  ],
+  [
+   267,
+   "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");"
+  ],
+  [
+   366,
+   ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));"
+  ],
+  [
+   506,
+   "const abs = tok.startsWith(\"/\") ? tok : `${rootDir}/${tok}`;"
+  ],
+  [
    507,
    "if (!affected.includes(abs)) affected.push(abs);"
   ],
   [
-   701,
+   627,
+   ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));"
+  ],
+  [
+   708,
    "if (fi.some((f) => fj.includes(f))) {"
   ],
   [
-   724,
+   730,
+   "if (rest.startsWith(\"\\\"\") && rest.endsWith(\"\\\"\") && rest.length >= 2) rest = rest.slice(1, -1);"
+  ],
+  [
+   731,
    "if (rest.includes(\" -> \")) {"
   ],
   [
-   741,
+   748,
    "if (token.length < 3 || !token.includes(\"/\")) return \"\";"
   ],
   [
-   742,
+   749,
    "return /\\.[A-Za-z0-9]+$/.test(token) ? token : \"\";"
   ],
   [
-   927,
+   818,
+   "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${homeDir}/${p.slice(2)}` : p);"
+  ],
+  [
+   933,
+   "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +"
+  ],
+  [
+   934,
    "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +"
   ],
   [
-   931,
+   938,
    "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;"
   ],
   [
-   1285,
+   1182,
+   "const rel = (p: string): string => (p.startsWith(`${projectRoot}/`) ? p.slice(projectRoot.length + 1) : p);"
+  ],
+  [
+   1183,
+   "const pathUnderRoot = (p: string): string => (p.startsWith(\"/\") ? p : `${projectRoot}/${p}`);"
+  ],
+  [
+   1292,
    "if (m) for (const fp of m.files) if (!base.includes(fp)) base.push(fp);"
   ],
   [
-   1489,
+   1496,
    ".filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)))"
   ],
   [
-   1771,
+   1778,
    "const impure = (o[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));"
   ],
   [
-   2336,
+   2015,
+   "if (src === designDoc || src === implPlan || src.startsWith(`${runDir}/`) || src.startsWith(`${retirementDestDir}/`)) {"
+  ],
+  [
+   2088,
+   "return !pathUnderRoot(f).startsWith(`${retirementDestDir}/`);"
+  ],
+  [
+   2191,
+   "if (!p.startsWith(`${projectRoot}/`)) {"
+  ],
+  [
+   2268,
+   "const extraAbs = rep.fixed.filter((p2) => p2 !== \"\").map((p2) => (p2.startsWith(\"/\") ? p2 : `${projectRoot}/${p2}`));"
+  ],
+  [
+   2271,
+   "if (!p2.startsWith(`${projectRoot}/`) || !(await pathExists(p2))) {"
+  ],
+  [
+   2343,
    "return needle !== \"\" && (loc.includes(needle) || needle.includes(loc));"
   ],
   [
-   2357,
+   2364,
    "const blockers = loaded.filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)));"
   ],
   [
-   2992,
+   2430,
+   "const outside = files.filter((fp) => !fp.startsWith(`${projectRoot}/`));"
+  ],
+  [
+   2670,
+   "return !pathUnderRoot(hf).startsWith(`${retirementDestDir}/`);"
+  ],
+  [
+   2999,
    "if (!g.issueIds.includes(fx.issueId)) es.push(`fixes 引用未知条目 ${fx.issueId}`);"
   ],
   [
-   2995,
+   3002,
    "if (!g.issueIds.includes(d.issueId)) es.push(`deferred 引用未知条目 ${d.issueId}`);"
   ],
   [
-   3002,
+   3009,
    "if (!g.issueIds.includes(d.issueId)) es.push(`exempt 引用未知条目 ${d.issueId}`);"
   ],
   [
-   3007,
+   3014,
    "if (!g.issueIds.includes(d.issueId)) es.push(`delegated 引用未知条目 ${d.issueId}`);"
   ]
  ],
  "skills/self/dev-workflow/workflows/src/wave-executor.shared.ts": [
+  [
+   31,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
+  ],
   [
    251,
    "\"try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',claimAny=process.argv[5]==='claim"
@@ -155,6 +259,26 @@
   [
    270,
    "\"if(hit){const h=hit.slice(0,hit.indexOf('\\\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（'+(claimAny?'前缀+词边界认领（stat"
+  ],
+  [
+   317,
+   "if (rel.startsWith(\"/\")) return rel;"
+  ],
+  [
+   318,
+   "const trimmed = base.endsWith(\"/\") ? base.slice(0, -1) : base;"
+  ],
+  [
+   331,
+   "const prefix = t.endsWith(\"/\") ? t : `${t}/`;"
+  ],
+  [
+   332,
+   "if (file === t || file.startsWith(prefix)) return true;"
+  ],
+  [
+   346,
+   "const abs = entries.filter((t) => t.startsWith(\"/\"));"
   ],
   [
    350,
@@ -179,6 +303,10 @@
   [
    1001,
    "if (n.deps.includes(cur) && !seen.has(n.id)) {"
+  ],
+  [
+   1014,
+   "const interpreter = node.script.endsWith(\".sh\") ? \"bash\" : \"node\";"
   ],
   [
    1263,
@@ -246,6 +374,26 @@
   ]
  ],
  "skills/self/dev-workflow/workflows/src/tech-review-loop.shared.ts": [
+  [
+   120,
+   "if (!p.endsWith(\".rendered.md\")) return p;"
+  ],
+  [
+   130,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
+  ],
+  [
+   136,
+   "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");"
+  ],
+  [
+   489,
+   "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${home}/${p.slice(2)}` : p);"
+  ],
+  [
+   577,
+   "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +"
+  ],
   [
    578,
    "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +"

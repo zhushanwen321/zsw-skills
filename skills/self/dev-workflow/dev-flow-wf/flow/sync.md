@@ -9,7 +9,7 @@ CreateWorkflow saved: design-code-sync-loop
 args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath?, watchlist, rulings?, attempt?, taskId?, executionId?, sampleType? }
 // statusPath = status.json 绝对路径——planner 职责②进度核对数据源；未传时降级单侧核对并在 frameworkFindings 的 note 注明
 // watchlist = 符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）——机械信号步唯一扫描词源，必传：
-//   缺失或与设计文档+impl-plan.md 反引号集不等集（词表过期）= setup-failure 拒启，不允许无词表/过期词表开审
+//   缺失或 sourceFingerprints 与源文档当前内容指纹不等（词表过期/文档已改词表未重生成）= setup-failure 拒启，不允许无词表/过期词表开审
 //   （不回退文档反引号抓取——该路径依赖「反引号 = 本项目符号」隐式约定，已废除）
 // rulings = 已裁决记录 json 绝对路径（可选）：顶层数组，元素 {id, direction: "doc-right"|"code-right", anchor, quote, source, commit?}
 //   ——设计决策与开发期裁决的机器可读清单，注入 planner 与全部模块 reviewer（已答问题不得标 contested）；
@@ -21,9 +21,9 @@ args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath?, watchlist, ru
 终态: converged / contested / stuck + setup/planner/review/fix/retire/io-failure
 ```
 
-**阶段事件观测步骤边界**（stage=D5，引擎写入；SKILL「阶段事件观测」节）：setup = 环境校验 / 三道前置硬校验（attempt 防覆盖 / 词表等集 / 裁决记录装载）/ 矩阵初始化 / 框架对照规划（planner 失败随 setup 窗口补终态）；review = 机械信号扫描 + 并行模块审查（R1）或机械/清理对账 + 聚焦复审（R2+），round = 轮次；fix = 并行修复与组级 commit；retire = 退役判定（转清理条目回下轮修复时自然结束，converged / retire-failure 的 end 随终态统一补记）；finalize 仅在轮次耗尽兜底路径出现。
+**阶段事件观测步骤边界**（stage=D5，引擎写入；SKILL「阶段事件观测」节）：setup = 环境校验 / 三道前置硬校验（attempt 防覆盖 / 词表指纹 / 裁决记录装载）/ 矩阵初始化 / 框架对照规划（planner 失败随 setup 窗口补终态）；review = 机械信号扫描 + 并行模块审查（R1）或机械/清理对账 + 聚焦复审（R2+），round = 轮次；fix = 并行修复与组级 commit；retire = 退役判定（转清理条目回下轮修复时自然结束，converged / retire-failure 的 end 随终态统一补记）；finalize 仅在轮次耗尽兜底路径出现。
 
-**setup 三道前置硬校验**（任一不过 = setup-failure，派发任何 reviewer 之前拒启）：① attempt 防覆盖——显式 attempt ≤ runDir 已有最大序号即拒启（防覆盖历史轮次产物）；② 词表等集校验（词表符号集与「设计文档 + impl-plan.md」反引号集完全一致才放行）——watchlist 缺失或词表过期即拒启，预检结果缓存供 R1 机械步立项消费；③ 裁决记录装载——传入 rulings 时读失败或格式畸形（非顶层数组 / 元素缺 id+direction / 有效元素为 0）即拒启（fail-closed：静默丢裁决 = 已裁项被重判为争议的直接通道）。
+**setup 三道前置硬校验**（任一不过 = setup-failure，派发任何 reviewer 之前拒启）：① attempt 防覆盖——显式 attempt ≤ runDir 已有最大序号即拒启（防覆盖历史轮次产物）；② 词表指纹校验（watchlist 的 sourceFingerprints 与「设计文档 + impl-plan.md」当前内容 sha256 一致才放行——文档任何改动都会使指纹不等，语义强于旧反引号词集比对）——watchlist 缺失、缺指纹字段（旧版生成器产物）或指纹不等即拒启，预检结果缓存供 R1 机械步立项消费；③ 裁决记录装载——传入 rulings 时读失败或格式畸形（非顶层数组 / 元素缺 id+direction / 有效元素为 0）即拒启（fail-closed：静默丢裁决 = 已裁项被重判为争议的直接通道）。
 
 引擎语义（两级审查拓扑 + 轮次收敛）：
 
@@ -53,7 +53,7 @@ phase 3+ 修复循环：双向修复 → 聚焦复审 →（轮）→ 退役判�
 
 **must-fix 级 contested 升级三要件**（引擎机器校验，缺一 = 返回判无效回喂重派——结构化校验失败后把错误清单发回 reviewer 重派重试）：`consultedAnchors`（判争议前实际查过的锚点——本文锚点 = 原文位置引用：设计文档章节号 / 代码 file:line / 裁决记录条目 id）、`whyInsufficient`（已查锚点为何不构成答案）、`misleadScenario`（裁错方向会误导什么交付判断）。配套注入硬规则：凡设计文档或已裁决记录已明确回答的问题不得标 contested，按已裁方向给 direction，rationale 必须引用对应锚点（清单 id 或设计章节号）。
 
-**selfCheck 口径**：selfCheck 由聚焦复审消费（reviewer 复跑命令/核对预期），非引擎执行——复跑不过或无证据 = 条目回流重修；无测试套件的仓库可用 grep 断言，测试清单缺失如实呈现不虚构。
+**selfCheck 口径**（2026-11-04 结构化）：selfCheck = 结构化申报 `{kind: machine-check|existence-check, command, expected, actual}`——引擎按 command 复跑做输出等值比对（前置 exit 0；失败/不等值只 WARN 不强判，聚焦复审按 WARN 线索聚焦核验），「grep 断言」式自由文本不再接受；复跑不过或无证据 = 条目回流重修，测试清单缺失如实呈现不虚构。
 
 ## 三向功能对照矩阵（审查报告主体，findings 是单元格展开）
 

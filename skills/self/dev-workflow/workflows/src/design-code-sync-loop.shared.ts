@@ -515,21 +515,28 @@ function normFixOutcome(raw: FixOutcome, rootDir: string): FixOutcome {
  *  聚焦复审按 WARN 线索聚焦核验），不假装确定性 */
 async function rerunSelfChecks(groupLabel: string, fixes: FixRecord[]): Promise<void> {
   const RERUN_WRAP =
-    "var cp=require('child_process');var out='';try{out=String(cp.execFileSync('/bin/sh',['-c',process.argv[1]],{cwd:process.argv[2],encoding:'utf8',maxBuffer:33554432,timeout:120000}))}catch(e){out='EXIT '+e.status+': '+String(e.stdout||'')+String(e.stderr||'')};process.stdout.write(out)";
+    "var cp=require('child_process');var code=0,out='';try{out=String(cp.execFileSync('/bin/sh',['-c',process.argv[1]],{cwd:process.argv[2],encoding:'utf8',maxBuffer:33554432,timeout:120000}))}catch(e){code=typeof e.status==='number'?e.status:-1;out=String(e.stdout||'')+String(e.stderr||'')};console.log(JSON.stringify({code:code,out:out}))";
   const normOut = (s: string): string => {
     const t = s.trim();
-    return t.length > 4000 ? t.slice(0, 4000) : t;
+    return t.length > 4000 ? `${t.slice(0, 4000)}…(截断)` : t;
   };
   for (const fx of fixes) {
     if (fx.selfCheck.command.trim() === "") continue;
+    // 审计纪律：引擎替 fixer 执行了什么必须可审计——复跑日志落 command 全文（红队 E2 修正）
+    log(`selfCheck 复跑（${fx.issueId}，${fx.selfCheck.kind}）：${fx.selfCheck.command.slice(0, 200)}`);
     try {
       const r = await world.run("node", ["-e", RERUN_WRAP, fx.selfCheck.command, projectRoot]);
-      const rerun = normOut(r.stdout);
+      const parsed = JSON.parse(r.stdout) as { code: number; out: string };
+      const rerun = normOut(parsed.out);
       const declared = normOut(fx.selfCheck.actual);
-      if (rerun === declared) {
-        log(`组 ${groupLabel} 条目 ${fx.issueId} selfCheck 复跑等值通过（${fx.selfCheck.kind}）`);
-      } else {
+      const declaredExpected = normOut(fx.selfCheck.expected);
+      // 等值通过前置 exit 0（红队 E3：失败形态拼接可凑等值，非零退出不算自检通过）
+      if (parsed.code !== 0) {
+        log(`WARN: 组 ${groupLabel} 条目 ${fx.issueId} selfCheck 复跑退出码 ${parsed.code}（非 0）——自检未通过，聚焦复审按此聚焦核验`);
+      } else if (rerun !== declared) {
         log(`WARN: 组 ${groupLabel} 条目 ${fx.issueId} selfCheck 复跑与申报不等值（${fx.selfCheck.kind}）——自检证据存疑，聚焦复审按此聚焦核验`);
+      } else {
+        log(`组 ${groupLabel} 条目 ${fx.issueId} selfCheck 复跑等值通过（${fx.selfCheck.kind}${declaredExpected !== "" && declaredExpected !== declared ? `；注：申报 expected 与 actual 不一致（expected=${declaredExpected.slice(0, 80)}）` : ""}）`);
       }
     } catch (e) {
       log(`WARN: 组 ${groupLabel} 条目 ${fx.issueId} selfCheck 复跑执行失败（${String(e).slice(0, 120)}）——聚焦复审按此聚焦核验`);
