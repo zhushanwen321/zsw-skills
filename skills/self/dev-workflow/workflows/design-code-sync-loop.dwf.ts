@@ -1004,6 +1004,36 @@ async function fingerprintFiles(absFiles: string[]): Promise<Map<string, string 
   return m;
 }
 
+/**
+ * 记账 diff 的 changed 集合（D5 规则⑤，纯函数便于片段级验证）：「任一持有组快照值 ≠
+ * 当前指纹」∪ 记账时点盘上脏且无快照持有者的文件（新增文件或批前快照外的盘上文件——
+ * 设计明令不存在逃出 diff 集合的路径，无主脏文件必须进三态判定走挂起或呈报）。
+ * 删除文件经持有者分支的 null 哨兵指纹差捕获；仅申报而未落盘的文件不在此捕获（由
+ * 调用方按存在性单独并入，申报未写不误报）。
+ */
+function accountingDiffChangedSet(
+  unit: { snapshot: Map<string, string | null> | null }[],
+  union: string[],
+  curAbs: Set<string>,
+  current: Map<string, string | null>,
+): Set<string> {
+  const changed = new Set<string>();
+  for (const p of union) {
+    const holders = unit.filter((r) => r.snapshot !== null && r.snapshot.has(p));
+    if (holders.length === 0) {
+      if (curAbs.has(p) && current.has(p)) changed.add(p);
+      continue;
+    }
+    for (const r of holders) {
+      if (r.snapshot!.get(p) !== current.get(p)) {
+        changed.add(p);
+        break;
+      }
+    }
+  }
+  return changed;
+}
+
 // ── 参数窄化（纯函数，便于片段级验证） ──
 
 
@@ -4174,19 +4204,10 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       for (const r of unit) for (const p of [...r.g.files, ...r.outcome!.o.affectedFiles]) claimSet.add(p);
       const union = [...new Set([...snapUnion, ...curAbs, ...claimSet])];
       const current = await fingerprintFiles(union);
-      // changed = 「任一持有组快照值 ≠ 当前指纹」（多组同持文件按任一快照不同判——恢复
-      // 改造前「批前 ∪ 批后」并集覆盖：新增文件经读盘捕获、删除文件经快照有读盘无捕获、
-      // 归零修复经指纹差捕获）∪ 派发后申报文件存在性 ∪ 挂起集合重判（先前单元无认领的
-      // 文件可能已被本单元组认领，须重新走三态判定）
-      const changed = new Set<string>();
-      for (const p of union) {
-        for (const r of unit) {
-          if (r.snapshot!.has(p) && r.snapshot!.get(p) !== current.get(p)) {
-            changed.add(p);
-            break;
-          }
-        }
-      }
+      // changed = 指纹差判定（accountingDiffChangedSet——含无快照持有者的记账时点盘上
+      // 脏文件，新增/批外脏文件不逃出三态判定）∪ 派发后申报文件存在性 ∪ 挂起集合重判
+      // （先前单元无认领的文件可能已被本单元组认领，须重新走三态判定）
+      const changed = accountingDiffChangedSet(unit, union, new Set(curAbs), current);
       for (const r of unit) {
         for (const p of r.outcome!.o.affectedFiles) {
           if (await pathExists(p)) changed.add(p);
