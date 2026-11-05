@@ -80,6 +80,7 @@ const SCHEMA_GapEntry = {
     severity: { type: "string", enum: ["high", "medium", "low"], description: "严重度：high 预留给破坏数据/崩溃级" },
     fixHint: { type: "string", description: "一句可执行修复建议" },
     prevId: { type: "string", description: "R2+ 复审专属：延续上批条目时原样填其 U 编号（引擎按它刷新条目描述，不按文字匹配）；新问题不填" },
+    returnNote: { type: "string", description: "引擎内部字段（reviewer 不产不填）：fixer 申报留回流理由" },
   },
   required: ["location", "gap", "decisionAffecting", "deliveryAffecting", "impactNote", "severity", "fixHint"],
 };

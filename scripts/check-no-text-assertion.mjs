@@ -45,11 +45,39 @@ const scanFile = (rel) => {
 const current = {};
 for (const rel of TARGETS) current[rel] = scanFile(rel);
 
+// 基线条目第三元 = 归类标签（protocol-parse | format-validation | path-set | enum-check |
+// unclassified）：使「该命中为何属保留区」可被 grep 复查——误归类（实为证据扫描却登记为
+// 保留区）机器查不出存在性、只能靠标签抽查兜住。--update 沿用旧标签，新命中标 unclassified；
+// 校验只按行号+内容匹配，标签不参与，未归类计数随通过信息输出提醒补标
+const readOldCategories = () => {
+  try {
+    const old = JSON.parse(readFileSync(BASELINE, "utf8"));
+    const map = new Map();
+    for (const rel of TARGETS)
+      for (const e of old[rel] ?? []) {
+        const cat = e.length >= 3 ? e[2] : "unclassified";
+        map.set(`${e[0]}\t${e[1]}`, cat);
+      }
+    return map;
+  } catch {
+    return new Map();
+  }
+};
+
 const update = process.argv.includes("--update");
 if (update) {
-  writeFileSync(BASELINE, `${JSON.stringify(current, null, 1)}\n`);
-  const total = Object.values(current).reduce((n, v) => n + v.length, 0);
-  console.log(`基线已更新：${total} 处存量命中（全部视为已归类保留区）。新增命中点须在提交说明写明归类理由。`);
+  const oldCats = readOldCategories();
+  const tagged = {};
+  let unclassified = 0;
+  for (const rel of TARGETS)
+    tagged[rel] = current[rel].map(([l, c]) => {
+      const cat = oldCats.get(`${l}\t${c}`) ?? "unclassified";
+      if (cat === "unclassified") unclassified += 1;
+      return [l, c, cat];
+    });
+  writeFileSync(BASELINE, `${JSON.stringify(tagged, null, 1)}\n`);
+  const total = Object.values(tagged).reduce((n, v) => n + v.length, 0);
+  console.log(`基线已更新：${total} 处存量命中（新增命中标 unclassified：${unclassified} 处）。归类标签可直接编辑基线第三元修正；新增命中点须在提交说明写明归类理由。`);
   process.exit(0);
 }
 
@@ -77,7 +105,12 @@ for (const rel of TARGETS) {
 }
 
 if (additions.length === 0) {
-  console.log(`文字匹配断言防回潮：通过（当前 ${totals.current} 处命中 ⊆ 基线 ${totals.baseline} 处；基线外新增 0；基线已收敛 ${totals.removed} 处）`);
+  const unclassified = Object.values(baseline).reduce(
+    (n, entries) => n + entries.filter((e) => e.length < 3 || e[2] === "unclassified").length,
+    0,
+  );
+  const tagNote = unclassified > 0 ? `；未归类 ${unclassified} 处（编辑基线第三元补标签，类别：protocol-parse/format-validation/path-set/enum-check）` : "；归类标签齐全";
+  console.log(`文字匹配断言防回潮：通过（当前 ${totals.current} 处命中 ⊆ 基线 ${totals.baseline} 处；基线外新增 0；基线已收敛 ${totals.removed} 处${tagNote}）`);
   process.exit(0);
 }
 

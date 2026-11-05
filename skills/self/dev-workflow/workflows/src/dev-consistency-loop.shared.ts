@@ -150,12 +150,12 @@ const NODE_PREP = [
   // /^-[a-z]*c/i 找首个短旗标簇元素（单短横开头、簇尾为 c 时后随 arg 才是命令串；
   // 排除 -- 长选项形态），命中取该元素后随 arg 为命令串，剥一层对称外引号，连同 ;/&&
   // 切片并入候选，切片候选（下标 > args.length 的扩展候选）额外过 STUB_HEAD（stub 词头
-  // 带参数形态——只新增拒收方向，RUNNER 豁免语义不变）。簇判据与四式正则字面量与
+  // 带参数形态）。echo/printf 开头的候选一律拒收：echo 输出内容可为任意字样（如 runner
+  // 名），字样不构成真实测试证据、无豁免。簇判据与三式正则字面量与
   // wave-executor 侧 NOOP_CMD_* 保持逐字一致（两侧改动须同步）
   "var SQ = String.fromCharCode(39);",
   "var SHELL_QUOTE = function (s) { return /^[A-Za-z0-9_\\/:.,@%^+=-]+$/.test(s) ? s : SQ + s.split(SQ).join(SQ + '\\\\' + SQ + SQ) + SQ; };",
   "var STUB_RE = /^\\s*(true|false|:)\\s*$/;",
-  "var RUNNER_RE = /(vitest|jest|pnpm(?:-m)?\\s+(?:run\\s+)?test|npm\\s+(?:run\\s+)?test|yarn\\s+test|make\\s+test)/;",
   "var NOOP_RE = /^\\s*(echo|printf)\\b/;",
   "var STUB_HEAD_RE = /^\\s*(true|false|:|exit)(\\s|$)/;",
   "var noopCmdErr = function (label, program, args) {",
@@ -177,7 +177,7 @@ const NODE_PREP = [
   "  }",
   "  for (var ci = 0; ci < cands.length; ci++) {",
   "    var cc = cands[ci];",
-  "    if (STUB_RE.test(cc) || (ci > args.length && STUB_HEAD_RE.test(cc)) || (NOOP_RE.test(cc) && !RUNNER_RE.test(cc))) return label + ' 是恒绿形态命令（' + full + '）——不构成真实测试证据（恢复：检查 testPlan.fullSuite / testPlan.artifacts[n].command / testPlan.incremental / 节点 testCommand 是否为真实测试命令）';",
+  "    if (STUB_RE.test(cc) || (ci > args.length && STUB_HEAD_RE.test(cc)) || NOOP_RE.test(cc)) return label + ' 是恒绿形态命令（' + full + '）——不构成真实测试证据（恢复：检查 testPlan.fullSuite / testPlan.artifacts[n].command / testPlan.incremental / 节点 testCommand 是否为真实测试命令）';",
   "  }",
   "  return null;",
 "};",
@@ -879,10 +879,10 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
         `- [待办] reasonable ${result.reasonable.length} 项（写 impl-plan §5 合理偏差登记表）：${result.reasonable.map((r) => `${r.location}——${one(r.summary)}`).join("；")}`,
       );
     if (result.deferredLedger.length > 0) {
-      // 升级呈报条目（聚合判定无组承接 / fixer 职责外申报，gap 带对应前缀）从普通待办
-      // 拆出单列——混在「登记残留风险」一行会把优先人工裁决的升级语义降格成普通待办
-      const isEscalated = (d: { gap: string }): boolean =>
-        d.gap.startsWith("[聚合升级/无组承接]") || d.gap.startsWith("[职责外申报]");
+      // 升级呈报条目（聚合判定无组承接 / fixer 职责外申报）从普通待办拆出单列——混在
+      // 「登记残留风险」一行会把优先人工裁决的升级语义降格成普通待办。分流判据 = kind
+      // 字段（引擎写入点产生），gap 前缀文本仅人读展示不参与判定
+      const isEscalated = (d: { kind: string }): boolean => d.kind === "escalated";
       const escalatedLedger = result.deferredLedger.filter(isEscalated);
       const plainDeferred = result.deferredLedger.filter((d) => !isEscalated(d));
       if (escalatedLedger.length > 0)
@@ -1123,7 +1123,9 @@ function validateReviewResult(v: unknown): Validated<ReviewResult> {
 /** grepChecks 恒过形态判据（assertion-residue MF-1-9）：shell 恒过/恒输出命令不算自检申报
  *  ——引擎不复跑文档组自检命令，echo 类申报即「自检必绿」。exit 形态 2026-11-04 round-1
  *  MF-1-2 补入候选组（exit 0 复跑 code=0/输出空串，与申报 actual 空串等值畅通）。正则
- *  字面量与 design-code-sync-loop validateFixOutcome 侧（MF-1-3）同判据，改动须两处同步 */
+ *  字面量与 design-code-sync-loop validateFixOutcome 侧（MF-1-3）同判据，改动须两处同步。
+ *  已知边界：\b 词边界对「:」开头形态（裸「:」/「: cmd」）不成立会漏——冒号形态申报占比
+ *  极低，跨引擎字面一致优先，不单侧扩大覆盖面（与 W4 侧边界声明同源） */
 const GREP_CHECK_STUB_RE = /^(true|false|:|echo|printf|exit)\b/;
 
 function validateFixReport(v: unknown): Validated<FixReport> {
@@ -1405,6 +1407,7 @@ gateARetry: while (true) {
         location: it.location,
         gap: it.gap,
         impactNote: it.impactNote,
+        kind: "deferred",
       });
       log(`条目 ${it.id} 双无（影响决策=否、影响交付=否）→ 降级登记项，不进修复批次`);
     } else {
@@ -1498,6 +1501,7 @@ gateARetry: while (true) {
           location: it.location,
           gap: `[聚合升级/无组承接] ${a.reason ?? ""}：${it.gap}`,
           impactNote: it.impactNote,
+          kind: "escalated",
         });
         log(`条目 ${it.id} 聚合升级呈报（无组承接）：${a.reason ?? ""}`);
       } else if (a.action === "keep" && typeof a.group === "string" && a.group !== "") {
@@ -1574,7 +1578,7 @@ gateARetry: while (true) {
       "",
       "待修条目清单：",
       docEntries
-        .map(([id, d]) => `- ${id} ${d.location}\n  差距：${d.gap}${d.fixHint ? `\n  修复提示：${d.fixHint}` : ""}`)
+        .map(([id, d]) => `- ${id} ${d.location}\n  差距：${d.gap}${d.fixHint ? `\n  修复提示：${d.fixHint}` : ""}${d.returnNote ? `\n  回流理由（上轮 fixer 申报方向两可/实现侧错误）：${d.returnNote}` : ""}`)
         .join("\n"),
       "",
       "约束：",
@@ -1647,15 +1651,14 @@ gateARetry: while (true) {
       docErrorPool.delete(id);
       fixedCount += 1;
     }
-    // skipped 申报（fixer 核实方向两可 / 实现侧错误）：留池回流，理由写进 value 的 gap
-    // 前缀（编号不动——键是稳定 id，value 字段可更新；下轮 prompt 渲染 values 时理由可见）。
-    // 重复 skipped 只保留最新一次理由（剥掉旧前缀再套新的——逐轮嵌套会让 gap 无限膨胀）
+    // skipped 申报（fixer 核实方向两可 / 实现侧错误）：留池回流，理由写进 value 的
+    // returnNote 字段（编号不动——键是稳定 id；下轮 prompt 渲染时理由单列可见）。
+    // 重复 skipped 只保留最新一次理由（字段覆盖，无文本拼接膨胀）
     for (const s of docFix.skipped) {
       if (!docIds.has(s.id)) continue;
       const entry = docErrorPool.get(s.id);
       if (entry === undefined) continue;
-      const bareGap = entry.gap.replace(/^fixer 申报留回流（[^）]*）：/, "");
-      docErrorPool.set(s.id, { ...entry, gap: `fixer 申报留回流（${s.reason}）：${bareGap}` });
+      docErrorPool.set(s.id, { ...entry, returnNote: s.reason });
     }
     log(`[${(await probeNow()).iso}] 文档修复组：当场修复 ${fixedCount} 条，留池回流 ${docIds.size - fixedCount} 条（方向两可 / 实现侧错误）`);
     return { name: docGroupName, fix: fixedCount > 0 ? docFix : null };
@@ -1772,6 +1775,7 @@ gateARetry: while (true) {
         location: it.location,
         gap: `[职责外申报] ${d.reason}：${it.gap}`,
         impactNote: it.impactNote,
+        kind: "escalated",
       });
       log(`条目 ${it.id} 被 fixer 申报职责外（${d.reason}）——转升级呈报由主 agent 重派`);
     }

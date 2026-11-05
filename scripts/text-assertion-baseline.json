@@ -2,469 +2,579 @@
  "skills/self/dev-workflow/workflows/src/dev-consistency-loop.shared.ts": [
   [
    37,
-   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
+   "enum-check"
   ],
   [
-   156,
-   "\"var SHELL_QUOTE = function (s) { return /^[A-Za-z0-9_\\\\/:.,@%^+=-]+$/.test(s) ? s : SQ + s.split(SQ).join(SQ + '\\\\\\\\' + SQ + SQ) + SQ; };\","
+   157,
+   "\"var SHELL_QUOTE = function (s) { return /^[A-Za-z0-9_\\\\/:.,@%^+=-]+$/.test(s) ? s : SQ + s.split(SQ).join(SQ + '\\\\\\\\' + SQ + SQ) + SQ; };\",",
+   "format-validation"
   ],
   [
    166,
-   "\"    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-z]*c/i.test(args[fai])) { fci = fai; break; } }\","
+   "\"    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-z]*c/i.test(args[fai])) { fci = fai; break; } }\",",
+   "format-validation"
   ],
   [
    180,
-   "\"    if (STUB_RE.test(cc) || (ci > args.length && STUB_HEAD_RE.test(cc)) || (NOOP_RE.test(cc) && !RUNNER_RE.test(cc))) return label + ' 是恒绿形态命令（' + full + '）——不"
+   "\"    if (STUB_RE.test(cc) || (ci > args.length && STUB_HEAD_RE.test(cc)) || NOOP_RE.test(cc)) return label + ' 是恒绿形态命令（' + full + '）——不构成真实测试证据（恢复：检查 testPlan.f",
+   "format-validation"
   ],
   [
    186,
-   "\"if (ALLOWED.indexOf(fsuite.program) < 0) die('testPlan.fullSuite.program 不在白名单 ' + ALLOWED.join('/') + ': ' + fsuite.program);\","
+   "\"if (ALLOWED.indexOf(fsuite.program) < 0) die('testPlan.fullSuite.program 不在白名单 ' + ALLOWED.join('/') + ': ' + fsuite.program);\",",
+   "enum-check"
   ],
   [
    195,
-   "\"    if (ALLOWED.indexOf(at.command.program) < 0) die('testPlan.artifacts[' + ai + '].command.program 不在白名单: ' + at.command.program);\","
+   "\"    if (ALLOWED.indexOf(at.command.program) < 0) die('testPlan.artifacts[' + ai + '].command.program 不在白名单: ' + at.command.program);\",",
+   "enum-check"
   ],
   [
    202,
-   "\"  if (ALLOWED.indexOf(ep.testPlan.incremental.program) < 0) die('testPlan.incremental.program 不在白名单: ' + ep.testPlan.incremental.program);\","
+   "\"  if (ALLOWED.indexOf(ep.testPlan.incremental.program) < 0) die('testPlan.incremental.program 不在白名单: ' + ep.testPlan.incremental.program);\",",
+   "enum-check"
   ],
   [
    207,
-   "\"if (!/^[0-9a-f]{7,40}$/i.test(bl)) die('baseline 非 git hash 形态: ' + bl);\","
+   "\"if (!/^[0-9a-f]{7,40}$/i.test(bl)) die('baseline 非 git hash 形态: ' + bl);\",",
+   "protocol-parse"
   ],
   [
    220,
-   "\"var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);\","
+   "\"var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);\",",
+   "path-set"
   ],
   [
    228,
-   "\"    var m = line.match(/^(\\\\d+|-)\\\\s+(\\\\d+|-)\\\\s+(.+)$/);\","
+   "\"    var m = line.match(/^(\\\\d+|-)\\\\s+(\\\\d+|-)\\\\s+(.+)$/);\",",
+   "protocol-parse"
   ],
   [
    318,
-   "\"  var idx = p.indexOf(' -> ');\","
+   "\"  var idx = p.indexOf(' -> ');\",",
+   "protocol-parse"
   ],
   [
    323,
-   "\"var untracked = entries.filter(function (e) { return e.code.indexOf('?') >= 0; }).map(function (e) { return e.path; });\","
+   "\"var untracked = entries.filter(function (e) { return e.code.indexOf('?') >= 0; }).map(function (e) { return e.path; });\",",
+   "protocol-parse"
   ],
   [
    324,
-   "\"var foreign = changed.filter(function (f) { return pool.indexOf(f) < 0; });\","
+   "\"var foreign = changed.filter(function (f) { return pool.indexOf(f) < 0; });\",",
+   "enum-check"
   ],
   [
    325,
-   "\"var foreignUntracked = foreign.filter(function (f) { return untracked.indexOf(f) >= 0; });\","
+   "\"var foreignUntracked = foreign.filter(function (f) { return untracked.indexOf(f) >= 0; });\",",
+   "enum-check"
   ],
   [
    347,
-   "\"      if (m.indexOf('index.lock') >= 0 && i < 6) { sleep(200 + i * 300); continue; }\","
+   "\"      if (m.indexOf('index.lock') >= 0 && i < 6) { sleep(200 + i * 300); continue; }\",",
+   "protocol-parse"
   ],
   [
    420,
-   "\"  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }\","
+   "\"  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }\",",
+   "protocol-parse"
   ],
   [
    424,
-   "\"    if (BYPASS_RE[j][0].test(content)) { hits.push({ file: curFile, pattern: BYPASS_RE[j][1], line: content.trim().slice(0, 160) }); break; }\","
+   "\"    if (BYPASS_RE[j][0].test(content)) { hits.push({ file: curFile, pattern: BYPASS_RE[j][1], line: content.trim().slice(0, 160) }); break; }\",",
+   "format-validation"
   ],
   [
    506,
-   "if (p.startsWith(\"./\")) p = p.slice(2);"
+   "if (p.startsWith(\"./\")) p = p.slice(2);",
+   "path-set"
   ],
   [
    507,
-   "if (p.startsWith(projectRoot + \"/\")) p = p.slice(projectRoot.length + 1);"
-  ],
-  [
-   885,
-   "d.gap.startsWith(\"[聚合升级/无组承接]\") || d.gap.startsWith(\"[职责外申报]\");"
+   "if (p.startsWith(projectRoot + \"/\")) p = p.slice(projectRoot.length + 1);",
+   "path-set"
   ],
   [
    1002,
-   "for (const p of parts) if (p.files.includes(filePath)) return p.name;"
+   "for (const p of parts) if (p.files.includes(filePath)) return p.name;",
+   "path-set"
   ],
   [
-   1144,
-   "if (GREP_CHECK_STUB_RE.test(cmd)) {"
+   1146,
+   "if (GREP_CHECK_STUB_RE.test(cmd)) {",
+   "format-validation"
   ],
   [
-   1158,
-   "const impure = (f[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));"
+   1160,
+   "const impure = (f[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));",
+   "format-validation"
   ],
   [
-   1366,
-   "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))"
+   1368,
+   "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))",
+   "format-validation"
   ],
   [
-   1858,
-   "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));"
+   1862,
+   "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));",
+   "enum-check"
   ],
   [
-   1942,
-   "f === \".tmp\" || f.startsWith(\".tmp/\") || f === \".pi\" || f.startsWith(\".pi/workflows/\");"
+   1946,
+   "f === \".tmp\" || f.startsWith(\".tmp/\") || f === \".pi\" || f.startsWith(\".pi/workflows/\");",
+   "path-set"
   ],
   [
-   1949,
-   "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),"
+   1953,
+   "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),",
+   "enum-check"
   ],
   [
-   2381,
-   "\"var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.sp"
+   2385,
+   "\"var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.sp",
+   "protocol-parse"
   ]
  ],
  "skills/self/dev-workflow/workflows/src/design-code-sync-loop.shared.ts": [
   [
    133,
-   "\"    var m=t.match(/`([^`\\\\n]{2,60})`/g)||[];\","
+   "\"    var m=t.match(/`([^`\\\\n]{2,60})`/g)||[];\",",
+   "protocol-parse"
   ],
   [
    135,
-   "\"      if(!v||!/^[\\\\x20-\\\\x7e]+$/.test(v))continue;\","
+   "\"      if(!v||!/^[\\\\x20-\\\\x7e]+$/.test(v))continue;\",",
+   "format-validation"
   ],
   [
    136,
-   "\"      if(v.indexOf('/')>=0||v.indexOf(' ')>=0)continue;\","
+   "\"      if(v.indexOf('/')>=0||v.indexOf(' ')>=0)continue;\",",
+   "protocol-parse"
   ],
   [
    138,
-   "\"      if(/v?\\\\d+(\\\\.\\\\d+)+/i.test(v))continue;\","
+   "\"      if(/v?\\\\d+(\\\\.\\\\d+)+/i.test(v))continue;\",",
+   "protocol-parse"
   ],
   [
    197,
-   "\"  var h=/^### (\\\\S+)/.exec(ln);\","
+   "\"  var h=/^### (\\\\S+)/.exec(ln);\",",
+   "protocol-parse"
   ],
   [
    199,
-   "\"  if(/^## /.test(ln)){cur=null;continue}\","
+   "\"  if(/^## /.test(ln)){cur=null;continue}\",",
+   "protocol-parse"
   ],
   [
    201,
-   "\"  var isStd=false;for(var s of std){if(ln.indexOf(s)===0){isStd=true;break}}\","
+   "\"  var isStd=false;for(var s of std){if(ln.indexOf(s)===0){isStd=true;break}}\",",
+   "protocol-parse"
   ],
   [
    335,
-   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
+   "enum-check"
   ],
   [
    341,
-   "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");"
+   "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");",
+   "path-set"
   ],
   [
    385,
-   "const abs = p.startsWith(\"/\");"
+   "const abs = p.startsWith(\"/\");",
+   "path-set"
   ],
   [
    482,
-   ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));"
+   ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));",
+   "path-set"
   ],
   [
    622,
-   "const abs = tok.startsWith(\"/\") ? tok : `${rootDir}/${tok}`;"
+   "const abs = tok.startsWith(\"/\") ? tok : `${rootDir}/${tok}`;",
+   "path-set"
   ],
   [
    623,
-   "if (!affected.includes(abs)) affected.push(abs);"
+   "if (!affected.includes(abs)) affected.push(abs);",
+   "path-set"
   ],
   [
    743,
-   ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));"
+   ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));",
+   "path-set"
   ],
   [
    824,
-   "if (fi.some((f) => fj.includes(f))) {"
+   "if (fi.some((f) => fj.includes(f))) {",
+   "enum-check"
   ],
   [
    846,
-   "if (rest.startsWith(\"\\\"\") && rest.endsWith(\"\\\"\") && rest.length >= 2) rest = rest.slice(1, -1);"
+   "if (rest.startsWith(\"\\\"\") && rest.endsWith(\"\\\"\") && rest.length >= 2) rest = rest.slice(1, -1);",
+   "protocol-parse"
   ],
   [
    847,
-   "if (rest.includes(\" -> \")) {"
+   "if (rest.includes(\" -> \")) {",
+   "protocol-parse"
   ],
   [
    864,
-   "if (token.length < 3 || !token.includes(\"/\")) return \"\";"
+   "if (token.length < 3 || !token.includes(\"/\")) return \"\";",
+   "path-set"
   ],
   [
    865,
-   "return /\\.[A-Za-z0-9]+$/.test(token) ? token : \"\";"
+   "return /\\.[A-Za-z0-9]+$/.test(token) ? token : \"\";",
+   "path-set"
   ],
   [
    934,
-   "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${homeDir}/${p.slice(2)}` : p);"
+   "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${homeDir}/${p.slice(2)}` : p);",
+   "path-set"
   ],
   [
    1054,
-   "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +"
+   "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +",
+   "protocol-parse"
   ],
   [
    1055,
-   "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +"
+   "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +",
+   "protocol-parse"
   ],
   [
    1059,
-   "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;"
+   "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;",
+   "format-validation"
   ],
   [
    1308,
-   "const rel = (p: string): string => (p.startsWith(`${projectRoot}/`) ? p.slice(projectRoot.length + 1) : p);"
+   "const rel = (p: string): string => (p.startsWith(`${projectRoot}/`) ? p.slice(projectRoot.length + 1) : p);",
+   "path-set"
   ],
   [
    1309,
-   "const pathUnderRoot = (p: string): string => (p.startsWith(\"/\") ? p : `${projectRoot}/${p}`);"
+   "const pathUnderRoot = (p: string): string => (p.startsWith(\"/\") ? p : `${projectRoot}/${p}`);",
+   "path-set"
   ],
   [
    1418,
-   "if (m) for (const fp of m.files) if (!base.includes(fp)) base.push(fp);"
+   "if (m) for (const fp of m.files) if (!base.includes(fp)) base.push(fp);",
+   "enum-check"
   ],
   [
    1622,
-   ".filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)))"
+   ".filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)))",
+   "enum-check"
   ],
   [
    1981,
-   "else if (typeof m[\"command\"] === \"string\" && ALWAYS_PASS_CMD_RE.test(m[\"command\"].trim())) badSc.push(`${i + 1}（selfCheck.command 须是对受影响文件的真实检查命令，不得是 shell 恒过/恒"
+   "else if (typeof m[\"command\"] === \"string\" && ALWAYS_PASS_CMD_RE.test(m[\"command\"].trim())) badSc.push(`${i + 1}（selfCheck.command 须是对受影响文件的真实检查命令，不得是 shell 恒过/恒",
+   "format-validation"
   ],
   [
    1988,
-   "const impure = (o[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));"
+   "const impure = (o[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));",
+   "format-validation"
   ],
   [
    2237,
-   "if (src === designDoc || src === implPlan || src.startsWith(`${runDir}/`) || src.startsWith(`${retirementDestDir}/`)) {"
+   "if (src === designDoc || src === implPlan || src.startsWith(`${runDir}/`) || src.startsWith(`${retirementDestDir}/`)) {",
+   "path-set"
   ],
   [
    2310,
-   "return !pathUnderRoot(f).startsWith(`${retirementDestDir}/`);"
+   "return !pathUnderRoot(f).startsWith(`${retirementDestDir}/`);",
+   "path-set"
   ],
   [
    2413,
-   "if (!p.startsWith(`${projectRoot}/`)) {"
+   "if (!p.startsWith(`${projectRoot}/`)) {",
+   "path-set"
   ],
   [
    2490,
-   "const extraAbs = rep.fixed.filter((p2) => p2 !== \"\").map((p2) => (p2.startsWith(\"/\") ? p2 : `${projectRoot}/${p2}`));"
+   "const extraAbs = rep.fixed.filter((p2) => p2 !== \"\").map((p2) => (p2.startsWith(\"/\") ? p2 : `${projectRoot}/${p2}`));",
+   "path-set"
   ],
   [
    2493,
-   "if (!p2.startsWith(`${projectRoot}/`) || !(await pathExists(p2))) {"
+   "if (!p2.startsWith(`${projectRoot}/`) || !(await pathExists(p2))) {",
+   "path-set"
   ],
   [
    2590,
-   "const blockers = loaded.filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)));"
+   "const blockers = loaded.filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)));",
+   "enum-check"
   ],
   [
    2661,
-   "return n === null || !n.startsWith(`${projectRoot}/`);"
+   "return n === null || !n.startsWith(`${projectRoot}/`);",
+   "path-set"
   ],
   [
    2745,
-   "terr.add(tok.startsWith(\"/\") ? tok : `${projectRoot}/${tok}`);"
+   "terr.add(tok.startsWith(\"/\") ? tok : `${projectRoot}/${tok}`);",
+   "path-set"
   ],
   [
    2756,
-   "if (segs[i].includes(\"*\") || segs[i].endsWith(\"...\")) cut = i;"
+   "if (segs[i].includes(\"*\") || segs[i].endsWith(\"...\")) cut = i;",
+   "path-set"
   ],
   [
    2766,
-   "if (d.startsWith(fp)) return false;"
+   "if (d.startsWith(fp)) return false;",
+   "path-set"
   ],
   [
    2772,
-   "if (d.startsWith(`${base}/`)) return false;"
+   "if (d.startsWith(`${base}/`)) return false;",
+   "path-set"
   ],
   [
    3021,
-   "return !pathUnderRoot(hf).startsWith(`${retirementDestDir}/`);"
+   "return !pathUnderRoot(hf).startsWith(`${retirementDestDir}/`);",
+   "path-set"
   ],
   [
    3347,
-   "if (!g.issueIds.includes(fx.issueId)) es.push(`fixes 引用未知条目 ${fx.issueId}`);"
+   "if (!g.issueIds.includes(fx.issueId)) es.push(`fixes 引用未知条目 ${fx.issueId}`);",
+   "enum-check"
   ],
   [
    3350,
-   "if (!g.issueIds.includes(d.issueId)) es.push(`deferred 引用未知条目 ${d.issueId}`);"
+   "if (!g.issueIds.includes(d.issueId)) es.push(`deferred 引用未知条目 ${d.issueId}`);",
+   "enum-check"
   ],
   [
    3357,
-   "if (!g.issueIds.includes(d.issueId)) es.push(`exempt 引用未知条目 ${d.issueId}`);"
+   "if (!g.issueIds.includes(d.issueId)) es.push(`exempt 引用未知条目 ${d.issueId}`);",
+   "enum-check"
   ],
   [
    3362,
-   "if (!g.issueIds.includes(d.issueId)) es.push(`delegated 引用未知条目 ${d.issueId}`);"
+   "if (!g.issueIds.includes(d.issueId)) es.push(`delegated 引用未知条目 ${d.issueId}`);",
+   "enum-check"
   ]
  ],
  "skills/self/dev-workflow/workflows/src/wave-executor.shared.ts": [
   [
    31,
-   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
+   "enum-check"
   ],
   [
    68,
-   "return SHELL_SAFE_ARG_RE.test(s) ? s : \"'\" + s.split(\"'\").join(\"'\\\\''\") + \"'\";"
+   "return SHELL_SAFE_ARG_RE.test(s) ? s : \"'\" + s.split(\"'\").join(\"'\\\\''\") + \"'\";",
+   "format-validation"
   ],
   [
    76,
-   "const flagIdx = args.findIndex((a) => /^-[a-z]*c/i.test(a));"
+   "const flagIdx = args.findIndex((a) => /^-[a-z]*c/i.test(a));",
+   "format-validation"
   ],
   [
    90,
-   "if (NOOP_CMD_STUB_RE.test(c) || (i > args.length && NOOP_CMD_STUB_HEAD_RE.test(c)) || (NOOP_CMD_ECHO_RE.test(c) && !NOOP_CMD_RUNNER_RE.test(c))) {"
+   "if (NOOP_CMD_STUB_RE.test(c) || (i > args.length && NOOP_CMD_STUB_HEAD_RE.test(c)) || NOOP_CMD_ECHO_RE.test(c)) {",
+   "format-validation"
   ],
   [
    295,
-   "\"try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',claimAny=process.argv[5]==='claim"
+   "\"try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',claimAny=process.argv[5]==='claim",
+   "protocol-parse"
   ],
   [
    311,
-   "\"const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));\" +"
+   "\"const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));\" +",
+   "protocol-parse"
   ],
   [
    314,
-   "\"if(hit){const h=hit.slice(0,hit.indexOf('\\\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（'+(claimAny?'前缀+词边界认领（stat"
+   "\"if(hit){const h=hit.slice(0,hit.indexOf('\\\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（'+(claimAny?'前缀+词边界认领（stat",
+   "protocol-parse"
   ],
   [
    361,
-   "if (rel.startsWith(\"/\")) return rel;"
+   "if (rel.startsWith(\"/\")) return rel;",
+   "path-set"
   ],
   [
    362,
-   "const trimmed = base.endsWith(\"/\") ? base.slice(0, -1) : base;"
+   "const trimmed = base.endsWith(\"/\") ? base.slice(0, -1) : base;",
+   "path-set"
   ],
   [
    375,
-   "const prefix = t.endsWith(\"/\") ? t : `${t}/`;"
+   "const prefix = t.endsWith(\"/\") ? t : `${t}/`;",
+   "path-set"
   ],
   [
    376,
-   "if (file === t || file.startsWith(prefix)) return true;"
+   "if (file === t || file.startsWith(prefix)) return true;",
+   "path-set"
   ],
   [
    390,
-   "const abs = entries.filter((t) => t.startsWith(\"/\"));"
+   "const abs = entries.filter((t) => t.startsWith(\"/\"));",
+   "path-set"
   ],
   [
    394,
-   "const mixed = entries.filter((t) => /\\s/.test(t) || /[()（）]/.test(t));"
+   "const mixed = entries.filter((t) => /\\s/.test(t) || /[()（）]/.test(t));",
+   "path-set"
   ],
   [
    409,
-   "const arrow = p.indexOf(\" -> \");"
+   "const arrow = p.indexOf(\" -> \");",
+   "protocol-parse"
   ],
   [
    419,
-   "const isTmpArtifact = (f: string): boolean => /^(\\.\\.\\/)*\\.tmp\\//.test(f);"
+   "const isTmpArtifact = (f: string): boolean => /^(\\.\\.\\/)*\\.tmp\\//.test(f);",
+   "path-set"
   ],
   [
    576,
-   "if (!(TEST_WHITELIST as readonly string[]).includes(tc.program)) {"
+   "if (!(TEST_WHITELIST as readonly string[]).includes(tc.program)) {",
+   "enum-check"
   ],
   [
    677,
-   "if (!commitTemplate.includes(\"{unitId}\") || !commitTemplate.includes(\"{summary}\")) {"
+   "if (!commitTemplate.includes(\"{unitId}\") || !commitTemplate.includes(\"{summary}\")) {",
+   "format-validation"
   ],
   [
    1047,
-   "if (n.deps.includes(cur) && !seen.has(n.id)) {"
+   "if (n.deps.includes(cur) && !seen.has(n.id)) {",
+   "enum-check"
   ],
   [
    1060,
-   "const interpreter = node.script.endsWith(\".sh\") ? \"bash\" : \"node\";"
+   "const interpreter = node.script.endsWith(\".sh\") ? \"bash\" : \"node\";",
+   "format-validation"
   ],
   [
    1309,
-   "node.designRef !== \"\" && !summary.includes(node.designRef) ? `${node.designRef} ${summary}` : summary;"
+   "node.designRef !== \"\" && !summary.includes(node.designRef) ? `${node.designRef} ${summary}` : summary;",
+   "presentation"
   ],
   [
    1563,
-   "if (!failedIds.includes(nid)) errors.push(`item ${it[\"id\"]}：nodeIds 含未知/已 disputed 节点 ${nid}（幻觉 ref）`);"
+   "if (!failedIds.includes(nid)) errors.push(`item ${it[\"id\"]}：nodeIds 含未知/已 disputed 节点 ${nid}（幻觉 ref）`);",
+   "enum-check"
   ],
   [
    1578,
-   "const conflicted = [...covered].filter((id) => fixCovered.has(id) && items.some((it) => it[\"action\"] === \"disputed\" && isStrArr(it[\"nodeIds\"]) && (it[\"nodeIds\"]"
+   "const conflicted = [...covered].filter((id) => fixCovered.has(id) && items.some((it) => it[\"action\"] === \"disputed\" && isStrArr(it[\"nodeIds\"]) && (it[\"nodeIds\"]",
+   "enum-check"
   ],
   [
    1592,
-   "const files = items.filter((it) => ids.includes(it[\"id\"] as string)).flatMap((it) => (isStrArr(it[\"files\"]) ? (it[\"files\"] as string[]) : []));"
+   "const files = items.filter((it) => ids.includes(it[\"id\"] as string)).flatMap((it) => (isStrArr(it[\"files\"]) ? (it[\"files\"] as string[]) : []));",
+   "enum-check"
   ],
   [
    1599,
-   "const inter = groupFiles[i].filter((f) => groupFiles[j].includes(f));"
+   "const inter = groupFiles[i].filter((f) => groupFiles[j].includes(f));",
+   "enum-check"
   ],
   [
    1721,
-   "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);"
+   "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);",
+   "enum-check"
   ],
   [
    1751,
-   "fixItems.filter((it) => commitGateFailures.some((cf) => cf.nodeIds.some((nid) => it.nodeIds.includes(nid)))).map((it) => it.id),"
+   "fixItems.filter((it) => commitGateFailures.some((cf) => cf.nodeIds.some((nid) => it.nodeIds.includes(nid)))).map((it) => it.id),",
+   "enum-check"
   ],
   [
    1757,
-   "const gItems = fixItems.filter((it) => g.itemIds.includes(it.id));"
+   "const gItems = fixItems.filter((it) => g.itemIds.includes(it.id));",
+   "enum-check"
   ],
   [
    1759,
-   "const gNodes = plan.nodes.filter((n) => gItems.some((it) => it.nodeIds.includes(n.id)));"
+   "const gNodes = plan.nodes.filter((n) => gItems.some((it) => it.nodeIds.includes(n.id)));",
+   "enum-check"
   ],
   [
    1824,
-   "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);"
+   "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);",
+   "enum-check"
   ],
   [
    1848,
-   "const node = plan.nodes.find((n) => cf.nodeIds.includes(n.id));"
+   "const node = plan.nodes.find((n) => cf.nodeIds.includes(n.id));",
+   "enum-check"
   ],
   [
    1850,
-   "const fixFiles = rep.fixes.filter((f) => f.itemId !== \"\" && cf.nodeIds.some((nid) => (fixItems.find((it) => it.id === f.itemId)?.nodeIds.includes(nid) ?? false)"
+   "const fixFiles = rep.fixes.filter((f) => f.itemId !== \"\" && cf.nodeIds.some((nid) => (fixItems.find((it) => it.id === f.itemId)?.nodeIds.includes(nid) ?? false)",
+   "enum-check"
   ],
   [
    1854,
-   "const cfIdx = commitGateFailures.indexOf(cf);"
+   "const cfIdx = commitGateFailures.indexOf(cf);",
+   "enum-check"
   ],
   [
    1855,
-   "const dcIdx = deferredCommits.findIndex((dc) => cf.nodeIds.includes(dc.id) && dc.message === cf.message);"
+   "const dcIdx = deferredCommits.findIndex((dc) => cf.nodeIds.includes(dc.id) && dc.message === cf.message);",
+   "enum-check"
   ],
   [
    2000,
-   "for (const t of n.territory) if (!list.includes(t)) list.push(t);"
+   "for (const t of n.territory) if (!list.includes(t)) list.push(t);",
+   "path-set"
   ],
   [
    2378,
-   "for (const n of plan.nodes) if (n.kind === \"dev\") for (const t of n.territory) if (!allTerr.includes(t)) allTerr.push(t);"
+   "for (const n of plan.nodes) if (n.kind === \"dev\") for (const t of n.territory) if (!allTerr.includes(t)) allTerr.push(t);",
+   "enum-check"
   ]
  ],
  "skills/self/dev-workflow/workflows/src/tech-review-loop.shared.ts": [
   [
    120,
-   "if (!p.endsWith(\".rendered.md\")) return p;"
+   "if (!p.endsWith(\".rendered.md\")) return p;",
+   "format-validation"
   ],
   [
    130,
-   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {"
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
+   "enum-check"
   ],
   [
    136,
-   "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");"
+   "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");",
+   "path-set"
   ],
   [
    489,
-   "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${home}/${p.slice(2)}` : p);"
+   "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${home}/${p.slice(2)}` : p);",
+   "path-set"
   ],
   [
    577,
-   "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +"
+   "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +",
+   "protocol-parse"
   ],
   [
    578,
-   "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +"
+   "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +",
+   "protocol-parse"
   ],
   [
    582,
-   "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;"
+   "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;",
+   "format-validation"
   ]
  ]
 }

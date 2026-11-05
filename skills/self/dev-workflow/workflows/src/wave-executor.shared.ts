@@ -55,11 +55,11 @@ const TEST_WHITELIST = ["pnpm", "npm", "node", "git", "bash"] as const;
 // 标簇（bash -lc 'exit 0'，裸 '-c' 精确匹配拦不住）——判据按 /^-[a-z]*c/i 找首个短旗
 // 标簇元素（单短横开头、簇尾为 c 时后随 arg 才是命令串；排除 -- 长选项形态），命中取该
 // 元素后随 arg 为命令串，剥一层对称外引号，连同 ;/&& 切片并入候选，切片候选（下标 >
-// args.length 的扩展候选）额外过 STUB_HEAD（stub 词头带参数形态——只新增拒收方向，RUNNER
-// 豁免语义不变）。簇判据与四式正则字面量与 dev-consistency-loop NODE_PREP 侧 noopCmdErr
+// args.length 的扩展候选）额外过 STUB_HEAD（stub 词头带参数形态）。echo/printf 开头的
+// 候选一律拒收：echo 输出内容可为任意字样（如 runner 名），字样不构成真实测试证据、无
+// 豁免。簇判据与三式正则字面量与 dev-consistency-loop NODE_PREP 侧 noopCmdErr
 // 保持逐字一致（两侧改动须同步）
 const NOOP_CMD_STUB_RE = /^\s*(true|false|:)\s*$/;
-const NOOP_CMD_RUNNER_RE = /(vitest|jest|pnpm(?:-m)?\s+(?:run\s+)?test|npm\s+(?:run\s+)?test|yarn\s+test|make\s+test)/;
 const NOOP_CMD_ECHO_RE = /^\s*(echo|printf)\b/;
 const NOOP_CMD_STUB_HEAD_RE = /^\s*(true|false|:|exit)(\s|$)/;
 const SHELL_SAFE_ARG_RE = /^[A-Za-z0-9_/:.,@%^+=-]+$/;
@@ -87,7 +87,7 @@ function noopCommandError(label: string, program: string, args: string[]): strin
   }
   for (let i = 0; i < cands.length; i++) {
     const c = cands[i];
-    if (NOOP_CMD_STUB_RE.test(c) || (i > args.length && NOOP_CMD_STUB_HEAD_RE.test(c)) || (NOOP_CMD_ECHO_RE.test(c) && !NOOP_CMD_RUNNER_RE.test(c))) {
+    if (NOOP_CMD_STUB_RE.test(c) || (i > args.length && NOOP_CMD_STUB_HEAD_RE.test(c)) || NOOP_CMD_ECHO_RE.test(c)) {
       return `${label} 是恒绿形态命令（${full}）——不构成真实测试证据（恢复：检查 testPlan.fullSuite / testPlan.artifacts[n].command / testPlan.incremental / 节点 testCommand 是否为真实测试命令）`;
     }
   }

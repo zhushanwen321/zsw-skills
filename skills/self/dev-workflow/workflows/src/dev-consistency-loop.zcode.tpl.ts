@@ -85,6 +85,8 @@ interface GapEntry {
   fixHint: string;
   /** R2+ 复审专属：延续上批条目时原样填其 U 编号（引擎按它刷新条目描述，不按文字匹配）；新问题不填 */
   prevId?: string;
+  /** 引擎内部字段（reviewer 不产不填）：fixer 申报留回流理由（skipped 申报的 reason），随 prompt 渲染给下轮修复组 */
+  returnNote?: string;
 }
 
 /** R2+ 定向复审的对账申报（清零判定唯一证据通道——学 W1 reconciliation：fail-closed，漏报不视为已修） */
@@ -255,8 +257,8 @@ interface FinalResult {
   gateALog: string | null;
   /** 单条停机线升级清单（1+2 次 fixer 后复审仍报，设计 §8.6 ③） */
   escalated: { id: string; location: string; gap: string; uncleanRounds: number }[];
-  /** 必填字段分流降级条目（影响决策=否 且 影响交付=无——不进修复批次，随终态回流主 agent 登记残留风险；含聚合升级/职责外申报条目——ledger 中单列升级呈报行） */
-  deferredLedger: { id: string; location: string; gap: string; impactNote: string }[];
+  /** 必填字段分流降级条目（影响决策=否 且 影响交付=无——不进修复批次，随终态回流主 agent 登记残留风险）；kind = escalated（聚合升级/职责外申报，终态单列升级呈报行）| deferred（普通降级登记）——分流判据字段，gap 前缀文本仅人读展示 */
+  deferredLedger: { id: string; location: string; gap: string; impactNote: string; kind: "escalated" | "deferred" }[];
   /** 终态仍活跃条目（stuck / fix-failure 在场） */
   remaining: { id: string; location: string; gap: string; severity: string; group: string }[];
   /** 分区概览（诊断） */
