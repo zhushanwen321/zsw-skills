@@ -2123,6 +2123,7 @@ function fixerPrompt(g: FixGroup, byId: Map<string, FindingRecord>): string {
   L.push("6. 越权候选防线：若某条的修复动作将是「删除/移除一段现有实现」而其指控仅是「设计文档没写」（无行为矛盾/悬空引用等实质缺陷证据），**无论等级（含 must-fix）**都不要执行删除——放入 deferred（reason 写候选卡论证：小取舍/大简化/核心价值不变），它将随终态呈报用户裁决后才动；「文档没写」更可能是文档侧漏登记而非代码越权，宁可多呈报一张候选卡，不可直接删码。deferred 的另一合法场景 = 退役引用清理条目核实为必须原样指向的合法存证（条目指引会标明）。");
   L.push("7. 符号豁免申报（仅机械信号条目可用）：若某条指控「词表符号 X 在代码库零命中」，而你核实 X 本就不该被扫描（典型 = 外部/上游包符号、且文档已就地解释其来源）——不要为消信号去删改文档（会丢失对外部依赖行为的关键描述），放入 exempt（reason 写核实证据：如在依赖包中的命中位置 / 文档解释所在位置），它将转豁免终态、落豁免登记并随终态呈报主 agent 终审。真悬空引用（本项目符号被删/改名）不属于豁免，照常修复。");
   L.push("8. 职责外申报：条目属实、但修复动作属其他职责域（典型 = e2e/测试资产修复、跨模块公共设施改动落在生产代码组）——不要硬修也不要留置不理（留置会让复审每轮重报直到 stuck，实测单条空转 6 轮），放入 delegated（reason 写修复动作属什么域、为什么不在本组职责内），它将转 delegated 终态随终态呈报主 agent 重派或立项。职责内该修的照常修。");
+  L.push("9. 修复触及 workflows/src/ 单源时：返回前必跑 node scripts/check-no-text-assertion.mjs——基线外命中若为既有代码行号移位（内容逐字未变、仅行号推移），跑 --update 重登记基线并把 scripts/text-assertion-baseline.json 列入 affectedFiles（组提交要过 pre-commit 同款门禁，实测移位未登记会拒 commit）；新出现的字面判定命中按检查器输出指引归类处置，禁止盲目 --update 洗入。");
   L.push("");
   L.push(runlogDutyLine(`sync-fix-${fileSafe(g.id)}`));
   L.push("完成后返回 JSON：fixes（元素 {issueId, description, selfCheck: {kind, command, expected, actual}}，issueId 与上面条目一致原样引用，本组全部条目必须被 fixes / deferred / exempt / delegated 之一覆盖）+ deferred（元素 {issueId, reason}——仅越权候选防线场景）+ exempt（元素 {issueId, reason}——仅机械条目的符号豁免场景）+ delegated（元素 {issueId, reason}——仅职责外场景，无申报时显式 []）+ affectedFiles（实际改动文件路径数组，含新增文件）。");

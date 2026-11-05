@@ -2259,6 +2259,7 @@ gateARetry: while (true) {
           "4. 每条修复申报 affectedFiles（含波及文件，相对仓库根路径的纯路径——不得夹说明文字或 file:line 行号，引擎按值校验，杂质会被拒收回喂）；修不动 / 需上游裁决的条目放 skipped 带具体 reason，不静默跳过。",
           "5. 其他并行修复组工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属；未申报的改动引擎不处置不阻塞，留盘随终态呈报主 agent 判归属）。",
           "6. 职责外申报：条目属实、但修复动作属其他职责域（典型 = e2e/测试资产修复落在生产代码分区）——放入 delegated（reason 写修复动作属什么域），它将转升级呈报由主 agent 重派；职责内该修的照常修。",
+          "7. 修复触及 workflows/src/ 单源时：返回前必跑 node scripts/check-no-text-assertion.mjs——基线外命中若为既有代码行号移位（内容逐字未变、仅行号推移），跑 --update 重登记基线并把 scripts/text-assertion-baseline.json 加入 affectedFiles 申报（组提交要过 pre-commit 同款门禁，实测移位未登记会拒 commit）；新出现的字面判定命中按检查器输出指引归类处置，禁止盲目 --update 洗入。",
           foreignNote
             ? ["", "工作区说明（存在无人申报的改动，引擎不处置不阻塞，留盘待认领；在现状基础上继续修复）：", foreignNote].join("\n")
             : "",
