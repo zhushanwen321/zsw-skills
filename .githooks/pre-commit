@@ -47,4 +47,18 @@ if [ -n "$ASSERT_STAGED" ]; then
   node scripts/check-no-text-assertion.mjs || exit 1
 fi
 
+# 段 3：技能版本纪律（AX3 强制器：bump 对账 + 共享源按产物 diff 联动 + 产物版本戳一致性）
+# 判定对象 = git 索引（本次提交内容与 HEAD 的差异）；触技能自有文件 / 共享构建源 / 产物时
+# 检查。检查器逐条输出「违规 → 权威源 → 恢复动作」，此处只给总处置提示
+VERSION_STAGED=$(git diff --cached --name-only --diff-filter=ACMRD -- 'skills/self/dev-workflow/tech-design-wf/' 'skills/self/dev-workflow/dev-flow-wf/' 'skills/self/dev-workflow/workflows/')
+if [ -n "$VERSION_STAGED" ]; then
+  echo "pre-commit[version-discipline]: staged 变更含技能自有文件 / 共享构建源 / 产物，跑版本纪律检查…"
+  node scripts/check-version-discipline.mjs || {
+    echo ""
+    echo "[version-discipline] 技能版本纪律未过（逐条恢复动作见上方）。"
+    echo "  恢复动作：按上方提示 bump 对应 SKILL.md frontmatter version；产物变化时重跑 node scripts/build-workflows.mjs 后重新 git add 再提"
+    exit 1
+  }
+fi
+
 exit 0
