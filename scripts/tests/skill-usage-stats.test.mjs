@@ -15,6 +15,9 @@
 //  10. CLI 失败（exit 1 + 错误 JSON）→ 可操作错误；CLI 输出非 JSON → 可操作错误
 //  11. 未知参数 fail-fast exit 2；--help exit 0
 //  12. JSON / table 输出形态；--output 落盘；空数据 exit 1
+//  13. --group skillVersion：observed 读事件自带 skill_version、estimated 读 run 参数
+//      指向产物（execPlan / designDoc→meta.json）的 skillVersion；读不到归 unknown 桶
+//      显式计数（老 JSONL 无字段不抛错），unknown 桶与 dataQuality 计数自洽；byTask 版本列
 //
 // 运行：node --test scripts/tests/skill-usage-stats.test.mjs
 // 测试自足：假 agent-session-reader + 临时 HOME 观测事件，不读真实用户数据。
@@ -135,7 +138,7 @@ function baseRun(overrides) {
   };
 }
 
-function buildFixtures() {
+function buildFixtures(artifacts) {
   const zcodeRuns = [
     // observed run：attempt 1，双 actor 并行 + world-run 节点落在 gate-a 窗口
     baseRun({
@@ -280,7 +283,7 @@ function buildFixtures() {
       tokensReasoning: 0,
       tokensNoncacheInput: 9,
       tokensTotal: 41,
-      args: { execPlan: "/p/exec-plan.json", maxRounds: 3 },
+      args: { execPlan: artifacts.execPlanV010, maxRounds: 3 },
       actorRows: [
         actorRow({
           site: "actor#1",
@@ -393,7 +396,7 @@ function buildFixtures() {
       timeEnd: T(6, 1),
       taskId: "task-ghost",
       executionId: "ghost-exec",
-      args: { execPlan: "/p/exec-plan.json", executionId: "ghost-exec" },
+      args: { execPlan: artifacts.missingExecPlan, executionId: "ghost-exec" },
     }),
     // legacy：T2 方向审修复轮（名称词表，无 args）
     baseRun({
@@ -414,7 +417,7 @@ function buildFixtures() {
       tokensInput: 77,
       tokensNoncacheInput: 77,
       tokensTotal: 77,
-      args: { execPlan: "/p/exec-plan.json" },
+      args: { execPlan: artifacts.missingExecPlan },
     }),
     // run 级 token 对账——重复 session：同 session 两行，第二行 token 不得重复累加
     baseRun({
@@ -428,7 +431,7 @@ function buildFixtures() {
       tokensCacheRead: 150,
       tokensNoncacheInput: 50,
       tokensTotal: 220,
-      args: { execPlan: "/p/exec-plan.json" },
+      args: { execPlan: artifacts.execPlanNoVersion },
       actorRows: [
         actorRow({
           site: "actor#1",
@@ -476,7 +479,7 @@ function buildFixtures() {
       tokensOutput: 50,
       tokensNoncacheInput: 40,
       tokensTotal: 140,
-      args: { designDoc: "/p/design.md", implPlan: "/p/impl-plan.md" },
+      args: { designDoc: artifacts.designDoc, implPlan: "/p/impl-plan.md" },
       actorRows: [
         actorRow({
           site: "actor#1",
@@ -609,23 +612,25 @@ function writeObservations(home) {
     writeFileSync(join(root, taskId, `${execId}.jsonl`), rows.map((r) => (typeof r === "string" ? r : JSON.stringify(r))).join("\n") + "\n");
   };
   const common = (o) => ({ ...o, task_id: o.task_id ?? "task-a" });
+  // 新版事件（带 skill_version）：observed 口径的版本来源；老 JSONL 用例保持无该字段
+  const ver = (v, o) => common({ ...o, skill_version: v });
 
   // attempt 1：execution 窗口 + gate-a 窗口（与 world-run 节点对齐）
   write("task-a", "d1-att1", [
-    ev(common({ execution_id: "d1-att1", stage: "D1", step: "execution", attempt: 1, event: "start", timestamp: T(10, 0) })),
-    ev(common({ execution_id: "d1-att1", stage: "D1", step: "gate-a", attempt: 1, event: "start", timestamp: T(10, 20) })),
-    ev(common({ execution_id: "d1-att1", stage: "D1", step: "gate-a", attempt: 1, event: "end", timestamp: T(10, 25) })),
-    ev(common({ execution_id: "d1-att1", stage: "D1", step: "execution", attempt: 1, event: "end", timestamp: T(10, 44), outcome: "completed" })),
+    ev(ver("0.2.0", { execution_id: "d1-att1", stage: "D1", step: "execution", attempt: 1, event: "start", timestamp: T(10, 0) })),
+    ev(ver("0.2.0", { execution_id: "d1-att1", stage: "D1", step: "gate-a", attempt: 1, event: "start", timestamp: T(10, 20) })),
+    ev(ver("0.2.0", { execution_id: "d1-att1", stage: "D1", step: "gate-a", attempt: 1, event: "end", timestamp: T(10, 25) })),
+    ev(ver("0.2.0", { execution_id: "d1-att1", stage: "D1", step: "execution", attempt: 1, event: "end", timestamp: T(10, 44), outcome: "completed" })),
   ]);
   // attempt 2
   write("task-a", "d1-att2", [
-    ev(common({ execution_id: "d1-att2", stage: "D1", step: "execution", attempt: 2, event: "start", timestamp: T(11, 0) })),
-    ev(common({ execution_id: "d1-att2", stage: "D1", step: "execution", attempt: 2, event: "end", timestamp: T(11, 10), outcome: "completed" })),
+    ev(ver("0.2.0", { execution_id: "d1-att2", stage: "D1", step: "execution", attempt: 2, event: "start", timestamp: T(11, 0) })),
+    ev(ver("0.2.0", { execution_id: "d1-att2", stage: "D1", step: "execution", attempt: 2, event: "end", timestamp: T(11, 10), outcome: "completed" })),
   ]);
-  // 跨技能 T2
+  // 跨技能 T2（不同技能版本：同 taskId 的版本列跨 0.1.0/0.2.0）
   write("task-a", "t2-att1", [
-    ev(common({ execution_id: "t2-att1", skill: "tech-design-wf", stage: "T2", step: "review", event: "start", timestamp: T(9, 0) })),
-    ev(common({ execution_id: "t2-att1", skill: "tech-design-wf", stage: "T2", step: "review", event: "end", timestamp: T(9, 30), outcome: "converged" })),
+    ev(ver("0.1.0", { execution_id: "t2-att1", skill: "tech-design-wf", stage: "T2", step: "review", event: "start", timestamp: T(9, 0) })),
+    ev(ver("0.1.0", { execution_id: "t2-att1", skill: "tech-design-wf", stage: "T2", step: "review", event: "end", timestamp: T(9, 30), outcome: "converged" })),
   ]);
   // 手工段：D0 compile（无 run 匹配 → 手工执行，token unknown）
   write("task-manual", "d0-manual", [
@@ -656,10 +661,11 @@ function writeObservations(home) {
   ]);
   // 引擎名事件（历史形态 skill=tech-review-loop，非四技能名）——统计侧归一
   write("task-alias", "alias-exec", [
-    ev(common({ task_id: "task-alias", execution_id: "alias-exec", skill: "tech-review-loop", stage: "T2", step: "review", event: "start", timestamp: T(13, 0) })),
-    ev(common({ task_id: "task-alias", execution_id: "alias-exec", skill: "tech-review-loop", stage: "T2", step: "review", event: "end", timestamp: T(13, 30), outcome: "converged" })),
+    ev(ver("0.1.0", { task_id: "task-alias", execution_id: "alias-exec", skill: "tech-review-loop", stage: "T2", step: "review", event: "start", timestamp: T(13, 0) })),
+    ev(ver("0.1.0", { task_id: "task-alias", execution_id: "alias-exec", skill: "tech-review-loop", stage: "T2", step: "review", event: "end", timestamp: T(13, 30), outcome: "converged" })),
   ]);
-  // attempt 回填形态：setup start(null) → setup end(1) 正常配对；execution 运行中未闭合
+  // 老 JSONL（无 skill_version）：attempt 回填形态 setup start(null)/end(1) 正常配对；
+  // execution 运行中未闭合（RL6：老数据归 unknown 桶不抛错）
   write("task-pair", "pair-exec", [
     ev(common({ task_id: "task-pair", execution_id: "pair-exec", stage: "D4", step: "setup", event: "start", timestamp: T(15, 0) })),
     ev(common({ task_id: "task-pair", execution_id: "pair-exec", stage: "D4", step: "setup", event: "end", timestamp: T(15, 1), attempt: 1, outcome: "completed" })),
@@ -668,13 +674,32 @@ function writeObservations(home) {
   return root;
 }
 
+// 产物 fixture（estimated 口径版本来源）：execPlan / designDoc→meta.json 两种载体 +
+// 读不到的两类（文件缺失、无 skillVersion 字段）
+function makeArtifacts(home) {
+  const dir = join(home, "artifacts");
+  mkdirSync(dir, { recursive: true });
+  const execPlanV010 = join(dir, "exec-plan-v010.json");
+  writeFileSync(execPlanV010, JSON.stringify({ version: 1, skillVersion: "0.1.0", nodes: [] }));
+  const execPlanNoVersion = join(dir, "exec-plan-no-version.json");
+  writeFileSync(execPlanNoVersion, JSON.stringify({ version: 1, nodes: [] }));
+  const missingExecPlan = join(dir, "gone", "exec-plan.json"); // 不创建 = 产物已迁移/删除
+  const designPkg = join(dir, "design-pkg");
+  mkdirSync(designPkg, { recursive: true });
+  const designDoc = join(designPkg, "demo.rendered.md");
+  writeFileSync(designDoc, "# demo\n");
+  writeFileSync(join(designPkg, "meta.json"), JSON.stringify({ name: "demo", skillVersion: "0.3.0" }));
+  return { execPlanV010, execPlanNoVersion, missingExecPlan, designDoc };
+}
+
 function setupEnv(t) {
   const home = mkdtempSync(join(tmpdir(), "sus-test-home-"));
   const binDir = mkdtempSync(join(tmpdir(), "sus-test-bin-"));
   makeFakeCli(binDir);
   mkdirSync(join(home, ".pi", "agent"), { recursive: true }); // 缺省 pi agentDir
   const fixturePath = join(home, "fixtures.json");
-  writeFileSync(fixturePath, JSON.stringify(buildFixtures()));
+  const artifacts = makeArtifacts(home);
+  writeFileSync(fixturePath, JSON.stringify(buildFixtures(artifacts)));
   const obsRoot = writeObservations(home);
   const logPath = join(home, "cli-log.txt");
   t.after(() => {
@@ -1102,4 +1127,64 @@ test("两后端零匹配且观测根为空 → exit 1 带恢复动作", (t) => {
     rmSync(home, { recursive: true, force: true });
     rmSync(binDir, { recursive: true, force: true });
   }
+});
+
+// ── 12. 技能版本分组（--group skillVersion）与 unknown 桶自洽 ──
+test("--group skillVersion：observed 读事件、estimated 读产物；老 JSONL 与产物缺失归 unknown 且与 dataQuality 自洽", (t) => {
+  const { runScript } = setupEnv(t);
+  const res = runScript(["--format", "json", "--group", "skillVersion"]);
+  assert.equal(res.status, 0, res.stderr);
+  const report = JSON.parse(res.stdout);
+
+  // 分组键 = skillVersion；版本桶含两个 observed 版本、一个 estimated 版本与 unknown
+  assert.deepEqual(report.pivot.groups, ["skillVersion"]);
+  const row = (v) => report.pivot.rows.find((r) => r.dims.skillVersion === v);
+  for (const v of ["0.1.0", "0.2.0", "0.3.0", "unknown"]) assert.ok(row(v), `版本桶 ${v} 应存在`);
+
+  // observed 口径 = 事件自带 skill_version（D1 两次 attempt 0.2.0；T2 0.1.0）
+  const d1 = report.runs.find((r) => r.id === "dwfrun-1");
+  assert.equal(d1.skillVersion, "0.2.0");
+  assert.equal(d1.skillVersionSource, "observed-event");
+  const t2 = report.runs.find((r) => r.id === "dwfrun-3");
+  assert.equal(t2.skillVersion, "0.1.0");
+
+  // estimated 口径 = run 参数指向产物：execPlan 顶层字段 / designDoc 同级 meta.json
+  const d2 = report.runs.find((r) => r.id === "dwfrun-4");
+  assert.equal(d2.skillVersion, "0.1.0");
+  assert.equal(d2.skillVersionSource, "artifact:execPlan");
+  const d5 = report.runs.find((r) => r.id === "dwfrun-14");
+  assert.equal(d5.skillVersion, "0.3.0");
+  assert.equal(d5.skillVersionSource, "artifact:designDoc");
+
+  // RL6 老 JSONL（无 skill_version）：observed run 与手工段都归 unknown 桶，不抛错
+  const pair = report.runs.find((r) => r.id === "dwfrun-15");
+  assert.equal(pair.skillVersion, "unknown");
+  assert.equal(pair.skillVersionSource, "unknown-observed");
+  assert.equal(report.dataQuality.skillVersionUnknownObserved, 1);
+  assert.equal(report.dataQuality.skillVersionUnknownManualExecs, 2, "d0-manual + bad-events 两个老 JSONL 手工段");
+  assert.ok(report.dataQuality.details.some((d) => d.includes("老 JSONL")), "老数据归桶向 dataQuality 披露");
+
+  // estimated 读产物失败/缺字段：显式计数、不崩
+  assert.equal(report.dataQuality.artifactVersionReadFailed, 2, "ghost-exec + dwfrun-11 的产物文件缺失");
+  assert.equal(report.dataQuality.artifactVersionMissingField, 1, "dwfrun-12 的产物无 skillVersion 字段");
+  assert.equal(report.dataQuality.skillVersionUnknownEstimated, 6, "无产物来源（含 pi 的 PR 生命周期 run）/读失败/缺字段共入 unknown 桶");
+  const unknownRow = row("unknown");
+  assert.equal(
+    unknownRow.metrics.runs,
+    report.dataQuality.skillVersionUnknownObserved + report.dataQuality.skillVersionUnknownEstimated,
+    "unknown 桶的 run 数 = observed/estimated 两档 unknown 计数之和",
+  );
+  assert.equal(unknownRow.metrics.manualExecs, report.dataQuality.skillVersionUnknownManualExecs, "unknown 桶手工段数与 dataQuality 自洽");
+  assert.ok(report.dataQuality.details.some((d) => d.includes("产物版本读取失败")), "读失败向 dataQuality 披露");
+  assert.ok(report.dataQuality.details.some((d) => d.includes("缺 skillVersion 字段")), "缺字段向 dataQuality 披露");
+
+  // 跨版本对比：byTask 同 taskId 含版本列（同任务的两次 D1 与 T2 跨 0.1.0/0.2.0）
+  assert.deepEqual(report.byTask["observed:task-a"].skillVersions, ["0.1.0", "0.2.0"]);
+
+  // table 形态输出版本分组列与版本 unknown 计数
+  const resTable = runScript(["--group", "skillVersion"]);
+  assert.equal(resTable.status, 0, resTable.stderr);
+  assert.match(resTable.stdout, /按 skillVersion 汇总/);
+  assert.match(resTable.stdout, /unknown/);
+  assert.match(resTable.stdout, /技能版本 unknown/);
 });

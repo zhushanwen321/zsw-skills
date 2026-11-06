@@ -25,6 +25,16 @@
 //   durationSum    = run durationMs 直接相加（任务耗时累加，并行不去重）
 //   actorDurationSum / nodeDurationSum = actor / 节点各自时长相加（工作量口径）
 //
+// 版本口径（--group skillVersion）：
+//   observed  = 观测事件自带的 skill_version（事件回答「谁在执行」——执行存量产物时也记
+//               引擎当前版本，不记 unknown）
+//   estimated = run 参数指向产物（execPlan / designDoc 路径）内的 skillVersion（产物回答
+//               「谁产出」）；产物缺失/不可解析/无该字段 → 归 unknown 桶并计入 dataQuality
+//               （读失败与缺字段分开计数），不伪造版本、不中断统计
+//   寻址口径：观测树按 task-id 顶层直读、产物只按 run args 记录的绝对路径读取——本脚本
+//   不重算布局检测、无 slug 派生（新布局只改目录父级，run args 记录的仍是运行时绝对路径；
+//   exec-plan 的 workspaceRoot/projectRoot 是执行坐标，统计侧不据此重排地址）
+//
 // 用法：
 //   node scripts/skill-usage-stats.mjs [选项]
 // 选项：
@@ -33,8 +43,8 @@
 //   --since <时间>          透传给 usage CLI（run 起始时间下界）
 //   --until <时间>          透传给 usage CLI（run 起始时间上界）
 //   --format table|json     输出形态，缺省 table
-//   --group <维>            stage | step | role | model | status，可重复（表格透视维度；
-//                           缺省 = stage）
+//   --group <维>            stage | step | role | model | status | skillVersion，可重复
+//                           （表格透视维度；缺省 = stage）
 //   --pi-agent-dir <路径>   pi 数据目录，可重复；给出即替换缺省 ~/.pi/agent；
 //                           zcode 后端恒参与（无开关）
 //   --include-selftest      计入自测样本（缺省只算 production；legacy 只按明确名称/
@@ -60,7 +70,7 @@ const SKILL_ALIASES = {
   "pr-lifecycle": "pr-cr-fix",
 };
 const canonicalSkill = (s) => SKILL_ALIASES[s] ?? s;
-const GROUP_DIMS = ["stage", "step", "role", "model", "status"];
+const GROUP_DIMS = ["stage", "step", "role", "model", "status", "skillVersion"];
 const USAGE_LINE =
   "node scripts/skill-usage-stats.mjs [--skill <名>]... [--since <时间>] [--until <时间>] [--format table|json] [--group <维>]... [--pi-agent-dir <路径>]... [--include-selftest] [--output <路径>]";
 const MAX_QUALITY_DETAILS = 500;
@@ -98,7 +108,7 @@ function parseArgs(argv) {
           "  --since <时间>         透传 usage CLI（run 起始时间下界；YYYY-MM-DD 或 ISO 串）",
           "  --until <时间>         透传 usage CLI（run 起始时间上界）",
           "  --format table|json    输出形态（缺省 table；json 打印完整报告对象）",
-          "  --group <维>           stage|step|role|model|status，可重复（table 透视维度，缺省 stage）",
+          "  --group <维>           stage|step|role|model|status|skillVersion，可重复（table 透视维度，缺省 stage）",
           "  --pi-agent-dir <路径>  pi 数据目录，可重复；给出即替换缺省 ~/.pi/agent；zcode 恒参与",
           "  --include-selftest     计入自测样本（缺省只算 production）",
           "  --output <路径>        另存完整 JSON 报告",
@@ -275,6 +285,72 @@ function sumRunTokens(runs) {
 function isTempPath(cwd) {
   if (typeof cwd !== "string" || cwd === "") return false;
   return cwd.startsWith("/tmp/") || cwd.startsWith(`${tmpdir()}/`);
+}
+
+const nonEmptyString = (v) => typeof v === "string" && v.trim() !== "";
+
+// ── 技能版本归因（--group skillVersion 的数据来源）──
+// 版本值定案（设计 D6/D7）：事件回答「谁在执行」、产物回答「谁产出」。observed 口径只读
+// 事件自带 skill_version；estimated 口径读 run 参数指向的产物字段，读不到归 unknown 桶
+// 显式计数，不伪造。
+const VERSION_UNKNOWN = "unknown";
+
+/** 读产物 JSON 的 skillVersion：ioError 非空 = 读不到文件或不是合法 JSON（产物已迁移/
+ *  删除/损坏）；version null 且无 ioError = 文件可读但无该字段（老产物） */
+function readArtifactSkillVersion(filePath) {
+  let text;
+  try {
+    text = readFileSync(filePath, "utf8");
+  } catch (e) {
+    return { version: null, ioError: e && e.code ? e.code : "读取失败" };
+  }
+  let obj;
+  try {
+    obj = JSON.parse(text);
+  } catch {
+    return { version: null, ioError: "不是合法 JSON" };
+  }
+  if (!obj || typeof obj !== "object") return { version: null, ioError: null };
+  return { version: nonEmptyString(obj.skillVersion) ? obj.skillVersion.trim() : null, ioError: null };
+}
+
+/** estimated 口径的版本来源：execPlan → exec-plan.json 顶层 skillVersion；designDoc →
+ *  设计包 meta.json（designDoc 是包内文档；.json 直接读自身）——meta.json 是设计包的
+ *  版本载体（T1 生成时写入，见 tech-design-wf/flow/write.md）。两个候选按序尝试，
+ *  首个读到版本即用；全失败 → unknown（io 失败 / 缺字段分别计数一次） */
+function artifactSkillVersionFor(args, quality) {
+  const candidates = [];
+  if (nonEmptyString(args.execPlan)) {
+    candidates.push({ source: "artifact:execPlan", file: args.execPlan.trim() });
+  }
+  if (nonEmptyString(args.designDoc)) {
+    const doc = args.designDoc.trim();
+    candidates.push({ source: "artifact:designDoc", file: /\.json$/i.test(doc) ? doc : join(dirnameOf(doc), "meta.json") });
+  }
+  if (candidates.length === 0) {
+    return { version: null, source: "no-artifact", detail: "run 参数无 execPlan/designDoc（无产物版本来源）" };
+  }
+  let ioFailed = null;
+  let missingField = null;
+  for (const c of candidates) {
+    const r = readArtifactSkillVersion(c.file);
+    if (r.ioError !== null) {
+      ioFailed = ioFailed ?? `${c.file}（${r.ioError}）`;
+      continue;
+    }
+    if (r.version === null) {
+      missingField = missingField ?? c.file;
+      continue;
+    }
+    return { version: r.version, source: c.source, detail: null };
+  }
+  if (ioFailed !== null) quality.artifactVersionReadFailed++;
+  if (missingField !== null) quality.artifactVersionMissingField++;
+  return {
+    version: null,
+    source: ioFailed !== null ? "artifact-read-failed" : "artifact-missing-field",
+    detail: ioFailed !== null ? `产物版本读取失败 ${ioFailed}` : `产物缺 skillVersion 字段（${missingField}）`,
+  };
 }
 
 // ── usage CLI 采集 ──
@@ -614,6 +690,12 @@ function loadObservations(obsRoot, quality) {
       const skills = [...new Set(events.map((e) => canonicalSkill(e.skill)))];
       const allSelftest = events.length > 0 && events.every((e) => e.sample_type === "selftest");
       const hasSelftest = events.some((e) => e.sample_type === "selftest");
+      // 执行级技能版本 = 事件 skill_version 的多数派（合法事件恒记同一引擎版本）；
+      // 老 JSONL（无该字段）→ null，由归因侧落 unknown 桶并显式计数
+      const versionValues = events
+        .map((e) => (nonEmptyString(e.skill_version) ? e.skill_version.trim() : null))
+        .filter((v) => v !== null);
+      const skillVersion = versionValues.length > 0 ? majorityOf(versionValues) : null;
       executions.set(executionId, {
         taskId: ent.name,
         file: filePath,
@@ -625,6 +707,7 @@ function loadObservations(obsRoot, quality) {
         outcome,
         allSelftest,
         hasSelftest,
+        skillVersion,
       });
     }
   }
@@ -864,6 +947,38 @@ function processRun(run, backend, opts, executions, aggregator, runSummaries, un
   const included = opts.includeSelftest || sampleType !== "selftest";
   if (!included) quality.selftestRunsExcluded++;
 
+  // ── 技能版本归因（--group skillVersion）──
+  // observed 口径读事件自带 skill_version（事件回答「谁在执行」）；estimated 口径读 run
+  // 参数指向产物内的 skillVersion（产物回答「谁产出」）。读不到归 unknown 桶并显式计数
+  //（不伪造）；本口径与 attribution 正交，同一版本桶可同时含 observed / estimated 两档。
+  // 排除的自测 run 不做归因（其记录不进统计，也不该污染 dataQuality 计数）
+  let skillVersion = null;
+  let skillVersionSource = null;
+  if (included) {
+    if (linked) {
+      if (linked.skillVersion !== null) {
+        skillVersion = linked.skillVersion;
+        skillVersionSource = "observed-event";
+      } else {
+        skillVersion = VERSION_UNKNOWN;
+        skillVersionSource = "unknown-observed";
+        quality.skillVersionUnknownObserved++;
+        pushDetail(quality, `观测事件无 skill_version（老 JSONL ${linked.file}）——该 run 技能版本归 unknown（${backend.label} ${run.id}）`);
+      }
+    } else {
+      const av = artifactSkillVersionFor(args, quality);
+      if (av.version !== null) {
+        skillVersion = av.version;
+        skillVersionSource = av.source;
+      } else {
+        skillVersion = VERSION_UNKNOWN;
+        skillVersionSource = av.source;
+        quality.skillVersionUnknownEstimated++;
+        pushDetail(quality, `${av.detail}——该 run 技能版本归 unknown（${backend.label} ${run.id}）`);
+      }
+    }
+  }
+
   const status = typeof run.status === "string" && run.status !== "" ? run.status : "unknown";
   const runTokenTotal = num(run.tokensTotal);
   // 用量证据判定：actor 重算 token 或 run 级重算 token 任一非零（run 级有值即 CLI 已算出消耗，
@@ -887,6 +1002,7 @@ function processRun(run, backend, opts, executions, aggregator, runSummaries, un
     role: null,
     model: null,
     status,
+    skillVersion,
     taskKey: task.key,
     taskSource: task.source,
     attemptId: typeof run.executionId === "string" ? run.executionId : String(run.id ?? ""),
@@ -950,6 +1066,7 @@ function processRun(run, backend, opts, executions, aggregator, runSummaries, un
       role: roleFor(skill, evidenceStage ?? stage, a.name),
       model: typeof a.model === "string" && a.model !== "" ? a.model : "unknown",
       status,
+      skillVersion,
       taskKey: task.key,
       taskSource: task.source,
       attemptId: null,
@@ -996,6 +1113,7 @@ function processRun(run, backend, opts, executions, aggregator, runSummaries, un
       role: null, // 未归属到具体席位的差额用量（渲染为 (未归)）
       model: null,
       status,
+      skillVersion,
       taskKey: task.key,
       taskSource: task.source,
       attemptId: null,
@@ -1044,6 +1162,7 @@ function processRun(run, backend, opts, executions, aggregator, runSummaries, un
       role: null,
       model: null,
       status,
+      skillVersion,
       taskKey: task.key,
       taskSource: task.source,
       attemptId: null,
@@ -1067,6 +1186,8 @@ function processRun(run, backend, opts, executions, aggregator, runSummaries, un
     sampleType,
     sampleTypeSource,
     status,
+    skillVersion,
+    skillVersionSource,
     taskId: typeof run.taskId === "string" && run.taskId !== "" ? run.taskId : null,
     executionId: typeof run.executionId === "string" && run.executionId !== "" ? run.executionId : null,
     taskKey: task.key,
@@ -1105,6 +1226,13 @@ function addManualExecution(exec, opts, aggregator, quality) {
   quality.selftestWindowsExcluded += exec.windows.length - windows.length;
   const skill = majorityOf(exec.skills) ?? "unknown-skill";
   const outcome = exec.outcome ?? "unknown";
+  // 手工段的版本归因同 observed 口径（读事件自带 skill_version）；老 JSONL 归 unknown
+  // 并显式计数——每次执行只计一次（下游按 stage 拆多条记录不再重复计数）
+  const skillVersion = exec.skillVersion ?? VERSION_UNKNOWN;
+  if (exec.skillVersion === null) {
+    quality.skillVersionUnknownManualExecs++;
+    pushDetail(quality, `观测事件无 skill_version（老 JSONL ${exec.file}）——该手工段技能版本归 unknown（task ${exec.taskId}）`);
+  }
   const byStage = new Map();
   for (const w of windows) {
     const arr = byStage.get(w.stage) ?? [];
@@ -1122,6 +1250,7 @@ function addManualExecution(exec, opts, aggregator, quality) {
       role: null,
       model: null,
       status: outcome,
+      skillVersion,
       taskKey: `observed:${exec.taskId}`,
       taskSource: "observed-taskid",
       attemptId: exec.executionId,
@@ -1143,6 +1272,7 @@ function addManualExecution(exec, opts, aggregator, quality) {
       role: null,
       model: null,
       status: outcome,
+      skillVersion,
       taskKey: `observed:${exec.taskId}`,
       taskSource: "observed-taskid",
       attemptId: exec.executionId,
@@ -1171,6 +1301,7 @@ function buildTaskRollup(records) {
               ? "run args 显式 taskId（无观测文件关联）"
               : "legacy 词干估算标签，精度低于 observed-taskid",
         skills: {},
+        skillVersions: new Set(),
         runs: 0,
         manualExecs: 0,
         actorSessions: 0,
@@ -1184,6 +1315,7 @@ function buildTaskRollup(records) {
       tasks.set(rec.taskKey, t);
     }
     if (rec.skill) t.skills[rec.skill] = (t.skills[rec.skill] ?? 0) + 1;
+    if (nonEmptyString(rec.skillVersion)) t.skillVersions.add(rec.skillVersion);
     if (rec.kind === "run") {
       t.runs += 1;
       t.durationSum += rec.durationMs ?? 0;
@@ -1213,6 +1345,7 @@ function buildTaskRollup(records) {
       source: t.source,
       attributionNote: t.attributionNote,
       skills: t.skills,
+      skillVersions: [...t.skillVersions].sort(),
       runs: t.runs,
       manualExecs: t.manualExecs,
       actorSessions: t.actorSessions,
@@ -1298,7 +1431,7 @@ function renderTable(report, opts) {
   lines.push("");
   const q = report.dataQuality;
   lines.push(
-    `数据质量：坏行 ${q.badLines} / 缺字段事件 ${q.malformedEvents} / 未配对 start ${q.unpairedStarts} / 未配对 end ${q.unpairedEnds} / 未知事件 ${q.unknownEvents} / 声明 executionId 但缺观测文件 ${q.runsWithoutObservation} / taskId 不一致 ${q.taskIdMismatches} / token 不可对账 ${q.tokenReconcileNegative} / 归属零重叠 ${q.noOverlap} / 单阶段兜底 ${q.singleStageFallbacks} / 去重丢弃 run ${q.duplicateRunsDropped} / 排除自测 run ${q.selftestRunsExcluded} / 排除自测窗口 ${q.selftestWindowsExcluded}`,
+    `数据质量：坏行 ${q.badLines} / 缺字段事件 ${q.malformedEvents} / 未配对 start ${q.unpairedStarts} / 未配对 end ${q.unpairedEnds} / 未知事件 ${q.unknownEvents} / 声明 executionId 但缺观测文件 ${q.runsWithoutObservation} / taskId 不一致 ${q.taskIdMismatches} / token 不可对账 ${q.tokenReconcileNegative} / 归属零重叠 ${q.noOverlap} / 单阶段兜底 ${q.singleStageFallbacks} / 去重丢弃 run ${q.duplicateRunsDropped} / 排除自测 run ${q.selftestRunsExcluded} / 排除自测窗口 ${q.selftestWindowsExcluded} / 技能版本 unknown（observed run ${q.skillVersionUnknownObserved} / estimated run ${q.skillVersionUnknownEstimated} / 手工段 ${q.skillVersionUnknownManualExecs}）/ 产物版本读失败 ${q.artifactVersionReadFailed} / 产物缺版本字段 ${q.artifactVersionMissingField}`,
   );
   if (q.details.length) {
     lines.push("质量明细（截取前 10 条，全部见 JSON 报告 dataQuality.details）：");
@@ -1357,6 +1490,12 @@ function main() {
     selftestRunsExcluded: 0,
     selftestWindowsExcluded: 0,
     unclassifiedRuns: 0,
+    // 技能版本归因（--group skillVersion）：unknown 三档计数 + 产物读取失败/缺字段细分
+    skillVersionUnknownObserved: 0,
+    skillVersionUnknownEstimated: 0,
+    skillVersionUnknownManualExecs: 0,
+    artifactVersionReadFailed: 0,
+    artifactVersionMissingField: 0,
     details: [],
   };
 
@@ -1455,6 +1594,8 @@ function main() {
       "attribution: observed=executionId 精确关联观测 JSONL；estimated=legacy 分类器（run 名+args+actor 名）估算，精度低于 observed，两者恒分开不得相加视为同精度",
       "usageCoverage: observed/estimated=有 actor 用量证据的 run 数（按归因档）；unknown=无用量证据（含手工 D0/D4/D6——耗时照报，token 记 unknown 不写 0）",
       "legacy 自测样本只按明确名称（selftest/自测/冒烟）或临时路径 cwd 识别并标记 sampleTypeSource；缺省排除，--include-selftest 计入",
+      "skillVersion 归因：observed 读事件自带 skill_version（事件回答谁在执行）；estimated 读 run 参数指向产物（execPlan / designDoc 内的 meta.json）的 skillVersion（产物回答谁产出）；读不到归 unknown 桶并计入 dataQuality（读失败 / 缺字段分开计），不伪造版本",
+      "byTask.skillVersions 列出该 taskId 下出现过的全部技能版本（跨版本对比用；空数组 = 无版本证据）",
       "skill/stage 汇总里 legacy 阶段为分类器估算；observed run 的 step 来自观测窗口（actor/node 时间归属），legacy step 仅认 world-run 门禁命令特征",
     ],
     totals: metricJson(totals),

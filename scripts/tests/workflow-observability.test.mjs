@@ -9,9 +9,10 @@
 //   3. JSONL 路径安全：../ 形态 taskId 拒绝落盘
 //   4. 并发执行：不同 executionId 各写各文件互不串扰
 //   5. 观测层单元行为（单一源 + 壳钩子拼接执行）：正常 end / fn 抛异常补 script-error /
-//      阶段重叠披露 abandoned / obsCloseExecution 终态统一补记
+//      阶段重叠披露 abandoned / obsCloseExecution 终态统一补记 / skill_version 记注入常量
 //   6. workflow-observe.mjs：start/end 契约、参数校验（含未知 flag 与超大整数）、
-//      --help 入口、outcome 约束、selftest
+//      --help 入口、outcome 约束、selftest、--skill-version 旗标（传入落字段 / 缺省不写）、
+//      老 JSONL（无 skill_version 字段）追加兼容（RL6）
 //   7. 构建器：全量 --check 不漏检、--only 过滤
 //
 // 运行：node --test scripts/tests/workflow-observability.test.mjs
@@ -188,6 +189,11 @@ test("zcode 产物：setup-failure 终态的观测事件序列与字段契约", 
       assert.equal(rec.attempt, want.event === "end" ? 1 : null, `行 ${i} attempt`);
     });
     assert.ok(!("outcome" in lines[0] || "outcome" in lines[1]), "start 事件不带 outcome");
+    // skill_version 恒记执行引擎注入的当前版本（D6/V5 定案：事件回答「谁在执行」——
+    // 本用例是 setup-failure 的老式场景、无任何产物版本字段参与，事件照记引擎版本不记 unknown）
+    const embedded = readFileSync(join(WF, "tech-review-loop.dwf.ts"), "utf8").match(/const SKILL_VERSION = "([^"]*)";/)?.[1] ?? null;
+    assert.ok(embedded, "产物应内嵌 SKILL_VERSION 版本戳");
+    lines.forEach((l) => assert.equal(l.skill_version, embedded, "事件 skill_version 应等于产物内嵌的引擎版本"));
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -286,7 +292,9 @@ test("projectRoot 不存在：slug 探针失败早退仍有 4 行完整事件（
       designDoc, projectRoot: missingRoot, ...obsArgs("t-slug", "e-slug"),
     });
     assert.equal(result.terminated, "setup-failure");
-    assert.ok(result.message.includes("projectRoot 无法解析为项目 slug"), result.message);
+    // 措辞随寻址层演进（"slug 探针" → "skill-data 寻址检测探针"），本用例只锚定失败语义
+    // 与恢复动作在场——观测边界完整性才是被测行为
+    assert.ok(result.message.includes("projectRoot 无法解析为") && result.message.includes("恢复动作"), result.message);
     const lines = readJsonl(home, "t-slug", "e-slug");
     assert.deepEqual(
       lines.map((l) => ({ event: l.event, step: l.step, outcome: l.outcome })),
@@ -404,6 +412,8 @@ test("withStage/obsBegin/obsCloseExecution：正常 end、fn 抛异常补 script
     const ctx = { args: { taskId: "t-ws", executionId: "e-ws" } };
     const fn = new vm.Script(
       `(async function __main__(args, world, log) {\n${code}\n
+       // 观测层单独执行时无构建器注入——按拼接契约补 SKILL_VERSION 常量（业务源同位置）
+       const SKILL_VERSION = "0.1.0-test";
        obsCtx = initObservation("tech-design-wf", "T2", null);
        obsAttachHome(${JSON.stringify(home)});
        await obsEmit("execution", null, "start", null);
@@ -442,6 +452,8 @@ test("withStage/obsBegin/obsCloseExecution：正常 end、fn 抛异常补 script
       logs.some((l) => l.includes("观测阶段重叠") && l.includes("abandoned") && l.includes("恢复动作")),
       `阶段重叠须显式披露且含恢复动作：${logs.join("\n")}`,
     );
+    // skill_version = 拼接契约注入的常量（观测层自身不解析版本）
+    lines.forEach((l) => assert.equal(l.skill_version, "0.1.0-test", "skill_version 应记注入常量"));
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -465,6 +477,7 @@ test("obsEnd 配对检查：错名/round 错位给实际打开阶段补 abandone
     const ctx = { args: { taskId: "t-pair", executionId: "e-pair" } };
     const fn = new vm.Script(
       `(async function __main__(args, world, log) {\n${code}\n
+       const SKILL_VERSION = "0.1.0-test";
        obsCtx = initObservation("tech-design-wf", "T2", null);
        obsAttachHome(${JSON.stringify(home)});
        await obsEmit("execution", null, "start", null);
@@ -497,6 +510,7 @@ test("obsEnd 配对检查：错名/round 错位给实际打开阶段补 abandone
     const dupWarn = logs.find((l) => l.includes("观测配对异常") && l.includes("无打开中的阶段"));
     assert.ok(mismatchWarn && mismatchWarn.includes("恢复动作"), `错名 end 须披露且含恢复动作：${logs.join("\n")}`);
     assert.ok(dupWarn && dupWarn.includes("恢复动作"), `重复 end 须披露且含恢复动作：${logs.join("\n")}`);
+    lines.forEach((l) => assert.equal(l.skill_version, "0.1.0-test", "skill_version 应记注入常量"));
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -543,6 +557,7 @@ test("workflow-observe.mjs：用法错误 exit 2 且不落盘（非法 ID / star
       ["start", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P", "--round", "abc"],
       ["start", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P", "--round", "99999999999999999999"],
       ["start", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P", "--unknown-flag", "v"],
+      ["start", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P", "--skill-version", "  "],
       ["restart", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P"],
       ["end", "--task-id", "t", "--execution-id", "e", "--skill", "s", "--stage", "G", "--step", "P", "--sample-type", "staging"],
     ];
@@ -552,6 +567,45 @@ test("workflow-observe.mjs：用法错误 exit 2 且不落盘（非法 ID / star
       assert.ok(r.stderr.includes("恢复动作"), `错误信息应含恢复动作：${r.stderr}`);
     }
     assert.ok(!existsSync(join(home, ".agents/skill-data/workflow-observability")));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("workflow-observe.mjs：--skill-version 传入落字段、缺省不写；老 JSONL（无该字段）追加兼容（RL6）", () => {
+  const home = tmpHome();
+  try {
+    const base = ["--task-id", "t-ver", "--execution-id", "e-ver", "--skill", "dev-flow-wf", "--stage", "D0", "--step", "compile"];
+    // 缺省不写 skill_version（additive 契约：不带旗标的存量调用行为逐字节不变）
+    let r = runObserve(home, ["start", ...base]);
+    assert.equal(r.status, 0, r.stderr);
+    let lines = readJsonl(home, "t-ver", "e-ver");
+    assert.equal(lines.length, 1);
+    assert.ok(!("skill_version" in lines[0]), "未传 --skill-version 时不写字段");
+
+    // 老 JSONL 行（已落盘、无 skill_version）后追加带旗标的事件：老行原样保留，新行带字段
+    const file = join(home, ".agents/skill-data/workflow-observability", "t-ver", "e-ver.jsonl");
+    writeFileSync(
+      file,
+      `${readFileSync(file, "utf8")}{"execution_id":"e-ver","task_id":"t-ver","skill":"dev-flow-wf","stage":"D0","step":"compile","round":null,"attempt":null,"event":"end","timestamp":"2026-01-01T00:00:00.000Z","sample_type":"production"}\n`,
+    );
+    r = runObserve(home, ["end", ...base, "--skill-version", "0.1.0", "--outcome", "completed"]);
+    assert.equal(r.status, 0, r.stderr);
+    lines = readJsonl(home, "t-ver", "e-ver");
+    assert.equal(lines.length, 3);
+    assert.ok(!("skill_version" in lines[0]) && !("skill_version" in lines[1]), "老行保持无字段（不被改写）");
+    assert.equal(lines[2].skill_version, "0.1.0");
+    assert.equal(lines[2].event, "end");
+    assert.equal(lines[2].outcome, "completed");
+
+    // 验收命令原文形态：start 带 --skill-version 0.1.0 → 落盘行含 "skill_version":"0.1.0"
+    const r2 = runObserve(home, [
+      "start", "--task-id", "t-accept", "--execution-id", "e-accept", "--skill", "dev-flow-wf",
+      "--stage", "D0", "--step", "compile", "--skill-version", "0.1.0",
+    ]);
+    assert.equal(r2.status, 0, r2.stderr);
+    const raw = readFileSync(join(home, ".agents/skill-data/workflow-observability", "t-accept", "e-accept.jsonl"), "utf8");
+    assert.ok(raw.includes('"skill_version":"0.1.0"'), raw);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

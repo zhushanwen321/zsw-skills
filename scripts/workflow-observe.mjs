@@ -7,20 +7,27 @@
 // 每次执行一个 JSONL 文件、逐行追加；行契约与 workflow 内建观测完全相同（改字段须同步
 // workflows/src/observability.shared.ts 与 scripts/build-workflows.mjs 的 OBS_EVENT_FIELDS）：
 //   {execution_id, task_id, skill, stage, step, round, attempt, event, timestamp,
-//    sample_type[, outcome]}
+//    sample_type[, skill_version][, outcome]}
+// skill_version（增量可选字段，D6）：--skill-version <v> 传入时落该字段（D0/D4/D6 外部
+// 步骤填所属技能 SKILL.md frontmatter version）；未传时不写字段——additive 契约，老调用
+// 与老 JSONL（无该字段的行）不受影响。值语义 = 事件回答「谁在执行」：恒记本次执行的
+// 引擎/技能当前版本，不因执行的产物缺版本字段改记 unknown（unknown 仅用于 stats 的
+// estimated 口径归因桶）。
 //
 // 用法：
 //   node scripts/workflow-observe.mjs start --task-id T --execution-id E --skill S \
-//        --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest]
+//        --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest] \
+//        [--skill-version V]
 //   node scripts/workflow-observe.mjs end   --task-id T --execution-id E --skill S \
 //        --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest] \
-//        [--outcome R]
+//        [--skill-version V] [--outcome R]
 // 用法（统一运行入口 = 安装 symlink，dev-flow-wf 在任意项目运行都指向它）：
 //   node ~/.agents/scripts/workflow-observe.mjs start --task-id T --execution-id E --skill S \
-//        --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest]
+//        --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest] \
+//        [--skill-version V]
 //   node ~/.agents/scripts/workflow-observe.mjs end   --task-id T --execution-id E --skill S \
 //        --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest] \
-//        [--outcome R]
+//        [--skill-version V] [--outcome R]
 //   start = 阶段开始；end = 阶段结束。step=execution 的 end 是执行结束记录（--outcome 带
 //   本次终态词，如 completed / converged / blocked）；中间 step 的自然结束不带 --outcome，
 //   --outcome 只用于「终态统一补记的 end」（中间步骤自然结束不带 outcome）。
@@ -36,9 +43,11 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 
 const USAGE = `用法（~ 由 shell 展开；任意项目运行同一入口）：
-  node ~/.agents/scripts/workflow-observe.mjs start --task-id T --execution-id E --skill S --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest]
-  node ~/.agents/scripts/workflow-observe.mjs end   --task-id T --execution-id E --skill S --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest] [--outcome R]`;
+  node ~/.agents/scripts/workflow-observe.mjs start --task-id T --execution-id E --skill S --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest] [--skill-version V]
+  node ~/.agents/scripts/workflow-observe.mjs end   --task-id T --execution-id E --skill S --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest] [--skill-version V] [--outcome R]`;
 
+// 必填契约字段（每条事件必须齐备，构造后机器核对）；可选字段见 OBS_EVENT_OPTIONAL_FIELDS。
+// build-workflows.mjs 的 OBS_EVENT_FIELDS 为契约全集（必填 + 可选），三源同步锚之一
 const OBS_EVENT_FIELDS = [
   "execution_id",
   "task_id",
@@ -51,6 +60,9 @@ const OBS_EVENT_FIELDS = [
   "timestamp",
   "sample_type",
 ];
+// 可选契约字段（增量可选，additive）：仅调用方传对应旗标时写入，缺省不落字段——
+// 老 JSONL（无该字段的行）与不带旗标的存量调用都合法；skill_version 由 --skill-version 提供
+const OBS_EVENT_OPTIONAL_FIELDS = ["skill_version"];
 
 function fail(message, code) {
   console.error(`${message}\n恢复动作：${USAGE}`);
@@ -72,7 +84,7 @@ if (event !== "start" && event !== "end") {
 }
 
 // 选项白名单：未知 flag 拒绝（拼错的参数被静默忽略会让事件字段失真）
-const KNOWN_FLAGS = new Set(["task-id", "execution-id", "skill", "stage", "step", "round", "attempt", "sample-type", "outcome"]);
+const KNOWN_FLAGS = new Set(["task-id", "execution-id", "skill", "stage", "step", "round", "attempt", "sample-type", "skill-version", "outcome"]);
 
 const opts = {};
 for (let i = 1; i < argv.length; i += 2) {
@@ -133,6 +145,16 @@ if (opts.outcome !== undefined) {
   outcome = opts.outcome.trim();
 }
 
+// 可选字段 skill_version（OBS_EVENT_OPTIONAL_FIELDS 唯一成员）：传了就写、没传不写
+// 字段（additive）；start/end 都可携带（外部步骤的 begin 与终态补记 end 各自声明版本）
+let skillVersion = null;
+if (opts["skill-version"] !== undefined) {
+  if (!nonEmpty(opts["skill-version"])) {
+    fail("--skill-version 须为非空字符串（本次执行的技能版本，取所属技能 SKILL.md frontmatter version；不传 = 不写 skill_version 字段）", 2);
+  }
+  skillVersion = opts["skill-version"].trim();
+}
+
 // ── 构造事件并落盘 ──
 const rec = {
   execution_id: executionId,
@@ -147,8 +169,12 @@ const rec = {
   sample_type: sampleType,
 };
 if (outcome !== null) rec.outcome = outcome;
+if (skillVersion !== null) rec.skill_version = skillVersion;
 for (const f of OBS_EVENT_FIELDS) {
   if (!(f in rec)) fail(`内部错误：事件缺契约字段 ${f}（OBS_EVENT_FIELDS 与构造不一致——修本脚本）`, 1);
+}
+for (const f of OBS_EVENT_OPTIONAL_FIELDS) {
+  if (f in rec && typeof rec[f] !== "string") fail(`内部错误：可选契约字段 ${f} 非字符串（OBS_EVENT_OPTIONAL_FIELDS 与构造不一致——修本脚本）`, 1);
 }
 
 const jsonlPath = join(
