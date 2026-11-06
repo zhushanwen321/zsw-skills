@@ -78,6 +78,13 @@ def split_variants(cell):
     return variants
 
 
+# 词面后接特定字时属完整正常汉语词的子串误报（「面族 (?![板向])」先例同款边界判定）：
+# 「被否」⊂「被否决」——「被否」条目针对模板字段砍字形态（`- **被否**：`），
+# 「被否决」是完整正常汉语词（白名单已登记候选，如 domain-model.md 画布不变量
+# 「方案被否决 / 搁置时其 selected 标记同步清除」），后接「决」时不命中
+NEXT_CHAR_SUBSTRING_GUARDS = {"被否": "决"}
+
+
 def to_regex(term):
     pat = re.escape(term).replace("…", r".{0,30}?")
     if re.fullmatch(r"[A-Za-z0-9_-]+", term):
@@ -86,6 +93,8 @@ def to_regex(term):
         # 面族词的负向断言：后接「板」（XX面板，标准 UI 术语）或「向」（面向，动词）时
         # 是子串误报——「聚合面∈聚合面板」「扩展面∈扩展面向」，非该族词的名词用法
         pat = rf"{pat}(?![板向])"
+    elif term in NEXT_CHAR_SUBSTRING_GUARDS:
+        pat = rf"{pat}(?!{re.escape(NEXT_CHAR_SUBSTRING_GUARDS[term])})"
     return re.compile(pat)
 
 
