@@ -51,6 +51,16 @@ if (dirStat.isFile()) {
   failUsage("参数须是设计包目录（含六个章节 JSON），不是单个文件");
 }
 
+// 产物名（写盘）与标题 fallback 都取自目录名 basename；目录参数为相对的 '.' / '..'
+// 时 basename 取到点号，拼出「..rendered.md」式畸形产物名并覆盖目录内同名文件——
+// 入口直接拒绝，正常路径不受影响（正常目录名不会是点号）
+const dirBase = basename(designDir);
+if (dirBase === "." || dirBase === "..") {
+  failUsage(
+    `设计目录参数不能是相对的「${designDir}」（产物名取自目录名，会生成 ${dirBase}.rendered.md 畸形文件名并覆盖目录内同名文件）——请传设计目录的绝对路径`,
+  );
+}
+
 // ── 读取六章节 JSON（失败指明文件名与错误） ──
 
 const docs = {};
@@ -266,8 +276,16 @@ if (repairHistory.length > 0) {
   section("### 2.7 修复史判定表");
   out.push(
     table(
-      ["id", "机制", "修复次数", "回摆情况", "定性"],
-      repairHistory.map((r) => [r?.id, r?.mechanism, r?.fixCount, r?.oscillation, label(ENUM_LABELS.verdict, r?.verdict)]),
+      ["id", "机制", "修复次数", "回摆情况", "修复层次", "修复取证", "定性"],
+      repairHistory.map((r) => [
+        r?.id,
+        r?.mechanism,
+        r?.fixCount,
+        r?.oscillation,
+        r?.repairLevel,
+        r?.fixEvidence,
+        label(ENUM_LABELS.verdict, r?.verdict),
+      ]),
     ),
     "",
   );

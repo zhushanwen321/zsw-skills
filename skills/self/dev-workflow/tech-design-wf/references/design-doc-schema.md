@@ -164,7 +164,9 @@ P4 历史模式原则的产物表（触发条件：问题域有 ≥3 次修复�
 | mechanism | string | 必填 | 被反复修复的问题点，写符号名与位置 |
 | fixCount | number | 必填 | 全样本统计的修复次数，取证用 merge 提交的双亲 diff，不信 PR 描述 |
 | oscillation | string | 必填 | 收敛后是否回摆：无 / 有（附来回翻转的提交对） |
-| verdict | string 枚举 | 必填 | `asset`（资产域不动）/ `faulty`（故障密集域重构）/ `unfixed`（未修到——历次修复都没触及根因）。判定依据必须能从前三列读出；`unfixed` 直接驱动分型判为终态型 |
+| repairLevel | string | 必填 | 修复层次：历次修复集中在接口形状返工（结构性）还是逻辑错误（局部）——判定定性的支撑列之一 |
+| fixEvidence | string | 必填 | 修复取证：逐次修复的 commit 锚点（hash + 日期 + 一句话归属），使 fixCount 与定性可从表内复核（取证方式与命令形态对齐 P5 穷举断言可复算要求） |
+| verdict | string 枚举 | 必填 | `asset`（资产域不动）/ `faulty`（故障密集域重构）/ `unfixed`（未修到——历次修复都没触及根因）。判定依据必须能从前几列读出；`unfixed` 直接驱动分型判为终态型 |
 
 ### 5.7 artifactTables.upstreamDeps —— 上游依赖清单
 

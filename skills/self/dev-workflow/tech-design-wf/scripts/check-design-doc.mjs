@@ -384,27 +384,37 @@ if (exAssumptions.length + exExclusions.length + exStateCopies.length > 0 && !an
 
 // ── 规则 9：渲染产物过期 warning（不阻塞） ──
 
-const renderedName = `${basename(designDir)}.rendered.md`;
-try {
-  const renderedStat = statSync(join(designDir, renderedName));
-  for (const file of CHAPTER_FILES) {
-    let jsonStat;
-    try {
-      jsonStat = statSync(join(designDir, file));
-    } catch {
-      continue;
-    }
-    if (renderedStat.mtimeMs < jsonStat.mtimeMs) {
-      warnings.push(
-        `[提示] 渲染产物 ${renderedName} 早于 ${file} 的修改时间——重跑 node scripts/render-design-doc.mjs <设计目录> 刷新阅读视图（不阻塞本判定）`,
-      );
-      break;
-    }
-  }
-} catch {
+// 产物名取自目录名 basename；目录参数为相对的「.」/「..」时 basename 取到点号，
+// 拼出「..rendered.md」式畸形产物名。与 render-design-doc.mjs 入口守卫对称：本侧只读
+// 不写盘，不需要 exit 2 拦截——跳过产物时效对比，warning 直接指路绝对路径
+const dirBase = basename(designDir);
+if (dirBase === "." || dirBase === "..") {
   warnings.push(
-    `[提示] 渲染产物 ${renderedName} 缺失——运行 node scripts/render-design-doc.mjs <设计目录> 生成阅读视图（不阻塞本判定）`,
+    `[提示] 设计目录参数是相对的「${designDir}」——渲染产物名取自目录名，点号目录会推算错位（${dirBase}.rendered.md），无法判定渲染产物是否过期；请传设计目录的绝对路径重跑（不阻塞本判定）`,
   );
+} else {
+  const renderedName = `${dirBase}.rendered.md`;
+  try {
+    const renderedStat = statSync(join(designDir, renderedName));
+    for (const file of CHAPTER_FILES) {
+      let jsonStat;
+      try {
+        jsonStat = statSync(join(designDir, file));
+      } catch {
+        continue;
+      }
+      if (renderedStat.mtimeMs < jsonStat.mtimeMs) {
+        warnings.push(
+          `[提示] 渲染产物 ${renderedName} 早于 ${file} 的修改时间——重跑 node scripts/render-design-doc.mjs <设计目录> 刷新阅读视图（不阻塞本判定）`,
+        );
+        break;
+      }
+    }
+  } catch {
+    warnings.push(
+      `[提示] 渲染产物 ${renderedName} 缺失——运行 node scripts/render-design-doc.mjs <设计目录> 生成阅读视图（不阻塞本判定）`,
+    );
+  }
 }
 
 // ── 输出 ──
