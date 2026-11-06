@@ -177,7 +177,6 @@ const NODE_CHECK_EXISTS = [
 const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
 const NODE_RENAME_FILE =
   "require('fs').mkdirSync(require('path').dirname(process.argv[2]),{recursive:true});require('fs').renameSync(process.argv[1],process.argv[2])";
-const NODE_PROBE_HOME = "process.stdout.write(require('os').homedir())";
 // matrix 再生保留通道（F6-1，2026-10-25）：argv: [matrixPath] → stdout = JSON
 // {findingId: [追加行...]}。matrix.md 每轮由 renderMatrix 从内存结构化记录全量重渲染，
 // fixer 直接写进 finding 区块的订正/注记行不在结构化记录里、历代随再生丢失（实测
@@ -205,12 +204,44 @@ const NODE_EXTRACT_FINDING_EXTRAS = [
   "}",
   "out(res);",
 ].join("\n");
-// project-slug 探针：输出 basename-realhash8（realpath + sha256 前 8 位十六进制小写；
-// impl-spec §1 全域唯一算法，与 skill-data-dir.mjs / 各循环实现对同一组固定向量一致）
-const NODE_PROJECT_SLUG =
-  "const p=require('fs').realpathSync(process.argv[1]);" +
-  "const h=require('crypto').createHash('sha256').update(p).digest('hex').slice(0,8);" +
-  "process.stdout.write(p.split('/').filter(Boolean).pop()+'-'+h)";
+// 寻址探针：NODE_PROBE_HOME / NODE_PROJECT_ADDRESS 由构建器从
+// workflows/src/skill-data.shared.ts 整层注入（寻址算法唯一权威源——算法、固定向量
+// 与注入对账位置见该文件头注）
+
+// ── 寻址探针输出解析（NODE_PROJECT_ADDRESS 契约 {form, slug, workspaceRoot?, worktreeName?}）──
+
+/** workspace 形态携带 workspaceRoot / worktreeName，single 形态只有 slug */
+type ProjectAddress =
+  | { form: "single"; slug: string }
+  | { form: "workspace"; slug: string; workspaceRoot: string; worktreeName: string };
+
+/** 解析寻址探针输出；形态非法返回 null（调用方按 setup-failure 处理，不猜默认值） */
+function parseProjectAddress(raw: string): ProjectAddress | null {
+  try {
+    const v = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof v.slug !== "string" || v.slug === "") return null;
+    if (v.form === "single") return { form: "single", slug: v.slug };
+    if (
+      v.form === "workspace" &&
+      typeof v.workspaceRoot === "string" &&
+      v.workspaceRoot !== "" &&
+      typeof v.worktreeName === "string" &&
+      v.worktreeName !== ""
+    ) {
+      return { form: "workspace", slug: v.slug, workspaceRoot: v.workspaceRoot, worktreeName: v.worktreeName };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** dev-flow 段产物根：workspace 形态 = <ws-slug>/<worktreeName>（worktree 级隔离）；单仓
+ *  形态退回现行平铺（AX5：路径与两级化前逐字节相同） */
+function devFlowRoot(home: string, address: ProjectAddress): string {
+  const base = `${home}/.agents/skill-data/dev-flow/${address.slug}`;
+  return address.form === "workspace" ? `${base}/${address.worktreeName}` : base;
+}
 
 // run manifest 探针组（skill-data-redesign §5.1：终态在 runDir 根写 run.json）：
 // NODE_PROBE_NOW 取当前时刻（ISO8601）。startedAt 必须经 world.run 探针取而不能脚本内
@@ -242,6 +273,9 @@ const NODE_WRITE_RUN_JSON =
 interface RunManifest {
   workflow: string;
   segment: "tech-design" | "dev-flow";
+  /** 产物溯源字段：构建注入常量（所属技能 SKILL.md frontmatter version，唯一权威——
+   *  本循环 = dev-flow-wf）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
+  skillVersion: string;
   host: string;
   projectRoot: string;
   /** 无独立 worktree 概念的循环 = projectRoot */
@@ -349,7 +383,7 @@ function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
     problems.push("implPlan 缺失或非绝对路径：须传入实施计划 JSON 路径（tech-design-wf 产出的 .impl-plan.json）");
   }
   if (projectRoot === "") {
-    problems.push("projectRoot 缺失或非绝对路径：须传入项目根绝对路径（git 操作基准 + skill-data 产物段 project-slug 计算输入）");
+    problems.push("projectRoot 缺失或非绝对路径：须传入项目根绝对路径（git 操作基准 + skill-data 寻址检测输入）");
   }
   const maxRounds =
     typeof raw.maxRounds === "number" && Number.isFinite(raw.maxRounds) && raw.maxRounds >= 1
@@ -981,11 +1015,14 @@ if (planParse.exitCode !== 0) {
   };
 }
 
-// 产物目录组装：~/.agents/skill-data/dev-flow/<project-slug>/（<name>.sync/、<name>.runlog/、
-// <name>.ledger.md 平铺同基准）。project-slug 探针（realpath + sha256 前 8 位）：realpath 失败 =
-// projectRoot 不存在，setup-failure
-const slugRes = await world.run("node", ["-e", NODE_PROJECT_SLUG, projectRoot]);
-if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
+// 产物目录组装：布局随寻址形态两级化——workspace 形态 = <ws-slug>/<worktreeName>/（worktree
+// 级隔离：status 与 git 实物对账、断点恢复都绑定该 worktree 的检出状态），单仓形态退回现行
+// 平铺（AX5 逐字节不变）。寻址只看 projectRoot（检测探针内部以工作区目录派生 ws-slug 与
+// worktreeName——单一权威源）；约定见 skill-data-addressing.md。projectRoot 不存在 / 探针
+// 输出非法 = setup-failure
+const addressRes = await world.run("node", ["-e", NODE_PROJECT_ADDRESS, projectRoot]);
+const address = addressRes.exitCode === 0 ? parseProjectAddress(addressRes.stdout) : null;
+if (address === null) {
   await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
@@ -998,11 +1035,10 @@ if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
     contestedList: [],
     overdesignCandidates: [],
     remaining: [],
-    message: `projectRoot 无法解析为项目 slug（realpath + sha256 探针失败，exit ${slugRes.exitCode}）：${slugRes.stderr.trim()}。恢复动作：确认 projectRoot 目录存在后重新发起`,
+    message: `projectRoot 无法解析为 skill-data 寻址（检测探针失败，exit ${addressRes.exitCode}）：${addressRes.stderr.trim() || addressRes.stdout.trim()}。恢复动作：确认 projectRoot 目录存在后重新发起`,
   };
 }
-const projectSlug = slugRes.stdout.trim();
-const skillDataDir = `${homeDir}/.agents/skill-data/dev-flow/${projectSlug}`;
+const skillDataDir = devFlowRoot(homeDir, address);
 
 // runDir 命名：<skillDataDir>/<设计文档 basename 去扩展名>.sync/
 const docBase = designDoc.split("/").pop() ?? designDoc;
@@ -1337,7 +1373,10 @@ const NODE_APPEND_TEXT = [
 
 async function appendLedger(title: string, body: string): Promise<void> {
   try {
-    const r = await world.run("node", ["-e", NODE_APPEND_TEXT, ledgerPath, title, body]);
+    // 每笔盖版本行（产物溯源字段 = SKILL_VERSION 构建注入常量，本引擎 = dev-flow-wf
+    // 版本）：追加笔正文首行固定一行 skillVersion——ledger 是多轮追加的 markdown，
+    // 逐笔携带才能回答每段记录由哪个技能版本产出
+    const r = await world.run("node", ["-e", NODE_APPEND_TEXT, ledgerPath, title, `skillVersion: ${SKILL_VERSION}\n${body}`]);
     if (r.exitCode !== 0) log(`WARN: ledger 追加失败（${title}，exit ${r.exitCode}）——终态数据以 final.json 为准`);
   } catch (e) {
     log(`WARN: ledger 追加异常（${title}）：${String(e)}`);
@@ -3734,6 +3773,7 @@ if (finalResult !== null) {
     await writeRunManifest({
       workflow: "design-code-sync-loop",
       segment: "dev-flow",
+      skillVersion: SKILL_VERSION,
       host: HOST_PLATFORM,
       projectRoot,
       worktreePath: projectRoot,

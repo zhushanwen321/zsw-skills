@@ -53,11 +53,46 @@ const OBS_EXEMPT = new Set();
 // 构建时把该文件全文拼在业务正文之前（obsCtx 为 let，业务顶层赋值依赖声明在前）；
 // 未接入的 workflow 不拼。观测层只此一份，业务 shared 禁止拷贝副本
 const OBS_LAYER_PATH = join(SRC, "observability.shared.ts");
+// 寻址层单一构建输入（skill-data 目录寻址：slug 探针算法唯一权威源）：四个 workflow
+// 全部消费 NODE_PROBE_HOME / NODE_PROJECT_SLUG，构建时无条件全文拼接（启动校验层与
+// 观测层之后、业务正文之前——纯常量声明，与业务无声明顺序依赖）。层文件形态约束
+//（无 import/export、探针常量单行）见 skill-data.shared.ts 头注
+const SKILL_DATA_LAYER_PATH = join(SRC, "skill-data.shared.ts");
+
+// ── 版本权威映射：workflow → 所属技能 SKILL.md frontmatter version（手动 semver 唯一权威）──
+// 注入形态 = `const SKILL_VERSION = "<值>";` 常量行，拼在业务正文之前（四个产物同构）；
+// 业务源直接引用 SKILL_VERSION 盖产物载体（run.json / status.json / final.json / ledger）。
+// 版本戳比对（--check）：产物内嵌值 ≠ frontmatter 当前值 → 红灯（拦 bump 后忘重建）
+const SKILL_VERSION_SOURCES = {
+  "tech-review-loop": join(ROOT, "skills/self/dev-workflow/tech-design-wf/SKILL.md"),
+  "wave-executor": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
+  "dev-consistency-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
+  "design-code-sync-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
+};
+
+function readSkillVersion(skillMdPath, wfName) {
+  let text;
+  try {
+    text = readFileSync(skillMdPath, "utf8");
+  } catch {
+    throw new Error(`${wfName}: 缺版本权威源 ${skillMdPath.slice(ROOT.length + 1)}——SKILL_VERSION 无从注入`);
+  }
+  const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!fm) throw new Error(`${wfName}: 版本权威源 ${skillMdPath.slice(ROOT.length + 1)} 无 frontmatter 块——version 字段无从读取`);
+  const m = fm[1].match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m);
+  if (!m) {
+    throw new Error(
+      `${wfName}: 版本权威源 ${skillMdPath.slice(ROOT.length + 1)} frontmatter 缺 version 字段或非 semver 形态（MAJOR.MINOR.PATCH）` +
+        `——frontmatter version 是技能版本唯一权威（bump 语义见该文件紧邻注释），补上后重跑构建`,
+    );
+  }
+  return m[1];
+}
 
 // ── 观测契约（O 区）：三源同步锚——workflows/src/observability.shared.ts（单一观测层）、
 // 本文件的 OBS_EVENT_FIELDS / OBS_STAGES / OBS_STEPS、scripts/workflow-observe.mjs 的行
 // 契约。改事件字段或阶段词表必须三处同步（构建器在每次构建时按下述规则核对）──
-const OBS_EVENT_FIELDS = ["execution_id", "task_id", "skill", "stage", "step", "round", "attempt", "event", "timestamp", "sample_type"];
+const OBS_EVENT_FIELDS = ["execution_id", "task_id", "skill", "stage", "step", "round", "attempt", "event", "timestamp", "sample_type", "skill_version"];
 // stage 词表 = workflow 在所属流程的阶段编号（T2 = tech-design 审查；D1/D3 = dev-flow
 // 开发/验收执行；D2 = dev-flow 一致性审查；D5 = dev-flow 终态同步）
 const OBS_STAGES = new Set(["T2", "D1", "D3", "D2", "D5"]);
@@ -308,6 +343,8 @@ if (onlyIdx >= 0) {
 let dirty = 0;
 
 for (const name of names) {
+  // 版本权威读取（每个 workflow 取所属技能 frontmatter version；缺失/畸形即构建失败）
+  const skillVersion = readSkillVersion(SKILL_VERSION_SOURCES[name], name);
   const sharedPath = join(SRC, `${name}.shared.ts`);
   try {
     readFileSync(sharedPath, "utf8");
@@ -354,10 +391,25 @@ for (const name of names) {
   if (provZc === provPi) {
     throw new Error(`${name}: 启动校验层尾部缺少顶层调用行（await provenanceCheck();）——pi 剥除规则失效`);
   }
-  const sharedFull = obsLayer !== "" ? `${obsLayer}\n${shared}` : shared;
-  const rewrittenFull = obsLayer !== "" ? rewriteAgentCalls(sharedFull) : rewritten;
-  if (obsLayer !== "" && rewrittenFull.count !== rewritten.count) {
-    throw new Error(`${name}: 观测层中出现 agent( 调用点（不应发生——观测层不派 agent）`);
+  // 寻址层拼接（四个 workflow 无条件；层内不得派 agent）
+  const skillDataLayer = (() => {
+    try {
+      return readFileSync(SKILL_DATA_LAYER_PATH, "utf8");
+    } catch {
+      throw new Error(`缺 ${SKILL_DATA_LAYER_PATH.slice(ROOT.length + 1)}——寻址层单一构建输入不可缺失`);
+    }
+  })();
+  if (/agent\(/.test(skillDataLayer)) {
+    throw new Error(`${name}: 寻址层中出现 agent( 调用点（不应发生——寻址层是纯常量声明）`);
+  }
+  // 版本常量注入（四个产物同构）：单一行常量，业务源引用它盖产物载体（run.json /
+  // status.json / final.json / ledger 追加笔）。声明先于业务正文——shared 源内引用合法；
+  // 行内不放反引号/插值，pi 词法改写与 TS 剥离均按普通代码行透传
+  const versionLine = `const SKILL_VERSION = "${skillVersion}"; // 构建注入自 ${relative(join(ROOT, "skills/self/dev-workflow"), SKILL_VERSION_SOURCES[name])} frontmatter version（唯一权威）\n`;
+  const sharedFull = `${obsLayer !== "" ? `${obsLayer}\n` : ""}${skillDataLayer}\n${versionLine}${shared}`;
+  const rewrittenFull = rewriteAgentCalls(sharedFull);
+  if (rewrittenFull.count !== rewritten.count) {
+    throw new Error(`${name}: 拼接层（观测/寻址）中出现 agent( 调用点（不应发生——两层均不派 agent）`);
   }
   const piShared = stripTs(`${provPi}\n${rewrittenFull.text}`);
   const zcOut = stitch(zcTpl, `${provZc}\n${sharedFull}`);
@@ -369,6 +421,32 @@ for (const name of names) {
   if (obsErrors.length > 0) {
     for (const e of obsErrors) console.error(`✗ ${e}`);
     dirty += obsErrors.length;
+  }
+
+  // 版本戳比对（RL2 落地，--check 专属）：仓内产物内嵌 SKILL_VERSION ≠ frontmatter 当前值
+  // → 红灯（拦 bump 后忘重建）。产物文件缺失跳过——由下方 targets 一致性检查拦「产物过期」；
+  // 提取不到版本戳 = 产物早于版本注入机制，同样判过期
+  if (check) {
+    const stampRe = /const SKILL_VERSION = "([^"]*)";/;
+    for (const [path, label] of [
+      [join(WF, `${name}.dwf.ts`), "zcode"],
+      [join(WF, "pi", `${name}.js`), "pi"],
+    ]) {
+      let existing;
+      try {
+        existing = readFileSync(path, "utf8");
+      } catch {
+        continue;
+      }
+      const embedded = existing.match(stampRe)?.[1] ?? null;
+      if (embedded !== skillVersion) {
+        console.error(
+          `✗ ${label} 产物 ${path.slice(ROOT.length + 1)} 内嵌 SKILL_VERSION=${embedded ?? "（无版本戳）"} ` +
+            `≠ frontmatter 当前值 ${skillVersion}——bump 后忘重建。恢复动作：node scripts/build-workflows.mjs`,
+        );
+        dirty++;
+      }
+    }
   }
 
   const targets = [

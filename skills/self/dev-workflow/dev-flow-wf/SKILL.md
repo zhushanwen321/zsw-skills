@@ -1,5 +1,9 @@
 ---
 name: dev-flow-wf
+# 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
+# MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
+# 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
+version: 0.1.0
 description: >-
   Use when 一份完整设计包（tech-design-wf 产出：设计文档 + 双格式 impl-plan + 审查终态）
   需要落地为已验收代码。dev-flow 的 workflow 版（灰度并行，老版保留可随时切回）：
@@ -18,11 +22,11 @@ description: >-
 
 ## 设计包入口门 [MANDATORY]（机械可查）
 
-入口逐行核对（任一缺失 → 拒绝并指明缺什么、回 tech-design-wf 哪个阶段补；`<project-slug>` = 项目根 basename + "-" + 项目根绝对路径 sha256 前 8 位十六进制，脚本自动拼）：
+入口逐行核对（任一缺失 → 拒绝并指明缺什么、回 tech-design-wf 哪个阶段补）。设计包目录按寻址双形态（算法与约定见 `skill-data-addressing.md`——`<zsw-skills 检出根>/skills/self/dev-workflow/references/skill-data-addressing.md`，本节不内联）：workspace 形态（同仓多个 worktree 同父目录）= `~/.agents/skill-data/tech-design/<ws-slug>/`——工作区级共享、无 worktree 段，任何 worktree 的入口门都发现同一设计包；单仓形态 = `~/.agents/skill-data/tech-design/<project-slug>/`（现行平铺，路径不变）。两种 slug 均由脚本按 projectRoot 检测后自动拼接，不手拼。下表 `<slug>` = 单仓形态的 project-slug 或工作区形态的 ws-slug：
 
 | 文件 | 判据 |
 |------|------|
-| `~/.agents/skill-data/tech-design/<project-slug>/<name>.md` | 存在 |
+| `~/.agents/skill-data/tech-design/<slug>/<name>.md` | 存在 |
 | `<name>.impl-plan.md` + `.impl-plan.json`（与设计文档同目录） | 存在且单元 id 集一致 |
 | `<name>/final.json`（审查报告目录，与设计文档同根） | terminated == "converged" |
 | `<name>.plan-review.md`（与设计文档同目录） | 触发门槛（关键路径深度 ≥3 或单元 ≥4）时必须存在 |
@@ -55,7 +59,7 @@ description: >-
 
 ## 运行记录（防丢失）[MANDATORY]
 
-任务执行期信息统一平铺落 `~/.agents/skill-data/dev-flow/<project-slug>/`（`<name>.` 前缀隔离；设计包在同根 `tech-design/<project-slug>/` 段，slug 同源），两类载体、三条写入通道：
+任务执行期信息统一平铺落 dev-flow 段（`<name>.` 前缀隔离）：workspace 形态 = `~/.agents/skill-data/dev-flow/<ws-slug>/<worktreeName>/`（worktree 级隔离——status 与 git 实物对账、断点恢复都绑定该 worktree 的检出状态），单仓形态 = `~/.agents/skill-data/dev-flow/<project-slug>/`（现行平铺，路径不变）；设计包在 tech-design 段同源（workspace 形态 `tech-design/<ws-slug>/`，工作区级共享无 worktree 段）。slug 判据见 skill-data-addressing.md，下表路径相对 dev-flow 段产物根。两类载体、三条写入通道：
 
 | 载体 | 写入者 | 内容 |
 |------|--------|------|
@@ -149,7 +153,7 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 
 ## 状态恢复
 
-进度唯一事实源 = `<name>.status.json`（D0 生成于 `~/.agents/skill-data/dev-flow/<project-slug>/`，实际落点以 exec-plan 内 statusPath 声明为准；workflow/手工路径每次节点终态后回写）。恢复程序：以 git log 与工作区实物校准 status（**冲突以 git 为准**：标 done 无 commit → 回 pending；有 commit 未写 → 补写 done）→ 按所处段选 flow 落点续跑。
+进度唯一事实源 = `<name>.status.json`（D0 生成于 dev-flow 段产物根——workspace 形态为 `<ws-slug>/<worktreeName>/` 两级，单仓形态为现行 `<project-slug>/` 平铺；实际落点以 exec-plan 内 statusPath 声明为准；workflow/手工路径每次节点终态后回写）。恢复程序：以 git log 与工作区实物校准 status（**冲突以 git 为准**：标 done 无 commit → 回 pending；有 commit 未写 → 补写 done）→ 按所处段选 flow 落点续跑。
 
 ## 与老 dev-flow 的关系（灰度并行）
 

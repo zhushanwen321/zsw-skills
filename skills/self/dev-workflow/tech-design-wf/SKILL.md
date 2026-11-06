@@ -1,5 +1,9 @@
 ---
 name: tech-design-wf
+# 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
+# MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
+# 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
+version: 0.1.0
 description: >-
   Use when 三阶段产出完整设计包（设计文档 + 实施计划）：写技术设计文档 → 对抗式审查循环 →
   实施计划（impl-plan 双格式）。tech-design 的 workflow 形态版本（老 tech-design 保留作对照，可随时切回）。
@@ -35,7 +39,7 @@ T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
 
 ## 设计包（dev-flow-wf 的唯一入口输入）
 
-设计包整体落 `~/.agents/skill-data/tech-design/<project-slug>/`——`<project-slug>` = 项目根 basename + "-" + 项目根绝对路径 sha256 前 8 位十六进制，由 workflow 脚本按 projectRoot 自动拼接；用户传参（designDoc / projectRoot 等）一律传绝对路径，不手拼 slug。下表路径均相对该目录：
+设计包整体落 tech-design 段，目录按寻址双形态（算法与约定见 `skill-data-addressing.md`——`<zsw-skills 检出根>/skills/self/dev-workflow/references/skill-data-addressing.md`，本节不内联）：workspace 形态（同仓多个 worktree 同父目录）= `~/.agents/skill-data/tech-design/<ws-slug>/`——工作区级共享、无 worktree 段，任何 worktree 的入口门都发现同一设计包；单仓形态 = `~/.agents/skill-data/tech-design/<project-slug>/`（现行平铺，路径不变）。两级化只换父目录，`<ws-slug>/` 内部排布与现行目录完全一致；两种 slug 由 workflow 脚本按 projectRoot 检测后自动拼接。用户传参（designDoc / projectRoot 等）一律传绝对路径，不手拼 slug。下表路径均相对该目录：
 
 | 文件 | 产生者 | 机械可查判据 |
 |------|--------|-------------|

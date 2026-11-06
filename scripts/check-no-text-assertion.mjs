@@ -15,6 +15,9 @@
 //     并在提交说明写明该命中的归类理由）；属证据扫描的改为结构化判定
 //   - 删减不拦（存量自然收敛方向）
 //
+// 基线键 = 文件 + 命中行内容（多重集，同文件同内容按出现次数计）：行号仅作展示。
+// 按行号锁定会被行移动整体误报——并行单元插删一行，其下所有命中都变成「新增」。
+//
 // 用法：node scripts/check-no-text-assertion.mjs [--update]
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -47,18 +50,23 @@ for (const rel of TARGETS) current[rel] = scanFile(rel);
 
 // 基线条目第三元 = 归类标签（protocol-parse | format-validation | path-set | enum-check |
 // unclassified）：使「该命中为何属保留区」可被 grep 复查——误归类（实为证据扫描却登记为
-// 保留区）机器查不出存在性、只能靠标签抽查兜住。--update 沿用旧标签，新命中标 unclassified；
-// 校验只按行号+内容匹配，标签不参与，未归类计数随通过信息输出提醒补标
+// 保留区）机器查不出存在性、只能靠标签抽查兜住。--update 按内容沿用旧标签（同文件同内容
+// 出现多次时按序消费旧标签），新命中标 unclassified；校验只按内容多重集匹配，标签不参与，
+// 未归类计数随通过信息输出提醒补标
+const contentKey = (rel, content) => `${rel}\t${content}`;
+
 const readOldCategories = () => {
   try {
     const old = JSON.parse(readFileSync(BASELINE, "utf8"));
-    const map = new Map();
+    const pools = new Map();
     for (const rel of TARGETS)
       for (const e of old[rel] ?? []) {
         const cat = e.length >= 3 ? e[2] : "unclassified";
-        map.set(`${e[0]}\t${e[1]}`, cat);
+        const k = contentKey(rel, e[1]);
+        if (!pools.has(k)) pools.set(k, []);
+        pools.get(k).push(cat);
       }
-    return map;
+    return pools;
   } catch {
     return new Map();
   }
@@ -71,7 +79,8 @@ if (update) {
   let unclassified = 0;
   for (const rel of TARGETS)
     tagged[rel] = current[rel].map(([l, c]) => {
-      const cat = oldCats.get(`${l}\t${c}`) ?? "unclassified";
+      const pool = oldCats.get(contentKey(rel, c));
+      const cat = pool && pool.length > 0 ? pool.shift() : "unclassified";
       if (cat === "unclassified") unclassified += 1;
       return [l, c, cat];
     });
@@ -89,19 +98,23 @@ try {
   process.exit(1);
 }
 
-const keyOf = (line, content) => `${line}\t${content}`;
 const additions = [];
 const totals = { current: 0, baseline: 0, removed: 0 };
 for (const rel of TARGETS) {
-  const base = new Map((baseline[rel] ?? []).map(([l, c]) => [keyOf(l, c), false]));
-  totals.baseline += base.size;
+  const remaining = new Map();
+  for (const e of baseline[rel] ?? []) {
+    const k = contentKey(rel, e[1]);
+    remaining.set(k, (remaining.get(k) ?? 0) + 1);
+    totals.baseline += 1;
+  }
   for (const [l, c] of current[rel]) {
     totals.current += 1;
-    const k = keyOf(l, c);
-    if (base.has(k)) base.set(k, true);
+    const k = contentKey(rel, c);
+    const n = remaining.get(k) ?? 0;
+    if (n > 0) remaining.set(k, n - 1);
     else additions.push(`${rel}:${l}  ${c}`);
   }
-  totals.removed += [...base.values()].filter((used) => !used).length;
+  for (const n of remaining.values()) totals.removed += n;
 }
 
 if (additions.length === 0) {

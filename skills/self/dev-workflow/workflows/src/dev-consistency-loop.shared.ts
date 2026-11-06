@@ -60,15 +60,46 @@ const reviewerTemplate =
     : DEFAULT_REVIEWER_TEMPLATE;
 
 // skillDataDir 探针组（impl-spec §2.1：workflow 域无 import，路径解析走 node -e 子进程）：
-// home 探针 + project-slug 探针（realpath + sha256 前 8 位十六进制小写，全域唯一算法与
-// 同一组固定测试向量对账）+ exec-plan projectRoot 前置探针（NODE_PREP 需要 skillDataDir
-// 作 argv，而 slug 计算又需要 exec-plan 里的 projectRoot——先单独读出。相对形态按 cwd
+// NODE_PROBE_HOME / NODE_PROJECT_ADDRESS 由构建器从 workflows/src/skill-data.shared.ts
+// 整层注入（寻址算法唯一权威源——算法、固定向量与注入对账位置见该文件头注）。
+// exec-plan projectRoot 前置探针（NODE_PREP 需要 skillDataDir
+// 作 argv，而寻址检测又需要 exec-plan 里的 projectRoot——先单独读出。相对形态按 cwd
 // 解析，与 NODE_PREP 内 path.resolve(process.cwd(), ep.projectRoot) 同一语义）
-const NODE_PROBE_HOME = "process.stdout.write(require('os').homedir())";
-const NODE_PROJECT_SLUG =
-  "const p=require('fs').realpathSync(process.argv[1]);" +
-  "const h=require('crypto').createHash('sha256').update(p).digest('hex').slice(0,8);" +
-  "process.stdout.write(p.split('/').filter(Boolean).pop()+'-'+h)";
+
+// ── 寻址探针输出解析（NODE_PROJECT_ADDRESS 契约 {form, slug, workspaceRoot?, worktreeName?}）──
+
+/** workspace 形态携带 workspaceRoot / worktreeName，single 形态只有 slug */
+type ProjectAddress =
+  | { form: "single"; slug: string }
+  | { form: "workspace"; slug: string; workspaceRoot: string; worktreeName: string };
+
+/** 解析寻址探针输出；形态非法返回 null（调用方按启动期失败处理，不猜默认值） */
+function parseProjectAddress(raw: string): ProjectAddress | null {
+  try {
+    const v = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof v.slug !== "string" || v.slug === "") return null;
+    if (v.form === "single") return { form: "single", slug: v.slug };
+    if (
+      v.form === "workspace" &&
+      typeof v.workspaceRoot === "string" &&
+      v.workspaceRoot !== "" &&
+      typeof v.worktreeName === "string" &&
+      v.worktreeName !== ""
+    ) {
+      return { form: "workspace", slug: v.slug, workspaceRoot: v.workspaceRoot, worktreeName: v.worktreeName };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** dev-flow 段产物根：workspace 形态 = <ws-slug>/<worktreeName>（worktree 级隔离）；单仓
+ *  形态退回现行平铺（AX5：路径与两级化前逐字节相同） */
+function devFlowRoot(home: string, address: ProjectAddress): string {
+  const base = `${home}/.agents/skill-data/dev-flow/${address.slug}`;
+  return address.form === "workspace" ? `${base}/${address.worktreeName}` : base;
+}
 
 // run manifest 探针组（skill-data-redesign §5.1：终态在 skillDataDir 根写 run.json）：
 // NODE_PROBE_NOW 取当前时刻（ISO8601）。startedAt 必须经 world.run 探针取而不能脚本内
@@ -101,6 +132,9 @@ const NODE_WRITE_RUN_JSON =
 interface RunManifest {
   workflow: string;
   segment: "tech-design" | "dev-flow";
+  /** 产物溯源字段：构建注入常量（所属技能 SKILL.md frontmatter version，唯一权威——
+   *  本循环 = dev-flow-wf）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
+  skillVersion: string;
   host: string;
   projectRoot: string;
   /** 无独立 worktree 概念的循环 = projectRoot */
@@ -266,9 +300,9 @@ const NODE_PREP = [
   "var attemptNo = parseInt(process.argv[3] || '1', 10) || 1;",
   "var gateALog = path.join(statusDir, baseName + '.gate-a' + (attemptNo > 1 ? '.attempt' + attemptNo : '') + '.log');",
   // 过程记录目录（agent prompt 注入的防丢失落点）+ 未决/裁决档案——落外部算好的
-  // skillDataDir（~/.agents/skill-data/dev-flow/<project-slug>/，argv[4] 传入；impl-spec
-  // §2.1：不在内联脚本内重推导）。与既有 <name>.* 产物族同前缀（SKILL「运行记录」节）；
-  // mkdir 幂等，目录已存在则空操作
+  // skillDataDir（dev-flow 段，按寻址形态两级化：workspace 形态带 <worktreeName> 子目录；
+  // argv[4] 传入；impl-spec §2.1：不在内联脚本内重推导）。与既有 <name>.* 产物族同前缀
+  //（SKILL「运行记录」节）；mkdir 幂等，目录已存在则空操作
   "var skillDataDir = path.resolve(process.argv[4] || '');",
   "if (!skillDataDir) die('skillDataDir 缺失（argv[4]，恢复：核对脚本 argv 布局）');",
   "var runlogDir = path.join(skillDataDir, baseName + '.runlog');",
@@ -754,13 +788,15 @@ async function runSlotPool<T, R>(items: T[], limit: number, run: (item: T) => Pr
 }
 
 // status.json events 追加（§4.5 W3 回写义务：D3 入口门「Gate A 绿证据在 events 可查」的数据源；
-// 保留全部既有顶层字段——与 W2 写的是同一文件）
+// 保留全部既有顶层字段——与 W2 写的是同一文件）。argv[5] = SKILL_VERSION（构建注入常量）：
+// status.json 缺 skillVersion（旧格式产物 / D0 手工初建未写）时补写本引擎版本；已有则保留
+//（字段语义 = 产出引擎版本，只读溯源，覆盖会失真）
 const NODE_APPEND_EVENT =
-  "try{var fs=require('fs');var sp=process.argv[1];var st=JSON.parse(fs.readFileSync(sp,'utf8'));var evs=Array.isArray(st.events)?st.events:[];evs.push({seq:evs.length+1,node:process.argv[2],event:process.argv[3],detail:process.argv[4]||''});st.events=evs;fs.writeFileSync(sp,JSON.stringify(st,null,2));process.exit(0)}catch(e){process.stderr.write(String((e&&e.message)||'append failed'));process.exit(1)}";
+  "try{var fs=require('fs');var sp=process.argv[1];var st=JSON.parse(fs.readFileSync(sp,'utf8'));var evs=Array.isArray(st.events)?st.events:[];evs.push({seq:evs.length+1,node:process.argv[2],event:process.argv[3],detail:process.argv[4]||''});st.events=evs;if(typeof st.skillVersion!=='string'||st.skillVersion==='')st.skillVersion=process.argv[5];fs.writeFileSync(sp,JSON.stringify(st,null,2));process.exit(0)}catch(e){process.stderr.write(String((e&&e.message)||'append failed'));process.exit(1)}";
 
 async function appendStatusEvent(node: string, event: string, detail: string): Promise<void> {
   try {
-    const r = await world.run("node", ["-e", NODE_APPEND_EVENT, info.statusPath, node, event, detail]);
+    const r = await world.run("node", ["-e", NODE_APPEND_EVENT, info.statusPath, node, event, detail, SKILL_VERSION]);
     if (r.exitCode !== 0) log(`WARN: status.json events 追加失败（${event}，exit ${r.exitCode}）——终态数据以本次返回值为准`);
   } catch (e) {
     log(`WARN: status.json events 追加异常（${event}）：${String(e)}`);
@@ -914,6 +950,7 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
     await writeRunManifest({
       workflow: "dev-consistency-loop",
       segment: "dev-flow",
+      skillVersion: SKILL_VERSION,
       host: HOST_PLATFORM,
       projectRoot: info.projectRoot,
       worktreePath: info.projectRoot,
@@ -942,8 +979,10 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
 
 phase("生成分区并全面审查");
 
-// skillDataDir 组装（失败 = 启动期快失败，与下方 NODE_PREP 失败同型 throw）：
-// home → exec-plan projectRoot → project-slug → ~/.agents/skill-data/dev-flow/<slug>/
+// skillDataDir 组装（失败 = 启动期快失败，与下方 NODE_PREP 失败同型 throw）：布局随寻址
+// 形态两级化——workspace 形态 = <ws-slug>/<worktreeName>/（worktree 级隔离），单仓形态退回
+// 现行平铺（AX5 逐字节不变）。寻址只看 exec-plan 的 projectRoot（检测探针内部以工作区
+// 目录派生 ws-slug 与 worktreeName——单一权威源）；约定见 skill-data-addressing.md
 const homeRes = await world.run("node", ["-e", NODE_PROBE_HOME]);
 if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
   throw new Error(
@@ -956,13 +995,14 @@ if (planRootRes.exitCode !== 0 || planRootRes.stdout.trim() === "") {
     `exec-plan projectRoot 读取失败（exit ${planRootRes.exitCode}）：${planRootRes.stderr.trim() || planRootRes.stdout.trim()}——恢复动作：核对 execPlan 路径与 projectRoot 字段（D0 编译产物）`,
   );
 }
-const slugRes = await world.run("node", ["-e", NODE_PROJECT_SLUG, planRootRes.stdout.trim()]);
-if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
+const addressRes = await world.run("node", ["-e", NODE_PROJECT_ADDRESS, planRootRes.stdout.trim()]);
+const address = addressRes.exitCode === 0 ? parseProjectAddress(addressRes.stdout) : null;
+if (address === null) {
   throw new Error(
-    `projectRoot 无法解析为项目 slug（realpath + sha256 探针失败，exit ${slugRes.exitCode}）：${slugRes.stderr.trim()}——恢复动作：确认 exec-plan 的 projectRoot 目录存在后重新发起`,
+    `projectRoot 无法解析为 skill-data 寻址（检测探针失败，exit ${addressRes.exitCode}）：${addressRes.stderr.trim() || addressRes.stdout.trim()}——恢复动作：确认 exec-plan 的 projectRoot 目录存在后重新发起`,
   );
 }
-const skillDataDir = `${homeRes.stdout.trim()}/.agents/skill-data/dev-flow/${slugRes.stdout.trim()}`;
+const skillDataDir = devFlowRoot(homeRes.stdout.trim(), address);
 
 // ── 观测启用（O 区）：stage = D2（W3 一致性审查循环在 dev-flow 流程的阶段编号）。
 // execution start 从 home/slug 探针通过后起记；此前的启动期 throw 无观测覆盖，属已

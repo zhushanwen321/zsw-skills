@@ -18,6 +18,8 @@
 //   - phase 名集合必须两侧相等
 //   - agent 名模板静态文本序列（按出现顺序）必须两侧相等
 //   - SCHEMA_* ↔ interface 顶层字段名 + required 集必须相等（维度 4）
+//   - 探针注入不变量：产物内寻址探针串与 skill-data.shared.ts 单源逐字节一致、
+//     声明恰好一处（维度 5）
 
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -31,6 +33,22 @@ const PAIRS = [
   "dev-consistency-loop",
   "design-code-sync-loop",
 ];
+
+// 探针注入不变量（维度 5）的单一权威源：skill-data.shared.ts（寻址算法唯一权威源，
+// 构建器整层注入四产物）。提取方式 = 按行正则抓单行字符串常量值——该文件头注的形态
+// 约束（探针常量单行、串内无双引号与反斜杠）是本提取的依赖，破坏即在此报错
+const SKILL_DATA_SRC = join(ROOT, DIR, "src", "skill-data.shared.ts");
+const PROBE_CONST_NAMES = ["NODE_PROBE_HOME", "NODE_PROJECT_SLUG"];
+
+function extractProbeConst(srcText, constName) {
+  const m = srcText.match(new RegExp(`^const ${constName} = "((?:[^"\\\\]|\\\\.)*)";$`, "m"));
+  if (!m) {
+    throw new Error(
+      `${SKILL_DATA_SRC} 缺 ${constName} 单行字符串常量（形态约束见该文件头注：单行、串内无双引号与反斜杠）——探针注入不变量无从对账`,
+    );
+  }
+  return m[1];
+}
 
 // 已审差异白名单：差集中的串若逐条在此登记即放行。每条必须标注来源差异区
 // （B shim / E agent 调用层 / F 续聊补丁 / G 机制词 pi 语境化）。新增条目前先确认
@@ -306,6 +324,9 @@ function extractAgentNames(src, isPi) {
 
 let failed = false;
 const updateDump = [];
+const probeConsts = new Map(
+  PROBE_CONST_NAMES.map((constName) => [constName, extractProbeConst(readFileSync(SKILL_DATA_SRC, "utf8"), constName)]),
+);
 
 for (const name of PAIRS) {
   const zcFull = readFileSync(join(ROOT, DIR, `${name}.dwf.ts`), "utf8");
@@ -350,6 +371,29 @@ for (const name of PAIRS) {
   if (schemaProblems.length) {
     failed = true;
     problems.push(...schemaProblems);
+  }
+
+  // 5. 探针注入不变量：产物内寻址探针串与 skill-data.shared.ts 单源逐字节一致（零容忍）。
+  //    四源内联探针已退役（构建器从单一权威源整层注入）——产物缺串 = 注入丢失或产物
+  //    过期；声明多于一处 = 有人手改产物或另起炉灶内联拷贝。现状四源探针串之间曾无任何
+  //    机器对账，本维度是首个跨拷贝机器检查（新增，非替代——不改动上方双平台对账域）
+  for (const constName of PROBE_CONST_NAMES) {
+    const expected = probeConsts.get(constName);
+    const missing = [];
+    if (!zcFull.includes(expected)) missing.push("zcode");
+    if (!piFull.includes(expected)) missing.push("pi");
+    if (missing.length) {
+      failed = true;
+      problems.push(`  探针 ${constName} 未按单源注入（缺：${missing.join("/")}）——产物须含 skill-data.shared.ts 探针串原文。恢复动作：node scripts/build-workflows.mjs 重建`);
+    }
+    const declRe = new RegExp(`const ${constName} =`, "g");
+    for (const [label, text] of [["zcode", zcFull], ["pi", piFull]]) {
+      const declCount = (text.match(declRe) ?? []).length;
+      if (declCount !== 1) {
+        failed = true;
+        problems.push(`  探针 ${constName} 在 ${label} 产物内声明 ${declCount} 处（应为 1——单源注入唯一，多出处 = 内联拷贝回潮）`);
+      }
+    }
   }
 
   if (problems.length) {

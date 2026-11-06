@@ -6,132 +6,132 @@
    "enum-check"
   ],
   [
-   157,
+   191,
    "\"var SHELL_QUOTE = function (s) { return /^[A-Za-z0-9_\\\\/:.,@%^+=-]+$/.test(s) ? s : SQ + s.split(SQ).join(SQ + '\\\\\\\\' + SQ + SQ) + SQ; };\",",
    "format-validation"
   ],
   [
-   166,
+   200,
    "\"    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-z]*c/i.test(args[fai])) { fci = fai; break; } }\",",
    "format-validation"
   ],
   [
-   180,
+   214,
    "\"    if (STUB_RE.test(cc) || (ci > args.length && STUB_HEAD_RE.test(cc)) || NOOP_RE.test(cc)) return label + ' 是恒绿形态命令（' + full + '）——不构成真实测试证据（恢复：检查 testPlan.f",
    "format-validation"
   ],
   [
-   186,
+   220,
    "\"if (ALLOWED.indexOf(fsuite.program) < 0) die('testPlan.fullSuite.program 不在白名单 ' + ALLOWED.join('/') + ': ' + fsuite.program);\",",
    "enum-check"
   ],
   [
-   195,
+   229,
    "\"    if (ALLOWED.indexOf(at.command.program) < 0) die('testPlan.artifacts[' + ai + '].command.program 不在白名单: ' + at.command.program);\",",
    "enum-check"
   ],
   [
-   202,
+   236,
    "\"  if (ALLOWED.indexOf(ep.testPlan.incremental.program) < 0) die('testPlan.incremental.program 不在白名单: ' + ep.testPlan.incremental.program);\",",
    "enum-check"
   ],
   [
-   207,
+   241,
    "\"if (!/^[0-9a-f]{7,40}$/i.test(bl)) die('baseline 非 git hash 形态: ' + bl);\",",
    "protocol-parse"
   ],
   [
-   220,
+   254,
    "\"var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);\",",
    "path-set"
   ],
   [
-   228,
+   262,
    "\"    var m = line.match(/^(\\\\d+|-)\\\\s+(\\\\d+|-)\\\\s+(.+)$/);\",",
    "protocol-parse"
   ],
   [
-   318,
+   352,
    "\"  var idx = p.indexOf(' -> ');\",",
    "protocol-parse"
   ],
   [
-   323,
+   357,
    "\"var untracked = entries.filter(function (e) { return e.code.indexOf('?') >= 0; }).map(function (e) { return e.path; });\",",
    "protocol-parse"
   ],
   [
-   324,
+   358,
    "\"var foreign = changed.filter(function (f) { return pool.indexOf(f) < 0; });\",",
    "enum-check"
   ],
   [
-   325,
+   359,
    "\"var foreignUntracked = foreign.filter(function (f) { return untracked.indexOf(f) >= 0; });\",",
    "enum-check"
   ],
   [
-   347,
+   381,
    "\"      if (m.indexOf('index.lock') >= 0 && i < 6) { sleep(200 + i * 300); continue; }\",",
    "protocol-parse"
   ],
   [
-   420,
+   454,
    "\"  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }\",",
    "protocol-parse"
   ],
   [
-   424,
+   458,
    "\"    if (BYPASS_RE[j][0].test(content)) { hits.push({ file: curFile, pattern: BYPASS_RE[j][1], line: content.trim().slice(0, 160) }); break; }\",",
    "format-validation"
   ],
   [
-   506,
+   540,
    "if (p.startsWith(\"./\")) p = p.slice(2);",
    "path-set"
   ],
   [
-   507,
+   541,
    "if (p.startsWith(projectRoot + \"/\")) p = p.slice(projectRoot.length + 1);",
    "path-set"
   ],
   [
-   1002,
+   1042,
    "for (const p of parts) if (p.files.includes(filePath)) return p.name;",
    "path-set"
   ],
   [
-   1146,
+   1186,
    "if (GREP_CHECK_STUB_RE.test(cmd)) {",
    "format-validation"
   ],
   [
-   1160,
+   1200,
    "const impure = (f[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));",
    "format-validation"
   ],
   [
-   1368,
+   1408,
    "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))",
    "format-validation"
   ],
   [
-   1862,
+   1902,
    "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));",
    "enum-check"
   ],
   [
-   1946,
+   1986,
    "f === \".tmp\" || f.startsWith(\".tmp/\") || f === \".pi\" || f.startsWith(\".pi/workflows/\");",
    "path-set"
   ],
   [
-   1953,
+   1993,
    "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),",
    "enum-check"
   ],
   [
-   2385,
+   2425,
    "\"var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.sp",
    "protocol-parse"
   ]
@@ -158,207 +158,207 @@
    "protocol-parse"
   ],
   [
-   197,
+   196,
    "\"  var h=/^### (\\\\S+)/.exec(ln);\",",
    "protocol-parse"
   ],
   [
-   199,
+   198,
    "\"  if(/^## /.test(ln)){cur=null;continue}\",",
    "protocol-parse"
   ],
   [
-   201,
+   200,
    "\"  var isStd=false;for(var s of std){if(ln.indexOf(s)===0){isStd=true;break}}\",",
    "protocol-parse"
   ],
   [
-   335,
+   369,
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
    "enum-check"
   ],
   [
-   341,
+   375,
    "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");",
    "path-set"
   ],
   [
-   385,
+   419,
    "const abs = p.startsWith(\"/\");",
    "path-set"
   ],
   [
-   482,
+   516,
    ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));",
    "path-set"
   ],
   [
-   622,
+   656,
    "const abs = tok.startsWith(\"/\") ? tok : `${rootDir}/${tok}`;",
    "path-set"
   ],
   [
-   623,
+   657,
    "if (!affected.includes(abs)) affected.push(abs);",
    "path-set"
   ],
   [
-   743,
+   777,
    ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));",
    "path-set"
   ],
   [
-   824,
+   858,
    "if (fi.some((f) => fj.includes(f))) {",
    "enum-check"
   ],
   [
-   846,
+   880,
    "if (rest.startsWith(\"\\\"\") && rest.endsWith(\"\\\"\") && rest.length >= 2) rest = rest.slice(1, -1);",
    "protocol-parse"
   ],
   [
-   847,
+   881,
    "if (rest.includes(\" -> \")) {",
    "protocol-parse"
   ],
   [
-   864,
+   898,
    "if (token.length < 3 || !token.includes(\"/\")) return \"\";",
    "path-set"
   ],
   [
-   865,
+   899,
    "return /\\.[A-Za-z0-9]+$/.test(token) ? token : \"\";",
    "path-set"
   ],
   [
-   934,
+   968,
    "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${homeDir}/${p.slice(2)}` : p);",
    "path-set"
   ],
   [
-   1054,
+   1090,
    "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +",
    "protocol-parse"
   ],
   [
-   1055,
+   1091,
    "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +",
    "protocol-parse"
   ],
   [
-   1059,
+   1095,
    "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;",
    "format-validation"
   ],
   [
-   1308,
+   1344,
    "const rel = (p: string): string => (p.startsWith(`${projectRoot}/`) ? p.slice(projectRoot.length + 1) : p);",
    "path-set"
   ],
   [
-   1309,
+   1345,
    "const pathUnderRoot = (p: string): string => (p.startsWith(\"/\") ? p : `${projectRoot}/${p}`);",
    "path-set"
   ],
   [
-   1418,
+   1457,
    "if (m) for (const fp of m.files) if (!base.includes(fp)) base.push(fp);",
    "enum-check"
   ],
   [
-   1622,
+   1661,
    ".filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)))",
    "enum-check"
   ],
   [
-   1981,
+   2020,
    "else if (typeof m[\"command\"] === \"string\" && ALWAYS_PASS_CMD_RE.test(m[\"command\"].trim())) badSc.push(`${i + 1}（selfCheck.command 须是对受影响文件的真实检查命令，不得是 shell 恒过/恒",
    "format-validation"
   ],
   [
-   1988,
+   2027,
    "const impure = (o[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));",
    "format-validation"
   ],
   [
-   2237,
+   2276,
    "if (src === designDoc || src === implPlan || src.startsWith(`${runDir}/`) || src.startsWith(`${retirementDestDir}/`)) {",
    "path-set"
   ],
   [
-   2310,
+   2349,
    "return !pathUnderRoot(f).startsWith(`${retirementDestDir}/`);",
    "path-set"
   ],
   [
-   2413,
+   2452,
    "if (!p.startsWith(`${projectRoot}/`)) {",
    "path-set"
   ],
   [
-   2490,
+   2529,
    "const extraAbs = rep.fixed.filter((p2) => p2 !== \"\").map((p2) => (p2.startsWith(\"/\") ? p2 : `${projectRoot}/${p2}`));",
    "path-set"
   ],
   [
-   2493,
+   2532,
    "if (!p2.startsWith(`${projectRoot}/`) || !(await pathExists(p2))) {",
    "path-set"
   ],
   [
-   2590,
+   2629,
    "const blockers = loaded.filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)));",
    "enum-check"
   ],
   [
-   2661,
+   2700,
    "return n === null || !n.startsWith(`${projectRoot}/`);",
    "path-set"
   ],
   [
-   2745,
+   2784,
    "terr.add(tok.startsWith(\"/\") ? tok : `${projectRoot}/${tok}`);",
    "path-set"
   ],
   [
-   2756,
+   2795,
    "if (segs[i].includes(\"*\") || segs[i].endsWith(\"...\")) cut = i;",
    "path-set"
   ],
   [
-   2766,
+   2805,
    "if (d.startsWith(fp)) return false;",
    "path-set"
   ],
   [
-   2772,
+   2811,
    "if (d.startsWith(`${base}/`)) return false;",
    "path-set"
   ],
   [
-   3021,
+   3060,
    "return !pathUnderRoot(hf).startsWith(`${retirementDestDir}/`);",
    "path-set"
   ],
   [
-   3347,
+   3386,
    "if (!g.issueIds.includes(fx.issueId)) es.push(`fixes 引用未知条目 ${fx.issueId}`);",
    "enum-check"
   ],
   [
-   3350,
+   3389,
    "if (!g.issueIds.includes(d.issueId)) es.push(`deferred 引用未知条目 ${d.issueId}`);",
    "enum-check"
   ],
   [
-   3357,
+   3396,
    "if (!g.issueIds.includes(d.issueId)) es.push(`exempt 引用未知条目 ${d.issueId}`);",
    "enum-check"
   ],
   [
-   3362,
+   3401,
    "if (!g.issueIds.includes(d.issueId)) es.push(`delegated 引用未知条目 ${d.issueId}`);",
    "enum-check"
   ]
@@ -385,194 +385,204 @@
    "format-validation"
   ],
   [
-   295,
+   246,
+   "\"if(m.indexOf('index.lock')>=0&&i<10){sleep(1000+i*1000);continue}throw e}}};\" +",
+   "protocol-parse"
+  ],
+  [
+   301,
    "\"try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',claimAny=process.argv[5]==='claim",
    "protocol-parse"
   ],
   [
-   311,
+   317,
    "\"const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));\" +",
    "protocol-parse"
   ],
   [
-   314,
+   320,
    "\"if(hit){const h=hit.slice(0,hit.indexOf('\\\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（'+(claimAny?'前缀+词边界认领（stat",
    "protocol-parse"
   ],
   [
-   361,
+   367,
    "if (rel.startsWith(\"/\")) return rel;",
    "path-set"
   ],
   [
-   362,
+   368,
    "const trimmed = base.endsWith(\"/\") ? base.slice(0, -1) : base;",
    "path-set"
   ],
   [
-   375,
+   415,
    "const prefix = t.endsWith(\"/\") ? t : `${t}/`;",
    "path-set"
   ],
   [
-   376,
+   416,
    "if (file === t || file.startsWith(prefix)) return true;",
    "path-set"
   ],
   [
-   390,
+   430,
    "const abs = entries.filter((t) => t.startsWith(\"/\"));",
    "path-set"
   ],
   [
-   394,
+   434,
    "const mixed = entries.filter((t) => /\\s/.test(t) || /[()（）]/.test(t));",
    "path-set"
   ],
   [
-   409,
+   449,
    "const arrow = p.indexOf(\" -> \");",
    "protocol-parse"
   ],
   [
-   419,
+   459,
    "const isTmpArtifact = (f: string): boolean => /^(\\.\\.\\/)*\\.tmp\\//.test(f);",
    "path-set"
   ],
   [
-   576,
+   535,
+   "} else if (workspaceRoot !== null && !workspaceRoot.startsWith(\"/\")) {",
+   "path-set"
+  ],
+  [
+   626,
    "if (!(TEST_WHITELIST as readonly string[]).includes(tc.program)) {",
    "enum-check"
   ],
   [
-   677,
+   727,
    "if (!commitTemplate.includes(\"{unitId}\") || !commitTemplate.includes(\"{summary}\")) {",
    "format-validation"
   ],
   [
-   1047,
+   1098,
    "if (n.deps.includes(cur) && !seen.has(n.id)) {",
    "enum-check"
   ],
   [
-   1060,
+   1111,
    "const interpreter = node.script.endsWith(\".sh\") ? \"bash\" : \"node\";",
    "format-validation"
   ],
   [
-   1309,
+   1360,
    "node.designRef !== \"\" && !summary.includes(node.designRef) ? `${node.designRef} ${summary}` : summary;",
    "presentation"
   ],
   [
-   1563,
+   1614,
    "if (!failedIds.includes(nid)) errors.push(`item ${it[\"id\"]}：nodeIds 含未知/已 disputed 节点 ${nid}（幻觉 ref）`);",
    "enum-check"
   ],
   [
-   1578,
+   1629,
    "const conflicted = [...covered].filter((id) => fixCovered.has(id) && items.some((it) => it[\"action\"] === \"disputed\" && isStrArr(it[\"nodeIds\"]) && (it[\"nodeIds\"]",
    "enum-check"
   ],
   [
-   1592,
+   1643,
    "const files = items.filter((it) => ids.includes(it[\"id\"] as string)).flatMap((it) => (isStrArr(it[\"files\"]) ? (it[\"files\"] as string[]) : []));",
    "enum-check"
   ],
   [
-   1599,
+   1650,
    "const inter = groupFiles[i].filter((f) => groupFiles[j].includes(f));",
    "enum-check"
   ],
   [
-   1721,
+   1772,
    "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);",
    "enum-check"
   ],
   [
-   1751,
+   1802,
    "fixItems.filter((it) => commitGateFailures.some((cf) => cf.nodeIds.some((nid) => it.nodeIds.includes(nid)))).map((it) => it.id),",
    "enum-check"
   ],
   [
-   1757,
+   1808,
    "const gItems = fixItems.filter((it) => g.itemIds.includes(it.id));",
    "enum-check"
   ],
   [
-   1759,
+   1810,
    "const gNodes = plan.nodes.filter((n) => gItems.some((it) => it.nodeIds.includes(n.id)));",
    "enum-check"
   ],
   [
-   1824,
+   1875,
    "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);",
    "enum-check"
   ],
   [
-   1848,
+   1899,
    "const node = plan.nodes.find((n) => cf.nodeIds.includes(n.id));",
    "enum-check"
   ],
   [
-   1850,
+   1901,
    "const fixFiles = rep.fixes.filter((f) => f.itemId !== \"\" && cf.nodeIds.some((nid) => (fixItems.find((it) => it.id === f.itemId)?.nodeIds.includes(nid) ?? false)",
    "enum-check"
   ],
   [
-   1854,
+   1905,
    "const cfIdx = commitGateFailures.indexOf(cf);",
    "enum-check"
   ],
   [
-   1855,
+   1906,
    "const dcIdx = deferredCommits.findIndex((dc) => cf.nodeIds.includes(dc.id) && dc.message === cf.message);",
    "enum-check"
   ],
   [
-   2000,
+   2051,
    "for (const t of n.territory) if (!list.includes(t)) list.push(t);",
    "path-set"
   ],
   [
-   2378,
+   2437,
    "for (const n of plan.nodes) if (n.kind === \"dev\") for (const t of n.territory) if (!allTerr.includes(t)) allTerr.push(t);",
    "enum-check"
   ]
  ],
  "skills/self/dev-workflow/workflows/src/tech-review-loop.shared.ts": [
   [
-   120,
+   137,
    "if (!p.endsWith(\".rendered.md\")) return p;",
    "format-validation"
   ],
   [
-   130,
+   147,
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
    "enum-check"
   ],
   [
-   136,
+   153,
    "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");",
    "path-set"
   ],
   [
-   489,
+   506,
    "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${home}/${p.slice(2)}` : p);",
    "path-set"
   ],
   [
-   577,
+   596,
    "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +",
    "protocol-parse"
   ],
   [
-   578,
+   597,
    "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +",
    "protocol-parse"
   ],
   [
-   582,
+   601,
    "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;",
    "format-validation"
   ]

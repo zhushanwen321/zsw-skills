@@ -78,15 +78,30 @@ const buildCommitMessage = Function(
 )();
 const RECONCILE_STATUS = extractConstString("RECONCILE_STATUS");
 
-// ── 临时 git 仓与工具 ──
+// ── 临时 git 仓与工具（含子进程环境隔离） ──
+// git commit --only 时 pre-commit 收到 GIT_INDEX_FILE=<repo>/.git/next-index-<pid>.lock
+// （HEAD + 本次 pathspec 的临时索引）。本脚本在临时仓里 init/add/commit，子 git 继承该
+// 变量会把 fixture 条目写进主仓的提交临时索引；父 commit 随后用该索引建树 → "invalid
+// object ... for 'sub/unstaged.ts'" + "Error building trees"。只改子进程 env，不动
+// process.env（主流程自身不读写索引，隔离范围限于本脚本创建的临时对象）
+const GIT_ENV_SCRUB = [
+  "GIT_INDEX_FILE",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_PREFIX",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+];
+const CHILD_ENV = { ...process.env };
+for (const key of GIT_ENV_SCRUB) delete CHILD_ENV[key];
 
 const repo = mkdtempSync(join(tmpdir(), "commit-contract-"));
-const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", env: CHILD_ENV });
 const runReconcile = (statusObj, tpl, runIdArg, ids) => {
   const sp = join(repo, "status.json");
   writeFileSync(sp, JSON.stringify(statusObj));
   const args = ["-e", RECONCILE_STATUS, sp, repo, tpl, runIdArg, ...ids];
-  const out = execFileSync("node", args, { encoding: "utf8", maxBuffer: 33554432, stdio: ["pipe", "pipe", "pipe"] });
+  const out = execFileSync("node", args, { encoding: "utf8", maxBuffer: 33554432, stdio: ["pipe", "pipe", "pipe"], env: CHILD_ENV });
   return JSON.parse(out);
 };
 
@@ -232,7 +247,7 @@ try {
     const NODE_VERIFY = Function(`return (${consistSrc.slice(exprStart, exprEnd)});`)();
 
     const prepo = mkdtempSync(join(tmpdir(), "porcelain-parse-"));
-    const pgit = (...args) => execFileSync("git", ["-C", prepo, ...args], { encoding: "utf8" });
+    const pgit = (...args) => execFileSync("git", ["-C", prepo, ...args], { encoding: "utf8", env: CHILD_ENV });
     try {
       pgit("init", "-q");
       pgit("config", "user.email", "p@test");
@@ -248,7 +263,7 @@ try {
       pgit("add", "staged.ts"); // 形态「M 」
       writeFileSync(join(prepo, "sub", "untracked.ts"), "new\n"); // 形态「??」（父目录已跟踪 → 文件级）
       const parsed = JSON.parse(
-        execFileSync("node", ["-e", NODE_VERIFY, prepo, "[]"], { encoding: "utf8", maxBuffer: 33554432, stdio: ["pipe", "pipe", "pipe"] }),
+        execFileSync("node", ["-e", NODE_VERIFY, prepo, "[]"], { encoding: "utf8", maxBuffer: 33554432, stdio: ["pipe", "pipe", "pipe"], env: CHILD_ENV }),
       );
       const ch2 = new Set(parsed.changed);
       const fu = new Set(parsed.foreignUntracked || []);

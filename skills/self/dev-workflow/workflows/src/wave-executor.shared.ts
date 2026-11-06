@@ -159,13 +159,8 @@ const READ_FILE_QUIET = "try{process.stdout.write(require('fs').readFileSync(pro
 const EXISTS = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
 
 // skillDataDir 探针组（impl-spec §2.1：脚本无 import，路径解析走 node -e 子进程）：
-// home 探针 + project-slug 探针（realpath + sha256 前 8 位十六进制小写，全域唯一算法与
-// 同一组固定测试向量对账）
-const NODE_PROBE_HOME = "process.stdout.write(require('os').homedir())";
-const NODE_PROJECT_SLUG =
-  "const p=require('fs').realpathSync(process.argv[1]);" +
-  "const h=require('crypto').createHash('sha256').update(p).digest('hex').slice(0,8);" +
-  "process.stdout.write(p.split('/').filter(Boolean).pop()+'-'+h)";
+// NODE_PROBE_HOME / NODE_PROJECT_ADDRESS 由构建器从 workflows/src/skill-data.shared.ts
+// 整层注入（寻址算法唯一权威源——算法、固定向量与注入对账位置见该文件头注）
 
 // run manifest 探针组（skill-data-redesign §5.1：终态在 skillDataDir 根写 run.json）：
 // NODE_PROBE_NOW 取当前时刻（ISO8601）。startedAt 必须经 world.run 探针取而不能脚本内
@@ -197,6 +192,9 @@ const NODE_WRITE_RUN_JSON =
 interface RunManifest {
   workflow: string;
   segment: "tech-design" | "dev-flow";
+  /** 产物溯源字段：构建注入常量（所属技能 SKILL.md frontmatter version，唯一权威——
+   *  本循环 = dev-flow-wf）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
+  skillVersion: string;
   host: string;
   projectRoot: string;
   /** 无独立 worktree 概念的循环 = projectRoot（worktree 单元是节点级 cwd，run 级无） */
@@ -236,15 +234,23 @@ const GIT_TOPLEVEL =
 // argv: [cwd, message, ...files] → stdout = 新 commit hash；add 用绝对路径（pathspec 相对 cwd
 // 解析，cwd 非 repo 根时相对路径会指错文件）；commit 用 --only 限定路径——共享工作区并行
 // 调度时暂存区可能有其他单元的 staged 内容，普通 commit 会连带提交，破坏「每单元独立成笔」
+// index.lock 竞争退避：并行节点在同轮核验通过后各自 settle 提交，两笔 commit 争同一仓
+// 索引锁 → "Unable to create '…/.git/index.lock': File exists"。只对该形态退避重试；
+// pre-commit 拒绝等其余失败立即抛（stderr 原样交回调用方判定）。退避总量 ≥30s：一次
+// 提交要跑完整 pre-commit 链（build + parity + types + 契约，实测 10–20s），对端持锁
+// 时长同量级，短退避（先例 6 次≈5.7s）不够用
 const GIT_ADD_COMMIT =
   "try{const a=process.argv.slice(1);const c=a[0],m=a[1],f=a.slice(2);const p=require('path');const x=require('child_process').execFileSync;" +
+  "const sleep=ms=>Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,ms);" +
+  "const gr=(args,opts)=>{for(let i=0;;i++){try{return x('git',args,opts)}catch(e){const m=String((e&&(e.stderr||e.stdout))||e.message);" +
+  "if(m.indexOf('index.lock')>=0&&i<10){sleep(1000+i*1000);continue}throw e}}};" +
   "const abs=f.map(t=>p.resolve(c,t));" +
   // 幂等分支：目标文件零改动（如节点产物已在恢复对账时提交过）→ 直接返回当前 HEAD，
   // 不走 add/commit（git commit 对空暂存区报 nothing to commit 非零退出，曾误判 commit 失败）
-  "if(abs.length>0){const st=String(x('git',['status','--porcelain','--',...abs],{cwd:c,encoding:'utf8',maxBuffer:33554432}));" +
+  "if(abs.length>0){const st=String(gr(['status','--porcelain','--',...abs],{cwd:c,encoding:'utf8',maxBuffer:33554432}));" +
   "if(st.trim()===''){const h0=String(x('git',['rev-parse','HEAD'],{cwd:c,encoding:'utf8',maxBuffer:33554432})).trim();process.stdout.write(h0);process.exit(0)}}" +
-  "if(abs.length>0)x('git',['add','--',...abs],{cwd:c,encoding:'utf8',maxBuffer:33554432});" +
-  "x('git',['commit','--only','-m',m,'--',...abs],{cwd:c,encoding:'utf8',maxBuffer:33554432,stdio:['ignore','pipe','pipe']});" +
+  "if(abs.length>0)gr(['add','--',...abs],{cwd:c,encoding:'utf8',maxBuffer:33554432});" +
+  "gr(['commit','--only','-m',m,'--',...abs],{cwd:c,encoding:'utf8',maxBuffer:33554432,stdio:['ignore','pipe','pipe']});" +
   "const h=String(x('git',['rev-parse','HEAD'],{cwd:c,encoding:'utf8',maxBuffer:33554432})).trim();process.stdout.write(h)}" +
   "catch(e){process.stderr.write(String((e&&(e.stderr||e.stdout))||e.message));process.exit(1)}";
 
@@ -361,6 +367,40 @@ function joinPath(base: string, rel: string): string {
   if (rel.startsWith("/")) return rel;
   const trimmed = base.endsWith("/") ? base.slice(0, -1) : base;
   return `${trimmed}/${rel}`;
+}
+
+/** NODE_PROJECT_ADDRESS 输出契约（skill-data.shared.ts 探针头注的 JSON 形态）：workspace
+ *  形态携带 workspaceRoot / worktreeName，single 形态只有 slug */
+type ProjectAddress =
+  | { form: "single"; slug: string }
+  | { form: "workspace"; slug: string; workspaceRoot: string; worktreeName: string };
+
+/** 解析寻址探针输出；形态非法返回 null（由调用方按启动期失败处理，不猜默认值） */
+function parseProjectAddress(raw: string): ProjectAddress | null {
+  try {
+    const v = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof v.slug !== "string" || v.slug === "") return null;
+    if (v.form === "single") return { form: "single", slug: v.slug };
+    if (
+      v.form === "workspace" &&
+      typeof v.workspaceRoot === "string" &&
+      v.workspaceRoot !== "" &&
+      typeof v.worktreeName === "string" &&
+      v.worktreeName !== ""
+    ) {
+      return { form: "workspace", slug: v.slug, workspaceRoot: v.workspaceRoot, worktreeName: v.worktreeName };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** dev-flow 段产物根：workspace 形态 = <ws-slug>/<worktreeName>（worktree 级隔离）；单仓
+ *  形态退回现行平铺（AX5：路径与两级化前逐字节相同） */
+function devFlowRoot(home: string, address: ProjectAddress): string {
+  const base = `${home}/.agents/skill-data/dev-flow/${address.slug}`;
+  return address.form === "workspace" ? `${base}/${address.worktreeName}` : base;
 }
 
 function tailLines(text: string, n: number): string {
@@ -484,6 +524,16 @@ function validatePlan(raw: unknown): ValidateResult {
   const statusPathRel = isStr(raw.statusPath) ? raw.statusPath : null;
   if (statusPathRel === null) {
     errors.push("statusPath 必须是非空字符串");
+  }
+  // workspaceRoot（增量可选字段，additive）：工作区形态的 exec-plan 记录工作区根绝对路径，
+  // 供统计 / 迁移等外部消费者派生工作区级地址；缺省合法（单仓项目与存量 exec-plan 不因此
+  // 被拒——执行裁决只认 version，字段缺失不构成拒绝理由）。提供了就按绝对路径校验，形态
+  // 错误是作者笔误，静默忽略会让下游按错路径派生
+  const workspaceRoot = raw.workspaceRoot === undefined ? null : isStr(raw.workspaceRoot) ? raw.workspaceRoot : null;
+  if (raw.workspaceRoot !== undefined && workspaceRoot === null) {
+    errors.push("workspaceRoot 若提供必须是非空字符串（工作区根绝对路径）");
+  } else if (workspaceRoot !== null && !workspaceRoot.startsWith("/")) {
+    errors.push(`workspaceRoot 必须是绝对路径（实际：${workspaceRoot}）`);
   }
   // projectRoot/statusPath 是节点构建的路径基准，缺失时节点级校验无从进行——
   // 两者错误收集齐后即返回（不带病进节点校验）；两者齐备则继续收集后续错误，
@@ -686,6 +736,7 @@ function validatePlan(raw: unknown): ValidateResult {
       version: 1,
       mode,
       projectRoot,
+      workspaceRoot,
       statusPath: joinPath(projectRoot, statusPathRel),
       commitTemplate: commitTemplate ?? "{unitId} — {summary}",
       baseline: typeof raw.baseline === "string" ? raw.baseline : null,
@@ -2068,8 +2119,12 @@ if (!(await existsViaNode(plan.projectRoot))) {
   return invalidRet(`projectRoot 不存在：${plan.projectRoot}`, plan.statusPath);
 }
 
-// skillDataDir 组装（失败走 invalidRet，与其他启动校验同型）：runlog/ledger 等过程记录
-// 落 ~/.agents/skill-data/dev-flow/<project-slug>/（status.json 本身落点由 exec-plan 决定）
+// skillDataDir 组装（失败走 invalidRet，与其他启动校验同型）：runlog/ledger/run.json 等
+// 过程记录落 skill-data dev-flow 段（status.json 本身落点由 exec-plan 决定）。布局随寻址
+// 形态两级化：workspace 形态 = <ws-slug>/<worktreeName>/（worktree 级隔离），单仓形态退回
+// 现行平铺（AX5 逐字节不变）。寻址只看 projectRoot（检测探针内部以工作区目录派生 ws-slug
+// 与 worktreeName——单一权威源；exec-plan 的 workspaceRoot 供统计/迁移等外部消费者派生
+// 工作区级地址，不在此重复换算）。注释不内联算法，约定见 skill-data-addressing.md
 const homeRes = await world.run("node", ["-e", NODE_PROBE_HOME]);
 if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
   return invalidRet(
@@ -2077,14 +2132,15 @@ if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
     plan.statusPath,
   );
 }
-const slugRes = await world.run("node", ["-e", NODE_PROJECT_SLUG, plan.projectRoot]);
-if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
+const addressRes = await world.run("node", ["-e", NODE_PROJECT_ADDRESS, plan.projectRoot]);
+const address = addressRes.exitCode === 0 ? parseProjectAddress(addressRes.stdout) : null;
+if (address === null) {
   return invalidRet(
-    `projectRoot 无法解析为项目 slug（realpath + sha256 探针失败，exit ${slugRes.exitCode}）：${slugRes.stderr.trim()}`,
+    `projectRoot 无法解析为 skill-data 寻址（检测探针失败，exit ${addressRes.exitCode}）：${addressRes.stderr.trim() || addressRes.stdout.trim()}——恢复动作：确认 exec-plan 的 projectRoot 目录存在且为 git 仓库内路径后重新发起`,
     plan.statusPath,
   );
 }
-const skillDataDir = `${homeRes.stdout.trim()}/.agents/skill-data/dev-flow/${slugRes.stdout.trim()}`;
+const skillDataDir = devFlowRoot(homeRes.stdout.trim(), address);
 
 // ── 观测启用（O 区）：stage 按 exec-plan mode 区分——mode=dev 即 D1 开发执行，
 // mode=acceptance 即 D3 端到端验收。attempt 无独立参数（run 级恒 1）。execution start
@@ -2195,7 +2251,10 @@ if (existingStatus === null) {
   try {
     await writeTextViaNode(
       plan.statusPath,
-      JSON.stringify({ baseline: baselineVal, runId: activeRunId, nodes: initialNodes, events: [] }, null, 2),
+      // skillVersion 盖初建（产物溯源字段 = SKILL_VERSION 构建注入常量，本引擎 =
+      // dev-flow-wf 版本）：此后回写链构造性保留——readStatusFile 把 schema 外顶层字段
+      // 收进 extra 原样回写、RECONCILE 探针保留全部 schema 外顶层字段，后续覆盖不丢
+      JSON.stringify({ skillVersion: SKILL_VERSION, baseline: baselineVal, runId: activeRunId, nodes: initialNodes, events: [] }, null, 2),
     );
   } catch (e) {
     return await invalidObs(`status.json 初始态创建失败（${plan.statusPath}）：${errText(e)}`, plan.statusPath);
@@ -2465,10 +2524,11 @@ try {
 if (runStartedAt !== null) {
   const endRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
   const gitRev = await gitRevProbe(plan.projectRoot);
-  await writeRunManifest({
-    workflow: "wave-executor",
-    segment: "dev-flow",
-    host: HOST_PLATFORM,
+    await writeRunManifest({
+      workflow: "wave-executor",
+      segment: "dev-flow",
+      skillVersion: SKILL_VERSION,
+      host: HOST_PLATFORM,
     projectRoot: plan.projectRoot,
     worktreePath: plan.projectRoot,
     branch: gitRev.branch,

@@ -16,9 +16,10 @@
 //    max-rounds（+ 环节失败三态）；escalated 一律停回用户裁决，不轮内自行重跑
 //    方案对比（F18：方向裁决权上收）；direction-rejected 只在方向审席判 rewrite 档
 //    （问题定义/方案主干/分型被击穿）时到达——patch 档常规发现走轮内修复闭环，不外溢
-//  - runDir 命名按 F22：~/.agents/skill-data/tech-design/<project-slug>/<设计目录
-//    basename>/（project-slug = realpath(projectRoot) basename + sha256 前 8 位，六域
-//    对账同一组固定向量），重发起轮次目录带 attempt 后缀（round-3.attempt2），不覆盖历史
+//  - runDir 命名按 F22：tech-design 段工作区级共享（workspace 形态 = <ws-slug>/<设计目录
+//    basename>/，无 worktree 段；单仓形态为现行平铺）。寻址算法与双形态约定见
+//    skill-data-addressing.md（本文件只消费检测探针输出，不内联算法），重发起轮次目录
+//    带 attempt 后缀（round-3.attempt2），不覆盖历史
 //  - designDoc 语义 = 设计目录（六个章节 JSON 权威源所在）或其渲染 md 路径（以
 //    .rendered.md 结尾时取其目录归一）；setup 对设计目录跑 check-design-doc.mjs
 //    （exit 0 = 进场门槛，非 0 = setup-failure 且 message 透传校验脚本 stdout——含
@@ -58,12 +59,25 @@ const NODE_WRITE_FILE =
 const NODE_CHECK_EXISTS =
   "const fs=require('fs');const missing=process.argv.slice(1).filter(p=>!fs.existsSync(p));if(missing.length>0){process.stdout.write(missing.join(' | '));process.exit(1)}";
 const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
-// project-slug 探针：输出 basename-realhash8（realpath + sha256 前 8 位十六进制小写；
-// impl-spec §1 全域唯一算法，与 skill-data-dir.mjs / 各循环实现对同一组固定向量一致）
-const NODE_PROJECT_SLUG =
-  "const p=require('fs').realpathSync(process.argv[1]);" +
-  "const h=require('crypto').createHash('sha256').update(p).digest('hex').slice(0,8);" +
-  "process.stdout.write(p.split('/').filter(Boolean).pop()+'-'+h)";
+// 寻址探针：NODE_PROJECT_ADDRESS 由构建器从 workflows/src/skill-data.shared.ts
+// 整层注入（寻址算法唯一权威源——算法、固定向量与注入对账位置见该文件头注）
+
+/** NODE_PROJECT_ADDRESS 输出契约：workspace 形态携带 workspaceRoot / worktreeName，
+ *  single 形态只有 slug。tech-design 段是工作区级共享（设计包是仓库级资产），两级化只
+ *  换父目录（per-worktree slug → ws-slug），不加 worktree 段 */
+type ProjectAddress = { form: "single" | "workspace"; slug: string };
+
+/** 解析寻址探针输出；形态非法返回 null（调用方按 setup-failure 处理，不猜默认值） */
+function parseProjectAddress(raw: string): ProjectAddress | null {
+  try {
+    const v = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof v.slug !== "string" || v.slug === "") return null;
+    if (v.form === "single" || v.form === "workspace") return { form: v.form, slug: v.slug };
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 // run manifest 探针组（skill-data-redesign §5.1：终态在 runDir 根写 run.json）：
 // NODE_PROBE_NOW 取当前时刻（ISO8601）。startedAt 必须经 world.run 探针取而不能脚本内
@@ -94,6 +108,9 @@ const NODE_WRITE_RUN_JSON =
 interface RunManifest {
   workflow: string;
   segment: "tech-design" | "dev-flow";
+  /** 产物溯源字段：构建注入常量（所属技能 SKILL.md frontmatter version，唯一权威——
+   *  本循环 = tech-design-wf）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
+  skillVersion: string;
   host: string;
   projectRoot: string;
   /** 无独立 worktree 概念的循环 = projectRoot */
@@ -515,13 +532,16 @@ const { designDoc, projectRoot, maxRounds } = inputs;
 // ── 环境准备（runDir / attempt / 模板探针） ──
 phase("校验审查环境并做方向审");
 
-// runDir 命名（F22）：~/.agents/skill-data/tech-design/<project-slug>/<设计目录 basename>/
-//（designDoc 已归一为设计目录，basename 即设计名；runDir 与设计包目录语义上同位）
+// runDir 命名（F22）：tech-design 段 = 工作区级共享（无 worktree 段——设计包是仓库级资产，
+// 任何 worktree 的入口门都发现同一设计包）。两级化只换父目录：workspace 形态 slug = ws-slug，
+// 单仓形态退回现行平铺（AX5 逐字节不变）；<ws-slug>/ 目录内部排布与现行 slug 目录完全一致。
+// designDoc 已归一为设计目录，basename 即设计名；约定见 skill-data-addressing.md
 const docBase = designDoc.split("/").pop() ?? designDoc;
 const docName = docBase.replace(/\.[^.]+$/, "");
-// project-slug 探针（realpath + sha256 前 8 位）：realpath 失败 = projectRoot 不存在，setup-failure
-const slugRes = await world.run("node", ["-e", NODE_PROJECT_SLUG, projectRoot]);
-if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
+// 寻址检测探针：realpath / git 失败 = projectRoot 不存在或不可寻址，setup-failure
+const addressRes = await world.run("node", ["-e", NODE_PROJECT_ADDRESS, projectRoot]);
+const address = addressRes.exitCode === 0 ? parseProjectAddress(addressRes.stdout) : null;
+if (address === null) {
   await obsCloseExecution("setup-failure");
   return {
     terminated: "setup-failure",
@@ -532,11 +552,10 @@ if (slugRes.exitCode !== 0 || slugRes.stdout.trim() === "") {
     mustFixTrajectory: [],
     remaining: [],
     blocked: null,
-    message: `projectRoot 无法解析为项目 slug（realpath + sha256 探针失败，exit ${slugRes.exitCode}）：${slugRes.stderr.trim()}。恢复动作：确认 projectRoot 目录存在后重新发起`,
+    message: `projectRoot 无法解析为 skill-data 寻址（检测探针失败，exit ${addressRes.exitCode}）：${addressRes.stderr.trim() || addressRes.stdout.trim()}。恢复动作：确认 projectRoot 目录存在后重新发起`,
   };
 }
-const projectSlug = slugRes.stdout.trim();
-const runDir = `${home}/.agents/skill-data/tech-design/${projectSlug}/${docName !== "" ? docName : "design"}`;
+const runDir = `${home}/.agents/skill-data/tech-design/${address.slug}/${docName !== "" ? docName : "design"}`;
 const finalJsonPath = `${runDir}/final.json`;
 
 // run manifest startedAt（循环启动时记录；探针失败 = 防覆盖判据不可用，终态时放弃写
@@ -725,6 +744,9 @@ async function finish(
   const finalDoc = {
     terminated: result.terminated,
     rounds: result.rounds,
+    // 产物溯源字段：SKILL_VERSION = 构建注入常量（tech-design-wf frontmatter version，
+    // 注入点见 build-workflows.mjs）——只读溯源，不参与执行裁决
+    skillVersion: SKILL_VERSION,
     runDir,
     designDoc,
     oneliner: result.directionOneliner,
@@ -747,6 +769,7 @@ async function finish(
     await writeRunManifest({
       workflow: "tech-review-loop",
       segment: "tech-design",
+      skillVersion: SKILL_VERSION,
       host: HOST_PLATFORM,
       projectRoot,
       worktreePath: projectRoot,
