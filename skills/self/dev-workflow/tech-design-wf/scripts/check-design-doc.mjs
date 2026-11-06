@@ -6,6 +6,7 @@
 //
 // 八条规则：
 //   1. 完整性：六文件存在；meta 必填字段非空；designType / priority / nature 枚举合法；
+//      skillVersion 可选（有则查 semver 形态、无则放行——存量设计目录零影响）；
 //      relatedDocs 为数组形态且元素有 path（不强制非空——纯语义登记，通用性不设 warning）
 //   2. id 唯一：各数组内 id 不重复，全部 id 数组并集无重复（不同前缀 G/U/D 等各自编号，天然共存）
 //   3. 导航对齐：meta.reviewNav[].decisionId 集合 == s3.decisions[].id 集合（A/B 级决策不得缺导航行）
@@ -137,6 +138,15 @@ if (meta !== undefined) {
           );
         }
       });
+    }
+  }
+  // skillVersion：可选字段（产物溯源——本设计包由哪个技能版本产出，值读技能 SKILL.md
+  // frontmatter version），additive 校验：有则查 semver 形态、无则放行（存量设计目录零影响）
+  if (meta.skillVersion !== undefined) {
+    if (typeof meta.skillVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(meta.skillVersion.trim())) {
+      failures.push(
+        `[枚举] meta.json skillVersion 值「${String(meta.skillVersion)}」不是 semver 形态（MAJOR.MINOR.PATCH）——值读本技能 SKILL.md frontmatter version（唯一权威），不填可整字段删除（存量兼容形态）`,
+      );
     }
   }
 }

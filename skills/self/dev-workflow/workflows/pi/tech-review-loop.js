@@ -543,7 +543,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "0.1.0"; // 构建注入自 tech-design-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.2.0"; // 构建注入自 tech-design-wf/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // tech-review-loop — tech-design-wf 技能 W1 审查循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，

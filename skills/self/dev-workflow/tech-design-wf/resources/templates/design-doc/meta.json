@@ -1,5 +1,6 @@
 {
   "name": "design-doc",
+  "skillVersion": "<本技能 SKILL.md frontmatter version，如 0.1.0——读文件取真实值>",
   "designType": "evolution",
   "typeRationale": "<分型依据一句话：终态型写触发依据（用户显式要求 / 修复史「未修到」/ 架构级设计对象），演进型写为什么不需要终态视角的辩护>",
   "priority": "P2",

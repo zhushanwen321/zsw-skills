@@ -2,7 +2,7 @@
 
 > 输入：T2 converged 的设计文档（final.json 存在且 terminated == "converged"）。产出：**双格式 impl-plan**（`.impl-plan.md` 人读 + `.impl-plan.json` 机器）+ 并行度复审（门槛触发时）。全程不停等用户确认（阶段内动作），完成即 T3 确认点。
 
-> **产物路径 [MANDATORY]**：`~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.md` 与 `.impl-plan.json`（与设计目录同级——设计文档是 `<name>/` 目录（六章节 JSON，权威源）+ `<name>.rendered.md` 渲染视图，不是单 md 文件；设计包整体在该目录，slug 规则见 SKILL.md 设计包节）。产物在 HOME 下天然不入 git。基线 = 计划文件落盘，不依赖 git 跟踪。
+> **产物路径 [MANDATORY]**：`~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.md` 与 `.impl-plan.json`（与设计目录同级——设计文档是 `<name>/` 目录（六章节 JSON，权威源）+ `<name>.rendered.md` 渲染视图，不是单 md 文件；设计包整体在该目录，slug 与双形态寻址规则见 `skill-data-addressing.md`（`<zsw-skills 检出根>/skills/self/dev-workflow/references/skill-data-addressing.md`））。产物在 HOME 下天然不入 git。基线 = 计划文件落盘，不依赖 git 跟踪。
 
 ## 入口自检（老 dev-flow 预检门的承接）
 
@@ -22,8 +22,8 @@
 
 ```markdown
 # <名称> 实施计划
-基线: <流水线起点前 HEAD hash> | 来源设计: <路径> | 日期: <date>
-<!-- 基线 = 开始实施前的代码 HEAD，供一致性审查的 git diff <基线>..HEAD -->
+基线: <流水线起点前 HEAD hash> | 来源设计: <路径> | 日期: <date> | 版本: <tech-design-wf SKILL.md frontmatter version>
+<!-- 基线 = 开始实施前的代码 HEAD，供一致性审查的 git diff <基线>..HEAD；版本 = 产出本计划的技能版本（产物溯源字段，读文件取真实值，不凭记忆写），与 .impl-plan.json 的 skillVersion 同源同值 -->
 ## 0 章节映射     # 四类内容 + 待验证检查点在本文档的实际位置（坐标唯一来源）
 ## 1 目标快照     # 摘录设计背景/目标 + Out-of-scope，逐字摘录禁止改写
 ## 2 单元列表
@@ -72,6 +72,7 @@
   "name": "<name>",
   "designDoc": "~/.agents/skill-data/tech-design/<project-slug>/<name>",
   "baseline": "<git rev-parse HEAD>",
+  "skillVersion": "<tech-design-wf SKILL.md frontmatter version>",
   "sectionMap": { "goal": "§N", "mechanism": "§N", "acceptance": "§N", "breakdown": "§N" },
   "units": [
     { "id": "u-foundation", "responsibility": "…", "territory": ["…"],

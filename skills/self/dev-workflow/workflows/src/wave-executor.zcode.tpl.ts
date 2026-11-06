@@ -129,6 +129,9 @@ interface ParsedPlan {
   version: number;
   mode: "dev" | "acceptance";
   projectRoot: string;
+  /** 工作区根绝对路径（workspace 形态的 exec-plan 记录；单仓项目与存量 exec-plan 缺省为
+   *  null——additive 字段，不参与执行裁决，只供统计/迁移等外部消费者派生工作区级地址） */
+  workspaceRoot: string | null;
   statusPath: string;
   commitTemplate: string;
   baseline: string | null;

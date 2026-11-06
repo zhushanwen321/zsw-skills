@@ -37,6 +37,7 @@
 | riskScore | number | 必填 | 风险分（整数） |
 | riskRationale | string | 必填 | 风险分依据一句话 |
 | reviewNav | object 数组 | 必填 | 人工审核导航，每条 A/B 级决策一行；全部 decisionId 的集合必须与 `s3-solution.json` decisions 的 id 集合完全一致（A/B 级决策不得缺导航行） |
+| skillVersion | string | 可选 | 产出本设计的技能版本（semver `MAJOR.MINOR.PATCH`），值读本技能 SKILL.md frontmatter `version`（唯一权威，T1 创建 meta.json 时写入——写入义务见 `flow/write.md`「meta.json skillVersion 写入」节）。产物溯源字段：回答「本设计包由哪个技能版本产出」，只读溯源不参与任何执行裁决；机器检查校验 semver 形态（有则查、无则放行——存量设计目录零影响） |
 | relatedDocs | object 数组 | 可选（默认空数组） | 关联登记清单：本设计触及、修改、推翻的项目内存量权威文档（决策记录 ADR、产品定义、领域模型等），供下游终态同步（design-code-sync）核对回写——登记了没同步 = 可立项的遗漏。纯语义登记，不强制非空（无关联时空数组，校验只查数组形态）；渲染为头部表「关联登记」行（空数组不渲染该行） |
 
 **reviewNav 行内字段**：

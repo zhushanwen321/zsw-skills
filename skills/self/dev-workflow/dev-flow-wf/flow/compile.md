@@ -1,6 +1,6 @@
 # D0 编译 — 设计包 → 执行数据结构
 
-> 一次性判断性工作（主 agent 亲为），替代此后每单元的重复手工编排。产物：`<name>.exec-plan.json` + `<name>.prompts/*.md` + 初始 `<name>.status.json` + `<name>.runlog/` 目录 + `<name>.ledger.md` 头部初始化，全部落 `~/.agents/skill-data/dev-flow/<project-slug>/`（HOME 下天然不入 git；`<project-slug>` = 项目根 basename + "-" + 项目根绝对路径 sha256 前 8 位，脚本自动拼）。项目内 `.tmp/dev-flow/` 未整体废弃——acceptance/plan-mode 脚本族的既有用法不属本流程产物。完成后进 D1。
+> 一次性判断性工作（主 agent 亲为），替代此后每单元的重复手工编排。产物：`<name>.exec-plan.json` + `<name>.prompts/*.md` + 初始 `<name>.status.json` + `<name>.runlog/` 目录 + `<name>.ledger.md` 头部初始化，全部落 dev-flow 段（HOME 下天然不入 git）。段内目录按寻址双形态：单仓形态 = `<project-slug>/`（现行平铺，路径不变）；workspace 形态（同仓多个 worktree 同父目录）= `<ws-slug>/<worktreeName>/`（worktree 级隔离，status 与 git 对账、断点恢复绑定该 worktree 的检出状态）。两种 slug 由寻址检测探针按 projectRoot 自动派生，不手算（算法与约定见 `skill-data-addressing.md`——`<zsw-skills 检出根>/skills/self/dev-workflow/references/skill-data-addressing.md`）；设计包落 tech-design 段（workspace 形态为 `<ws-slug>/`，工作区级共享）。项目内 `.tmp/dev-flow/` 未整体废弃——acceptance/plan-mode 脚本族的既有用法不属本流程产物。完成后进 D1。
 
 ## 编译清单（按序执行）
 
@@ -12,13 +12,15 @@
 
 ```jsonc
 {
-  "version": 1,
+  "version": 1,                        // schemaVersion（数据契约版本）——消费方唯一执行裁决依据，保持路由角色不变
+  "skillVersion": "<dev-flow-wf SKILL.md frontmatter version>",   // 产物溯源字段：本 exec-plan 由哪个技能版本编译产出；只读溯源不参与执行裁决（读文件取真实值，不凭记忆写）
   "mode": "dev",                       // dev（D1）| acceptance（D3）
-  "projectRoot": "<项目根绝对路径>",      // 引擎缺省 cwd（W2/W3 消费；节点 cwd 为 null 时用）
-  "planPath": "~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.json",
-  "designDocPath": "~/.agents/skill-data/tech-design/<project-slug>/<name>.md",
+  "projectRoot": "<项目根绝对路径>",      // 引擎缺省 cwd；W2/W3/W4 的节点 git 操作基准（执行位置绑定一次编译）；节点 cwd 为 null 时用
+  "workspaceRoot": "<工作区根绝对路径>",  // 可选：工作区形态填（工作区根 = 各 worktree 的父目录），单仓项目省略——additive 字段，缺省不拒执行、不参与执行裁决。寻址与统计按它派生工作区级地址；节点 git 操作仍用 projectRoot
+  "planPath": "<tech-design 段>/<slug>/<name>.impl-plan.json",
+  "designDocPath": "<tech-design 段>/<slug>/<name>.md",
   "baseline": "<git rev-parse HEAD>",
-  "statusPath": "~/.agents/skill-data/dev-flow/<project-slug>/<name>.status.json",
+  "statusPath": "<dev-flow 段>/<slug>[/<worktreeName>]/<name>.status.json",
   "testPlan": {                        // 从 impl-plan.json 的 testPlan 继承（W3 Gate A 消费，缺失即 fail-fast）
     "incremental": "…",                // 可选：修复组核验用的增量测试
     "fullSuite": { "program": "pnpm", "args": ["…"] },  // 必填：项目全量命令（含 lint/typecheck，从项目配置真实读取合成；复杂多命令封装为脚本走 bash）
@@ -32,7 +34,7 @@
       "designRef": "§3.2",              // 设计章节锚（从 impl-plan 章节映射提取；commit 渲染时前置于 summary——老三要素保真：unit id + 设计章节 + 测试结论）
       "territory": ["packages/shared/src/..."],   // 相对该节点 cwd 所在 git 仓库根（与 files_changed / porcelain 同基准；禁绝对路径——引擎启动校验拒绝）
       "testCommand": { "program": "pnpm", "args": ["-C", "packages/shared", "test"] },
-      "promptFile": "~/.agents/skill-data/dev-flow/<project-slug>/<name>.prompts/u-foundation.md" }
+      "promptFile": "<dev-flow 段>/<slug>[/<worktreeName>]/<name>.prompts/u-foundation.md" }
   ],
   "acceptance": {                       // D3 实例化时生成（本步先空着）
     "nodes": [],                        // kind=verify（script/artifactsDir）| inspect（promptFile/artifactsRefs/deps）
@@ -41,6 +43,7 @@
 }
 ```
 
+- **路径占位符**：`<tech-design 段>` = `~/.agents/skill-data/tech-design/`，`<dev-flow 段>` = `~/.agents/skill-data/dev-flow/`（两者写入 exec-plan 时展开为绝对路径）；`<slug>` = 单仓形态的 project-slug 或工作区形态的 ws-slug，`<worktreeName>` 只在 workspace 形态出现。取值经寻址检测探针（projectRoot 输入）实得，不手算；算法与双形态约定见 skill-data-addressing.md
 - **wave** = 编译期展示分组（拓扑分层编号，人看进度用；**调度只看依赖边，wave 不是边界**）
 - **testCommand** = 每节点增量测试命令（T1 形态：program + args 拆开；含管道/&& 的复杂命令落临时脚本走 bash 通道）——从 impl-plan §4 测试计划逐单元提取
 - **cwd** = worktree 隔离单元（判据见 references/dag-authoring.md）填 worktree 绝对路径，其余 null。禁填仓库子目录：引擎启动断言 cwd 必须等于其所在 git 仓库根（projectRoot 与 worktree 根都满足），子目录直接拒绝启动
@@ -54,9 +57,12 @@
 
 ```jsonc
 { "name": "<name>", "baseline": "<HEAD>", "updated": "<ISO>",
+  "skillVersion": "<dev-flow-wf SKILL.md frontmatter version>",
   "nodes": { "u-foundation": { "status": "pending", "attempts": 0 } },
   "events": [] }
 ```
+
+初始 `status.json` 的 `skillVersion` 同 exec-plan 口径（产物溯源字段，只读；引擎回写链构造性保留该字段——W3 events 追加探针仅在字段缺失时补写引擎版本，不覆盖已有值）。
 
 运行档案两件（SKILL「运行记录」节——引擎启动幂等重建，D0 初始化覆盖手工路径）：`<name>.runlog/` 空目录（agent 过程记录落点，任务书引用其下 `<unitId>.md`）；`<name>.ledger.md` 写入文件头一行说明（`# <name> 未决事项与裁决处置档案——引擎终态与主 agent 处置记录追加于此`）。
 
@@ -66,7 +72,7 @@
 
 - L0 静态检查基线：lint / typecheck / 项目检查脚本在 baseline 上全绿记录（命令从项目 AGENTS.md / package.json scripts 真实读取，禁凭记忆编）
 - 产物类条目编入 testPlan.artifacts（引擎 Gate A 第一波并行预备，见 §2 testPlan 注释；禁只标注不落位）
-- 覆盖矩阵骨架：从 impl-plan 范围声明表 × 验收计划表生成「单元声明范围 × 计划用例」骨架表落 `~/.agents/skill-data/dev-flow/<project-slug>/<name>.coverage.md`（D4 收尾时回填实际覆盖并处置 uncovered 区——补测试或登记理由）
+- 覆盖矩阵骨架：从 impl-plan 范围声明表 × 验收计划表生成「单元声明范围 × 计划用例」骨架表落 dev-flow 段产物根（workspace 形态 `<ws-slug>/<worktreeName>/`，单仓形态 `<project-slug>/`）下的 `<name>.coverage.md`（D4 收尾时回填实际覆盖并处置 uncovered 区——补测试或登记理由）
 - 章节映射锚点核对：逐条 read 设计文档核对 §N 实际存在，对不上停回 tech-design-wf T3（不猜测）
 - （进 D3 前）环境 smoke：场景依赖的每个环境面跑无 LLM 探针验证可用；项目 verification skill 提供环境体检脚本（doctor 类启动前体检）时纳入 smoke 探针清单；剧本 dry-run：机械断言先对样本数据跑通；bash 语义歧义点（管道子 shell 的 cwd 隔离、`$()` 剥尾换行、引号嵌套、**管道退出码陷阱**）逐行过一遍——`cmd | tail; echo $?` 取的是管道末段（tail）的退出码，主命令失败会被判绿，验收/测试命令一律无管道形态 `cmd > log 2>&1; echo "EXIT=$?"`，判定读 EXIT 行 + grep 日志，禁止 `| tail`/`| head` 后跟 `$?`/`&&` 判定退出；采样管道复用检查：read 项目采样管道文档，已有脚本直接复用，新做法记录回写（进管道文档），禁现场重写管道；多实例分配：互斥场景组绑独立 dev 实例（装配器端口段派生 + 独立数据目录）
 - **verify 剧本每步汇总落盘 [MANDATORY]**：剧本骨架的 step 函数每步结束时向 `<artifactsDir>/summary.jsonl` 追加一行 JSON：`{"step":"<步骤名>","command":"<命令>","exitCode":<n>,"stats":"<vitest/断言统计行，可空>"}`——供 L4 inspect 以汇总文件为准核对（只读 summary、仅异常步骤读全文日志；实测 inspect 逐个全文读 19 份日志耗 259 万 token 占 D3 时长 85.7%，2026-09-29）。step 函数自身拿不到 artifactsDir 时由剧本头部变量注入
