@@ -29,6 +29,7 @@ scripts/           workflow 双平台构建与校验脚本
 |-------|------|
 | tech-design-wf | 三阶段产出完整设计包：设计文档写作 → 对抗式审查循环 → 实施计划（impl-plan 双格式） |
 | dev-flow-wf | 将 tech-design-wf 产出的完整设计包落地为已验收代码 |
+| symbol-watchlist | 符号词表生成与自验工具（extract-backticks.mjs）：tech-design-wf T3 产词表、dev-flow-wf D5 发起前自验的共享契约载体 |
 | design-code-sync | 校准代码实现与设计文档的一致性 |
 | architecture-clean-domain-design | 以 DDD 与六边形架构为分析视角的领域建模与架构分析：统一语言、限界上下文、聚合不变量、圈层性质判定；只做映射与登记，不输出结构改造设计 |
 | workflow-authoring | 双平台 workflow 撰写与观测接入规范：单源构建结构、GUI 泳道约束、观测接入五步、检查门禁与数据落盘 |

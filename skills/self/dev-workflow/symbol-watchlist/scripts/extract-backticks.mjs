@@ -33,7 +33,9 @@
 // 判不可读（不尝试读），其余不展开波浪号、不拼接基目录、fs.readFileSync 原样直读。
 //
 // 本脚本只产草稿——哪些词纳入扫描（scan）、哪些剔除（skip）由 T3 主 agent 对照设计文档
-// 语义分析后写入 <basename>.symbol-watchlist.json（见 flow/plan.md「符号词表」节）。
+// 语义分析后写入 <basename>.symbol-watchlist.json（见 tech-design-wf flow/plan.md「符号词表」节）。
+// 本脚本现属 symbol-watchlist skill（词表协议的共享契约载体，生成流程在 tech-design-wf T3、
+// 发起前自验在 dev-flow-wf D5）；传参形态不限——相对 / ~/ / 绝对均归一为绝对路径键。
 
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -121,7 +123,7 @@ function runCheck(wlPath) {
   let hasFpFail = false;
   if (unreadable.length > 0) {
     hasFpFail = true;
-    console.log(`FAIL: 指纹键不可读: ${unreadable.join("、")}（键须为下游可直读的绝对路径——回 T3 用绝对路径参数重产词表）`);
+    console.log(`FAIL: 指纹键不可读: ${unreadable.join("、")}（键须为下游可直读的绝对路径——回 T3 重产词表，传参形态不限、键一律归一为绝对）`);
   }
   if (mismatched.length > 0) {
     hasFpFail = true;

@@ -705,7 +705,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "0.3.0"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.3.1"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // design-code-sync-loop — dev-flow-wf 技能 W4 终态同步循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts 与 tech-review-loop.dwf.ts（多脚本循环骨架
@@ -837,8 +837,8 @@ const NODE_BACKTICK_GREP = [
     "  }catch(e){fpUnread.push(fp);}",
     "}",
     "if(fpUnread.length>0||fpStale.length>0){",
-    "  var FP_SELF_CHECK='自验：node ~/.agents/skills/tech-design-wf/scripts/extract-backticks.mjs --check <watchlist 绝对路径> 必须 PASS';",
-    "  var rU=fpUnread.length>0?'词表指纹键不可读（路径解析失败，与文档内容无关）：'+fpUnread.join('、')+'——指纹键是引擎 fs.readFileSync 的直读路径，须为绝对路径形态（~/ 与相对形态均不可读）。重产：node ~/.agents/skills/tech-design-wf/scripts/extract-backticks.mjs <设计文档绝对路径> <impl-plan.md 绝对路径>（脚本 + 甄别 + 落盘，键已归一为绝对路径）。'+FP_SELF_CHECK:'';",
+    "  var FP_SELF_CHECK='自验：node ~/.agents/skills/symbol-watchlist/scripts/extract-backticks.mjs --check <watchlist 绝对路径> 必须 PASS';",
+    "  var rU=fpUnread.length>0?'词表指纹键不可读（路径解析失败，与文档内容无关）：'+fpUnread.join('、')+'——指纹键是引擎 fs.readFileSync 的直读路径，须为绝对路径形态（~/ 与相对形态均不可读）。重产：node ~/.agents/skills/symbol-watchlist/scripts/extract-backticks.mjs <设计文档> <impl-plan.md>（相对 / ~/ / 绝对传参均可，键一律归一为绝对；脚本 + 甄别 + 落盘）。'+FP_SELF_CHECK:'';",
     "  var rS=fpStale.length>0?'源文档已改而词表未重生成（指纹不等）：'+fpStale.join('、')+'——回 tech-design-wf flow/plan.md「符号词表」节重跑（脚本 + 甄别 + 落盘）。'+FP_SELF_CHECK:'';",
     "  out({ok:false,reason:rU+(rU!==''&&rS!==''?'；':'')+rS});process.exit(0)",
     "}",

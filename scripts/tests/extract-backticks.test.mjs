@@ -1,6 +1,6 @@
 // extract-backticks.test.mjs — T3 符号词表生成脚本的键形态归一 + --check 自验模式测试
 //
-// 覆盖（对应实现：skills/self/dev-workflow/tech-design-wf/scripts/extract-backticks.mjs）：
+// 覆盖（对应实现：skills/self/dev-workflow/symbol-watchlist/scripts/extract-backticks.mjs）：
 //   1. 相对路径入参 → 指纹键为归一绝对路径且 sha256 与文件内容一致
 //   2. ~/ 入参（HOME 指向临时目录）→ 读取与键都走 HOME 展开，键为绝对路径
 //   3. 不存在的入参 → exit 1 且 stderr 指明归一后路径（替代旧 WARN + exit 0 静默跳过）
@@ -32,7 +32,7 @@ const SCRIPT = join(
   "skills",
   "self",
   "dev-workflow",
-  "tech-design-wf",
+  "symbol-watchlist",
   "scripts",
   "extract-backticks.mjs",
 );
