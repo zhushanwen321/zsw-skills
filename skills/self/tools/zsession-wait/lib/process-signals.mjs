@@ -2,13 +2,18 @@
 // 设计依据（实机核实于 macOS / zcode 3.16.x）：
 // - 会话活状态在 app-server 进程内存里，db 无表达，只能旁观进程
 // - app-server 每 workspace 一个；打包态 ps 里显示为 "zcode-cli"（argv 被
-//   process.title 改写），定位靠 lsof 取 cwd 与 session.directory 比对
+//   process.title 改写），定位靠 lsof 取 cwd 与 session.directory 比对。
+//   同 workspace 可能有多个同 cwd 宿主（多窗口同目录），shell 后代取并集，
+//   避免 first-match 绑定漏掉目标会话自己的后台 bash
+// - 「没找到宿主」要区分两种：ps 里连 app-server 候选都没有（宿主真死，
+//   db 的 running 行可按崩溃残留处理）vs 有候选但 cwd 全不匹配 / lsof 全
+//   失败（识别失败，db 在途证据必须照常采信）——返回候选数与失败数给裁决层
 // - workflow 沙箱是独立 "ZCode Helper" 进程，命令行含 dwfrun-<uuid>.mjs；
 //   只按「db 中该会话子树的活跃 run id 交集」计数，避免同 workspace
 //   兄弟会话的沙箱误阻塞目标会话判定
 // - 后台 bash 是 app-server 的 detached 后代：宿主优雅退出会杀树，被
-//   SIGKILL 后孤儿存活（PPID 变 1）。shell 归属无法从 db 推出，做成
-//   workspace 级保守信号 + 显式开关（见 --ignore-shells）
+//   SIGKILL 后孤儿存活（PPID 变 1）。孤儿 shell 与宿主死活无关、始终采集：
+//   前代宿主被杀后新宿主起来，残留的 detached bash 只能靠全表扫发现
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -58,6 +63,7 @@ async function listProcesses() {
   return procs;
 }
 
+// 返回 null 表示 cwd 未知（lsof 失败/超时），与「取到了但不匹配」区分。
 async function cwdOfProcess(pid) {
   try {
     const { stdout } = await execFileAsync("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], {
@@ -93,15 +99,16 @@ function descendants(procs, rootPid) {
 
 export async function collectProcessSignals({ directory, activeRunIds }) {
   const procs = await listProcesses();
+  const candidates = procs.filter(looksLikeAppServer);
 
-  // 宿主定位：候选进程逐个 lsof 取 cwd，命中会话 directory 即认定。
-  // 找不到 ≠ 宿主死了（进程名可能随版本变），裁决层会结合 db 静默程度区分。
-  let hostPid = null;
-  for (const candidate of procs.filter(looksLikeAppServer)) {
-    if ((await cwdOfProcess(candidate.pid)) === directory) {
-      hostPid = candidate.pid;
-      break;
-    }
+  // 宿主绑定：对全部候选取 cwd，命中 directory 的都算（多窗口同目录场景），
+  // shell 后代取并集。lsof 失败单独计数——全失败时无法断言宿主死活。
+  const hostPids = [];
+  let lsofFailures = 0;
+  for (const candidate of candidates) {
+    const cwd = await cwdOfProcess(candidate.pid);
+    if (cwd === null) lsofFailures++;
+    else if (cwd === directory) hostPids.push(candidate.pid);
   }
 
   // 沙箱：只认 db 报告的活跃 run id（交集判定，见文件头注释）。
@@ -133,17 +140,31 @@ export async function collectProcessSignals({ directory, activeRunIds }) {
     foreignSandboxes.push({ pid: p.pid, runId: ids[0] });
   }
 
-  const hostDescendants = hostPid != null ? descendants(procs, hostPid) : [];
-  const hostShells = hostDescendants.filter(isShellProcess).map((p) => ({
-    pid: p.pid,
-    command: p.command.slice(0, 120),
-  }));
-  // 孤儿 shell：宿主死时 detached 后台 bash 被 launchd 收养（PPID=1）。
-  // 用户终端 nohup 的进程同样命中，无法归属，只提示不阻塞（--strict-orphan 可升级为阻塞）。
-  const orphanShells =
-    hostPid == null
-      ? procs.filter((p) => p.ppid === 1 && isShellProcess(p)).map((p) => ({ pid: p.pid, command: p.command.slice(0, 120) }))
-      : [];
+  const hostShells = [];
+  const seenShellPids = new Set();
+  for (const hostPid of hostPids) {
+    for (const d of descendants(procs, hostPid)) {
+      if (seenShellPids.has(d.pid)) continue;
+      if (!isShellProcess(d)) continue;
+      seenShellPids.add(d.pid);
+      hostShells.push({ pid: d.pid, command: d.command.slice(0, 120) });
+    }
+  }
 
-  return { hostPid, sandboxProcs, hostShells, orphanShells, foreignSandboxes };
+  // 孤儿 shell（PPID=1）：宿主被 SIGKILL 后 detached 后台 bash 被 launchd 收养。
+  // 与宿主死活无关始终采集；用户终端 nohup 的进程同样命中且无法归属，
+  // 默认只提示不阻塞（--strict-orphan 升级为阻塞）。
+  const orphanShells = procs
+    .filter((p) => p.ppid === 1 && isShellProcess(p))
+    .map((p) => ({ pid: p.pid, command: p.command.slice(0, 120) }));
+
+  return {
+    hostPids,
+    hostCandidateCount: candidates.length,
+    lsofFailures,
+    sandboxProcs,
+    hostShells,
+    orphanShells,
+    foreignSandboxes,
+  };
 }
