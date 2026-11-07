@@ -68,6 +68,7 @@ scripts/           Dual-platform workflow build and validation scripts
 | quota-wait | Suspend or stand by when model quota runs out; bundled CLI polls plan quota and returns on reset or deadline |
 | user-memory | Record and recall user preferences and habits |
 | worktree-manipulate | Single entry for bare repo + worktree workspace management |
+| zsession-wait | Watch another zcode session until fully stopped (idle + all subagents / workflows / background bash finished); reports "stopped", not "succeeded" |
 
 ### external/ — Collected
 

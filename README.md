@@ -68,6 +68,7 @@ scripts/           workflow 双平台构建与校验脚本
 | quota-wait | 模型套餐额度耗尽时挂起任务或设守望检查点；自带 CLI 轮询套餐额度，恢复或到点自动返回 |
 | user-memory | 记录与读取用户偏好、习惯 |
 | worktree-manipulate | bare repo + worktree 工作区管理唯一入口 |
+| zsession-wait | 等待 / 监控另一个 zcode 会话完全停止（会话静默 + subagent / workflow / 后台 bash 全收尾）的旁观 CLI；判「停止」不判「成功」 |
 
 ### external/ — 收录
 
