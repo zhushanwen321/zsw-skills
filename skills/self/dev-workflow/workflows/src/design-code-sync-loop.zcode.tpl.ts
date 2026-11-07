@@ -32,8 +32,9 @@ args:
   watchlist:
     type: string
     description: 符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）；
-      终态同步必备前置——setup 等集校验（词表与文档反引号集）不过即拒启，机械悬空引用
-      防线由它供词
+      终态同步必备前置——setup 词表指纹校验（词表 sourceFingerprints 与源文档当前 sha256
+      比对，文档已改而词表未重生成即拒启）不过即拒启，机械悬空引用防线由它供词；须为
+      绝对路径（~/ 与相对形态不可读，引擎对词表与指纹键一律直读）
     default: ""
   maxRounds:
     type: number
@@ -369,9 +370,14 @@ interface NarrowedInputs {
   /** 可选：status.json 绝对路径（planner 职责②进度核对数据源；空串 = 未传，降级单侧核对） */
   statusPath: string;
   /** 可选：符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）；
-   *  空串 = 未传，机械信号步跳过（不回退文档反引号抓取——抓取依赖「反引号 = 本项目符号」
-   *  的隐式约定，2026-09-27 起词表是唯一扫描词源） */
+   *  空串 = 未传或传了非绝对形态（后者在 watchlistNonAbs 留痕），机械信号步跳过
+   *  （不回退文档反引号抓取——抓取依赖「反引号 = 本项目符号」的隐式约定，
+   *  2026-09-27 起词表是唯一扫描词源） */
   watchlist: string;
+  /** 非空 = watchlist 传了但非绝对路径形态（~/ / 相对等原始值留痕）——setup 报错两分用：
+   *  区分「未传」（指路产词表）与「传了但形态不可读」（指路修正为绝对路径），避免把
+   *  后者误归因为缺失 */
+  watchlistNonAbs: string;
   /** 可选：已裁决记录 json 绝对路径（元素 {id, direction, anchor, quote, source, commit?}）；
    *  空串 = 未传，无裁决注入（2026-11-03 授权新增） */
   rulings: string;

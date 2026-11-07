@@ -32,8 +32,9 @@ args:
   watchlist:
     type: string
     description: 符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）；
-      终态同步必备前置——setup 等集校验（词表与文档反引号集）不过即拒启，机械悬空引用
-      防线由它供词
+      终态同步必备前置——setup 词表指纹校验（词表 sourceFingerprints 与源文档当前 sha256
+      比对，文档已改而词表未重生成即拒启）不过即拒启，机械悬空引用防线由它供词；须为
+      绝对路径（~/ 与相对形态不可读，引擎对词表与指纹键一律直读）
     default: ""
   maxRounds:
     type: number
@@ -369,9 +370,14 @@ interface NarrowedInputs {
   /** 可选：status.json 绝对路径（planner 职责②进度核对数据源；空串 = 未传，降级单侧核对） */
   statusPath: string;
   /** 可选：符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）；
-   *  空串 = 未传，机械信号步跳过（不回退文档反引号抓取——抓取依赖「反引号 = 本项目符号」
-   *  的隐式约定，2026-09-27 起词表是唯一扫描词源） */
+   *  空串 = 未传或传了非绝对形态（后者在 watchlistNonAbs 留痕），机械信号步跳过
+   *  （不回退文档反引号抓取——抓取依赖「反引号 = 本项目符号」的隐式约定，
+   *  2026-09-27 起词表是唯一扫描词源） */
   watchlist: string;
+  /** 非空 = watchlist 传了但非绝对路径形态（~/ / 相对等原始值留痕）——setup 报错两分用：
+   *  区分「未传」（指路产词表）与「传了但形态不可读」（指路修正为绝对路径），避免把
+   *  后者误归因为缺失 */
+  watchlistNonAbs: string;
   /** 可选：已裁决记录 json 绝对路径（元素 {id, direction, anchor, quote, source, commit?}）；
    *  空串 = 未传，无裁决注入（2026-11-03 授权新增） */
   rulings: string;
@@ -779,7 +785,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "0.2.1"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.3.0"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // design-code-sync-loop — dev-flow-wf 技能 W4 终态同步循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts 与 tech-review-loop.dwf.ts（多脚本循环骨架
@@ -891,21 +897,33 @@ const NODE_BACKTICK_GREP = [
   "if(badSkip.length>0){out({ok:false,reason:'词表 skip 元素畸形（须 {word, reason 非空}）'+badSkip.length+' 条'});process.exit(0)}",
   // 指纹校验（2026-11-04 结构化改造，硬门）：sourceFingerprints = { <输入文档路径>:
   // sha256 }，由 extract-backticks 生成、T3 甄别时原样抄入 watchlist；缺失 = 旧版词表，
-  // 不等 = 文档已改词表未重生成——两者都拒启指路重产。指纹通过后按指纹键重提取反引号
-  // 词集做等集软监测（2026-11-04 恢复，过滤逻辑自 dc0d0ae^ 历史版取回）：指纹只护「词表
-  // 与源文档同步」，词表自身 scan/skip 被改写时指纹照样通过——差集经 wordsDrift 字段
-  // 输出，ok 仍 true 不拒启（旧等集硬门对措辞形态过强、曾致修复死锁，其退役语义保留；
-  // 完整性监测降级为解析侧 WARN 指路重甄别）。文档路径不另传 argv——指纹键即 extract-
-  // backticks 的输入文档集，重提取与指纹校验同源
+  // 拒启指路重产。指纹失败按根因拆两路（2026-11-07：旧版把读不到的键也归「文档已改」，
+  // 主 agent 按错误标题反向诊断、两次共 4 次同错 setup-failure——「路径解析不到」与
+  // 「文档改了」的处置动作不同，必须分路）：键不以 / 开头（相对或 ~/ 形态——本探针无
+  // 展开逻辑，必然读不到）或 readFileSync 抛异常 → 键不可读路（路径解析失败，与文档
+  // 内容无关）；键可读但 sha256 不等 → 指纹过期路（文档已改词表未重生成）。两路并发时
+  // reason 两段都输出（先不可读后过期，；分隔）。自验统一指路 --check 一条命令——禁止
+  // 在 reason 内嵌 node -e 内联自验代码（嵌套引号转义风险）。指纹通过后按指纹键重提取
+  // 反引号词集做等集软监测（2026-11-04 恢复，过滤逻辑自 dc0d0ae^ 历史版取回）：指纹只护
+  // 「词表与源文档同步」，词表自身 scan/skip 被改写时指纹照样通过——差集经 wordsDrift
+  // 字段输出，ok 仍 true 不拒启（旧等集硬门对措辞形态过强、曾致修复死锁，其退役语义
+  // 保留；完整性监测降级为解析侧 WARN 指路重甄别）。文档路径不另传 argv——指纹键即
+  // extract-backticks 的输入文档集，重提取与指纹校验同源
   "var fps=wlRaw.sourceFingerprints;",
   "if(fps===null||typeof fps!=='object'||Array.isArray(fps)||Object.keys(fps).length===0){out({ok:false,reason:'词表缺 sourceFingerprints 字段（旧版生成器产物或手写词表）——回 tech-design-wf T3 重新生成词表'});process.exit(0)}",
-  "var fpBad=[];",
+  "var fpUnread=[],fpStale=[];",
   "for (var fp in fps){",
+  "  if(fp.indexOf('/')!==0){fpUnread.push(fp===''?'\"\"':fp);continue}",
   "  try{ var cur=crypto.createHash('sha256').update(fs.readFileSync(fp,'utf8')).digest('hex');",
-  "    if(cur!==fps[fp])fpBad.push(fp);",
-  "  }catch(e){fpBad.push(fp+'（不可读）');}",
+  "    if(cur!==fps[fp])fpStale.push(fp);",
+  "  }catch(e){fpUnread.push(fp);}",
   "}",
-  "if(fpBad.length>0){out({ok:false,reason:'源文档已改而词表未重生成（指纹不等）：'+fpBad.join('、')+'——回 tech-design-wf flow/plan.md「符号词表」节重跑（脚本+甄别）'});process.exit(0)}",
+  "if(fpUnread.length>0||fpStale.length>0){",
+  "  var FP_SELF_CHECK='自验：node ~/.agents/skills/tech-design-wf/scripts/extract-backticks.mjs --check <watchlist 绝对路径> 必须 PASS';",
+  "  var rU=fpUnread.length>0?'词表指纹键不可读（路径解析失败，与文档内容无关）：'+fpUnread.join('、')+'——指纹键是引擎 fs.readFileSync 的直读路径，须为绝对路径形态（~/ 与相对形态均不可读）。重产：node ~/.agents/skills/tech-design-wf/scripts/extract-backticks.mjs <设计文档绝对路径> <impl-plan.md 绝对路径>（脚本 + 甄别 + 落盘，键已归一为绝对路径）。'+FP_SELF_CHECK:'';",
+  "  var rS=fpStale.length>0?'源文档已改而词表未重生成（指纹不等）：'+fpStale.join('、')+'——回 tech-design-wf flow/plan.md「符号词表」节重跑（脚本 + 甄别 + 落盘）。'+FP_SELF_CHECK:'';",
+  "  out({ok:false,reason:rU+(rU!==''&&rS!==''?'；':'')+rS});process.exit(0)",
+  "}",
   // 词集软监测（2026-11-04 恢复，过滤逻辑自 dc0d0ae^ 历史版逐条取回）：反引号重提取
   // （2-60 字符、ASCII 可见、不含 / 与空格、符号段 ≤4、非版本号形态）→ 与 scan∪skip
   // 差集 wordsDrift。只输出不拒启——硬门语义在指纹段，等集完整性由解析侧 WARN 承接
@@ -1192,11 +1210,19 @@ function deriveInputs(raw: Record<string, unknown>): NarrowedInputs {
   const attempt =
     typeof raw.attempt === "number" && Number.isFinite(raw.attempt) && raw.attempt >= 1 ? Math.floor(raw.attempt) : null;
   const statusPath = isAbs(raw.statusPath) ? (raw.statusPath as string).trim() : "";
-  const watchlist = isAbs(raw.watchlist) ? (raw.watchlist as string).trim() : "";
+  // watchlist 报错两分：非绝对形态的原始值留痕——对 ~/ / 相对形态静默置空会让 setup
+  // 统一报「未传 watchlist」，把「传了但形态不可读」误归因为缺失（designDoc/implPlan/
+  // projectRoot 的报错文案已含非绝对路径形态——「缺失或非绝对路径」合并单文案，此处
+  // watchlist 按未传/形态错拆得比它们更细）。非字符串形态经
+  // JSON.stringify 留痕（undefined/null = 未传，置空）
+  const watchlistRaw =
+    typeof raw.watchlist === "string" ? raw.watchlist.trim() : raw.watchlist === undefined || raw.watchlist === null ? "" : JSON.stringify(raw.watchlist);
+  const watchlist = watchlistRaw.startsWith("/") ? watchlistRaw : "";
+  const watchlistNonAbs = watchlist === "" ? watchlistRaw : "";
   const rulings = isAbs(raw.rulings) ? (raw.rulings as string).trim() : "";
   // 空串 = 常规全量模式（默认）；非空须为绝对路径（runDir）——相对路径拼错会静默落空
   const resumeFrom = isAbs(raw.resumeFrom) ? (raw.resumeFrom as string).trim() : "";
-  return { designDoc, implPlan, projectRoot, statusPath, watchlist, rulings, resumeFrom, maxRounds, plannerTemplate, reviewerTemplate, attempt, problems };
+  return { designDoc, implPlan, projectRoot, statusPath, watchlist, watchlistNonAbs, rulings, resumeFrom, maxRounds, plannerTemplate, reviewerTemplate, attempt, problems };
 }
 
 // ── 纯函数（归一 / 解析 / 渲染，不触 world） ──
@@ -1755,7 +1781,7 @@ if (inputs.problems.length > 0) {
     message: `参数校验失败：${inputs.problems.join("；")}。${HINT_RELAUNCH_WITH_ARGS}`,
   };
 }
-const { designDoc, implPlan, projectRoot, statusPath: statusPathArg, watchlist, rulings: rulingsPath, resumeFrom, maxRounds } = inputs;
+const { designDoc, implPlan, projectRoot, statusPath: statusPathArg, watchlist, watchlistNonAbs, rulings: rulingsPath, resumeFrom, maxRounds } = inputs;
 
 // ── 环境准备（runDir / attempt / 模板探针 / 基线 HEAD） ──
 
@@ -1933,8 +1959,13 @@ if (inputs.attempt !== null && inputs.attempt <= prevAttemptMax) {
 //    resume 续跑模式跳过 R1 机械立项、缓存不消费（机械条目修复后由 R2+ 对账重扫验证）
 let mechPreflight: Awaited<ReturnType<typeof runMechanicalScan>> | null = null;
 if (watchlist === "") {
+  // 报错两分：未传 → 指路产词表；传了但非绝对形态 → 指路修正形态（引擎对键/路径一律
+  // fs.readFileSync 直读，~/ 与相对形态不可读——归因错误会把主 agent 引去重产词表，
+  // 修正形态才是恢复动作）
   const bad = await setupFail(
-    "未传 watchlist（符号词表）——机械防线为终态同步必备前置，不再允许无词表开审。恢复动作：按 tech-design-wf flow/plan.md「符号词表」节产出 <basename>.symbol-watchlist.json 后，携 watchlist 参数重新发起",
+    watchlistNonAbs !== ""
+      ? `watchlist 参数传了但非绝对路径形态：${watchlistNonAbs}——须为绝对路径（~/ 与相对形态不可读）。恢复：修正为绝对路径后重新发起`
+      : "未传 watchlist（符号词表）——机械防线为终态同步必备前置，不再允许无词表开审。恢复动作：按 tech-design-wf flow/plan.md「符号词表」节产出 <basename>.symbol-watchlist.json 后，携 watchlist 参数重新发起",
   );
   return bad;
 }

@@ -61,4 +61,20 @@ if [ -n "$VERSION_STAGED" ]; then
   }
 fi
 
+# 段 4：check-exec-plan 差分测试（移植侧与 W2 引擎同源防漂移）
+# check-exec-plan.mjs 的 schema 主段是 wave-executor validatePlan 的 JS 移植（错误文案逐字
+# 一致），改任一侧（共享源 / 构建产物 / 移植脚本 / 差分测试自身）必须过差分对账
+EXEC_STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- 'skills/self/dev-workflow/workflows/src/wave-executor.shared.ts' 'skills/self/dev-workflow/workflows/pi/wave-executor.js' 'skills/self/dev-workflow/dev-flow-wf/scripts/check-exec-plan.mjs' 'scripts/tests/check-exec-plan-parity.test.mjs')
+if [ -n "$EXEC_STAGED" ]; then
+  echo "pre-commit[exec-plan-parity]: staged 变更含 validatePlan 共享源 / 产物 / 移植侧，跑差分测试…"
+  node --test scripts/tests/check-exec-plan-parity.test.mjs || {
+    echo ""
+    echo "[exec-plan-parity] check-exec-plan 与 wave-executor validatePlan 差分测试失败。"
+    echo "  恢复动作：同步修改 skills/self/dev-workflow/dev-flow-wf/scripts/check-exec-plan.mjs 与"
+    echo "  workflows/src/wave-executor.shared.ts 的同源段（错误文案逐字一致）→ node scripts/build-workflows.mjs"
+    echo "  → node --test scripts/tests/check-exec-plan-parity.test.mjs 绿后重新 git add"
+    exit 1
+  }
+fi
+
 exit 0

@@ -11,6 +11,14 @@ args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath?, watchlist, ru
 // watchlist = 符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）——机械信号步唯一扫描词源，必传：
 //   缺失或 sourceFingerprints 与源文档当前内容指纹不等（词表过期/文档已改词表未重生成）= setup-failure 拒启，不允许无词表/过期词表开审
 //   （不回退文档反引号抓取——该路径依赖「反引号 = 本项目符号」隐式约定，已废除）
+// 发起前自验 [MANDATORY]：发起 CreateWorkflow 前先跑
+//   node ~/.agents/skills/tech-design-wf/scripts/extract-backticks.mjs --check <watchlist 绝对路径>
+//   stdout 必须 PASS 才发起——FAIL 时按输出分类处置后重验，PASS 才发起：
+//   指纹键不可读 / 指纹不等 / 缺 sourceFingerprints = 回 T3 用绝对路径参数重产词表
+//   （tech-design-wf flow/plan.md「符号词表」节——缺 sourceFingerprints 与脚本自报恢复动作一致）；
+//   词表不可读或非 JSON = 先核对传入路径（文件不存在 = 回 T3 重产），JSON 结构错才手修词表结构；
+//   其余结构类（缺 scan/skip 数组 / skip 元素畸形）= 修词表结构
+//   （该自验与 setup 词表指纹校验同源，提前拦截免整次派发 setup-failure 空跑）
 // rulings = 已裁决记录 json 绝对路径（可选）：顶层数组，元素 {id, direction: "doc-right"|"code-right", anchor, quote, source, commit?}
 //   ——设计决策与开发期裁决的机器可读清单，注入 planner 与全部模块 reviewer（已答问题不得标 contested）；
 //   读失败/格式畸形 = setup-failure 拒启（fail-closed：出错即拒启而非降级继续，防静默丢裁决）；未传不阻断（存量设计可后补）

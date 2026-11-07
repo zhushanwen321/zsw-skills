@@ -49,11 +49,25 @@
 - **cwd** = worktree 隔离单元（判据见 references/dag-authoring.md）填 worktree 绝对路径，其余 null。禁填仓库子目录：引擎启动断言 cwd 必须等于其所在 git 仓库根（projectRoot 与 worktree 根都满足），子目录直接拒绝启动
 - **territory 声明（2026-09-29 裁决范围声明降级）**：每单元登记允许改动的文件/目录清单——粒度到目录或文件族即可，运行时不再逐文件核验（改动对账由核验对账事件、终态残留核查与 D2 一致性审查承接）。声明仍承载两职责：①启动互斥断言——任意两单元声明重叠且无依赖路径会被拒绝启动（并行写冲突防线，实测曾致同文件双写、归属互污）；②DAG 编排参考。必然连带产物（pnpm-lock.yaml、被改模块的配套测试文件、授权连带修改）建议一并登记供对账归属。声明路径在磁盘不存在的目录级前缀可接受（运行中诞生的文件天然覆盖）
 
-### 3. 逐节点 promptFile 构造
+### 3. exec-plan 校验（fail-fast，生成即校验）
+
+```bash
+node ~/.agents/skills/dev-flow-wf/scripts/check-exec-plan.mjs <exec-plan 绝对路径>
+```
+
+stdout `PASS` 才继续步骤 4。校验集与 W2 引擎的 validatePlan 及 W3 启动契约（testPlan / 必填字段 / 白名单）同源，错误文案逐字一致，漂移由差分测试机器对账拦截（`node --test scripts/tests/check-exec-plan-parity.test.mjs`，zsw-skills 检出内执行）。FAIL 逐行输出 `FAIL: <分类>: <明细>`（全部报完再退出），按分类路由处置：
+
+- 单字段错误（`territory` 形态 / `ref` 引用名 / `whitelist`、`noop` 命令形态 / `cwd`、`script`、`testPlan` / 路径层级与占位符类 `field`）→ 手修 exec-plan 对应字段后重跑本门；值转抄自 impl-plan 的字段（testCommand / deps / 单元 id）同步修 impl-plan 上游，否则重编译复现
+- 结构性缺漏（`schema`、缺数组缺必填的 `field`）→ 回步骤 2 重编译（尚无节点执行过时；已有进度改手修 + ledger 登记，重初始化会重置 status.json / runlog / ledger）
+- `cycle` 依赖环 / `overlap` territory 重叠无依赖路径 → 回 tech-design-wf T3 修 impl-plan 后重走本清单——手修 exec-plan 会确定性复现同类错误
+
+运行时环境断言（cwd == git rev-parse --show-toplevel、promptFile / verify script 盘上存在、projectRoot 存在）仍由 W2 引擎 setup 在派发前 fail-fast——promptFile 本清单下一步才构造，静态门不查存在性，正确计划不会恒红。
+
+### 4. 逐节点 promptFile 构造
 
 每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·范围声明·验收条款/设计文档对应节摘录/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：测试 = 仅跑 testCommand 及其触及的测试文件，明写禁止包级全量套件与跨包扫描——全量回归由 D2 Gate A 统一承担，testCommand 覆盖不了改动行为时在 deviations 申报、不自行扩跑；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组；宿主无 structured-output 工具时在回复中用 json 代码块返回同构对象，解析失败视同本次汇报无效打回重报）/ 约束（范围声明清单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报/过程记录义务：临时待办·需裁决事项·复盘观察随时 append 到 `<name>.runlog/<unitId>.md`（任务书内写绝对路径；一行一条 `[HH:MM] 类型: 一句话事实`，不替代 JSON 返回契约——SKILL「运行记录」节））。
 
-### 4. 初始 status.json + 运行档案初始化
+### 5. 初始 status.json + 运行档案初始化
 
 ```jsonc
 { "name": "<name>", "baseline": "<HEAD>", "updated": "<ISO>",
@@ -68,7 +82,7 @@
 
 节点字段 = `status` / `attempts`（终态回写附 `commit?` / `evidence?`）；status 合法值 = `pending / in-progress / done / blocked / failed`，终局另写 `suspended`（从未派发的挂起节点——人读恢复时按 pending 对待重跑）。引擎回写保留 name/updated 顶层字段；恢复对账双向：标 done 无 commit → 回 pending（其已 done 的直接/传递后继一并回 pending——后继的验证结论基于已消失的 commit，属陈旧验证）；有 commit 未记 → 引擎按 git log 匹配单元 id 补写 done（status.json 缺失时初始重建后同样反查 git log，不重跑已交付单元）。终局另写一条汇总事件 {node:"-", event:"run-terminal", detail:"terminated=…; done/blocked/skipped 计数"}（人读恢复入口）。
 
-### 5. L0 前置 + 环境准备（D3 前置项此时一并核）
+### 6. L0 前置 + 环境准备（D3 前置项此时一并核）
 
 - L0 静态检查基线：lint / typecheck / 项目检查脚本在 baseline 上全绿记录（命令从项目 AGENTS.md / package.json scripts 真实读取，禁凭记忆编）
 - 产物类条目编入 testPlan.artifacts（引擎 Gate A 第一波并行预备，见 §2 testPlan 注释；禁只标注不落位）
@@ -77,7 +91,7 @@
 - （进 D3 前）环境 smoke：场景依赖的每个环境面跑无 LLM 探针验证可用；项目 verification skill 提供环境体检脚本（doctor 类启动前体检）时纳入 smoke 探针清单；剧本 dry-run：机械断言先对样本数据跑通；bash 语义歧义点（管道子 shell 的 cwd 隔离、`$()` 剥尾换行、引号嵌套、**管道退出码陷阱**）逐行过一遍——`cmd | tail; echo $?` 取的是管道末段（tail）的退出码，主命令失败会被判绿，验收/测试命令一律无管道形态 `cmd > log 2>&1; echo "EXIT=$?"`，判定读 EXIT 行 + grep 日志，禁止 `| tail`/`| head` 后跟 `$?`/`&&` 判定退出；采样管道复用检查：read 项目采样管道文档，已有脚本直接复用，新做法记录回写（进管道文档），禁现场重写管道；多实例分配：互斥场景组绑独立 dev 实例（装配器端口段派生 + 独立数据目录）
 - **verify 剧本每步汇总落盘 [MANDATORY]**：剧本骨架的 step 函数每步结束时向 `<artifactsDir>/summary.jsonl` 追加一行 JSON：`{"step":"<步骤名>","command":"<命令>","exitCode":<n>,"stats":"<vitest/断言统计行，可空>"}`——供 L4 inspect 以汇总文件为准核对（只读 summary、仅异常步骤读全文日志；实测 inspect 逐个全文读 19 份日志耗 259 万 token 占 D3 时长 85.7%，2026-09-29）。step 函数自身拿不到 artifactsDir 时由剧本头部变量注入
 
-### 6. 验收编译规则（为 D3 预生成 acceptance 面）
+### 7. 验收编译规则（为 D3 预生成 acceptance 面）
 
 验收计划表逐行：**L3 → verify 节点**（script = 剧本路径，artifactsDir）；**L4 → inspect 节点**（promptFile 任务书含「确定性产物已就绪」指针 + 逐节点 `<artifactsDir>/summary.jsonl` 汇总路径——核对以汇总为准、仅异常步骤读全文日志，deps 指向其 verify 前驱；任务书驱动约束：项目有 verification skill 时真机驱动一律经其进行（发现规则同 tech-design-wf T3：`verify-*` 前缀 + Launch/Drive 节，AGENTS.md 声明优先），禁绕过技能裸驱动）；**L0/L2 不编译成节点**——已由 D1 单元测试与 D2 Gate A 覆盖，行标注「已覆盖」，D3 入口门引用 Gate A 证据（HEAD 未前进则免重跑）。混合行拆行（确定性部分降 L3 先行，判断行依赖它）。分组按「组」列；熔断判据 = 依赖可达性（设计 §8.7；核心短路 haltOnCoreFail 已退役被引擎忽略）。
 
@@ -99,6 +113,8 @@
 - **一次性 vs 可复用分流**：验收脚本按一次性（迁移/特殊环境/本设计特有）vs 可复用（进项目 e2e 资产）分流落位
 - **fail 先查排障文档**：验收失败处理写在 verify/inspect 节点 promptFile 约束——先 read 项目排障文档（典型 docs/TROUBLESHOOTING.md）归因，禁不归因重试、禁放宽断言
 - **开发期 e2e**：验收计划表「单元 committed 后」时点的项编译为 kind=verify 节点插入 dev 模式 nodes（deps=所属 dev 单元）
+
+**D3 发起门（生成即校验）**：acceptance 节点实例化落位、mode=acceptance 的 exec-plan 定稿后，发起 W2 验证实例化前跑同款校验（`node ~/.agents/skills/dev-flow-wf/scripts/check-exec-plan.mjs <exec-plan 绝对路径>`）必须 PASS 再发起——schema 错误在编译点拦下并按步骤 3 同款路由处置，不留到引擎 setup 才爆。
 
 ## worktree 合并排布
 

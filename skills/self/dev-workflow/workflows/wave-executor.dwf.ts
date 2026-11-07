@@ -588,7 +588,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "0.2.1"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.3.0"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ── W2 wave-executor ──
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
@@ -2702,7 +2702,17 @@ try {
 }
 const validated = validatePlan(rawPlan);
 if (!validated.ok) {
-  return invalidRet(`exec-plan schema 校验失败（共 ${validated.errors.length} 条）：\n- ${validated.errors.join("\n- ")}`, "");
+  return invalidRet(
+    `exec-plan schema 校验失败（共 ${validated.errors.length} 条）：\n- ${validated.errors.join("\n- ")}\n` +
+      `——恢复指引（按错误类型路由）：\n` +
+      `① 单字段错误（路径层级、引用名拼写）可手修 exec-plan 后重发` +
+      `（该字段值若转抄自 impl-plan——testCommand/deps/单元 id 等——需同步修 impl-plan 上游，否则 D0 重编译会复现）；\n` +
+      `② 结构性缺漏（缺数组、缺必填字段）回 D0 重编译（flow/compile.md）后重发` +
+      `（尚无节点执行过时；已有进度时手修+登记避免抹档案——D0 重初始化会重置 status.json / runlog / ledger）；\n` +
+      `③ 依赖环 / territory 重叠冲突源自上游 impl-plan——回 tech-design-wf T3 修 impl-plan 后重走 D0，` +
+      `手修 exec-plan 会确定性复现同类错误`,
+    "",
+  );
 }
 plan = validated.plan;
 

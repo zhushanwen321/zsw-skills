@@ -26,7 +26,7 @@ parameters:
     watchlist:
       type: string
       default: ""
-      description: "符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）；终态同步必备前置——setup 等集校验（词表与文档反引号集）不过即拒启，机械悬空引用防线由它供词"
+      description: "符号词表绝对路径（<basename>.symbol-watchlist.json，tech-design-wf T3 产出）；终态同步必备前置——setup 词表指纹校验（词表 sourceFingerprints 与源文档当前 sha256 比对，文档已改而词表未重生成即拒启）不过即拒启，机械悬空引用防线由它供词；须为绝对路径（~/ 与相对形态不可读，引擎对词表与指纹键一律直读）"
     maxRounds:
       type: number
       default: 10
