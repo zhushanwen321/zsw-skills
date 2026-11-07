@@ -174,6 +174,20 @@ const NODE_CHECK_EXISTS = [
   "}",
   "if(missing.length>0||invalid.length>0){process.stdout.write(JSON.stringify({missing:missing,invalid:invalid}));process.exit(1)}",
 ].join("\n");
+// resume 断点校验专用探针（与 NODE_CHECK_EXISTS 的 isFile 全量断言不同：resumeFrom 按参数
+// 语义是 runDir 目录，须区分「存在且为目录」+「final.json 存在且为常规文件」两断言——
+// 2026-11-07 修复：误用 NODE_CHECK_EXISTS 使 contested 恢复路径必然 setup-fail（实测 3 连））
+const NODE_CHECK_RESUME = [
+  "var fs=require('fs');",
+  "var missing=[],invalid=[];",
+  "  var d=process.argv[1],f=process.argv[2],st=null;",
+  "  try{st=fs.statSync(d)}catch(e){missing.push(d);}",
+  "  if(st&&!st.isDirectory())invalid.push(d);",
+  "  st=null;",
+  "  try{st=fs.statSync(f)}catch(e){missing.push(f);}",
+  "  if(st&&!st.isFile())invalid.push(f);",
+  "if(missing.length>0||invalid.length>0){process.stdout.write(JSON.stringify({missing:missing,invalid:invalid}));process.exit(1)}",
+].join("\n");
 const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
 const NODE_RENAME_FILE =
   "require('fs').mkdirSync(require('path').dirname(process.argv[2]),{recursive:true});require('fs').renameSync(process.argv[1],process.argv[2])";
@@ -1208,7 +1222,7 @@ let resumeRaw: {
 if (resumeFrom !== "") {
   const prevRunJsonPath = `${resumeFrom}/run.json`;
   const prevFinalPath = `${resumeFrom}/final.json`;
-  const resumeExists = await world.run("node", ["-e", NODE_CHECK_EXISTS, resumeFrom, prevFinalPath]);
+  const resumeExists = await world.run("node", ["-e", NODE_CHECK_RESUME, resumeFrom, prevFinalPath]);
   if (resumeExists.exitCode !== 0) {
     const pp = parseExistsProbe(resumeExists.stdout);
     const probeBad = [

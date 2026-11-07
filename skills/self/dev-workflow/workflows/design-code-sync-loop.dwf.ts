@@ -779,7 +779,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "0.2.0"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.2.1"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // design-code-sync-loop — dev-flow-wf 技能 W4 终态同步循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts 与 tech-review-loop.dwf.ts（多脚本循环骨架
@@ -954,6 +954,20 @@ const NODE_CHECK_EXISTS = [
   "  try{st=fs.statSync(p)}catch(e){missing.push(p);continue}",
   "  if(!st.isFile())invalid.push(p);",
   "}",
+  "if(missing.length>0||invalid.length>0){process.stdout.write(JSON.stringify({missing:missing,invalid:invalid}));process.exit(1)}",
+].join("\n");
+// resume 断点校验专用探针（与 NODE_CHECK_EXISTS 的 isFile 全量断言不同：resumeFrom 按参数
+// 语义是 runDir 目录，须区分「存在且为目录」+「final.json 存在且为常规文件」两断言——
+// 2026-11-07 修复：误用 NODE_CHECK_EXISTS 使 contested 恢复路径必然 setup-fail（实测 3 连））
+const NODE_CHECK_RESUME = [
+  "var fs=require('fs');",
+  "var missing=[],invalid=[];",
+  "  var d=process.argv[1],f=process.argv[2],st=null;",
+  "  try{st=fs.statSync(d)}catch(e){missing.push(d);}",
+  "  if(st&&!st.isDirectory())invalid.push(d);",
+  "  st=null;",
+  "  try{st=fs.statSync(f)}catch(e){missing.push(f);}",
+  "  if(st&&!st.isFile())invalid.push(f);",
   "if(missing.length>0||invalid.length>0){process.stdout.write(JSON.stringify({missing:missing,invalid:invalid}));process.exit(1)}",
 ].join("\n");
 const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
@@ -1990,7 +2004,7 @@ let resumeRaw: {
 if (resumeFrom !== "") {
   const prevRunJsonPath = `${resumeFrom}/run.json`;
   const prevFinalPath = `${resumeFrom}/final.json`;
-  const resumeExists = await world.run("node", ["-e", NODE_CHECK_EXISTS, resumeFrom, prevFinalPath]);
+  const resumeExists = await world.run("node", ["-e", NODE_CHECK_RESUME, resumeFrom, prevFinalPath]);
   if (resumeExists.exitCode !== 0) {
     const pp = parseExistsProbe(resumeExists.stdout);
     const probeBad = [
