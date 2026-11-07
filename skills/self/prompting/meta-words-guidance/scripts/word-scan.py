@@ -83,6 +83,9 @@ def split_variants(cell):
 # 「被否决」是完整正常汉语词（白名单已登记候选，如 domain-model.md 画布不变量
 # 「方案被否决 / 搁置时其 selected 标记同步清除」），后接「决」时不命中
 NEXT_CHAR_SUBSTRING_GUARDS = {"被否": "决"}
+# 前一字守卫：被禁词的前邻字属白名单词的尾字时豁免（2026-11-07 裁决项——
+# 白名单词「定死」（钉死的替换形态）后接「导出落点」时，「死导出」子串误报）
+PREV_CHAR_SUBSTRING_GUARDS = {"死导出": "定"}
 
 
 def to_regex(term):
@@ -95,6 +98,8 @@ def to_regex(term):
         pat = rf"{pat}(?![板向])"
     elif term in NEXT_CHAR_SUBSTRING_GUARDS:
         pat = rf"{pat}(?!{re.escape(NEXT_CHAR_SUBSTRING_GUARDS[term])})"
+    if term in PREV_CHAR_SUBSTRING_GUARDS:
+        pat = rf"(?<!{re.escape(PREV_CHAR_SUBSTRING_GUARDS[term])}){pat}"
     return re.compile(pat)
 
 
