@@ -102,6 +102,7 @@ const NODE_BACKTICK_GREP = [
   "var root=process.argv[1],wl=process.argv[2];",
   "var out=function(o){console.log(JSON.stringify(o))};",
   "var wlRaw=null;try{wlRaw=JSON.parse(fs.readFileSync(wl,'utf8'))}catch(e){out({ok:false,reason:'词表不可读或非合法 JSON：'+wl});process.exit(0)}",
+  "if(wlRaw===null||typeof wlRaw!=='object'){out({ok:false,reason:'词表内容非 JSON 对象（顶层为 null 或标量）：'+wl+'——词表须为含 scan/skip/sourceFingerprints 的对象'});process.exit(0)}",
   "var scan=Array.isArray(wlRaw.scan)?wlRaw.scan.filter(function(s){return typeof s==='string'&&s!==''}):null;",
   "var skip=Array.isArray(wlRaw.skip)?wlRaw.skip:null;",
   "if(scan===null||skip===null){out({ok:false,reason:'词表缺 scan 数组或 skip 数组：'+wl});process.exit(0)}",
@@ -109,32 +110,35 @@ const NODE_BACKTICK_GREP = [
   "if(badSkip.length>0){out({ok:false,reason:'词表 skip 元素畸形（须 {word, reason 非空}）'+badSkip.length+' 条'});process.exit(0)}",
   // 指纹校验（2026-11-04 结构化改造，硬门）：sourceFingerprints = { <输入文档路径>:
   // sha256 }，由 extract-backticks 生成、T3 甄别时原样抄入 watchlist；缺失 = 旧版词表，
-  // 拒启指路重产。指纹失败按根因拆两路（2026-11-07：旧版把读不到的键也归「文档已改」，
-  // 主 agent 按错误标题反向诊断、两次共 4 次同错 setup-failure——「路径解析不到」与
-  // 「文档改了」的处置动作不同，必须分路）：键不以 / 开头（相对或 ~/ 形态——本探针无
-  // 展开逻辑，必然读不到）或 readFileSync 抛异常 → 键不可读路（路径解析失败，与文档
-  // 内容无关）；键可读但 sha256 不等 → 指纹过期路（文档已改词表未重生成）。两路并发时
-  // reason 两段都输出（先不可读后过期，；分隔）。自验统一指路 --check 一条命令——禁止
-  // 在 reason 内嵌 node -e 内联自验代码（嵌套引号转义风险）。指纹通过后按指纹键重提取
-  // 反引号词集做等集软监测（2026-11-04 恢复，过滤逻辑自 dc0d0ae^ 历史版取回）：指纹只护
-  // 「词表与源文档同步」，词表自身 scan/skip 被改写时指纹照样通过——差集经 wordsDrift
-  // 字段输出，ok 仍 true 不拒启（旧等集硬门对措辞形态过强、曾致修复死锁，其退役语义
-  // 保留；完整性监测降级为解析侧 WARN 指路重甄别）。文档路径不另传 argv——指纹键即
-  // extract-backticks 的输入文档集，重提取与指纹校验同源
+  // 拒启指路重产。指纹失败按根因拆三路（「路径解析不到」「文档改了」「值损坏」的处置
+  // 动作不同，必须分路）：① 键不以 / 开头（相对或 ~/ 形态——本探针无展开逻辑，必然
+  // 读不到）或 readFileSync 抛异常 → 键不可读路（路径解析失败，与文档内容无关）；
+  // ② 值非字符串或非 64 位 hex → 值形态畸形路（手写/损坏词表——这种值若直接进 sha256
+  // 比对恒不等，会被误归「源文档已改」引去重跑文档侧流程，故先判形态再比对）；③ 键
+  // 可读且值形态合法但 sha256 不等 → 指纹过期路（文档已改词表未重生成）。多路并发时
+  // reason 各段都输出（先畸形、再不可读、后过期，；分隔）。自验统一指路 --check 一条
+  // 命令——禁止在 reason 内嵌 node -e 内联自验代码（嵌套引号转义风险）。指纹通过后按
+  // 指纹键重提取反引号词集做等集软监测（2026-11-04 恢复，过滤逻辑自 dc0d0ae^ 历史版取
+  // 回）：指纹只护「词表与源文档同步」，词表自身 scan/skip 被改写时指纹照样通过——差集
+  // 经 wordsDrift 字段输出，ok 仍 true 不拒启（旧等集硬门对措辞形态过强、曾致修复死锁，
+  // 其退役语义保留；完整性监测降级为解析侧 WARN 指路重甄别）。文档路径不另传 argv——
+  // 指纹键即 extract-backticks 的输入文档集，重提取与指纹校验同源
   "var fps=wlRaw.sourceFingerprints;",
   "if(fps===null||typeof fps!=='object'||Array.isArray(fps)||Object.keys(fps).length===0){out({ok:false,reason:'词表缺 sourceFingerprints 字段（旧版生成器产物或手写词表）——回 tech-design-wf T3 重新生成词表'});process.exit(0)}",
-  "var fpUnread=[],fpStale=[];",
+  "var fpUnread=[],fpStale=[],fpBad=[];",
   "for (var fp in fps){",
   "  if(fp.indexOf('/')!==0){fpUnread.push(fp===''?'\"\"':fp);continue}",
+  "  if(!(typeof fps[fp]==='string'&&/^[0-9a-f]{64}$/.test(fps[fp]))){fpBad.push(fp);continue}",
   "  try{ var cur=crypto.createHash('sha256').update(fs.readFileSync(fp,'utf8')).digest('hex');",
   "    if(cur!==fps[fp])fpStale.push(fp);",
   "  }catch(e){fpUnread.push(fp);}",
   "}",
-  "if(fpUnread.length>0||fpStale.length>0){",
+  "if(fpBad.length>0||fpUnread.length>0||fpStale.length>0){",
   "  var FP_SELF_CHECK='自验：node ~/.agents/skills/symbol-watchlist/scripts/extract-backticks.mjs --check <watchlist 绝对路径> 必须 PASS';",
+  "  var rB=fpBad.length>0?'指纹值形态畸形（须 64 位 sha256 hex）：'+fpBad.join('、')+'——指纹值须为 extract-backticks 产出的 sha256 hex 字符串（非字符串值直接比对恒不等，会被误判为文档改动）；回 tech-design-wf T3 重新生成词表。'+FP_SELF_CHECK:'';",
   "  var rU=fpUnread.length>0?'词表指纹键不可读（路径解析失败，与文档内容无关）：'+fpUnread.join('、')+'——指纹键是引擎 fs.readFileSync 的直读路径，须为绝对路径形态（~/ 与相对形态均不可读）。重产：node ~/.agents/skills/symbol-watchlist/scripts/extract-backticks.mjs <设计文档> <impl-plan.md>（相对 / ~/ / 绝对传参均可，键一律归一为绝对；脚本 + 甄别 + 落盘）。'+FP_SELF_CHECK:'';",
   "  var rS=fpStale.length>0?'源文档已改而词表未重生成（指纹不等）：'+fpStale.join('、')+'——回 tech-design-wf flow/plan.md「符号词表」节重跑（脚本 + 甄别 + 落盘）。'+FP_SELF_CHECK:'';",
-  "  out({ok:false,reason:rU+(rU!==''&&rS!==''?'；':'')+rS});process.exit(0)",
+  "  out({ok:false,reason:[rB,rU,rS].filter(function(s){return s!==''}).join('；')});process.exit(0)",
   "}",
   // 词集软监测（2026-11-04 恢复，过滤逻辑自 dc0d0ae^ 历史版逐条取回）：反引号重提取
   // （2-60 字符、ASCII 可见、不含 / 与空格、符号段 ≤4、非版本号形态）→ 与 scan∪skip

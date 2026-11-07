@@ -49,8 +49,9 @@ stdout 输出 `PASS` 并 exit 0 = 可发起；任一失败输出 `FAIL: <分类>
   `~/` 形态的键 ENOENT。落盘时原样抄草稿输出的键，勿手写或改动。
 - **指纹**：键值 = 输入文件当前内容 sha256。发起时引擎重算比对——源文档任何改动使指纹不等 =
   词表过期，拒启指路重产。
-- **6 类拒启判定**（`--check` 校验集，与引擎 setup 探针同源）：词表不可读或非合法 JSON /
-  缺 scan 数组或 skip 数组 / skip 元素畸形 / 缺 sourceFingerprints / 指纹键不可读 / 指纹不等。
+- **8 类拒启判定**（`--check` 校验集，与引擎 setup 探针同源）：词表不可读或非合法 JSON /
+  词表内容非 JSON 对象（顶层 null 或标量）/ 缺 scan 数组或 skip 数组 / skip 元素畸形 /
+  缺 sourceFingerprints / 指纹值形态畸形（须 64 位 sha256 hex）/ 指纹键不可读 / 指纹不等。
 - **同源纪律 + 差分测试防漂移**：反引号提取规则与 design-code-sync-loop 扫描器
   （NODE_BACKTICK_GREP）逐字同源，`--check` 校验集与引擎 setup 词表探针同源——两侧必须
   同步修改；zsw-skills 仓 `scripts/tests/extract-backticks.test.mjs` 的差分测试

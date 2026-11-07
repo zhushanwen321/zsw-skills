@@ -140,6 +140,24 @@ const PARITY_CASES = [
     ok: true, categories: [],
   },
   {
+    name: "worktree 合并节点（territory 抄录被合单元 + deps 指向被合单元——compile.md 合并排布契约）",
+    build: () => {
+      const p = legalDevPlan();
+      p.nodes.push({ id: "merge-u-1", kind: "dev", deps: ["u-1"], designRef: "§3.4", territory: ["src/a/"], testCommand: { program: "pnpm", args: ["test"] }, promptFile: "/tmp/skill-data/dev-flow/parity/p.prompts/merge-u-1.md" });
+      return p;
+    },
+    ok: true, categories: [],
+  },
+  {
+    name: "合并节点缺 territory（dev 节点 territory 必须非空——compile.md 未声明 territory 的字面编译形态两侧同拒）",
+    build: () => {
+      const p = legalDevPlan();
+      p.nodes.push({ id: "merge-u-1", kind: "dev", deps: ["u-1"], testCommand: { program: "pnpm", args: ["test"] }, promptFile: "/tmp/skill-data/dev-flow/parity/p.prompts/merge-u-1.md" });
+      return p;
+    },
+    ok: false, categories: ["field"],
+  },
+  {
     name: "缺 projectRoot",
     build: () => { const p = legalDevPlan(); delete p.projectRoot; return p; },
     ok: false, categories: ["field"],

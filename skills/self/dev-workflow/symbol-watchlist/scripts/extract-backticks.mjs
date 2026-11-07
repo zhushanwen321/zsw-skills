@@ -25,8 +25,9 @@
 //   node extract-backticks.mjs <设计文档路径> [impl-plan.md 路径 ...]   （T3 产草稿）
 //   node extract-backticks.mjs --check <watchlist.json 路径>           （design-code-sync 发起前自验）
 //
-// --check 自验模式：对落盘词表跑 6 类校验（词表不可读或非合法 JSON / 缺 scan 数组或 skip
-// 数组 / skip 元素畸形 / 缺 sourceFingerprints / 指纹键不可读 / 指纹不等），全部通过 stdout
+// --check 自验模式：对落盘词表跑 8 类校验（词表不可读或非合法 JSON / 词表内容非 JSON
+// 对象（顶层 null 或标量）/ 缺 scan 数组或 skip 数组 / skip 元素畸形 / 缺 sourceFingerprints /
+// 指纹值形态畸形（须 64 位 sha256 hex）/ 指纹键不可读 / 指纹不等），全部通过 stdout
 // 输出 PASS 并 exit 0；任一失败 stdout 输出 `FAIL: <分类名>: <明细>` 并 exit 1。
 // 同源纪律：--check 的校验集与 design-code-sync-loop NODE_BACKTICK_GREP 探针同源——两侧必须
 // 同步修改；scripts/tests/ 下的差分测试保证不漂移。指纹键判定与探针逐字一致：非 / 开头直接
@@ -68,10 +69,16 @@ function runCheck(wlPath) {
   } catch (e) {
     return fail("词表不可读或非合法 JSON", `${wlPath}（JSON 解析失败: ${e.message}）`);
   }
-  // 探针对非对象顶层按「缺 scan/skip 数组」判（属性访问取不到 scan）；null 顶层在探针中
-  // 属抛 TypeError 的未定义行为，此处按同类 FAIL 兜住——方向 fail-closed，不输出 PASS。
-  const isPlainObj = wl !== null && typeof wl === "object" && !Array.isArray(wl);
-  if (!isPlainObj) return fail("缺 scan 数组或 skip 数组", `${wlPath}（词表顶层非 JSON 对象）`);
+  // 探针同款检查（判定两侧等价）：JSON.parse 成功 ≠ 拿到对象——顶层 null/标量在探针侧
+  // 若直接取 wlRaw.scan，null 会抛 TypeError（探针崩溃 exit 1 空输出，上游只能看到空
+  // stdout，与「node 不可用」混淆），故探针在 scan/skip 判定前先行拒收；本侧同判据同分类。
+  // 数组顶层两侧同归「缺 scan 数组或 skip 数组」（属性访问取不到 scan）
+  if (wl === null || typeof wl !== "object") {
+    return fail(
+      "词表内容非 JSON 对象",
+      `${wlPath}（顶层为 null 或标量——词表须为含 scan/skip/sourceFingerprints 的对象；词表内容损坏手修不可靠，回 tech-design-wf T3 重新生成词表）`,
+    );
+  }
   const scanBad = !Array.isArray(wl.scan);
   const skipBad = !Array.isArray(wl.skip);
   if (scanBad || skipBad) {
@@ -104,23 +111,36 @@ function runCheck(wlPath) {
   // 不尝试读——否则相对键恰在运行 cwd 下存在且指纹正确时本侧会 PASS 而探针 ok:false，
   // 自验闭环断裂：探针指路「--check 必须 PASS」、照做通过但 workflow 照样拒启）；其余键
   // 不展开波浪号、不拼接基目录、fs.readFileSync 原样直读。FAIL 判定与探针 ok:false 等价。
+  // 值形态判定与探针逐字一致：非 64 位 sha256 hex 字符串的值先归「指纹值形态畸形」（这种
+  // 值直接进 sha256 比对恒不等，会被误归「指纹不等/源文档已改」引去重跑文档侧流程），
+  // 不参与比对。
   const unreadable = [];
   const mismatched = [];
+  const badShape = [];
   for (const key of Object.keys(fps)) {
     if (!key.startsWith("/")) {
       unreadable.push(key === "" ? '""' : key);
       continue;
     }
+    const v = fps[key];
+    if (typeof v !== "string" || !/^[0-9a-f]{64}$/.test(v)) {
+      badShape.push(key);
+      continue;
+    }
     try {
       const cur = createHash("sha256").update(readFileSync(key, "utf8")).digest("hex");
-      if (cur !== fps[key]) mismatched.push(key);
+      if (cur !== v) mismatched.push(key);
     } catch {
       unreadable.push(key);
     }
   }
-  // 第 5/6 类可同时成立（探针侧合并为一个 ok:false），两类 FAIL 行都要输出完再退出，
-  // 不得在第一类就 process.exit 漏报另一类
+  // 三类可同时成立（探针侧合并为一个 ok:false，段序 = 畸形 → 不可读 → 过期），全部 FAIL
+  // 行都要输出完再退出，不得在第一类就 process.exit 漏报其余类
   let hasFpFail = false;
+  if (badShape.length > 0) {
+    hasFpFail = true;
+    console.log(`FAIL: 指纹值形态畸形: ${badShape.join("、")}（须 64 位 sha256 hex 字符串——词表内容损坏手修不可靠，回 tech-design-wf T3 重新生成词表）`);
+  }
   if (unreadable.length > 0) {
     hasFpFail = true;
     console.log(`FAIL: 指纹键不可读: ${unreadable.join("、")}（键须为下游可直读的绝对路径——回 T3 重产词表，传参形态不限、键一律归一为绝对）`);

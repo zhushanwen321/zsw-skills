@@ -60,6 +60,7 @@ stdout `PASS` 才继续步骤 4。校验集与 W2 引擎的 validatePlan 及 W3 
 - 单字段错误（`territory` 形态 / `ref` 引用名 / `whitelist`、`noop` 命令形态 / `cwd`、`script`、`testPlan` / 路径层级与占位符类 `field`）→ 手修 exec-plan 对应字段后重跑本门；值转抄自 impl-plan 的字段（testCommand / deps / 单元 id）同步修 impl-plan 上游，否则重编译复现
 - 结构性缺漏（`schema`、缺数组缺必填的 `field`）→ 回步骤 2 重编译（尚无节点执行过时；已有进度改手修 + ledger 登记，重初始化会重置 status.json / runlog / ledger）
 - `cycle` 依赖环 / `overlap` territory 重叠无依赖路径 → 回 tech-design-wf T3 修 impl-plan 后重走本清单——手修 exec-plan 会确定性复现同类错误
+- `io:`（exec-plan 路径不存在或不可读）/ `json:`（JSON 语法错）自解释类——核对路径 / 修语法后重跑本门
 
 运行时环境断言（cwd == git rev-parse --show-toplevel、promptFile / verify script 盘上存在、projectRoot 存在）仍由 W2 引擎 setup 在派发前 fail-fast——promptFile 本清单下一步才构造，静态门不查存在性，正确计划不会恒红。
 
@@ -91,6 +92,8 @@ stdout `PASS` 才继续步骤 4。校验集与 W2 引擎的 validatePlan 及 W3 
 - （进 D3 前）环境 smoke：场景依赖的每个环境面跑无 LLM 探针验证可用；项目 verification skill 提供环境体检脚本（doctor 类启动前体检）时纳入 smoke 探针清单；剧本 dry-run：机械断言先对样本数据跑通；bash 语义歧义点（管道子 shell 的 cwd 隔离、`$()` 剥尾换行、引号嵌套、**管道退出码陷阱**）逐行过一遍——`cmd | tail; echo $?` 取的是管道末段（tail）的退出码，主命令失败会被判绿，验收/测试命令一律无管道形态 `cmd > log 2>&1; echo "EXIT=$?"`，判定读 EXIT 行 + grep 日志，禁止 `| tail`/`| head` 后跟 `$?`/`&&` 判定退出；采样管道复用检查：read 项目采样管道文档，已有脚本直接复用，新做法记录回写（进管道文档），禁现场重写管道；多实例分配：互斥场景组绑独立 dev 实例（装配器端口段派生 + 独立数据目录）
 - **verify 剧本每步汇总落盘 [MANDATORY]**：剧本骨架的 step 函数每步结束时向 `<artifactsDir>/summary.jsonl` 追加一行 JSON：`{"step":"<步骤名>","command":"<命令>","exitCode":<n>,"stats":"<vitest/断言统计行，可空>"}`——供 L4 inspect 以汇总文件为准核对（只读 summary、仅异常步骤读全文日志；实测 inspect 逐个全文读 19 份日志耗 259 万 token 占 D3 时长 85.7%，2026-09-29）。step 函数自身拿不到 artifactsDir 时由剧本头部变量注入
 
+本步编入完成后（含产物类条目编入 `testPlan.artifacts`）重跑步骤 3 校验门（`node ~/.agents/skills/dev-flow-wf/scripts/check-exec-plan.mjs <exec-plan 绝对路径>`）确认 PASS 再进步骤 7。
+
 ### 7. 验收编译规则（为 D3 预生成 acceptance 面）
 
 验收计划表逐行：**L3 → verify 节点**（script = 剧本路径，artifactsDir）；**L4 → inspect 节点**（promptFile 任务书含「确定性产物已就绪」指针 + 逐节点 `<artifactsDir>/summary.jsonl` 汇总路径——核对以汇总为准、仅异常步骤读全文日志，deps 指向其 verify 前驱；任务书驱动约束：项目有 verification skill 时真机驱动一律经其进行（发现规则同 tech-design-wf T3：`verify-*` 前缀 + Launch/Drive 节，AGENTS.md 声明优先），禁绕过技能裸驱动）；**L0/L2 不编译成节点**——已由 D1 单元测试与 D2 Gate A 覆盖，行标注「已覆盖」，D3 入口门引用 Gate A 证据（HEAD 未前进则免重跑）。混合行拆行（确定性部分降 L3 先行，判断行依赖它）。分组按「组」列；熔断判据 = 依赖可达性（设计 §8.7；核心短路 haltOnCoreFail 已退役被引擎忽略）。
@@ -119,6 +122,13 @@ stdout `PASS` 才继续步骤 4。校验集与 W2 引擎的 validatePlan 及 W3 
 ## worktree 合并排布
 
 DAG 含 worktree 单元（node.cwd ≠ projectRoot）且存在跨 cwd 依赖边时，D0 必须显式排合并——编译合并节点（kind=dev，id 如 `merge-<worktree单元>`，promptFile=合并指令：核对 worktree 单元 commit → 按项目既有合并约定（无约定 git merge --no-ff）合入工作分支，拿不定先停问用户；testCommand=合并冒烟），下游集成单元 deps 指向合并节点；单 worktree 小计划可标注手工段由主 agent 执行并记录。引擎不做合并检测。
+
+合并节点是普通 dev 节点，按 dev 节点全契约编译——合并把被合单元的改动落进工作分支（merge commit 触及被合单元声明范围内的路径，冲突解决可能追加手修），属会产生文件写入的单元，不是纯 git 元操作：
+
+- `territory` 必填：抄录被合 worktree 单元的 territory 清单（合并节点 cwd = projectRoot，territory 相对主仓根；worktree 检出与主仓同一仓库布局，相对路径一致），如 `"territory": ["packages/shared/src/..."]`。缺 territory 会被引擎启动校验拒绝（dev 节点 territory 必须非空），且落步骤 3 路由的 `field` 类——结构性缺漏回本清单重编译仍缺，必须在编译点写对
+- `deps` 必须含被合 worktree 单元（如 `"deps": ["u-shared"]`）：合并节点 territory 与被合单元重叠，范围声明互斥断言放行的前提 = 两节点间存在依赖路径；缺 deps 会被 `overlap` 类拒绝
+- promptFile 合并指令中写明：合并后核对 `git status` 无未预期残留；files_changed 按合并实际触及路径如实申报（合并自身已成 commit 时引擎核验走幂等分支不重复提交）
+- 多个 territory 重叠的 worktree 单元（彼此已用依赖边串行）不得各编一个合并节点——两个合并节点 territory 重叠且无依赖路径同样被 `overlap` 拒；须共用一个合并节点（territory 取并集、deps 列全部被合单元），或在合并节点之间加依赖边
 
 ## 完成判据
 

@@ -14,10 +14,11 @@ args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath?, watchlist, ru
 // 发起前自验 [MANDATORY]：发起 CreateWorkflow 前先跑
 //   node ~/.agents/skills/symbol-watchlist/scripts/extract-backticks.mjs --check <watchlist 绝对路径>
 //   stdout 必须 PASS 才发起——FAIL 时按输出分类处置后重验，PASS 才发起：
-//   指纹键不可读 / 指纹不等 / 缺 sourceFingerprints = 回 T3 重产词表（脚本在
+//   指纹值形态畸形 / 指纹键不可读 / 指纹不等 / 缺 sourceFingerprints = 回 T3 重产词表（脚本在
 //   symbol-watchlist skill，传参形态不限——相对 / ~/ / 绝对均归一为绝对键）
 //   （tech-design-wf flow/plan.md「符号词表」节——缺 sourceFingerprints 与脚本自报恢复动作一致）；
 //   词表不可读或非 JSON = 先核对传入路径（文件不存在 = 回 T3 重产），JSON 结构错才手修词表结构；
+//   词表内容非 JSON 对象（顶层 null 或标量）= 词表内容损坏，回 T3 重产词表（手修不可靠）；
 //   其余结构类（缺 scan/skip 数组 / skip 元素畸形）= 修词表结构
 //   （该自验与 setup 词表指纹校验同源，提前拦截免整次派发 setup-failure 空跑）
 // rulings = 已裁决记录 json 绝对路径（可选）：顶层数组，元素 {id, direction: "doc-right"|"code-right", anchor, quote, source, commit?}

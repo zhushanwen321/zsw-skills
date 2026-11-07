@@ -138,237 +138,242 @@
  ],
  "skills/self/dev-workflow/workflows/src/design-code-sync-loop.shared.ts": [
   [
-   128,
+   130,
    "\"  if(fp.indexOf('/')!==0){fpUnread.push(fp===''?'\\\"\\\"':fp);continue}\",",
    "path-set"
   ],
   [
-   145,
+   131,
+   "\"  if(!(typeof fps[fp]==='string'&&/^[0-9a-f]{64}$/.test(fps[fp]))){fpBad.push(fp);continue}\",",
+   "format-validation"
+  ],
+  [
+   149,
    "\"    var m=t.match(/`([^`\\\\n]{2,60})`/g)||[];\",",
    "protocol-parse"
   ],
   [
-   147,
+   151,
    "\"      if(!v||!/^[\\\\x20-\\\\x7e]+$/.test(v))continue;\",",
    "format-validation"
   ],
   [
-   148,
+   152,
    "\"      if(v.indexOf('/')>=0||v.indexOf(' ')>=0)continue;\",",
    "protocol-parse"
   ],
   [
-   150,
+   154,
    "\"      if(/v?\\\\d+(\\\\.\\\\d+)+/i.test(v))continue;\",",
    "protocol-parse"
   ],
   [
-   222,
+   226,
    "\"  var h=/^### (\\\\S+)/.exec(ln);\",",
    "protocol-parse"
   ],
   [
-   224,
+   228,
    "\"  if(/^## /.test(ln)){cur=null;continue}\",",
    "protocol-parse"
   ],
   [
-   226,
+   230,
    "\"  var isStd=false;for(var s of std){if(ln.indexOf(s)===0){isStd=true;break}}\",",
    "protocol-parse"
   ],
   [
-   395,
+   399,
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
    "enum-check"
   ],
   [
-   401,
+   405,
    "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");",
    "path-set"
   ],
   [
-   432,
+   436,
    "const watchlist = watchlistRaw.startsWith(\"/\") ? watchlistRaw : \"\";",
    "path-set"
   ],
   [
-   453,
+   457,
    "const abs = p.startsWith(\"/\");",
    "path-set"
   ],
   [
-   550,
+   554,
    ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));",
    "path-set"
   ],
   [
-   690,
+   694,
    "const abs = tok.startsWith(\"/\") ? tok : `${rootDir}/${tok}`;",
    "path-set"
   ],
   [
-   691,
+   695,
    "if (!affected.includes(abs)) affected.push(abs);",
    "path-set"
   ],
   [
-   811,
+   815,
    ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));",
    "path-set"
   ],
   [
-   892,
+   896,
    "if (fi.some((f) => fj.includes(f))) {",
    "enum-check"
   ],
   [
-   914,
+   918,
    "if (rest.startsWith(\"\\\"\") && rest.endsWith(\"\\\"\") && rest.length >= 2) rest = rest.slice(1, -1);",
    "protocol-parse"
   ],
   [
-   915,
+   919,
    "if (rest.includes(\" -> \")) {",
    "protocol-parse"
   ],
   [
-   932,
+   936,
    "if (token.length < 3 || !token.includes(\"/\")) return \"\";",
    "path-set"
   ],
   [
-   933,
+   937,
    "return /\\.[A-Za-z0-9]+$/.test(token) ? token : \"\";",
    "path-set"
   ],
   [
-   1002,
+   1006,
    "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${homeDir}/${p.slice(2)}` : p);",
    "path-set"
   ],
   [
-   1124,
+   1128,
    "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +",
    "protocol-parse"
   ],
   [
-   1125,
+   1129,
    "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +",
    "protocol-parse"
   ],
   [
-   1129,
+   1133,
    "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;",
    "format-validation"
   ],
   [
-   1383,
+   1387,
    "const rel = (p: string): string => (p.startsWith(`${projectRoot}/`) ? p.slice(projectRoot.length + 1) : p);",
    "path-set"
   ],
   [
-   1384,
+   1388,
    "const pathUnderRoot = (p: string): string => (p.startsWith(\"/\") ? p : `${projectRoot}/${p}`);",
    "path-set"
   ],
   [
-   1496,
+   1500,
    "if (m) for (const fp of m.files) if (!base.includes(fp)) base.push(fp);",
    "enum-check"
   ],
   [
-   1700,
+   1704,
    ".filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)))",
    "enum-check"
   ],
   [
-   2059,
+   2063,
    "else if (typeof m[\"command\"] === \"string\" && ALWAYS_PASS_CMD_RE.test(m[\"command\"].trim())) badSc.push(`${i + 1}（selfCheck.command 须是对受影响文件的真实检查命令，不得是 shell 恒过/恒",
    "format-validation"
   ],
   [
-   2066,
+   2070,
    "const impure = (o[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));",
    "format-validation"
   ],
   [
-   2315,
+   2319,
    "if (src === designDoc || src === implPlan || src.startsWith(`${runDir}/`) || src.startsWith(`${retirementDestDir}/`)) {",
    "path-set"
   ],
   [
-   2388,
+   2392,
    "return !pathUnderRoot(f).startsWith(`${retirementDestDir}/`);",
    "path-set"
   ],
   [
-   2491,
+   2495,
    "if (!p.startsWith(`${projectRoot}/`)) {",
    "path-set"
   ],
   [
-   2568,
+   2572,
    "const extraAbs = rep.fixed.filter((p2) => p2 !== \"\").map((p2) => (p2.startsWith(\"/\") ? p2 : `${projectRoot}/${p2}`));",
    "path-set"
   ],
   [
-   2571,
+   2575,
    "if (!p2.startsWith(`${projectRoot}/`) || !(await pathExists(p2))) {",
    "path-set"
   ],
   [
-   2668,
+   2672,
    "const blockers = loaded.filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)));",
    "enum-check"
   ],
   [
-   2739,
+   2743,
    "return n === null || !n.startsWith(`${projectRoot}/`);",
    "path-set"
   ],
   [
-   2823,
+   2827,
    "terr.add(tok.startsWith(\"/\") ? tok : `${projectRoot}/${tok}`);",
    "path-set"
   ],
   [
-   2834,
+   2838,
    "if (segs[i].includes(\"*\") || segs[i].endsWith(\"...\")) cut = i;",
    "path-set"
   ],
   [
-   2844,
+   2848,
    "if (d.startsWith(fp)) return false;",
    "path-set"
   ],
   [
-   2850,
+   2854,
    "if (d.startsWith(`${base}/`)) return false;",
    "path-set"
   ],
   [
-   3099,
+   3103,
    "return !pathUnderRoot(hf).startsWith(`${retirementDestDir}/`);",
    "path-set"
   ],
   [
-   3425,
+   3429,
    "if (!g.issueIds.includes(fx.issueId)) es.push(`fixes 引用未知条目 ${fx.issueId}`);",
    "enum-check"
   ],
   [
-   3428,
+   3432,
    "if (!g.issueIds.includes(d.issueId)) es.push(`deferred 引用未知条目 ${d.issueId}`);",
    "enum-check"
   ],
   [
-   3435,
+   3439,
    "if (!g.issueIds.includes(d.issueId)) es.push(`exempt 引用未知条目 ${d.issueId}`);",
    "enum-check"
   ],
   [
-   3440,
+   3444,
    "if (!g.issueIds.includes(d.issueId)) es.push(`delegated 引用未知条目 ${d.issueId}`);",
    "enum-check"
   ]

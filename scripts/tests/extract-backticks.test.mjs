@@ -10,8 +10,9 @@
 //      提取 NODE_BACKTICK_GREP 探针（join 后 node -e 实跑，形态对齐引擎 world.run 调用），
 //      与 --check 子模式对同一批 fixture 各拿判定，断言探针 ok:false ⟺ --check FAIL、
 //      探针 ok:true ⟺ --check PASS——两侧校验集漂移在此被拦；指纹失败 fixture 另断言
-//      探针 reason 按根因分路（键不可读 / 指纹过期 / 两段并发先不可读后过期）——
-//      reason 归因文案漂移在此被拦
+//      探针 reason 按根因分路（值形态畸形 / 键不可读 / 指纹过期 / 混合先畸形再不可读后
+//      过期）——reason 归因文案漂移在此被拦；顶层 null/标量与指纹值非字符串 fixture 锚定
+//      探针的崩溃/误报形态（值非字符串直接比对恒不等会误归「源文档已改」）
 //
 // 运行：node scripts/tests/extract-backticks.test.mjs
 
@@ -206,6 +207,14 @@ test("--check 判定与 NODE_BACKTICK_GREP 探针判定逐 fixture 等价（差�
       { name: "skip 元素畸形（缺 reason）", file: "wl-badskip.json", wl: { schemaVersion: 1, sourceFingerprints: goodFps, scan: ["exitPlanMode"], skip: [{ word: "designDoc" }] }, expect: "skip 元素畸形" },
       { name: "skip 元素为 null（明细构造须检查不抛 TypeError）", file: "wl-nullskip.json", wl: { schemaVersion: 1, sourceFingerprints: goodFps, scan: ["exitPlanMode"], skip: [null] }, expect: "skip 元素畸形", detailNeedle: "元素 #0: null" },
       { name: "sourceFingerprints 空对象", file: "wl-emptyfps.json", wl: { schemaVersion: 1, sourceFingerprints: {}, scan: ["exitPlanMode"], skip: [] }, expect: "缺 sourceFingerprints" },
+      { name: "指纹值为数字（直接比对恒不等、误归「源文档已改」的形态）", file: "wl-fpnum.json", wl: { schemaVersion: 1, sourceFingerprints: { [docA]: 42 }, scan: ["exitPlanMode"], skip: [] }, expect: "指纹值形态畸形", probeReasonHas: ["指纹值形态畸形", "64 位 sha256 hex"], probeReasonNotHas: ["源文档已改"] },
+      { name: "指纹值为对象", file: "wl-fpobj.json", wl: { schemaVersion: 1, sourceFingerprints: { [docA]: { hash: sha256(textA) } }, scan: ["exitPlanMode"], skip: [] }, expect: "指纹值形态畸形", probeReasonHas: ["指纹值形态畸形"], probeReasonNotHas: ["源文档已改"] },
+      { name: "指纹值为短 hex（合法字符长度不足）", file: "wl-fpshort.json", wl: { schemaVersion: 1, sourceFingerprints: { [docA]: "abc123" }, scan: ["exitPlanMode"], skip: [] }, expect: "指纹值形态畸形", probeReasonHas: ["指纹值形态畸形"], probeReasonNotHas: ["源文档已改"] },
+      { name: "指纹值畸形与键不可读并发（段序：先畸形后不可读）", file: "wl-fpmix.json", wl: { schemaVersion: 1, sourceFingerprints: { [docA]: 42, "no-such-relative-key.md": "0".repeat(64) }, scan: ["exitPlanMode"], skip: [] }, expect: "指纹值形态畸形", alsoExpect: "指纹键不可读", probeReasonOrdered: ["指纹值形态畸形", "路径解析失败，与文档内容无关"] },
+      { name: "三段并发（畸形+不可读+过期，段序全序钉住）", file: "wl-fp3mix.json", wl: { schemaVersion: 1, sourceFingerprints: { [docA]: 42, "no-such-relative-key.md": "0".repeat(64), [docB]: "1".repeat(64) }, scan: ["exitPlanMode"], skip: [] }, expect: "指纹值形态畸形", alsoExpect: ["指纹键不可读", "指纹不等"], probeReasonOrdered: ["指纹值形态畸形", "路径解析失败，与文档内容无关", "源文档已改而词表未重生成"] },
+      { name: "词表顶层 null（JSON.parse 成功返回 null——探针直接取属性会 TypeError 崩溃的形态）", file: "wl-topnull.json", raw: "null", expect: "词表内容非 JSON 对象", probeReasonHas: ["词表内容非 JSON 对象（顶层为 null 或标量）", "scan/skip/sourceFingerprints"] },
+      { name: "词表顶层数字（标量顶层）", file: "wl-topnum.json", raw: "42", expect: "词表内容非 JSON 对象", probeReasonHas: ["词表内容非 JSON 对象（顶层为 null 或标量）"] },
+      { name: "词表顶层数组（非对象容器——两侧均应落「缺 scan/skip」既有路而非崩溃）", file: "wl-toparr.json", raw: "[]", expect: "缺 scan 数组或 skip 数组" },
       { name: "词表文件不存在", file: "wl-missing.json", wl: null, expect: "词表不可读或非合法 JSON" },
       { name: "词表非合法 JSON", file: "wl-badjson.json", raw: "{oops", expect: "词表不可读或非合法 JSON" },
     ];
@@ -236,7 +245,7 @@ test("--check 判定与 NODE_BACKTICK_GREP 探针判定逐 fixture 等价（差�
       } else {
         assert.equal(probeOut.parsed.ok, false, `[${fx.name}] 探针应 ok:false，实际 ${JSON.stringify(probeOut.parsed).slice(0, 200)}`);
         assert.ok(checkOut.stdout.startsWith(`FAIL: ${fx.expect}: `), `[${fx.name}] --check 首行应为「FAIL: ${fx.expect}: …」，实际: ${checkOut.stdout.trim()}`);
-        if (fx.alsoExpect) assert.ok(checkOut.stdout.includes(`FAIL: ${fx.alsoExpect}: `), `[${fx.name}] --check 应同时报告「FAIL: ${fx.alsoExpect}」，实际: ${checkOut.stdout.trim()}`);
+        for (const extra of [].concat(fx.alsoExpect ?? [])) assert.ok(checkOut.stdout.includes(`FAIL: ${extra}: `), `[${fx.name}] --check 应同时报告「FAIL: ${extra}」，实际: ${checkOut.stdout.trim()}`);
         if (fx.detailNeedle) assert.ok(checkOut.stdout.includes(fx.detailNeedle), `[${fx.name}] FAIL 明细应含「${fx.detailNeedle}」，实际: ${checkOut.stdout.trim()}`);
         // 探针 reason 根因断言（F2 报错拆路）：键不可读路归因「路径解析失败，与文档内容
         // 无关」，指纹过期路归因「文档已改」——两路 reason 文案漂移在此被拦
@@ -250,7 +259,7 @@ test("--check 判定与 NODE_BACKTICK_GREP 探针判定逐 fixture 等价（差�
           const [first, second] = fx.probeReasonOrdered;
           const atFirst = probeOut.parsed.reason.indexOf(first);
           const atSecond = probeOut.parsed.reason.indexOf(second);
-          assert.ok(atFirst >= 0 && atSecond > atFirst, `[${fx.name}] 探针 reason 两段应先不可读后过期（；分隔），实际: ${probeOut.parsed.reason}`);
+          assert.ok(atFirst >= 0 && atSecond > atFirst, `[${fx.name}] 探针 reason 各段应按 probeReasonOrdered 声明的顺序出现，实际: ${probeOut.parsed.reason}`);
         }
       }
       const probeVerdict = probeFail ? "ok:false" : "ok:true";
