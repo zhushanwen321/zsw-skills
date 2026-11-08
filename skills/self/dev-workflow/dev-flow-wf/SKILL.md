@@ -3,7 +3,7 @@ name: dev-flow-wf
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 0.3.2
+version: 0.3.3
 description: >-
   Use when 一份完整设计包（tech-design-wf 产出：设计文档 + 双格式 impl-plan + 审查终态）
   需要落地为已验收代码。dev-flow 的 workflow 版（灰度并行，老版保留可随时切回）：
@@ -132,7 +132,11 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 
 执行体按宿主环境选择：**zcode**（会话可见 CreateWorkflow 工具 / saved workflows）→ 上表 saved workflow 经 `CreateWorkflow saved` 发起；**pi**（subagent-workflow extension、workflow 工具可用）→ 本 skill 安装位置上级的 `../workflows/pi/<name>.js`（四件：wave-executor / dev-consistency-loop / design-code-sync-loop / tech-review-loop——tech-review-loop 属 tech-design-wf 的 W1，dev-flow-wf 运行只需前三件）复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run <name> --args k=v`——两版脚本业务逻辑逐行一致，仅 agent 调用层与文件头不同；--args 值全字符串，数字参数脚本内自动归一，数组型不支持。两版均未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：zcode workflow 用 ResumeWorkflowRun/AmendWorkflow，pi 重新 run（attempt 递增防产物覆盖），手工路径以 status.json + git log 对账，冲突以 git 为准）。
 
-**attempt 重发起纪律 [MANDATORY]**：对在途 run 重发起（AmendWorkflow / supersede）前尽量等在途节点落定（或先停派发让活跃节点收尾）——journal 缓存只认已完成节点，未完成的在途工作不入缓存，重发起即在途工作全部作废重做（实测单次损失 47.6 分钟 / 约 3700 万 token，2026-09-29）。
+**attempt 重发起纪律 [MANDATORY]**：对 run 重发起分两种形态，前提判据 = 脚本是否变化——
+
+- **形态一：AmendWorkflow / 改脚本重发**：对在途 run 重发起前尽量等在途节点落定（或先停派发让活跃节点收尾）——journal 缓存只认已完成节点，未完成的在途工作不入缓存，改脚本重发起即在途工作全部作废重做（实测单次损失 47.6 分钟 / 约 3700 万 token，2026-09-29）
+- **形态二：GUI 仅改模型设置重发**（提示 Changed the settings of workflow run，脚本不变）：无损续跑——已完成节点（ask 与 world-run）按 journal 重放、同秒完成不重新派发；在途 actor 的 session 历史完整并入新 run 同名 actor session、新模型从断点续跑（实测依据：2026-11-08 tech-review-loop 三次 run，R1 六个 ask 节点同秒重放、在途 actor 21 条消息原样保留后由新模型续跑）。损失上限 = 切换瞬间正在流式生成、尚未落盘的那一条消息。附带口径提醒：跨 run 汇总 token 时继承消息会在新旧 run 各计一次，读 usage 统计时注意
+- 脚本不变的改设置重发不适用形态一的等待纪律
 
 ## 双平台脚本维护约定（改 workflows/src/ 时）
 
