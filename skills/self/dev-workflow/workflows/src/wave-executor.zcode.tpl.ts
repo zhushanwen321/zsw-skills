@@ -54,7 +54,7 @@ interface VerifyVerdict {
   detail: string;
 }
 
-/** 验收自愈归因结论（设计 §8.7）：三分类 + 证据 + 失败面文件集 */
+/** 验收自愈归因结论（设计 §8.7）：三分类 + 证据 + 失败相关文件集 */
 interface HealVerdict {
   /** spec-bug=验收资产自身缺陷（可修复重验）/ product-bug=被测产品缺陷（不修，依赖判定）/ environment=超时资源类（重试一次） */
   class: "spec-bug" | "product-bug" | "environment";

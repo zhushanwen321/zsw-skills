@@ -213,7 +213,7 @@ interface GroupRun {
   commitNote: string;
   /** 定向复审结果；未派复审（无改动且无活跃条目的组）= null——该组条目保持原状（fail-closed） */
   review: ReviewResult | null;
-  /** 辅助组（文档修复组专用）：不跑增量测试、不派定向复审——纯文档改动无编译/回归面 */
+  /** 辅助组（文档修复组专用）：不跑增量测试、不派定向复审——纯文档改动无编译/回归环节 */
   auxiliary?: boolean;
 }
 
@@ -646,7 +646,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "0.3.3"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.3.4"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // W3 dev-consistency-loop — dev-flow-wf D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：
@@ -809,7 +809,7 @@ const NODE_PLAN_PROJECT_ROOT = [
 ].join("\n");
 
 // ── node 执行器（全部 world.run("node", ["-e", ...])：cwd 可指定 projectRoot，
-//    git/测试命令不经 shell 拼接，argv 传参无注入面）──
+//    git/测试命令不经 shell 拼接，argv 传参无注入风险）──
 
 // 启动准备：读 exec-plan → schema 校验 → 解析 projectRoot（消费 exec-plan 的 projectRoot
 // 字段，相对形态按 cwd 解析）→ git diff 文件清单 + numstat 行数 → 按顶层目录段
@@ -1011,10 +1011,10 @@ const NODE_VERIFY = [
 
 // 组级 commit（引擎统一执行，fixer 不碰 git）：逐文件 existsSync 预过滤 + git add --
 // 终止符 + git commit --only -m -- <本组文件清单>（对齐 W2 GIT_ADD_COMMIT / W4
-// commitGroupFiles 契约：--only + pathspec 把提交面钉死在本组文件——共享工作区下
+// commitGroupFiles 契约：--only + pathspec 把提交范围固定在本组文件——共享工作区下
 // 暂存区可能有前序流程遗留（如 W2「commit 被拒转待办」的 staged 内容），裸 commit
 // 会连带卷入错误提交说明）。零改动幂等分支：组文件无实际差异（porcelain 空）直接
-// 返回成功不提交（空提交面 git 报 nothing to commit，曾会被误判 commit 失败）。
+// 返回成功不提交（本组无改动可提交时 git 报 nothing to commit，曾会被误判 commit 失败）。
 // index.lock 竞争做退避重试自愈——不在脚本层建 promise 链串行（容器路由对依赖
 // 分析不友好）。
 const NODE_COMMIT = [
@@ -1814,7 +1814,7 @@ function validateReviewResult(v: unknown): Validated<ReviewResult> {
  *  MF-1-2 补入候选组（exit 0 复跑 code=0/输出空串，与申报 actual 空串等值畅通）。正则
  *  字面量与 design-code-sync-loop validateFixOutcome 侧（MF-1-3）同判据，改动须两处同步。
  *  已知边界：\b 词边界对「:」开头形态（裸「:」/「: cmd」）不成立会漏——冒号形态申报占比
- *  极低，跨引擎字面一致优先，不单侧扩大覆盖面（与 W4 侧边界声明同源） */
+ *  极低，跨引擎字面一致优先，不单侧扩大覆盖范围（与 W4 侧边界声明同源） */
 const GREP_CHECK_STUB_RE = /^(true|false|:|echo|printf|exit)\b/;
 
 function validateFixReport(v: unknown): Validated<FixReport> {
@@ -1983,8 +1983,8 @@ for (const v of r1Norm) {
   for (const e of v.docErrors) addDocError(e);
   for (const u of v.unreasonable) {
     const key = itemKey(u);
-    // 跨区双报建档去重（设计「去重放弃」指不做跨区仲裁——同一身份键只建一条台账，
-    // 双修无害但台账不重复计数）；归属取首个报出分区的 partitionOf 结果
+    // 跨区双报建档去重（设计「去重放弃」指不做跨区仲裁——同一身份键只建一条条目，
+    // 双修无害但条目不重复计数）；归属取首个报出分区的 partitionOf 结果
     if (items.some((i) => i.key === key)) continue;
     seq += 1;
     items.push({
@@ -2038,7 +2038,7 @@ let prevActiveCount = items.length;
 // 历轮全部修复组的申报文件并集（终态残留对账的豁免集：终态工作区改动 − 此并集 = 残留）
 const declaredPool = new Set<string>();
 // stuck 终态也跑 Gate A（2026-09-29 裁决）：stuck 是合法高频终态，全量门不能只挂
-// converged——stuck 时 Gate A 结果是主 agent 处置的输入面（实测两线 D2 均以 stuck
+// converged——stuck 时 Gate A 结果是主 agent 处置的输入（实测两线 D2 均以 stuck
 // 收场，Gate A 由主 agent 手动补跑，机制上漏门）。停机线触发时记理由不直接终态，
 // 落到 Phase 3 统一跑完 Gate A 后按 stuckPendingReason 收尾
 let stuckPendingReason: string | null = null;
@@ -2273,7 +2273,7 @@ gateARetry: while (true) {
       "约束：",
       "1. 修复对象 = 文档与注释（设计文档 / docs/ 项目文档 / 代码注释）；禁止为对齐失真描述去改实现——若你核实后确信实现才错了（文档是对的），该条放 skipped 并写明实现侧证据（file:line），它将回流主 agent 裁决，不盲改。",
       "2. 波及扫描：每修一处 grep 同模式实例（同类失真表述 / 同键引用 / 同族计数口径），组内实例一并修；组外文件在 description 标注「组外波及：<位置>」。",
-      "3. 联动自检（替代代码组的测试硬门，结构化申报）：修完跑适用的一致性检查（如改 style.css 投影段跑 python3 .githooks/check_css_token_ssot.py、改 i18n 文案跑 python3 .githooks/check_i18n_locale_sync.py）——selfCheck.grepChecks 每条 {desc, command, expected, actual} 记实际执行的检查命令与输出（existence-check 类 = 旧表述零残留检索，expected 填零命中预期）；无适用检查时对旧表述做零残留检索同款申报。selfCheck.typecheck 填 \"pass\"（纯文档改动无编译面）。命令与输出必须可复算（引擎做结构校验：grepChecks 每条须含非空 command 与 actual；当前引擎不复跑文档组自检命令——聚焦复审按申报的 command/actual 线索聚焦核验）。",
+      "3. 联动自检（替代代码组的测试硬门，结构化申报）：修完跑适用的一致性检查（如改 style.css 派生段（从 token 权威源生成的段落）跑 python3 .githooks/check_css_token_ssot.py、改 i18n 文案跑 python3 .githooks/check_i18n_locale_sync.py）——selfCheck.grepChecks 每条 {desc, command, expected, actual} 记实际执行的检查命令与输出（existence-check 类 = 旧表述零残留检索，expected 填零命中预期）；无适用检查时对旧表述做零残留检索同款申报。selfCheck.typecheck 填 \"pass\"（纯文档改动无编译环节）。命令与输出必须可复算（引擎做结构校验：grepChecks 每条须含非空 command 与 actual；当前引擎不复跑文档组自检命令——聚焦复审按申报的 command/actual 线索聚焦核验）。",
       "4. git 禁令同代码组：禁止 git add / commit / push / stash——提交由工作流引擎统一执行。",
       "5. affectedFiles 如实申报每个改动文件（含设计文档——无论在仓库内还是 ~/.agents/skill-data/ 下都如实申报，引擎按申报核验归属；仓库外与 gitignored 文件提交时自然落空不阻塞）。路径必须纯路径（不得夹说明文字或 file:line 行号——引擎按值校验，杂质会被拒收回喂；说明放 description）。",
       "",
@@ -2428,7 +2428,7 @@ gateARetry: while (true) {
 
   // ── 阶段 B：轮级核验（需要全体组申报——合法汇聚点）→ 逐组增量测试 → 逐组 commit ──
   // skipped 消费（fixerPrompt 纪律 2 的契约闭环）：fixer 申报「设计文档自身错误、不改
-  // 代码」的条目 → 台账置不活跃（否则永远 active 空转烧轮次直到 stuck）+ 转 docErrorPool
+  // 代码」的条目 → 该条目置不活跃（否则永远 active 空转烧轮次直到 stuck）+ 转 docErrorPool
   // 随终态回流主 agent 亲修文档；复审若不同意（实现确有问题）在 unreasonable 带 prevId
   // 重报即重开该条目，闭环不受损
   for (const f of fixesByGroup) {
@@ -2495,7 +2495,7 @@ gateARetry: while (true) {
     };
   });
   // 文档修复组合成入提交管线（auxiliary：不跑增量测试、不派定向复审——纯文档改动无
-  // 编译/回归面；skill-data（仓库外）与 gitignored 的设计文档改动不匹配 porcelain 相对
+  // 编译/回归环节；skill-data（仓库外）与 gitignored 的设计文档改动不匹配 porcelain 相对
   // 路径、changedFiles 天然不含走组级提交幂等跳过，docs/ 改动照常组级一笔提交）
   const docGroup = fixesByGroup.find((f) => f.name === `文档修复-r${fixRound}`);
   if (docGroup !== undefined) {
@@ -2939,7 +2939,7 @@ if (contentActiveFinal.length > 0 && stuckPendingReason === null) {
 // ══════════════ Phase 3：产物类第一波并行预备 + 全量测试 Gate A ══════════════
 
 // stuck 待收尾时 Gate A 结果并入 stuck 终态（终态 = stuck 非 gate-a-failed——残留条目的
-// 处置输入面完整），gateOutcome 记录结果供 finish 的 events 回写
+// 处置输入完整），gateOutcome 记录结果供 finish 的 events 回写
 const finishGateA = (gateFailNote: string): Promise<Awaited<ReturnType<typeof finish>>> => {
   gateOutcome = "fail";
   return stuckPendingReason !== null
@@ -2951,7 +2951,7 @@ const finishGateA = (gateFailNote: string): Promise<Awaited<ReturnType<typeof fi
 await obsBegin("gate-a", null);
 
 // 产物类并行预备（§6.1 条目 3）：Gate A 起始时并行启动全部产物类命令，禁止按清单顺序
-// 现用现建（2026-09-19 实测教训：real 轨首跑因磁盘产物过期被 launch 探针拒绝，重跑付一次全轮成本）
+// 现用现建（2026-09-19 实测教训：真实进程层首跑因磁盘产物过期被 launch 探针拒绝，重跑付一次全轮成本）
 const artifactLogOf = (id: string): string => info.gateALog.replace(/(\.attempt\d+)?\.log$/, `.artifact-${id}$1.log`);
 if (info.artifacts.length > 0) {
   phase("产物类并行预备");

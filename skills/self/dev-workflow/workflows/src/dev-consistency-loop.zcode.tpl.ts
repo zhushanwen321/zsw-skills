@@ -213,7 +213,7 @@ interface GroupRun {
   commitNote: string;
   /** 定向复审结果；未派复审（无改动且无活跃条目的组）= null——该组条目保持原状（fail-closed） */
   review: ReviewResult | null;
-  /** 辅助组（文档修复组专用）：不跑增量测试、不派定向复审——纯文档改动无编译/回归面 */
+  /** 辅助组（文档修复组专用）：不跑增量测试、不派定向复审——纯文档改动无编译/回归环节 */
   auxiliary?: boolean;
 }
 

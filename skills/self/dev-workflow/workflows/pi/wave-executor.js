@@ -165,7 +165,7 @@ const SCHEMA_InspectResult = {
     verdict: {
       type: "string",
       enum: ["pass", "fail", "degraded"],
-      description: "验收结论：pass = 通过标准全部达成；fail = 有未达成项；degraded = 场景不可构造但替代构造已证判定面（任务书契约词表，勿用 status 字段）",
+      description: "验收结论：pass = 通过标准全部达成；fail = 有未达成项；degraded = 场景不可构造但替代构造已证判定成立（任务书契约词表，勿用 status 字段）",
     },
     test_evidence: { type: "string", description: "验收证据：逐条核对结果与关键观测" },
     deviations: { type: "array", items: { type: "string" }, description: "与任务书的偏离说明（无偏离为空数组）" },
@@ -187,7 +187,7 @@ function wfAgent(name, persona) {
       const schema = SCHEMA_BY_KEY[typeKey];
       if (!schema) throw new Error(`未知 ask 类型键 ${typeKey}（SCHEMA_BY_KEY 未登记）`);
       // desc 直取 name 原文（不做 -rN/-RN 后缀剥离）：pi 实例名须与静态第一实参一致——
-      // workflow DAG 静态投影模板按调用点第一实参提取，剥离会让带轮次后缀的名字
+      // workflow DAG 静态派生模板按调用点第一实参提取，剥离会让带轮次后缀的名字
       // （主审-r2 等）匹配不上实例；且 zcode 侧同名即续聊，后缀是轮次新 agent 的身份语义，
       // 两平台显示名本就应当对齐。
       const desc = String(name);
@@ -513,7 +513,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "0.3.3"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.3.4"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ── W2 wave-executor ──
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
@@ -642,7 +642,7 @@ const ACCEPTANCE_FIXER_PERSONA = "你是验收缺陷修复者：按修复任务�
     "git 全禁（提交由引擎统一执行）；" +
     NO_ASK_RULE;
 // ── node -e 通道（脚本无 fs/process：写盘/读文件/git/带 cwd 的子进程全走 world.run node -e，
-//    argv 传参无 shell 注入面；代码串内可 require Node 内建） ──
+//    argv 传参无 shell 注入风险；代码串内可 require Node 内建） ──
 const WRITE_FILE = "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2])";
 const READ_FILE_QUIET = "try{process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8'))}catch{}";
 const EXISTS = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
@@ -938,7 +938,7 @@ function validatePlan(raw) {
     // 「本阶段错误收集完再停」的判据，吞掉节点级错误）
     if (raw.version !== 1)
         return { ok: false, errors: [`version 必须为 1，实际：${JSON.stringify(raw.version)}`] };
-    // 三个致命字段走直线守卫收窄（经 errors 间接 return 的写法 TS 无法收窄，unknown 会向下游传染）
+    // 三个致命字段走直线检查收窄（经 errors 间接 return 的写法 TS 无法收窄，unknown 会向下游传染）
     const mode = raw.mode === "dev" || raw.mode === "acceptance" ? raw.mode : null;
     if (mode === null) {
         errors.push(`mode 必须是 "dev" 或 "acceptance"，实际：${JSON.stringify(raw.mode)}`);
@@ -1512,7 +1512,7 @@ async function runVerifyScript(node) {
     });
     return { exitCode: r.exitCode, output: `${r.stdout}\n${r.stderr}` };
 }
-/** 归因 agent（§8.7 ①）：三分类 + 证据 + 失败面文件集；自愈历史回喂（跨轮记忆）。
+/** 归因 agent（§8.7 ①）：三分类 + 证据 + 失败相关文件集；自愈历史回喂（跨轮记忆）。
  *  返回 3 次回喂重试仍不合规时保守按 product-bug（不修验收资产，直接依赖判定）。 */
 async function diagnoseVerifyFailure(node, run, history, round) {
     // 名字带轮次：自愈循环每轮调用本函数，run 内 agent 名唯一——同名二建直接杀 run；
@@ -2331,7 +2331,7 @@ async function runSchedulingLoop() {
         }
         // 级二粗粒度复核的基线：**单调累积**（launch 时并入该节点范围声明，settle 后不移除）——
         // 粗粒度复核「只松不严」原则下，移除已落定节点的范围声明只会收紧：兄弟节点带残留改动
-        // 落定（blocked/commit 失败）后，在飞节点的核验会把残留判为越界 stray 而被误伤打回
+        // 落定（blocked/commit 失败）后，在途节点的核验会把残留判为越界 stray 而被误伤打回
         //（审查 P1 修正；launch 后并入保证新派发节点自身必在并集内）
         for (const id of active.keys()) {
             const n = plan.nodes.find((x) => x.id === id);
@@ -2347,7 +2347,7 @@ async function runSchedulingLoop() {
         active.delete(finishedId);
         log(`节点 ${finishedId} 落定（活跃 ${active.size}），重算就绪集`);
         // 核心组熔断判定：任一核心节点 blocked/failed 且 haltOnCoreFail → 记归因、停止新派发。
-        // 在飞节点收尾不放弃（await allSettled——熔断只是不派新，已派节点的落盘/commit 照常完成）
+        // 在途节点收尾不放弃（await allSettled——熔断只是不派新，已派节点的落盘/commit 照常完成）
         // §8.7 依赖可达性熔断（统一判据）：任一节点 blocked/failed 且卡住未终态后继
         // （dev 打回超限 / 自报 blockers / 引擎层失败）→ 立即停止派发（已派节点收尾不放弃）。
         // verify/inspect 的 failed 不立即熔断（acceptance 与 dev 模式一律）——统一失败处理
@@ -2371,14 +2371,14 @@ async function runSchedulingLoop() {
                     id: stuckBad.id,
                     detail: `${rt?.reason ?? "节点失败卡住后继"}\n${rt?.detail ?? ""}`.trim(),
                 };
-                log(`节点 ${stuckBad.id} 失败/受阻且卡住后继（依赖可达性熔断 §8.7）：未派发节点不再派发，等待在飞节点收尾`);
+                log(`节点 ${stuckBad.id} 失败/受阻且卡住后继（依赖可达性熔断 §8.7）：未派发节点不再派发，等待在途节点收尾`);
                 await Promise.allSettled([...active.values()]);
                 break;
             }
         }
     }
 }
-// ── 看板（运行观察面：节点状态流转实时上板，终态也可从 status.json 人读） ──
+// ── 看板（运行观察：节点状态流转实时上板，终态也可从 status.json 人读） ──
 artifact.board("nodes", {
     title: "执行节点状态",
     key: "id",

@@ -39,7 +39,7 @@
 //  - 一切失败 failed-as-return（沿 W1 T8 收紧：throw 的 errored run 不可 resume）——
 //    含未知参数键白名单 fail-fast
 // 数据传递 = 结构化返回总线（无聚合层故不落重型报告文件）：matrixRows / findings /
-// reconciliation / fixes 经 ask<T> 返回，脚本侧归一入台账；每轮原始返回留档
+// reconciliation / fixes 经 ask<T> 返回，脚本侧归一入条目清单；每轮原始返回留档
 // round-N[.attemptM]/ 下供断点恢复人读。agent 模板默认路径 = 本 skill 安装位
 // （~/.agents/skills/dev-flow-wf/agents/，args 可覆盖），~ 前缀经 node -e 通道运行时展开。
 // ============================================================================
@@ -171,7 +171,7 @@ const NODE_BACKTICK_GREP = [
   "out({ok:true,missing:scan.filter(function(s){return !hit.has(s)}),wordsDrift:wd});",
 ].join("\n");
 
-// node -e 通道（argv 传参，无 shell 注入面；node 代码不受脚本 facade 限制）
+// node -e 通道（argv 传参，无 shell 注入风险；node 代码不受脚本 facade 限制）
 const NODE_WRITE_FILE =
   "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2])";
 // argv: [...路径] → 全部存在且为常规文件 = exit 0；否则 exit 1 + stdout JSON
@@ -215,7 +215,7 @@ const NODE_RENAME_FILE =
 // fix-hint，由结构化记录重渲染；追加行才是 fixer 产物），按 finding id 归集，渲染时
 // 插回对应区块 fix-hint 行之后（保留合并）。区块边界 = `### <id>` 头起、下一个 `### ` /
 // `## ` 头止（文件头 `- 仓库：` 等在任一区块前，不归集）；块内精确重复行去重（防
-// fixer 未察觉在位而重复补写）。文件不存在/读取失败 → {}（首轮无旧矩阵，无保留面）。
+// fixer 未察觉在位而重复补写）。文件不存在/读取失败 → {}（首轮无旧矩阵，无追加行可保留）。
 const NODE_EXTRACT_FINDING_EXTRAS = [
   "var fs=require('fs');var out=function(o){process.stdout.write(JSON.stringify(o))};",
   "var res={};",
@@ -449,7 +449,7 @@ function asStr(v: unknown, d = ""): string {
 
 /** 字符串级 POSIX 路径归一（主脚本无 node API，等价 path.posix.normalize 的词法部分）：
  *  逐段消化 "." 与 "seg/.."。绝对路径（/ 开头）返回归一形态；穿越到根以上（归一后无段
- *  可弹出）返回 null = 非法。只做词法归一不触盘——symlink 逃逸不在覆盖面（4b 探针的
+ *  可弹出）返回 null = 非法。只做词法归一不触盘——symlink 逃逸不在覆盖范围（4b 探针的
  *  statSync 层同样不解 symlink，两侧同一边界，注释即为该边界的显式登记）。check4b 的
  *  仓库内前缀校验用归一后路径判定——否则 projectRoot/sub/../../outside 穿越形态靠
  *  首段子串命中即可绕过前缀检查 */
@@ -579,7 +579,7 @@ function normMatrixRows(raw: unknown, source: string, round: number): MatrixRowR
   return out;
 }
 
-/** reviewer findings 归一为台账条目（脚本重编 id：F<轮>-<序>，跨模块不去重） */
+/** reviewer findings 归一为清单条目（脚本重编 id：F<轮>-<序>，跨模块不去重） */
 function normFindings(raw: unknown, owner: string, round: number, seqStart: number): { findings: FindingRecord[]; next: number } {
   if (!Array.isArray(raw)) return { findings: [], next: seqStart };
   const out: FindingRecord[] = [];
@@ -619,7 +619,7 @@ function normFindings(raw: unknown, owner: string, round: number, seqStart: numb
 }
 
 /** reconciliation 防御：null 元素丢弃、字段窄化；status 畸形归 not-fixed
- *  （fail-closed：畸形当未修复，下轮对账重核，不会假清账） */
+ *  （fail-closed：畸形当未修复，下轮对账重核，不会假标完成） */
 function normRecon(raw: unknown): ReconEntry[] {
   if (!Array.isArray(raw)) return [];
   const out: ReconEntry[] = [];
@@ -751,7 +751,7 @@ function normRetirement(raw: RetirementVerdict): RetirementVerdict {
 
 // ── 断点续跑载入防御（resumeFrom）：final.json 是本引擎自己的落盘产物，但跨 run 读取
 //    仍按不可信输入窄化（与 normFindings/normPlanner 同款纪律）。条目级畸形归一不丢弃
-//    （status 畸形归 open——fail-closed：当未修进修复轮对账，不假清账）；id/owner 缺失 =
+//    （status 畸形归 open——fail-closed：当未修进修复轮对账，不假标完成）；id/owner 缺失 =
 //    条目不可标识，丢弃该条计缺陷。firstSeen 保留原值，由载入段按「载入后 open 置 1」
 //    统一重置（重绑定回 open 的在重绑定处置 1）──
 
@@ -1487,7 +1487,7 @@ const ledgerById = (id: string): FindingRecord | undefined => ledger.find((f) =>
 function findingEditFiles(f: FindingRecord): string[] {
   if (f.direction === "code-right") {
     // planner 域 code-right 的修复对象含 impl-plan（②③ 现实性/一致性差异修计划侧）；
-    // mechanical 域（反引号悬空）修复面 = 文档侧（含 impl-plan.md 人读版——它也可能含悬空引用）
+    // mechanical 域（反引号悬空）修复归属 = 文档侧（含 impl-plan.md 人读版——它也可能含悬空引用）
     if (f.owner === "planner") return [designDoc, implPlan];
     if (f.owner === "mechanical") return [designDoc, implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md")];
     return [designDoc];
@@ -1506,7 +1506,7 @@ function findingEditFiles(f: FindingRecord): string[] {
 }
 
 /** 候选组构造（脚本确定性，非 LLM）：每模块一候选组（组 = 模块 files 并集语义，条目 =
- *  该模块活跃条目）+ planner 域单候选组（框架级条目修复面横跨设计文档/登记文档，保守
+ *  该模块活跃条目）+ planner 域单候选组（框架级条目修复范围横跨设计文档/登记文档，保守
  *  串行）。候选组仍过 reconcileGroups 机器校验（无效组过滤/覆盖兜底/闭包合并/重编组号） */
 function buildCandidateGroups(active: FindingRecord[]): FixGroup[] {
   const raw: FixGroup[] = [];
@@ -1522,10 +1522,10 @@ function buildCandidateGroups(active: FindingRecord[]): FixGroup[] {
       id: "M-mech",
       issueIds: mechIds,
       files: [designDoc, implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md")],
-      note: "机械信号（反引号悬空引用）——修复面 = 文档侧引用清理",
+      note: "机械信号（反引号悬空引用）——修复归属 = 文档侧引用清理",
     });
   }
-  // 退役引用清理条目（引擎在收敛点生成，owner=retire-cleanup）：修复面 = location 锚点
+  // 退役引用清理条目（引擎在收敛点生成，owner=retire-cleanup）：修复范围 = location 锚点
   // （引用方文件）；锚点缺失（命中行无路径形态）→ 声明范围空集，按 fix-hint 定位 +
   // affectedFiles 申报核验——与漏实现条目同款降级路径
   const retireIds = active.filter((f) => f.owner === "retire-cleanup");
@@ -1536,13 +1536,13 @@ function buildCandidateGroups(active: FindingRecord[]): FixGroup[] {
     }))];
     raw.push({ id: "M-retire", issueIds: retireIds.map((f) => f.id), files, note: "退役引用清理——先修引用后执行退役移动（决定权在判定 agent，扫描命中只产清理素材）" });
   }
-  // planner 域拆两组（§7.1 回写）：文档侧条目（code-right：架构漂移/②③/登记面/越权回写）
-  // 单组串行；漏实现与 contested-suggestion（doc-right 修复面，代码锚点未知）单独成组
+  // planner 域拆两组（§7.1 回写）：文档侧条目（code-right：架构漂移/②③/登记文档差异/越权回写）
+  // 单组串行；漏实现与 contested-suggestion（doc-right 修复范围，代码锚点未知）单独成组
   // 且声明范围 = 空集（按 fix-hint 定位，affectedFiles 申报核验）
   const plannerDoc = active.filter((f) => f.owner === "planner" && f.direction === "code-right");
   const plannerImpl = active.filter((f) => f.owner === "planner" && f.direction !== "code-right");
   if (plannerDoc.length > 0) {
-    raw.push({ id: "M-plan", issueIds: plannerDoc.map((f) => f.id), files: [designDoc, implPlan], note: "框架级条目（架构漂移 / impl-plan 现实性与内部一致性 / 关联登记面）——修复面横跨文档侧，保守单组" });
+    raw.push({ id: "M-plan", issueIds: plannerDoc.map((f) => f.id), files: [designDoc, implPlan], note: "框架级条目（架构漂移 / impl-plan 现实性与内部一致性 / 关联登记文档核对）——修复范围横跨文档侧，保守单组" });
   }
   if (plannerImpl.length > 0) {
     raw.push({ id: "M-plan-impl", issueIds: plannerImpl.map((f) => f.id), files: [], note: "框架级漏实现 / contested-suggestion（应补代码，锚点未知）——声明范围空集：按 fix-hint 定位补码位置，affectedFiles 如实申报（引擎核验），串行单组" });
@@ -1550,7 +1550,7 @@ function buildCandidateGroups(active: FindingRecord[]): FixGroup[] {
   return raw;
 }
 
-/** matrix 再生保留面（F6-1）：读旧 matrix.md，按 finding id 提取 fixer 追加行
+/** matrix 再生保留合并（F6-1）：读旧 matrix.md，按 finding id 提取 fixer 追加行
  *  （订正/注记等非五字段行）——renderMatrix 重渲染时插回对应区块，防历代丢失。
  *  任一步故障（探针失败 / JSON 畸形）fail-soft 返回空 Map：矩阵主体由结构化记录重渲染、
  *  正确性不依赖追加行，保留是增强不是前提，不因保留失败炸轮。 */
@@ -1602,12 +1602,12 @@ function renderMatrix(extras: Map<string, string[]> = new Map()): string {
     });
   }
   L.push("");
-  L.push("## Findings 台账（八字段 + 状态）");
+  L.push("## Findings 条目清单（八字段 + 状态）");
   if (ledger.length === 0) {
     L.push("");
     L.push("（无 findings）");
   }
-  // 台账状态显示（终态各档带去向说明，防止终态条目误显示为 open：delegated = 职责外申报
+  // 条目状态显示（终态各档带去向说明，防止终态条目误显示为 open：delegated = 职责外申报
   // 随终态呈报主 agent 重派；exempt = 符号豁免待主 agent 终审；frozen = 方向争议冻结待用户裁决）
   const statusLabel: Record<FindingRecord["status"], string> = {
     open: "open",
@@ -1655,7 +1655,7 @@ function renderTrajectory(): string {
 }
 
 async function persistArtifacts(): Promise<void> {
-  // 先提取旧矩阵的 fixer 追加行（F6-1 保留合并）再整体重渲染——提取失败只丢保留面，
+  // 先提取旧矩阵的 fixer 追加行（F6-1 保留合并）再整体重渲染——提取失败只丢追加行，
   // 不阻断写盘（loadFindingExtras 内部已 fail-soft）
   const extras = await loadFindingExtras();
   const okM = await writeArtifact(matrixFile, renderMatrix(extras));
@@ -1751,7 +1751,7 @@ const REVIEWER_PERSONA =
   "你是终态同步的模块审查者：只报告，绝不改代码改文档；每个发现都有你亲自读到的代码证据。" +
   NO_ASK_RULE;
 const FIXER_PERSONA =
-  "你是终态同步修复工程师：先重演验证再动手、修完全量自检、如实申报改动面；做不完的如实说明，不静默跳过。" +
+  "你是终态同步修复工程师：先重演验证再动手、修完全量自检、如实申报改动范围；做不完的如实说明，不静默跳过。" +
   NO_ASK_RULE;
 const RETIRE_PERSONA =
   "你是交付收尾判定者：按规则产退役/保留清单，只判定不执行；拿不准的列保留并说明理由。" +
@@ -2088,7 +2088,7 @@ const IMPURE_PATH_RE = /[\s（「『“”"']|:\d+(?:-\d+)?$/;
  *  保持一致（两引擎同判据，聚合裁决固化同一字面量——单侧不得改动）。「command 文本须引用
  *  affectedFiles 至少一个路径基名」的跨文件强校验因误伤面大（合法自检常跨多文件聚合统计）
  *  不实装，恒过形态拒收是两引擎共同取舍。已知边界：\b 词边界对「:」开头形态（裸「:」/
- *  「: cmd」）不成立会漏——冒号形态申报占比极低，跨引擎字面一致优先，不单侧扩大覆盖面 */
+ *  「: cmd」）不成立会漏——冒号形态申报占比极低，跨引擎字面一致优先，不单侧扩大覆盖范围 */
 const ALWAYS_PASS_CMD_RE = /^(true|false|:|echo|printf|exit)\b/;
 
 // 文件名安全化（模块/组名可含路径分隔符与空白——runlog 文件名不能展开成子目录）
@@ -2119,7 +2119,7 @@ function rulingsContextBlock(): string {
 
 const plannerPromptText = [
   "终态同步 framework-scan（两级拓扑第一级，首轮全量）。",
-  `第一步：Read planner 模板 ${plannerTplAbs}——按其中任务契约执行全部职责（框架级对照 / impl-plan 现实性与内部一致性 / 关联登记面核对 / 模块分解）。`,
+  `第一步：Read planner 模板 ${plannerTplAbs}——按其中任务契约执行全部职责（框架级对照 / impl-plan 现实性与内部一致性 / 关联登记文档核对 / 模块分解）。`,
   runlogDutyLine("sync-planner"),
   `仓库 ${projectRoot}；设计文档 ${designDoc}；impl-plan ${implPlan}；审查基线 = 当前 HEAD（${headHash}）——审查对象是 HEAD 终态全量，不是 diff 区间。`,
   statusPathArg !== ""
@@ -2248,7 +2248,7 @@ const retirePromptText = [
   "1. 盘点本设计相关产物（设计文档 / impl-plan / 各轮审查留档）：已在 ~/.agents/skill-data/ 工作流产物目录下的属合规放置；项目内 .tmp/design-doc-retirement/ 下的也属合规放置（退役移动目标，git mv 语义绑定项目内目录）——两类逐项列 kept（理由 = 合规放置无需处理）。",
   "2. 残留在源码树（docs/ 等）的伴生产物——旧惯例 .review* 报告、probe 产物等——若内容判断已无存留价值，列 candidates。",
   "3. 被本次设计整体取代的旧设计文档——由你独立做内容判断（新版是否完全覆盖其价值），不受「是否还有引用」影响：引用的存在不是保留的理由，引擎会把全仓引用扫描结果转为清理条目先修引用、清零后才执行移动。",
-  `输入：仓库 ${projectRoot}；设计文档 ${designDoc}；同步矩阵 ${matrixFile}（可 Read 了解本次改动面与涉及文件）。`,
+  `输入：仓库 ${projectRoot}；设计文档 ${designDoc}；同步矩阵 ${matrixFile}（可 Read 了解本次改动范围与涉及文件）。`,
   "完成后返回 JSON：candidates（元素 {path, reason}，path 为 projectRoot 相对或绝对路径）+ kept（元素 {path, reason}）。零候选时 candidates 返回空数组（显式）——不要为了非空而虚构候选。",
 ].join("\n");
 
@@ -2513,7 +2513,7 @@ async function commitGroupFiles(round: number, gid: string, count: number, files
     log(`  ${gid}: 无可提交文件（改动均在 gitignore 产物或为空）——不 commit`);
     return;
   }
-  // 路径限定（沿 W2 GIT_ADD_COMMIT 惯例）：--only + pathspec 把提交面钉死在本组文件——
+  // 路径限定（沿 W2 GIT_ADD_COMMIT 惯例）：--only + pathspec 把提交范围固定在本组文件——
   // 预检对脏工作区仅 WARN 不阻断，无 pathspec 时 index 里预存 staged 内容会被卷入组 commit，
   // 且 diff --cached 判定也会被预存 staged 干扰
   const rels = staged.map((p) => rel(p));
@@ -2711,7 +2711,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
 
   if (round === 1 && resumeMode) {
     // ── resume 起步轮（断点续跑第 1 轮）：跳过 planner 与模块 fan-out（无审查——条目清单已
-    //    自先前 runDir 载入并按裁决重绑定），观测 setup 边界就此收口（非续跑路径的该边界
+    //    自先前 runDir 载入并按裁决重绑定），观测 setup 边界就此落定（非续跑路径的该边界
     //    在 R1 planner 之后），直接落入本分支之后的共享路径：contested 分流（载入 open 条
     //    目防御位）→ 停机线 → reconcileGroups 分组修复 → R2+ 聚焦复审主循环 ──
     await obsEnd("setup", null);
@@ -2737,7 +2737,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
         const files = [...new Set(p.modules.flatMap((m) => m.files))];
         // 词法归一后再验前缀：projectRoot/sub/../../outside 穿越形态的首段子串命中可绕过
         // 纯 startsWith 前缀检查——归一消化 .. 段后越界路径现出原形（2026-11-04 修复；
-        // symlink 逃逸不在词法层覆盖面，见 normPosixPath 注释）
+        // symlink 逃逸不在词法层覆盖范围，见 normPosixPath 注释）
         const outside = files.filter((fp) => {
           const n = normPosixPath(fp);
           return n === null || !n.startsWith(`${projectRoot}/`);
@@ -2876,8 +2876,8 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     log(`第 ${round} 轮 framework-scan：框架发现 ${plan.frameworkFindings.length} 条，模块分解 ${plan.modules.length} 个${plan.modules.length === 1 ? "（单模块退化 = 单 reviewer）" : ""}`);
     await auditJson(`${roundDir}/planner.json`, JSON.stringify(plan, null, 2));
     moduleById = new Map(plan.modules.map((m) => [m.id, m]));
-    // 框架级发现入台账：方向推断（模板无 direction 字段）——漏实现 = design 有 code 无 →
-    // doc-right（补代码）；越权/其余（impl-plan 现实性/内部一致性/登记面/越权回写）→ code-right
+    // 框架级发现入清单：方向推断（模板无 direction 字段）——漏实现 = design 有 code 无 →
+    // doc-right（补代码）；越权/其余（impl-plan 现实性/内部一致性/登记文档差异/越权回写）→ code-right
     //（修文档侧）；「一致」行只进矩阵不立项；矩阵行直接进全量矩阵顶层。
     // overdesign = 过度/存疑 档入账即转候选卡呈报（§7.3：只报告不删码，不进修复循环）
     for (const ff of plan.frameworkFindings) {
@@ -3293,7 +3293,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       try {
         await persistArtifacts();
       } catch {
-        // 矩阵本轮已落盘过，仲裁结果台账留档失败不改变改判语义
+        // 矩阵本轮已落盘过，仲裁结果条目留档失败不改变改判语义
       }
     }
   }
@@ -3411,7 +3411,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
   const roundFixes: FixRecord[] = [];
   // ── 修复环 run 内自愈（2026-10-03）：ES 语义覆盖违规不终止 run，回喂纠正至多 FIX_SELFHEAL_MAX 次 ──
   // 镜像 askValidated 的回喂形态（错误清单回灌 + 全量重报），但作用在语义层：fixer 申报的四桶
-  // 覆盖面与分组任务不符时，把违规清单 + 上轮申报原样回灌；纠正轮 agent 是新实例（pi 无同名
+  // 覆盖范围与分组任务不符时，把违规清单 + 上轮申报原样回灌；纠正轮 agent 是新实例（pi 无同名
   // 续聊保证），故纠正 brief 必须自包含。纠正耗尽仍违规 → 维持原 fail-fast（接管协议为最后
   // 兜底）。与 attempt 重发起的区别：纠正发生在组内状态新鲜时（在途编辑就是本组 fixer 的产物，
   // 无跨 run 对账成本），attempt 是跨 run 兜底而非常规路径。

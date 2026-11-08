@@ -100,9 +100,9 @@ interface MatrixRowLite {
   overdesign?: "over" | "suspect" | "fine";
 }
 
-/** planner 框架级发现（矩阵顶层行 + 台账条目） */
+/** planner 框架级发现（矩阵顶层行 + 清单条目） */
 interface PlannerFrameworkFinding {
-  /** 展示用 id（FF1 形态；台账以脚本重编 id 为准） */
+  /** 展示用 id（FF1 形态；清单以脚本重编 id 为准） */
   id: string;
   matrixRow: MatrixRowLite;
   /** must-fix / suggestion / info */
@@ -127,7 +127,7 @@ interface PlannerResult {
   modules: ModulePlanRec[];
 }
 
-/** findings 八字段 schema（sync-reviewer 模板第 4 条，W4 台账载体） */
+/** findings 八字段 schema（sync-reviewer 模板第 4 条，W4 条目清单载体） */
 interface Finding8 {
   id: string;
   /** file:line 或 文档§章节 */
@@ -231,7 +231,7 @@ interface RetirementVerdict {
   kept: { path: string; reason: string }[];
 }
 
-/** 台账条目（脚本侧全生命周期状态） */
+/** 清单条目（脚本侧全生命周期状态） */
 interface FindingRecord {
   id: string;
   /** 归属（"planner" | 模块 id）——R2+ 聚焦复审的续聊对象键 */
@@ -268,7 +268,7 @@ interface FindingRecord {
   contestedDefaulted?: boolean;
 }
 
-/** 矩阵行台账（拼接历史） */
+/** 矩阵行记录（拼接历史） */
 interface MatrixRowRecord extends MatrixRowLite {
   source: string;
   round: number;
@@ -322,14 +322,14 @@ interface SyncResult {
   /** 同步产物根（矩阵/轨迹/各轮留档所在） */
   runDir: string;
   designDoc: string;
-  /** 全量三向功能对照矩阵（markdown，含 findings 台账与方向分布） */
+  /** 全量三向功能对照矩阵（markdown，含 findings 条目清单与方向分布） */
   matrixFile: string;
   /** 机械信号步终态观测：`ran: 零命中 N 条` / `skipped: <原因>`（含未传 watchlist 词表的
    *  整步跳过——主 agent 据此可判词表参数是否遗漏）/ `failed: <原因>`；字段缺省 = 该步未
    *  被执行到（如 planner 阶段即失败），与「执行了但被跳过」区分。记录最后一次执行
    *  （R1 立项扫描或 R2+ 对账复扫）的结果 */
   mechanicalScan?: string;
-  /** findings 方向分布（按台账全量计） */
+  /** findings 方向分布（按清单全量计） */
   directionStats: { docRight: number; codeRight: number; contested: number };
   /** 退役执行结果（仅 converged 填实；其余终态为空） */
   retirement: { retired: { from: string; to: string }[]; kept: { path: string; reason: string }[] };

@@ -117,7 +117,7 @@ const artifact = { chart: () => {}, board: () => {}, markdown: async () => {}, f
 //  - 一切失败 failed-as-return（沿 W1 T8 收紧：throw 的 errored run 不可 resume）——
 //    含未知参数键白名单 fail-fast
 // 数据传递 = 结构化返回总线（无聚合层故不落重型报告文件）：matrixRows / findings /
-// reconciliation / fixes 经 ask<T> 返回，脚本侧归一入台账；每轮原始返回留档
+// reconciliation / fixes 经 ask<T> 返回，脚本侧归一入条目清单；每轮原始返回留档
 // round-N[.attemptM]/ 下供断点恢复人读。agent 模板默认路径 = 本 skill 安装位
 // （~/.agents/skills/dev-flow-wf/agents/，args 可覆盖），~ 前缀经 node -e 通道运行时展开。
 // ============================================================================
@@ -138,11 +138,11 @@ const SCHEMA_MatrixRowLite = {
   required: ["claim", "impl", "align", "note"],
 };
 
-// planner 框架级发现（矩阵顶层行 + 台账条目）
+// planner 框架级发现（矩阵顶层行 + 清单条目）
 const SCHEMA_PlannerFrameworkFinding = {
   type: "object",
   properties: {
-    id: { type: "string", description: "展示用 id（FF1 形态；台账以脚本重编 id 为准）" },
+    id: { type: "string", description: "展示用 id（FF1 形态；清单以脚本重编 id 为准）" },
     matrixRow: SCHEMA_MatrixRowLite,
     severity: { type: "string", enum: ["must-fix", "suggestion", "info"], description: "must-fix / suggestion / info" },
   },
@@ -171,7 +171,7 @@ const SCHEMA_PlannerResult = {
   required: ["frameworkFindings", "modules"],
 };
 
-// findings 八字段 schema（sync-reviewer 模板第 4 条，W4 台账载体）
+// findings 八字段 schema（sync-reviewer 模板第 4 条，W4 条目清单载体）
 const SCHEMA_Finding8 = {
   type: "object",
   properties: {
@@ -361,7 +361,7 @@ function wfAgent(name, persona) {
       const schema = SCHEMA_BY_KEY[typeKey];
       if (!schema) throw new Error(`未知 ask 类型键 ${typeKey}（SCHEMA_BY_KEY 未登记）`);
       // desc 直取 name 原文（不做 -rN/-RN 后缀剥离）：pi 实例名须与静态第一实参一致——
-      // workflow DAG 静态投影模板按调用点第一实参提取，剥离会让带轮次后缀的名字
+      // workflow DAG 静态派生模板按调用点第一实参提取，剥离会让带轮次后缀的名字
       // （主审-r2 等）匹配不上实例；且 zcode 侧同名即续聊，后缀是轮次新 agent 的身份语义，
       // 两平台显示名本就应当对齐。
       const desc = String(name);
