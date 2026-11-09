@@ -1624,7 +1624,7 @@ gateARetry: while (true) {
       "约束：",
       "1. 修复对象 = 文档与注释（设计文档 / docs/ 项目文档 / 代码注释）；禁止为对齐失真描述去改实现——若你核实后确信实现才错了（文档是对的），该条放 skipped 并写明实现侧证据（file:line），它将回流主 agent 裁决，不盲改。",
       "2. 波及扫描：每修一处 grep 同模式实例（同类失真表述 / 同键引用 / 同族计数口径），组内实例一并修；组外文件在 description 标注「组外波及：<位置>」。",
-      "3. 联动自检（替代代码组的测试硬门，结构化申报）：修完跑适用的一致性检查（如改 style.css 派生段（从 token 权威源生成的段落）跑 python3 .githooks/check_css_token_ssot.py、改 i18n 文案跑 python3 .githooks/check_i18n_locale_sync.py）——selfCheck.grepChecks 每条 {desc, command, expected, actual} 记实际执行的检查命令与输出（existence-check 类 = 旧表述零残留检索，expected 填零命中预期）；无适用检查时对旧表述做零残留检索同款申报。selfCheck.typecheck 填 \"pass\"（纯文档改动无编译环节）。命令与输出必须可复算（引擎做结构校验：grepChecks 每条须含非空 command 与 actual；当前引擎不复跑文档组自检命令——聚焦复审按申报的 command/actual 线索聚焦核验）。",
+      "3. 联动自检（替代代码组的测试硬门，结构化申报）：修完跑适用的一致性检查——适用检查以目标项目 AGENTS.md（或其索引的规范文档）登记的项目内检查为准，修复前先读该登记并按登记执行（典型形态：设计值派生视图与样式真值的比对检查、多语言文案双侧 key 对齐检查）；项目未登记适用检查时，对旧表述做零残留检索同款申报。selfCheck.grepChecks 每条 {desc, command, expected, actual} 记实际执行的检查命令与输出（existence-check 类 = 旧表述零残留检索，expected 填零命中预期）。selfCheck.typecheck 填 \"pass\"（纯文档改动无编译环节）。命令与输出必须可复算（引擎做结构校验：grepChecks 每条须含非空 command 与 actual；当前引擎不复跑文档组自检命令——聚焦复审按申报的 command/actual 线索聚焦核验）。",
       "4. git 禁令同代码组：禁止 git add / commit / push / stash——提交由工作流引擎统一执行。",
       "5. affectedFiles 如实申报每个改动文件（含设计文档——无论在仓库内还是 ~/.agents/skill-data/ 下都如实申报，引擎按申报核验归属；仓库外与 gitignored 文件提交时自然落空不阻塞）。路径必须纯路径（不得夹说明文字或 file:line 行号——引擎按值校验，杂质会被拒收回喂；说明放 description）。",
       "",
