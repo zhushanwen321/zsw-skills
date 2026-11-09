@@ -9,7 +9,8 @@
 //   - 规则 10：guards[].text 两两精确重复（trim 后相等）fail；跨字段特征子串逐字重复
 //     warning 不阻塞（同字段路径内重复不计数；guards[].text 登记处自身不参与提取——
 //     否则收敛为「登记处 + 引用侧」的目标形态后仍会误报）；登记全文在正文其他字段的
-//     逐字残留 warning 不阻塞（C1b，恰 1 条且含守护 id 与残留位置）
+//     逐字残留 warning 不阻塞（C1b，恰 1 条且含守护 id 与残留位置）；特征判据的命令动词
+//     分支边界为 (?!\w)——下划线延续的标识符 token 不命中、连字符边界照常命中
 //   - 渲染联动（render-design-doc.mjs）：{{ G1 }} 空白 token 展开为登记全文；meta.name
 //     内联 {{G1}} 时渲染首行标题同样经统一出口展开
 // 存量兼容：无 guards 的最小合法六章节（resources/templates/design-doc/ 裁剪形态）exit 0
@@ -369,4 +370,31 @@ test("meta.name 内联 {{G1}} → 渲染首行标题经统一出口展开为登�
   assert.equal(render.status, 0, `render 应 exit 0，实际 stderr：${render.stderr}`);
   const firstLine = rendered.split("\n")[0];
   assert.equal(firstLine, `# fixture-${GUARD_TEXT_B}-design`, `首行标题应展开 {{G1}}，实际：${firstLine}`);
+});
+
+// ── 用例 12：动词边界——下划线延续不命中动词分支，连字符边界仍命中（端到端走真实脚本） ──
+
+test("git_status_xxx 式标识符 token 跨两字段重复 → 不触发 warning", () => {
+  // 动词分支收紧为 (?!\w)：下划线属单词字符。该 token ≥30 无空白、动词开头、无元字符聚集、
+  // 无左括号——收紧前单凭动词分支进候选，收紧后三条判据全不中 → 零 warning。
+  // 两处都放非登记处字段（guards.text 是登记处、不参与提取）
+  const underscoreToken = "git_status_probe_boundary_check_token_xxx";
+  const r = runCheck((d) => {
+    d["s3-solution.json"].decisions[0].evidence = `证据示意：扫描 ${underscoreToken} 已核实`;
+    d["s4-accept.json"].assertionRedlights.push({ id: "RL1", assumption: "运行时假设示意", redlight: `守护命令 ${underscoreToken} 失败即红`, buildItem: "—" });
+  });
+  assertAllGreen(r, "下划线延续 token");
+});
+
+test("grep- 连字符边界 token 跨两字段重复 → 仍触发 warning", () => {
+  // 对照形态：连字符不是单词字符，动词分支照常命中——边界收紧只排除下划线延续
+  const hyphenToken = "grep-rn-inbound-guard-trigger-intraday";
+  const r = runCheck((d) => {
+    d["s3-solution.json"].decisions[0].evidence = `证据示意：扫描 ${hyphenToken} 已核实`;
+    d["s4-accept.json"].assertionRedlights.push({ id: "RL1", assumption: "运行时假设示意", redlight: `守护命令 ${hyphenToken} 失败即红`, buildItem: "—" });
+  });
+  assert.equal(r.status, 0, `warning 不阻塞判定，实际 exit=${r.status}\nstdout: ${r.stdout}`);
+  const warnLines = r.stdout.trim().split("\n").filter((l) => l.includes("[单一登记]"));
+  assert.equal(warnLines.length, 1, `应恰 1 条 [单一登记] warning，实际 stdout：${r.stdout}`);
+  assert.ok(warnLines[0].includes(hyphenToken), `warning 应含该 token，实际：${warnLines[0]}`);
 });

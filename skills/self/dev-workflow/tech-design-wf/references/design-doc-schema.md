@@ -284,7 +284,7 @@ P7 上游约束原则的产物表（触发条件：设计依赖非本项目代�
 | migrationWaves[].gapRefs | s3-solution.json | 同文件 terminalForm.gapTable[].id |
 | scenarios[].goalRefs | s4-accept.json | s1-context.json goals[].id |
 
-**{{Gx}} 守护引用标记**：任意章节 JSON 的文本字段可内联完整 token `{{Gx}}`（双花括号 + guards id），指向 s3-solution.json decisions[].guards 的 id；渲染脚本把 token 替换为对应 guards[].text 全文——人读层就近读到全文，登记仍只有一处。引用存在性（token 指向的 guards id 必须存在）由检查器校验；渲染对指向不存在的 token 原样保留（渲染 fail-soft，不校验）。
+**{{Gx}} 守护引用标记**：任意章节 JSON 的文本字段可内联完整 token `{{Gx}}`（双花括号 + guards id），指向 s3-solution.json decisions[].guards 的 id；渲染脚本把 token 替换为对应 guards[].text 全文——人读层就近读到全文，登记仍只有一处。引用存在性（token 指向的 guards id 必须存在）由检查器校验；渲染对指向不存在的 token 原样保留（渲染 fail-soft，不校验）。正文需要展示 `{{...}}` 字面形态本身（如向读者说明该语法）时，用全角花括号 `｛｛G1｝｝`——半角双花括号是守护引用保留语法，凡出现一律按引用校验，指向不存在的 id 即 fail。
 
 id 规则：各数组内 id 不重复，全部 id 数组的 id 全局唯一（不同前缀如 U / D 各自独立编号，天然不冲突；terminalForm.gapTable 与 decisions.guards 同用 `G` 前缀，两族编号互不重号）。建议前缀见各字段表。
 

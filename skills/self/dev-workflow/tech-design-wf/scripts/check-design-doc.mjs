@@ -61,8 +61,9 @@ const MIGRATION_HINT =
 // 元字符聚集取正类，否定类会把中文标题 / 文件路径等普通长 token 全数放进候选） ──
 const GUARD_TEXT_MIN_TOKEN_LEN = 30; // 短于 30 字符的路径片段等不构成逐字对账负担
 const GUARD_COMMAND_VERBS = ["grep", "rg", "ripgrep", "node", "python", "python3", "pytest", "npm", "git", "curl", "sqlite3", "find", "awk", "sed"];
-// 动词后须跟非字母数字，避免 github 式前缀误命中动词 git
-const GUARD_COMMAND_VERB_RE = new RegExp(`^(?:${GUARD_COMMAND_VERBS.join("|")})(?![A-Za-z0-9])`);
+// 动词后须跟非单词字符（字母 / 数字 / 下划线都不算边界）——避免 github 式前缀误命中动词
+// git，也避免 git_status_xxx 式标识符延续命中动词分支（真实命令动词后是空格 / 连字符 / 斜杠）
+const GUARD_COMMAND_VERB_RE = new RegExp(`^(?:${GUARD_COMMAND_VERBS.join("|")})(?!\\w)`);
 const GUARD_META_CLUSTER_RE = /[$\[\]{}|*+\\]{2,}/; // 正则元字符（$[]{}|*+\）2 个以上连续聚集
 // {{<id>}} 守护引用完整 token（规则 2 段 guards.text 叶子禁令与规则 4 段引用校验共用；
 // 顶层 const 按声明序执行，必须先于 guards 解析段声明，否则规则 2 段先引用会抛 ReferenceError）
