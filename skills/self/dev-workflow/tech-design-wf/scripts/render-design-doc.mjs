@@ -8,6 +8,10 @@
 //   - 长文本字段原样输出；数组渲染为 md 表格（产物表）或条目列表（决策 / 拆分单元）
 //   - 决策渲染为带（A 级）/（B 级）标记的条目；§3 各节编号固定（3.1 终态与 3.4
 //     迁移波次仅终态型渲染，演进型跳号省略），使 reviewNav 的 §3.3 锚点恒指决策节
+//   - 决策可携带 guards（守护登记：id / text / note，规格见 references/design-doc-schema.md
+//     §6.3）；正文任意文本字段的 {{Gx}} 完整 token 在统一出口（cell / prose / joinList）
+//     展开为登记 text 全文，指向不存在的 id 原样保留（引用校验归检查器，渲染 fail-soft）；
+//     有 guards 的决策在条目内渲染守护登记小表（id / text 全文 / note）
 //   - 渲染幂等：同输入同输出（固定字段顺序、无时间戳；缺字段渲染为 —）
 //
 // 用法：
@@ -89,18 +93,19 @@ if (loadErrors.length > 0) {
 const arr = (v) => (Array.isArray(v) ? v : []);
 const isEmpty = (v) => v === undefined || v === null || String(v).trim() === "";
 
-/** 表格单元格：竖线转义、换行压成空格；缺失值显示 —（渲染不校验合法性，只忠实呈现） */
+/** 表格单元格：先展开 {{Gx}} 再转义（竖线转义、换行压成空格；缺失值显示 —）——
+ * 全部表格与行内字段值的统一替换出口，守护登记表同样走此出口（渲染不校验合法性，只忠实呈现） */
 function cell(v) {
   if (isEmpty(v)) return "—";
-  return String(v).replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  return expandTokens(String(v)).replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 
-/** 长文本字段原样输出；缺失显示 — */
+/** 长文本字段原样输出（{{Gx}} 展开后）；缺失显示 — */
 function prose(v) {
-  return isEmpty(v) ? "—" : String(v);
+  return isEmpty(v) ? "—" : expandTokens(String(v));
 }
 
-/** md 表格：headers + rows（单元格已 cell 化的原文由调用方传入，此处只做转义） */
+/** md 表格：headers + rows（调用方传字段原文，逐格过 cell——{{Gx}} 展开 + 转义） */
 function table(headers, rows) {
   const lines = [
     `| ${headers.map((h) => cell(h)).join(" | ")} |`,
@@ -110,9 +115,12 @@ function table(headers, rows) {
   return lines.join("\n");
 }
 
-/** 数组 join 为顿号分隔串；空数组返回 null（调用方据此省略整行） */
+/** 数组 join 为顿号分隔串（条目先过 {{Gx}} 展开——units 文件 / 检查点等不经 cell 的出口也过替换）；
+ * 空数组返回 null（调用方据此省略整行） */
 function joinList(items) {
-  const list = arr(items).filter((x) => !isEmpty(x));
+  const list = arr(items)
+    .map((x) => expandTokens(x))
+    .filter((x) => !isEmpty(x));
   return list.length === 0 ? null : list.join("、");
 }
 
@@ -136,6 +144,28 @@ const s4 = docs.s4 ?? {};
 const s5 = docs.s5 ?? {};
 const isTerminal = meta.designType === "terminal";
 const out = [];
+
+// ── 守护引用展开（单一登记 + {{Gx}} 引用，规格见 references/design-doc-schema.md §6.3 / §9）──
+//
+// guards 权威登记在 s3 decisions[].guards（id / text / note），渲染前收集全部登记建
+// id → text 映射；正文 {{Gx}} token 的替换只在 cell / prose / joinList 统一出口发生。
+// fail-soft：token 指向不存在的 id、guards 字段形态不对时原样保留或跳过；guards id
+// 重复时 Map 后者覆盖前者——引用存在性与 id 唯一性归 check-design-doc.mjs，渲染不拦截。
+
+const guardMap = new Map();
+for (const d of arr(s3.decisions)) {
+  for (const g of arr(d?.guards)) {
+    if (g !== null && typeof g === "object" && typeof g.id === "string" && typeof g.text === "string" && g.text.trim() !== "") {
+      guardMap.set(g.id, g.text);
+    }
+  }
+}
+
+/** {{Gx}} 完整 token → guards 登记 text 全文；非字符串或无可替换映射时原样返回 */
+function expandTokens(v) {
+  if (typeof v !== "string" || guardMap.size === 0) return v;
+  return v.replace(/\{\{([^{}]+)\}\}/g, (token, id) => guardMap.get(id) ?? token);
+}
 
 function section(heading) {
   out.push(heading, "");
@@ -363,6 +393,21 @@ if (decisions.length > 0) {
     out.push(
       `- **效果**：架构：${cell(impact.architecture)}；功能：${cell(impact.function)}；复杂度：${cell(impact.complexity)}；性能：${cell(impact.performance)}；资源：${cell(impact.resource)}；红线：${cell(impact.redline)}`,
     );
+    // 守护登记（单一登记 + {{Gx}} 引用）：有 guards 的决策在条目内列小表，人读层
+    // 从登记处直接读全文（单元格与其他表格同走 cell 统一出口）
+    const guards = arr(d?.guards);
+    if (guards.length > 0) {
+      out.push("");
+      out.push("守护登记（正文 {{Gx}} 标记渲染时展开为下表全文）：");
+      out.push("");
+      out.push(
+        table(
+          ["id", "守护内容", "用途与触发场景"],
+          guards.map((g) => [g?.id, g?.text, g?.note]),
+        ),
+        "",
+      );
+    }
     out.push("");
   }
 }

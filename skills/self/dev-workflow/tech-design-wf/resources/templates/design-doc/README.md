@@ -5,3 +5,5 @@
 本样例 designType = evolution（演进型最小形态）。判终态型时：meta.json 的 designType 改为 terminal 并把 typeRationale 换成触发依据；s3-solution.json 补 `terminalForm`（axioms / targetForm / gapTable 三字段，公理与差距逐条登记）与 `migrationWaves`（差距-波次映射）两字段，decisions 的 gapRefs / axiomRefs 随登记填写——字段表见 schema §6。
 
 meta.json 的 `relatedDocs` 是关联登记清单：本设计触及、修改、推翻的存量权威文档（ADR / 产品定义 / 领域模型等）逐条登记 `{ path, relation }`，供下游终态同步核对回写；无关联时保持空数组即可。
+
+决策含守护 / 命令 / 正则类可执行内容时，登记在该决策的 `guards` 字段（id / text / note，单一登记），其他章节的文本字段内联完整标记 `{{G1}}` 引用——渲染自动展开为登记全文（字段规格见 schema §6.3，引用语法见 §9）。

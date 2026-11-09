@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 // 设计包机器自检（flow/write.md 写作自检与 flow/review.md 进场门槛同一实现，
 // 双轨语义等价由同一脚本保证）。设计文档权威源 = 设计目录内六个章节 JSON
-// （schema 见 references/design-doc-schema.md）；本脚本按八条规则判定合法性，
+// （schema 见 references/design-doc-schema.md）；本脚本按十条规则判定合法性，
 // 机器可查问题在写作期拦截，不进审查轮次消耗人工。
 //
-// 八条规则：
+// 十条规则：
 //   1. 完整性：六文件存在；meta 必填字段非空；designType / priority / nature 枚举合法；
 //      skillVersion 可选（有则查 semver 形态、无则放行——存量设计目录零影响）；
 //      relatedDocs 为数组形态且元素有 path（不强制非空——纯语义登记，通用性不设 warning）
-//   2. id 唯一：各数组内 id 不重复，全部 id 数组并集无重复（不同前缀 G/U/D 等各自编号，天然共存）
+//   2. id 唯一：各数组内 id 不重复，全部 id 数组并集无重复（不同前缀 G/U/D 等各自编号）；
+//      decisions[].guards[].id 同入全局并集（守护 id 与 gapTable 同为 G 前缀建议，编号须全局错开）
 //   3. 导航对齐：meta.reviewNav[].decisionId 集合 == s3.decisions[].id 集合（A/B 级决策不得缺导航行）
-//   4. 引用存在：gapRefs / unitRefs / axiomRefs / goalRefs 引用的 id 在被引用数组中存在
+//   4. 引用存在：gapRefs / unitRefs / axiomRefs / goalRefs 引用的 id 在被引用数组中存在；
+//      {{<id>}} 守护引用 token（递归扫描六章节全部字符串值）指向 decisions[].guards 登记的
+//      id——{{...}} 是守护引用保留语法，正文不作字面量使用，凡 {{...}} 一律按引用校验
 //   5. 分型一致：terminal 必填 terminalForm 三字段与 migrationWaves；evolution 必须为空或缺失
 //   6. 产物表完备：verified 前提 evidence 非空；stateCopies 至少一行、nature 枚举合法、
 //      excluded=false 行 sync 非空、excluded=true 行 exclusionNote 必填
@@ -22,10 +25,16 @@
 //      阻塞会使 T2 进场门槛批量 setup-failure；义务执行靠方向审按 must-fix 处置（模板
 //      D2 规定动作），存量清偿后可升级为阻塞
 //   9. warning（不阻塞）：rendered.md 缺失或早于任一 json 修改时间
+//   10. 单一登记（准则 14）：fail——guards[].text 两两精确重复（trim 后相等），同一守护全文
+//       须全局只登记一处；warning（不阻塞）——非 guards.text 字符串值中「无空白 ≥30 字符、
+//       且命令动词开头 / 正则元字符聚集 / 含 ASCII 左括号」的特征子串跨 ≥2 个字段逐字重复
+//       （同字段路径内重复不计数；guards[].text 是登记处自身，不参与提取）。warning 级是
+//       过渡分层：存量设计包正则 / 命令多处逐字重复在途，阻塞会批量 setup-failure；收敛
+//       方向 = decisions[].guards 单一登记 + {{<id>}} 引用，存量清偿后可升级为阻塞
 //
 // 用法：
 //   node check-design-doc.mjs <设计目录>
-// 输出：exit 0 = 八条规则全绿（stdout 一行确认；渲染过期 warning 只提示不改判定）；
+// 输出：exit 0 = 十条规则全绿（stdout 一行确认；warning 只提示不改判定）；
 //   exit 1 = stdout 逐项失败原因（每条指明哪个文件哪个字段缺什么 / 引用了不存在的
 //   什么 id），或 md 输入的迁移指引；exit 2 = 用法错误
 
@@ -43,6 +52,15 @@ const CHAPTER_FILES = [
 
 const MIGRATION_HINT =
   "本工具只接受分章节 JSON 设计目录（<name>/meta.json … s5-breakdown.json）；md 文件不是有效输入。存量 md 设计包继续处理请用技能 git 历史版本；新设计按 references/design-doc-schema.md 产出。";
+
+// ── 规则 10 判据常量（判据经 2026-11-09 真实设计包探针实证：命中 1 组真实重复、零误报——
+// 真实设计包 intraday-watch 的 httpx 守护正则 4 处逐字重复被恰好一组命中、中文正文零命中；
+// 元字符聚集取正类，否定类会把中文标题 / 文件路径等普通长 token 全数放进候选） ──
+const GUARD_TEXT_MIN_TOKEN_LEN = 30; // 短于 30 字符的路径片段等不构成逐字对账负担
+const GUARD_COMMAND_VERBS = ["grep", "rg", "ripgrep", "node", "python", "python3", "pytest", "npm", "git", "curl", "sqlite3", "find", "awk", "sed"];
+// 动词后须跟非字母数字，避免 github 式前缀误命中动词 git
+const GUARD_COMMAND_VERB_RE = new RegExp(`^(?:${GUARD_COMMAND_VERBS.join("|")})(?![A-Za-z0-9])`);
+const GUARD_META_CLUSTER_RE = /[$\[\]{}|*+\\]{2,}/; // 正则元字符（$[]{}|*+\）2 个以上连续聚集
 
 function failUsage(msg) {
   process.stderr.write(`用法错误：${msg}\n用法：node check-design-doc.mjs <设计目录>\n`);
@@ -100,6 +118,20 @@ const s2 = docs["s2-status.json"];
 const s3 = docs["s3-solution.json"];
 const s4 = docs["s4-accept.json"];
 const s5 = docs["s5-breakdown.json"];
+
+// 递归收集 JSON 值中的全部字符串（路径形态与既有规则消息一致：字段.子字段[下标]；
+// 供规则 4 守护引用扫描与规则 10 特征子串提取共用一次遍历）
+function collectStrings(value, path, file, out) {
+  if (typeof value === "string") {
+    out.push({ file, path: path === "" ? "(顶层)" : path, text: value });
+  } else if (Array.isArray(value)) {
+    value.forEach((item, i) => collectStrings(item, `${path}[${i}]`, file, out));
+  } else if (value !== null && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      collectStrings(item, path === "" ? key : `${path}.${key}`, file, out);
+    }
+  }
+}
 
 // ── 规则 1：完整性 + 枚举 ──
 
@@ -200,6 +232,65 @@ for (const [file, path, getItems] of ID_ARRAYS) {
     globalIdLocations.get(id).push(`${file} ${path}[${indexes[0]}]`);
   }
 }
+
+// decisions[].guards：守护登记数组（可选；每条 { id, text, note? }）。id 并入上方全局
+// 并集（与 gapTable 同为 G 前缀建议，编号须全局错开）；text 是守护全文的唯一登记处——
+// 规则 4 的 {{<id>}} 引用与规则 10 的单一登记均以它为基准
+const guardsIdSet = new Set();
+const guardsTextLocations = new Map(); // trim 后守护全文 -> { locations: string[], ids: string[] }
+const guardsTextPaths = new Set(); // 登记处字段路径（规则 10 特征子串提取时排除）
+arr(s3?.decisions).forEach((d, i) => {
+  const did = d?.id ?? "缺 id";
+  const guards = d?.guards;
+  if (guards === undefined) return;
+  if (!Array.isArray(guards)) {
+    failures.push(
+      `[守护] s3-solution.json decisions[${i}]（${did}）guards 须为数组——每条守护一个条目（{ id, text, note? }，id 为 G 前缀全局唯一），无守护时删除该字段`,
+    );
+    return;
+  }
+  const localSeen = new Map(); // id -> guards 下标[]
+  guards.forEach((g, j) => {
+    const where = `s3-solution.json decisions[${i}].guards[${j}]`;
+    if (g === null || typeof g !== "object" || Array.isArray(g)) {
+      failures.push(`[守护] ${where} 条目须为对象（{ id, text, note? }）——id 为 G 前缀全局唯一，text 为守护全文`);
+      return;
+    }
+    const id = g.id;
+    const text = g.text;
+    if (typeof id !== "string" || id.trim() === "") {
+      failures.push(
+        `[守护] ${where} id 缺失、非字符串或为空——每条守护须有 G 前缀全局唯一 id，文本字段以 {{<id>}} token 引用本条`,
+      );
+    }
+    if (typeof text !== "string" || text.trim() === "") {
+      failures.push(
+        `[守护] ${where} text 缺失、非字符串或为空——text 须登记守护全文，其余章节以 {{<id>}} 引用、不在正文逐字重复`,
+      );
+    }
+    if (typeof text === "string") guardsTextPaths.add(where);
+    if (typeof id === "string" && id.trim() !== "") {
+      guardsIdSet.add(id);
+      if (!localSeen.has(id)) localSeen.set(id, []);
+      localSeen.get(id).push(j);
+    }
+    if (typeof text === "string" && text.trim() !== "") {
+      const key = text.trim();
+      if (!guardsTextLocations.has(key)) guardsTextLocations.set(key, { locations: [], ids: [] });
+      guardsTextLocations.get(key).locations.push(where);
+      if (typeof id === "string" && id.trim() !== "") guardsTextLocations.get(key).ids.push(id);
+    }
+  });
+  for (const [id, indexes] of localSeen) {
+    if (indexes.length > 1) {
+      failures.push(
+        `[id] s3-solution.json decisions[${i}]（${did}）guards 内 id「${id}」重复出现（${indexes.map((j) => `guards[${j}]`).join(" 与 ")}）——同一数组内 id 不得重复`,
+      );
+    }
+    if (!globalIdLocations.has(id)) globalIdLocations.set(id, []);
+    globalIdLocations.get(id).push(`s3-solution.json decisions[${i}].guards[${indexes[0]}]`);
+  }
+});
 for (const [id, locations] of globalIdLocations) {
   if (locations.length > 1) {
     failures.push(`[id] id「${id}」重复定义于 ${locations.join(" 与 ")}——全部章节 JSON 的 id 须全局唯一`);
@@ -266,6 +357,30 @@ arr(s4?.scenarios).forEach((v, i) => {
     "设计目标（s1-context.json goals）",
   );
 });
+
+// {{<id>}} 守护引用：完整 token 形态，内层 trim 后须命中 guards 登记的 id。{{...}} 是守护
+// 引用保留语法——设计文档正文不出现双花括号字面量，凡 {{...}} 一律按引用校验（内容不在
+// guards id 集 = 拼错 id 或误用保留语法，从严 fail）
+const GUARD_REF_RE = /\{\{([^{}]+)\}\}/g;
+const allStrings = []; // { file, path, text }——六章节全部字符串值（规则 4 引用扫描与规则 10 特征子串提取共用）
+for (const file of CHAPTER_FILES) {
+  collectStrings(docs[file], "", file, allStrings);
+}
+for (const { file, path, text } of allStrings) {
+  const reported = new Set(); // 同一字符串内同一坏引用只报一次
+  for (const m of text.matchAll(GUARD_REF_RE)) {
+    const ref = m[1].trim();
+    if (guardsIdSet.has(ref) || reported.has(ref)) continue;
+    reported.add(ref);
+    const hint =
+      guardsIdSet.size > 0
+        ? `decisions[].guards 现有 id：${[...guardsIdSet].join("、")}`
+        : "本文档未登记任何守护（decisions[].guards 缺失或为空）";
+    failures.push(
+      `[引用] ${file} ${path} 引用了不存在的守护「${ref}」——{{...}} 是守护引用保留语法（守护在 s3-solution.json decisions[].guards 登记，${hint}）`,
+    );
+  }
+}
 
 // ── 规则 5：分型一致 ──
 
@@ -395,7 +510,7 @@ if (exAssumptions.length + exExclusions.length + exStateCopies.length > 0 && !an
 // ── 规则 9：渲染产物过期 warning（不阻塞） ──
 
 // 产物名取自目录名 basename；目录参数为相对的「.」/「..」时 basename 取到点号，
-// 拼出「..rendered.md」式畸形产物名。与 render-design-doc.mjs 入口守卫对称：本侧只读
+// 拼出「..rendered.md」式畸形产物名。与 render-design-doc.mjs 入口检查对称：本侧只读
 // 不写盘，不需要 exit 2 拦截——跳过产物时效对比，warning 直接指路绝对路径
 const dirBase = basename(designDir);
 if (dirBase === "." || dirBase === "..") {
@@ -427,10 +542,43 @@ if (dirBase === "." || dirBase === "..") {
   }
 }
 
+// ── 规则 10：单一登记（准则 14）——C1 fail：guards[].text 全局唯一；C2 warning：跨字段特征子串逐字重复 ──
+
+// C1：同一守护全文两两精确重复（trim 后相等）。逐字重复登记不是冗余备份——修复漏改一处
+// 即自相矛盾（准则 14），全文只允许在 guards 一个条目登记
+for (const { locations } of guardsTextLocations.values()) {
+  if (locations.length > 1) {
+    failures.push(
+      `[单一登记] 守护文本重复登记于 ${locations.join(" 与 ")}——text 须全局唯一（准则 14 单一登记）：保留一处登记，其余位置改用 {{<守护 id>}} 引用`,
+    );
+  }
+}
+
+// C2：跨字段特征子串逐字重复（warning 不阻塞——存量逐字重复在途清偿）。提取对象 = 非登记处
+// 的全部字符串值按空白切 token；guards[].text 自身不参与提取（收敛为单一登记后登记处 +
+// 引用侧并存是目标形态，登记处参与会反向误报）；同一字段路径内重复出现不计数，跨字段才算
+const featureTokenLocations = new Map(); // token -> Set<`文件 字段路径`>
+for (const { file, path, text } of allStrings) {
+  if (guardsTextPaths.has(`${file} ${path}`)) continue;
+  for (const token of text.split(/\s+/)) {
+    if (token.length < GUARD_TEXT_MIN_TOKEN_LEN) continue;
+    if (!GUARD_COMMAND_VERB_RE.test(token) && !GUARD_META_CLUSTER_RE.test(token) && !token.includes("(")) continue;
+    const location = `${file} ${path}`;
+    if (!featureTokenLocations.has(token)) featureTokenLocations.set(token, new Set());
+    featureTokenLocations.get(token).add(location);
+  }
+}
+for (const [token, locations] of featureTokenLocations) {
+  if (locations.size < 2) continue;
+  warnings.push(
+    `[单一登记] 特征子串「${token}」跨 ${locations.size} 个字段逐字重复（${[...locations].join("；")}）——同一正则 / 命令多处登记，修复漏改一处即自相矛盾（准则 14）；收敛为 decisions[].guards 单一登记 + {{<守护 id>}} 引用，或按准则 14 在决策节登记全部登记点清单（不阻塞本判定）`,
+  );
+}
+
 // ── 输出 ──
 
 if (failures.length === 0) {
-  process.stdout.write("六文件完整、meta 必填、id 唯一、导航对齐、跨章节引用存在、分型一致、产物表完备、内容形态合法——八条规则全绿\n");
+  process.stdout.write("六文件完整、meta 必填、id 唯一、导航对齐、跨章节引用与守护引用存在、分型一致、产物表完备、内容形态合法、守护单一登记——十条规则全绿\n");
   for (const w of warnings) process.stdout.write(w + "\n");
   process.exit(0);
 }

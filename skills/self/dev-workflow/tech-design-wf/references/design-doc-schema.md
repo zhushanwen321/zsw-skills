@@ -6,7 +6,7 @@
 
 1. **权威源 = 分章节 JSON**。设计文档 = `<name>/` 目录下六个章节 JSON；大段叙述文本（SCQA 开篇、现状描述、终态形态等）是 JSON 字段值。
 2. **渲染产物非权威**。`<name>.rendered.md` 由渲染脚本生成，仅供人与审查者阅读；禁止手改渲染产物——修改一律回到章节 JSON，改完重跑渲染脚本（见 §10）。
-3. **跨章节引用一律用 id 字段显式引用**，禁止用文字描述指代其他章节的条目（引用字段清单见 §9）。
+3. **跨章节引用一律用 id 字段显式引用**，禁止用文字描述指代其他章节的条目（引用字段清单见 §9）；守护 / 命令 / 正则类可执行内容的单一登记与引用走 guards 机器通道（decisions[].guards 登记 + {{Gx}} 标记引用，见 §6.3 与 §9）——对应写作准则 14 的单一登记要求（`references/design-principles.md`）。
 4. 本 schema 保持通用：不含项目专名与本机绝对路径；示例中的路径均为格式示意。
 
 ## 2. 设计包目录结构
@@ -225,6 +225,15 @@ P7 上游约束原则的产物表（触发条件：设计依赖非本项目代�
 | unitRefs | string 数组 | 必填 | 引用 s5-breakdown.json units[].id（见 §9）——本决策的交付影响对应哪些拆分单元 |
 | axiomRefs | string 数组 | 必填 | 引用本文件 terminalForm.axioms[].id（见 §9） |
 | impact | object | 必填 | 六维度效果（本决策让哪些目标 / 场景成立），字段与含义：`architecture` 架构、`function` 功能、`complexity` 复杂度、`performance` 性能、`resource` 资源、`redline` 红线；无影响的维度可留空串 |
+| guards | object 数组 | 可选 | 守护登记：该决策的守护 / 命令 / 正则类可执行内容单一登记于此（权威载体 = text 全文）；其余章节以 {{Gx}} 标记引用（渲染展开为全文）；同一内容禁止两处登记，重复登记由检查器拦截——决策无守护内容时省略整个字段。行内字段见下表 |
+
+**guards 行内字段**：
+
+| 字段 | 类型 | 必填 | 填写要求 |
+|---|---|---|---|
+| id | string | 必填 | 守护 id（建议 `G` 前缀，如 G1），进全局 id 唯一并集（§9）——与 terminalForm.gapTable 同用 `G` 前缀，两族编号互不重号 |
+| text | string | 必填 | 守护全文：正则 / 命令 / CI 步骤等可执行内容——单一登记的权威载体，全部 {{Gx}} 引用渲染时展开为该全文 |
+| note | string | 可选 | 一句用途与触发场景 |
 
 ### 6.4 migrationWaves —— 迁移波次（终态型必填，演进型不得有）
 
@@ -275,7 +284,9 @@ P7 上游约束原则的产物表（触发条件：设计依赖非本项目代�
 | migrationWaves[].gapRefs | s3-solution.json | 同文件 terminalForm.gapTable[].id |
 | scenarios[].goalRefs | s4-accept.json | s1-context.json goals[].id |
 
-id 规则：各数组内 id 不重复，全部 id 数组的 id 全局唯一（不同前缀如 G / U / D 各自独立编号，天然不冲突）。建议前缀见各字段表。
+**{{Gx}} 守护引用标记**：任意章节 JSON 的文本字段可内联完整 token `{{Gx}}`（双花括号 + guards id），指向 s3-solution.json decisions[].guards 的 id；渲染脚本把 token 替换为对应 guards[].text 全文——人读层就近读到全文，登记仍只有一处。引用存在性（token 指向的 guards id 必须存在）由检查器校验；渲染对指向不存在的 token 原样保留（渲染 fail-soft，不校验）。
+
+id 规则：各数组内 id 不重复，全部 id 数组的 id 全局唯一（不同前缀如 U / D 各自独立编号，天然不冲突；terminalForm.gapTable 与 decisions.guards 同用 `G` 前缀，两族编号互不重号）。建议前缀见各字段表。
 
 ## 10. 渲染产物
 
