@@ -164,7 +164,7 @@ for (const d of arr(s3.decisions)) {
 /** {{Gx}} 完整 token → guards 登记 text 全文；非字符串或无可替换映射时原样返回 */
 function expandTokens(v) {
   if (typeof v !== "string" || guardMap.size === 0) return v;
-  return v.replace(/\{\{([^{}]+)\}\}/g, (token, id) => guardMap.get(id) ?? token);
+  return v.replace(/\{\{([^{}]+)\}\}/g, (token, id) => guardMap.get(id.trim()) ?? token);
 }
 
 function section(heading) {
@@ -173,7 +173,7 @@ function section(heading) {
 
 // 头部：标题 + 产物地位声明 + 分型 / P 级 / 风险分表
 
-out.push(`# ${isEmpty(meta.name) ? basename(designDir) : meta.name}`);
+out.push(`# ${expandTokens(isEmpty(meta.name) ? basename(designDir) : meta.name)}`);
 out.push("");
 out.push(
   "> 本文件由渲染脚本从六章节 JSON 生成，是阅读视图而非权威源——修改请编辑章节 JSON 后重跑 `scripts/render-design-doc.mjs`；字段规格见 `references/design-doc-schema.md`。",

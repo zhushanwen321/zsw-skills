@@ -9,7 +9,8 @@
 //      skillVersion 可选（有则查 semver 形态、无则放行——存量设计目录零影响）；
 //      relatedDocs 为数组形态且元素有 path（不强制非空——纯语义登记，通用性不设 warning）
 //   2. id 唯一：各数组内 id 不重复，全部 id 数组并集无重复（不同前缀 G/U/D 等各自编号）；
-//      decisions[].guards[].id 同入全局并集（守护 id 与 gapTable 同为 G 前缀建议，编号须全局错开）
+//      decisions[].guards[].id 同入全局并集（守护 id 与 gapTable 同为 G 前缀建议，编号须全局错开）；
+//      guards.text 必须是叶子全文、不得内嵌 {{id}}——见规则 2 段校验
 //   3. 导航对齐：meta.reviewNav[].decisionId 集合 == s3.decisions[].id 集合（A/B 级决策不得缺导航行）
 //   4. 引用存在：gapRefs / unitRefs / axiomRefs / goalRefs 引用的 id 在被引用数组中存在；
 //      {{<id>}} 守护引用 token（递归扫描六章节全部字符串值）指向 decisions[].guards 登记的
@@ -28,7 +29,9 @@
 //   10. 单一登记（准则 14）：fail——guards[].text 两两精确重复（trim 后相等），同一守护全文
 //       须全局只登记一处；warning（不阻塞）——非 guards.text 字符串值中「无空白 ≥30 字符、
 //       且命令动词开头 / 正则元字符聚集 / 含 ASCII 左括号」的特征子串跨 ≥2 个字段逐字重复
-//       （同字段路径内重复不计数；guards[].text 是登记处自身，不参与提取）。warning 级是
+//       （同字段路径内重复不计数；guards[].text 是登记处自身，不参与提取）；warning（不阻塞）
+//       ——guards[].text 登记全文在正文其他字段的逐字残留（登记处是唯一权威副本，残留副本
+//       不随登记更新，收敛为 {{<id>}} 引用）。warning 级是
 //       过渡分层：存量设计包正则 / 命令多处逐字重复在途，阻塞会批量 setup-failure；收敛
 //       方向 = decisions[].guards 单一登记 + {{<id>}} 引用，存量清偿后可升级为阻塞
 //
@@ -61,6 +64,9 @@ const GUARD_COMMAND_VERBS = ["grep", "rg", "ripgrep", "node", "python", "python3
 // 动词后须跟非字母数字，避免 github 式前缀误命中动词 git
 const GUARD_COMMAND_VERB_RE = new RegExp(`^(?:${GUARD_COMMAND_VERBS.join("|")})(?![A-Za-z0-9])`);
 const GUARD_META_CLUSTER_RE = /[$\[\]{}|*+\\]{2,}/; // 正则元字符（$[]{}|*+\）2 个以上连续聚集
+// {{<id>}} 守护引用完整 token（规则 2 段 guards.text 叶子禁令与规则 4 段引用校验共用；
+// 顶层 const 按声明序执行，必须先于 guards 解析段声明，否则规则 2 段先引用会抛 ReferenceError）
+const GUARD_REF_RE = /\{\{([^{}]+)\}\}/g;
 
 function failUsage(msg) {
   process.stderr.write(`用法错误：${msg}\n用法：node check-design-doc.mjs <设计目录>\n`);
@@ -245,7 +251,7 @@ arr(s3?.decisions).forEach((d, i) => {
   if (guards === undefined) return;
   if (!Array.isArray(guards)) {
     failures.push(
-      `[守护] s3-solution.json decisions[${i}]（${did}）guards 须为数组——每条守护一个条目（{ id, text, note? }，id 为 G 前缀全局唯一），无守护时删除该字段`,
+      `[守护] s3-solution.json decisions[${i}]（${did}）guards 须为数组——每条守护一个条目（{ id, text, note? }，id 建议取 G 前缀（如 G1）、全局唯一），无守护时删除该字段`,
     );
     return;
   }
@@ -253,14 +259,14 @@ arr(s3?.decisions).forEach((d, i) => {
   guards.forEach((g, j) => {
     const where = `s3-solution.json decisions[${i}].guards[${j}]`;
     if (g === null || typeof g !== "object" || Array.isArray(g)) {
-      failures.push(`[守护] ${where} 条目须为对象（{ id, text, note? }）——id 为 G 前缀全局唯一，text 为守护全文`);
+      failures.push(`[守护] ${where} 条目须为对象（{ id, text, note? }）——id 建议取 G 前缀（如 G1）、全局唯一，text 为守护全文`);
       return;
     }
     const id = g.id;
     const text = g.text;
     if (typeof id !== "string" || id.trim() === "") {
       failures.push(
-        `[守护] ${where} id 缺失、非字符串或为空——每条守护须有 G 前缀全局唯一 id，文本字段以 {{<id>}} token 引用本条`,
+        `[守护] ${where} id 缺失、非字符串或为空——每条守护须有全局唯一 id（建议取 G 前缀，如 G1），文本字段以 {{<id>}} token 引用本条`,
       );
     }
     if (typeof text !== "string" || text.trim() === "") {
@@ -268,7 +274,14 @@ arr(s3?.decisions).forEach((d, i) => {
         `[守护] ${where} text 缺失、非字符串或为空——text 须登记守护全文，其余章节以 {{<id>}} 引用、不在正文逐字重复`,
       );
     }
-    if (typeof text === "string") guardsTextPaths.add(where);
+    // 叶子禁令：guards.text 登记守护全文本身，必须是叶子内容——内嵌 {{...}} 即嵌套 / 自引用 /
+    // 成环（{{...}} 在登记处 text 内也指其他守护或自身，语义上无法成立）
+    if (typeof text === "string" && text.matchAll(GUARD_REF_RE).next().value !== undefined) {
+      failures.push(
+        `[守护] ${where} text 内嵌 {{...}} 引用——guards.text 登记的是守护全文本身，必须是叶子内容：不得引用其他守护、不得自引用、不得成环（嵌套一律禁止）；引用方在正文文本字段用 {{<id>}}，登记处只放全文`,
+      );
+    }
+    if (typeof text === "string") guardsTextPaths.add(`${where}.text`);
     if (typeof id === "string" && id.trim() !== "") {
       guardsIdSet.add(id);
       if (!localSeen.has(id)) localSeen.set(id, []);
@@ -361,7 +374,6 @@ arr(s4?.scenarios).forEach((v, i) => {
 // {{<id>}} 守护引用：完整 token 形态，内层 trim 后须命中 guards 登记的 id。{{...}} 是守护
 // 引用保留语法——设计文档正文不出现双花括号字面量，凡 {{...}} 一律按引用校验（内容不在
 // guards id 集 = 拼错 id 或误用保留语法，从严 fail）
-const GUARD_REF_RE = /\{\{([^{}]+)\}\}/g;
 const allStrings = []; // { file, path, text }——六章节全部字符串值（规则 4 引用扫描与规则 10 特征子串提取共用）
 for (const file of CHAPTER_FILES) {
   collectStrings(docs[file], "", file, allStrings);
@@ -554,6 +566,23 @@ for (const { locations } of guardsTextLocations.values()) {
   }
 }
 
+// C1b：登记全文在正文其他字段的逐字残留（warning 不阻塞——存量残留逐字重复在途清偿，
+// 收敛方向 = 残留处改 {{<守护 id>}} 引用）。trim 后 < 6 字符的过短登记全文不构成对账
+// 负担，跳过；登记处自身（guardsTextPaths）不参与扫描
+for (const [key, { ids }] of guardsTextLocations) {
+  if (key.length < 6) continue;
+  const residual = [];
+  for (const entry of allStrings) {
+    if (guardsTextPaths.has(`${entry.file} ${entry.path}`)) continue;
+    if (entry.text.includes(key)) residual.push(`${entry.file} ${entry.path}`);
+  }
+  if (residual.length > 0) {
+    warnings.push(
+      `[单一登记] 守护「${ids.join("、")}」的登记全文仍在正文逐字残留（${residual.join("；")}）——登记处是唯一权威副本，残留副本不随登记更新、修一处漏一处即自相矛盾（准则 14）；收敛为 {{<守护 id>}} 引用（不阻塞本判定）`,
+    );
+  }
+}
+
 // C2：跨字段特征子串逐字重复（warning 不阻塞——存量逐字重复在途清偿）。提取对象 = 非登记处
 // 的全部字符串值按空白切 token；guards[].text 自身不参与提取（收敛为单一登记后登记处 +
 // 引用侧并存是目标形态，登记处参与会反向误报）；同一字段路径内重复出现不计数，跨字段才算
@@ -571,7 +600,7 @@ for (const { file, path, text } of allStrings) {
 for (const [token, locations] of featureTokenLocations) {
   if (locations.size < 2) continue;
   warnings.push(
-    `[单一登记] 特征子串「${token}」跨 ${locations.size} 个字段逐字重复（${[...locations].join("；")}）——同一正则 / 命令多处登记，修复漏改一处即自相矛盾（准则 14）；收敛为 decisions[].guards 单一登记 + {{<守护 id>}} 引用，或按准则 14 在决策节登记全部登记点清单（不阻塞本判定）`,
+    `[单一登记] 特征子串「${token}」跨 ${locations.size} 个字段逐字重复（${[...locations].join("；")}）——同一内容（正则 / 命令 / 断言句等）多处逐字重复，修复漏改一处即自相矛盾（准则 14）；收敛为 decisions[].guards 单一登记 + {{<守护 id>}} 引用，或按准则 14 在决策节登记全部登记点清单（不阻塞本判定）`,
   );
 }
 

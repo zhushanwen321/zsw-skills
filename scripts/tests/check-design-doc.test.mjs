@@ -1,12 +1,17 @@
 // check-design-doc.test.mjs — 设计包机器自检 check-design-doc.mjs 的独立测试
 //
 // 对应实现：skills/self/dev-workflow/tech-design-wf/scripts/check-design-doc.mjs（十条规则）。
-// 本测试聚焦守护理由单一登记契约（decisions[].guards 登记 + {{<id>}} 引用）三组校验：
-//   - 规则 2 扩展：guards[].id 进全局唯一并集（重复定义 fail；元素 id/text 形态畸形 fail）
-//   - 规则 4 扩展：{{<id>}} 完整 token 递归扫描六章节字符串值，引用不存在的守护 fail
+// 本测试聚焦守护全文单一登记契约（decisions[].guards 登记 + {{<id>}} 引用）三组校验：
+//   - 规则 2 扩展：guards[].id 进全局唯一并集（重复定义 fail；元素 id/text 形态畸形 fail；
+//     text 内嵌 {{...}} 叶子禁令 fail）
+//   - 规则 4 扩展：{{<id>}} 完整 token 递归扫描六章节字符串值，引用不存在的守护 fail；
+//     token 内层两端带空白（{{ G1 }}）同样放行——与渲染端 trim 后取 id 的行为一致
 //   - 规则 10：guards[].text 两两精确重复（trim 后相等）fail；跨字段特征子串逐字重复
 //     warning 不阻塞（同字段路径内重复不计数；guards[].text 登记处自身不参与提取——
-//     否则收敛为「登记处 + 引用侧」的目标形态后仍会误报）
+//     否则收敛为「登记处 + 引用侧」的目标形态后仍会误报）；登记全文在正文其他字段的
+//     逐字残留 warning 不阻塞（C1b，恰 1 条且含守护 id 与残留位置）
+//   - 渲染联动（render-design-doc.mjs）：{{ G1 }} 空白 token 展开为登记全文；meta.name
+//     内联 {{G1}} 时渲染首行标题同样经统一出口展开
 // 存量兼容：无 guards 的最小合法六章节（resources/templates/design-doc/ 裁剪形态）exit 0
 // 零 warning；规则 8/9 的存量提示（穷举声明 / 渲染产物过期）在 fixture 中显式关掉
 // （行声明 exhaustive=false + rendered.md 最后写入），使 warning 断言可归零。
@@ -16,13 +21,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-wf", "scripts", "check-design-doc.mjs");
+const RENDER_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-wf", "scripts", "render-design-doc.mjs");
 const CHAPTER_FILES = ["meta.json", "s1-context.json", "s2-status.json", "s3-solution.json", "s4-accept.json", "s5-breakdown.json"];
 
 // 特征子串用 token：单 token 无空白 35 字符，含正则元字符聚集（[[ 与 ]]）与 ASCII 左括号，
@@ -30,6 +36,9 @@ const CHAPTER_FILES = ["meta.json", "s1-context.json", "s2-status.json", "s3-sol
 const TOKEN = "'^test[a-z]+(one|two)[[:space:]]*$'";
 const GUARD_TEXT_A = "出站导入仅允许 trigger 与 intraday 两处，第三处即红";
 const GUARD_TEXT_B = "判定纯函数不得读库，读库即红";
+// C1b 用例的短中文守护：trim 后长度 7（∈ [6, 29)），无空白、无 ≥30 特征 token——
+// C2 特征子串提取不命中，残留判定只能走 C1b 的全文 includes
+const GUARD_TEXT_SHORT = "出站仅两处入口";
 
 // ── fixture 基座：最小合法六章节（evolution 分型，对照 resources/templates/design-doc/ 裁剪）──
 
@@ -108,6 +117,26 @@ function runCheck(mutate) {
     }
     writeFileSync(join(dir, `${basename(dir)}.rendered.md`), "# rendered\n");
     return spawnSync(process.execPath, [CHECK_SCRIPT, dir], { encoding: "utf8" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// check + render 联动场景：同一临时目录内先跑 check 再跑 render，读回渲染产物后断言；
+// 全部动作在 rmSync 之前完成，渲染产物不留盘
+function runCheckAndRender(mutate) {
+  const dir = mkdtempSync(join(tmpdir(), "design-doc-render-"));
+  try {
+    const docs = legalDesign();
+    if (mutate) mutate(docs);
+    for (const file of CHAPTER_FILES) {
+      writeFileSync(join(dir, file), JSON.stringify(docs[file], null, 2) + "\n");
+    }
+    writeFileSync(join(dir, `${basename(dir)}.rendered.md`), "# rendered\n");
+    const check = spawnSync(process.execPath, [CHECK_SCRIPT, dir], { encoding: "utf8" });
+    const render = spawnSync(process.execPath, [RENDER_SCRIPT, dir], { encoding: "utf8" });
+    const rendered = readFileSync(join(dir, `${basename(dir)}.rendered.md`), "utf8");
+    return { check, render, rendered };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -266,9 +295,78 @@ test("同一字段路径内重复出现 → 不触发 warning", () => {
 
 test("guards.text 登记处自身不参与特征子串提取 → 与引用侧并存不误报", () => {
   const r = runCheck((d) => {
-    d["s3-solution.json"].decisions[0].guards = [{ id: "G1", text: `守护全文：${TOKEN}` }];
-    d["s3-solution.json"].decisions[0].choice = `采用方案示意，由 {{G1}} 守护，原文 ${TOKEN}。`;
+    d["s3-solution.json"].decisions[0].guards = [{ id: "G1", text: `守护全文 ${TOKEN}` }];
+    d["s3-solution.json"].decisions[0].choice = `采用方案示意，由 {{G1}} 守护，依据 ${TOKEN} 结束。`;
   });
-  // 登记处若参与提取会凑成两位置误报；排除后仅引用侧一处 → 全绿
+  // TOKEN 两侧空白隔开：split(/\s+/) 后 TOKEN 本体独立成 token。登记处排除生效 →
+  // TOKEN 仅引用侧一处，不凑成两位置 → 全绿；排除失效（登记路径不含 .text 的死代码
+  // 形态）→ 登记处参与提取凑成两处 → 产生 [单一登记] warning，本用例必红
   assertAllGreen(r, "登记处排除");
+});
+
+// ── 用例 8：问题 2 回归——两份合法 guards 共享特征 token，登记处互相不误报 ──
+
+test("两份合法 guards（text 全文不同）共享同一特征 token → 零 warning", () => {
+  const r = runCheck((d) => {
+    d["s3-solution.json"].decisions[0].guards = [
+      { id: "G1", text: `守护甲 ${TOKEN} 结束` },
+      { id: "G2", text: `守护乙 ${TOKEN} 收尾` },
+    ];
+  });
+  // 登记处排除失效时两份登记处各自贡献 TOKEN → 跨 2 字段 warning；排除生效 → 零命中
+  assertAllGreen(r, "两份合法 guards 共享 token");
+});
+
+// ── 用例 9：C1b——登记全文在正文逐字残留（warning 不阻塞，恰 1 条） ──
+
+test("短中文守护全文在另一字段逐字残留 → 恰 1 条 [单一登记] warning（含守护 id 与残留位置）", () => {
+  const r = runCheck((d) => {
+    d["s3-solution.json"].decisions[0].guards = [{ id: "G1", text: GUARD_TEXT_SHORT }];
+    d["s3-solution.json"].decisions[0].choice = `采用方案示意，出站仅两处入口。`;
+  });
+  assert.equal(r.status, 0, `warning 不阻塞判定，实际 exit=${r.status}\nstdout: ${r.stdout}`);
+  const warnLines = r.stdout.trim().split("\n").filter((l) => l.includes("[单一登记]"));
+  assert.equal(warnLines.length, 1, `应恰 1 条 [单一登记] warning，实际 stdout：${r.stdout}`);
+  assert.ok(warnLines[0].includes("G1"), `warning 应含守护 id「G1」，实际：${warnLines[0]}`);
+  assert.ok(warnLines[0].includes("s3-solution.json decisions[0].choice"), `warning 应含残留位置，实际：${warnLines[0]}`);
+  assert.ok(warnLines[0].includes("{{<守护 id>}}"), `warning 应给收敛方向，实际：${warnLines[0]}`);
+});
+
+// ── 用例 10：规则 2 扩展——guards.text 叶子禁令（不得内嵌 {{...}} 引用） ──
+
+test("guards.text 内嵌 {{G2}} 引用已登记的其他守护 → fail 且消息含叶子禁令", () => {
+  const r = runCheck((d) => {
+    d["s3-solution.json"].decisions[0].guards = [
+      { id: "G1", text: `出站仅两处，细则见 {{G2}}` },
+      { id: "G2", text: GUARD_TEXT_B },
+    ];
+  });
+  // {{G2}} 指向已登记 id，规则 4 引用校验单独不拦——拦截只能靠叶子禁令
+  assert.equal(r.status, 1, `应 exit 1，实际 stdout：${r.stdout}`);
+  assert.match(r.stdout, /guards\[0\] text 内嵌 \{\{\.\.\.\}\} 引用/);
+  assert.match(r.stdout, /必须是叶子内容/);
+});
+
+// ── 用例 11：空白 token 与渲染出口（check 放行 + render 展开，问题 5/8 回归） ──
+
+test("{{ G1 }} 空白 token：check exit 0，渲染正文展开为登记全文", () => {
+  const { check, render, rendered } = runCheckAndRender((d) => {
+    d["s3-solution.json"].decisions[0].guards = [{ id: "G1", text: GUARD_TEXT_A }];
+    d["s3-solution.json"].decisions[0].choice = `采用方案示意，由 {{ G1 }} 守护。`;
+  });
+  assert.equal(check.status, 0, `check 应放行空白 token（trim 后命中登记 id），实际 stdout：${check.stdout}`);
+  assert.equal(render.status, 0, `render 应 exit 0，实际 stderr：${render.stderr}`);
+  assert.ok(rendered.includes(GUARD_TEXT_A), `渲染产物应展开 {{ G1 }} 为登记全文，实际：${rendered.split("\n").find((l) => l.includes("采用"))}`);
+  assert.ok(!rendered.includes("{{ G1 }}"), `渲染产物不应残留 {{ G1 }} token`);
+});
+
+test("meta.name 内联 {{G1}} → 渲染首行标题经统一出口展开为登记全文", () => {
+  const { check, render, rendered } = runCheckAndRender((d) => {
+    d["meta.json"].name = "fixture-{{G1}}-design";
+    d["s3-solution.json"].decisions[0].guards = [{ id: "G1", text: GUARD_TEXT_B }];
+  });
+  assert.equal(check.status, 0, `check 应放行 meta.name 内联引用，实际 stdout：${check.stdout}`);
+  assert.equal(render.status, 0, `render 应 exit 0，实际 stderr：${render.stderr}`);
+  const firstLine = rendered.split("\n")[0];
+  assert.equal(firstLine, `# fixture-${GUARD_TEXT_B}-design`, `首行标题应展开 {{G1}}，实际：${firstLine}`);
 });
