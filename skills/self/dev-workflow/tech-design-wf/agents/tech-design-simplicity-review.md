@@ -122,7 +122,7 @@ description: "过度设计审查技术设计文档（三审之一；方向审通
 - <上轮处置 id>：fixed——<复核证据：读了什么、确认了什么>
 ```
 
-**Summary 节只写计数与对账总结论，不复述发现**：R1 写一行「<N> must-fix.」；R2+ 聚焦复审轮在计数行后追加一行对账总结论——「<fixed> fixed / <not-fixed> not-fixed / <regressed> regressed / <escalate> escalate：<一句话总评>」（各状态计数以 Reconciliation 节逐条明细为准）。Summary 不得复述各条发现的标题或内容——各发现的小节标题即索引；0 发现轮写「0 must-fix.」（R2+ 附对账总结论）即可，不硬凑文字。
+**Summary 节只写计数与对账总结论，不复述发现**：R1 写一行「<N> must-fix.」；R2+ 聚焦复审轮在计数行后追加一行对账总结论——「<fixed> fixed / <not-fixed> not-fixed / <regressed> regressed / <escalate> escalate：<一句话总评>」（各状态计数以 Reconciliation 节逐条明细为准）。Summary 不得复述各条发现的标题或内容——各发现的小节标题即索引；0 发现轮写「0 must-fix.」（R2+ 附对账总结论）即可，不硬凑文字。纯文案/参数调整类的开头分类说明与「简洁面零发现」结论按 task prompt 要求保留——放在 Summary 之前的引言单行，不视为 Summary 内容。
 
 小节标题的锚点编号（review-simplicity#1、#2……）即 problems[].ref 引用的锚点，与 Findings 小节一一对应。优先级只有两级：MUST_FIX（唯一报告级别，rubric P0/P1 违反且三段论证齐备）/ INFO（他方职责的线索交接与 Speculative 级投机信号——不计数、不进 problems，报告末尾一句话带过）。
 

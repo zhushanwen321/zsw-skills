@@ -1188,3 +1188,64 @@ test("--group skillVersion：observed 读事件、estimated 读产物；老 JSON
   assert.match(resTable.stdout, /unknown/);
   assert.match(resTable.stdout, /技能版本 unknown/);
 });
+
+// ── 14. 继承（seed）口径：seed-only run = 已知零新生消耗；unknown run 全零 actor 不置 tokensKnown ──
+test("seed-only run 不归 unknown 且继承量不双计；unknown run 的全零 actor 不污染桶 tokensKnown", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "sus-seed-home-"));
+  const binDir = mkdtempSync(join(tmpdir(), "sus-seed-bin-"));
+  makeFakeCli(binDir);
+  mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+  const fixturePath = join(home, "fixtures.json");
+  // seed-only：重发后未产生新生成——新生 0、继承 500（继承只在 CLI 侧披露，stats 不得加回）
+  const seedRun = baseRun({
+    id: "dwfrun-seed",
+    name: "task-seed D1 开发循环",
+    args: { execPlan: "/p/exec-plan.json" },
+    tokensTotal: 0,
+    tokensTotalInherited: 500,
+    actorRows: [
+      actorRow({ name: "u-seed", session: "sess-seed", timeStart: T(10, 0), timeEnd: T(10, 1), durationMs: 60_000, tokensTotal: 0, tokensTotalInherited: 500 }),
+    ],
+  });
+  // unknown：无继承、新生 0、actor 行全零——全零记录不是用量证据
+  const zeroRun = baseRun({
+    id: "dwfrun-zero",
+    name: "task-zero D3 端到端验收",
+    args: { execPlan: "/p/exec-plan.json" },
+    tokensTotal: 0,
+    actorRows: [
+      actorRow({ name: "u-zero", session: "sess-zero", timeStart: T(12, 0), timeEnd: T(12, 1), durationMs: 60_000, tokensTotal: 0 }),
+    ],
+  });
+  writeFileSync(fixturePath, JSON.stringify({
+    zcode: { count: "2 of 2 total", backend: "zcode", runs: [seedRun, zeroRun], totals: { runs: 2, tokensTotal: 0 }, skipped: {} },
+    pi: { count: "0 of 0 total", backend: "pi", runs: [], totals: {}, skipped: {} },
+  }));
+  t.after(() => {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  });
+  const res = spawnSync(process.execPath, [SCRIPT, "--format", "json"], {
+    encoding: "utf8",
+    env: { ...process.env, HOME: home, PATH: `${binDir}:${process.env.PATH ?? ""}`, FAKE_FIXTURE_PATH: fixturePath, FAKE_CLI_MODE: "ok" },
+  });
+  assert.equal(res.status, 0, res.stderr);
+  const report = JSON.parse(res.stdout);
+
+  // seed-only：已知零新生消耗（estimated 非 unknown），继承 500 不进任何合计
+  const seed = report.runs.find((r) => r.id === "dwfrun-seed");
+  assert.equal(seed.usageAttribution, "estimated");
+  const d1 = report.bySkill["dev-flow-wf"].stages["D1"];
+  assert.equal(d1.metrics.tokensKnown, true, "seed-only 有继承证据 → 已知零新生，tokens 写 0 而非 null");
+  assert.equal(d1.metrics.tokens.total, 0, "继承量 500 不得加回（跨 run 双计防线）");
+  assert.equal(d1.metrics.usageCoverage.unknown, 0);
+  assert.equal(report.totals.tokens.total, 0, "totals 不含继承量");
+
+  // unknown：D3 桶只有全零 actor 的 unknown run → tokensKnown=false（JSON null），不得被写成 0
+  const zero = report.runs.find((r) => r.id === "dwfrun-zero");
+  assert.equal(zero.usageAttribution, "unknown");
+  const d3 = report.bySkill["dev-flow-wf"].stages["D3"];
+  assert.equal(d3.metrics.tokensKnown, false, "unknown run 的全零 actor 不置 tokensKnown");
+  assert.equal(d3.metrics.tokens, null);
+  assert.equal(d3.metrics.usageCoverage.unknown, 1);
+});

@@ -6,7 +6,10 @@
 //   1. `agent-session-reader usage --zcode --all --json`（zcode）与
 //      `agent-session-reader usage --pi=<dir> --all --json`（pi）——workflow run 级
 //      明细与 CLI 重算 token（tokensInput/Output/CacheRead/CacheWrite/Reasoning/
-//      NoncacheInput/Total；不读 spent_tokens / tokensReported 自报值）
+//      NoncacheInput/Total；不读 spent_tokens / tokensReported 自报值）。tokensXxx
+//      为本 run 新生消息口径：zcode 换模型重发 run 并入的 seed 继承消息在
+//      tokensXxxInherited 单列、不进 tokensXxx——跨 run 加总本脚本自然不双计，
+//      汇总无需（也不得）把 Inherited 字段加回 token 合计
 //   2. ~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl
 //      阶段事件（唯一允许直接读取的原始文件）
 //
@@ -18,7 +21,9 @@
 // 用量口径（usageAttribution）：
 //   observed / estimated = token 来自观测关联 / legacy 归类的 run（有 actor 会话用量证据）；
 //   unknown = 无模型用量证据（如手工 D0/D4/D6 只有事件没有 actor 会话）——耗时照报、
-//   token 记 unknown（JSON 里 null，不写 0 冒充无消耗）
+//   token 记 unknown（JSON 里 null，不写 0 冒充无消耗）；
+//   有继承（seed）用量但零新生的 run = 已知零新生消耗（重发后无新生成），不归 unknown；
+//   unknown run 的 actor 全零记录不是证据，不置 tokensKnown（防整桶 unknown 被写成 0）
 //
 // 时间口径（并行两套分开报）：
 //   elapsedMsUnion = 证据区间（actor 会话窗 + 节点窗，run 窗兜底）的并集 = 日历实际经过
@@ -615,7 +620,7 @@ function loadObservations(obsRoot, quality) {
         events.push(rec);
       }
       events.sort((x, y) => (toMs(x.timestamp) ?? 0) - (toMs(y.timestamp) ?? 0));
-      // start/end 配对：同 (stage|step|round) 键栈式配对、取最近未闭合 start。
+      // start/end 配对：同 (stage|step|round) 键栈式配对、取最近尚未配对的 start。
       // attempt 不参与身份匹配——观测契约允许 attempt 从 null 回填为 1（启动早期自动检测
       // 未完成时事件带 null，检测确定后其后的事件带值），setup start(null)/end(1) 是正常
       // 序列；start/end 各自的 attempt 原值保留（窗口 attempt 取 end 的回填值优先）
@@ -981,9 +986,12 @@ function processRun(run, backend, opts, executions, aggregator, runSummaries, un
 
   const status = typeof run.status === "string" && run.status !== "" ? run.status : "unknown";
   const runTokenTotal = num(run.tokensTotal);
-  // 用量证据判定：actor 重算 token 或 run 级重算 token 任一非零（run 级有值即 CLI 已算出消耗，
-  // 不得因 actor 行缺失而标 unknown）
-  const usageAttribution = runTokenTotal > 0 ? (attribution === "observed" ? "observed" : "estimated") : "unknown";
+  const runInheritedTotal = num(run.tokensTotalInherited);
+  // 用量证据判定：run 级或 actor 重算 token 任一非零，或有继承（seed）消息用量——有继承零新生的
+  // run = 已知零新生消耗（重发后未产生新生成），不归 unknown；真正 unknown = 无任何用量证据
+  // （如手工 D0/D4/D6 只有事件没有 actor 会话），此时 actor 全零记录同样不是证据
+  const hasUsageEvidence = runTokenTotal > 0 || runInheritedTotal > 0;
+  const usageAttribution = hasUsageEvidence ? (attribution === "observed" ? "observed" : "estimated") : "unknown";
   const task = taskKeyFor(run, linked);
 
   // ── 观测窗口（observed run 才有）；selftest 窗口随 --include-selftest 过滤 ──
@@ -1037,8 +1045,8 @@ function processRun(run, backend, opts, executions, aggregator, runSummaries, un
     const dupSession = sid !== null && seenSessions.has(sid);
     if (sid !== null && !dupSession) seenSessions.add(sid);
     if (!dupSession) uniqSessionCount++;
-    const tokens = dupSession
-      ? null
+    const tokens = dupSession || !hasUsageEvidence
+      ? null // unknown run 的全零记录不是用量证据，不得把桶 tokensKnown 置真（seed-only 有继承时全零是真实值）
       : {
           input: num(a.tokensInput),
           output: num(a.tokensOutput),
@@ -1589,6 +1597,7 @@ function main() {
     },
     notes: [
       "token 取 agent-session-reader usage 的重算字段（tokensInput 含缓存、tokensOutput 含 reasoning、tokensNoncacheInput=input−缓存、tokensTotal=input+output）；不读 spent_tokens / tokensReported 自报值",
+      "zcode tokensXxx 为本 run 新生消息口径：换模型重发 run 并入的 seed 继承消息单列在 usage 的 tokensXxxInherited（本报告不加总该字段），跨 run 合计因此不双计继承历史",
       "token 总量对账以 run 级重算值为准：唯一 actor 会话（同 run 内 session 去重，空 session 行按独立执行计）合计不足且全部分项差额非负时，差额合成 role=未归 的用量记录补齐（actorsNoSession/会话缺失场景）；total 为负或任一分项差额为负则不合成，保留 actor 合计并进 dataQuality.tokenReconcileNegative",
       "elapsedMsUnion=证据区间（actor 会话窗+节点窗，run 窗兜底）并集=日历实际经过；durationSum=run durationMs 相加；actorDurationSum/nodeDurationSum=actor/节点时长相加——并行口径分开报",
       "attribution: observed=executionId 精确关联观测 JSONL；estimated=legacy 分类器（run 名+args+actor 名）估算，精度低于 observed，两者恒分开不得相加视为同精度",
