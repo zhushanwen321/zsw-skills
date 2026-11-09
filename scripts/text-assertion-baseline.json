@@ -600,6 +600,16 @@
    601,
    "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;",
    "format-validation"
+  ],
+  [
+   702,
+   ".filter((l) => l.startsWith(\"[\"));",
+   "protocol-parse"
+  ],
+  [
+   1294,
+   ".filter((l) => l.startsWith(\"[\"));",
+   "protocol-parse"
   ]
  ]
 }

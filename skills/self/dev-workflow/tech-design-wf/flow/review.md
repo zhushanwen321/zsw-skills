@@ -12,7 +12,7 @@
 
 ## T2 进场门槛 [MANDATORY]
 
-进 T2 派审前，设计文档机器项必须全绿：`node <skill 安装位置>/scripts/check-design-doc.mjs <设计目录绝对路径>`（T1 `flow/write.md` Step 6 机器自检跑同一脚本）。脚本按十条规则判定：六文件完整与枚举合法 / id 全局唯一 / 导航对齐 / 跨章节引用存在（引用字段指向的 id 必须在被引用数组中）/ 分型一致 / 产物表触发完备 / 内容形态合法（分型理由不重复前缀、文件条目括号配对）/ 守护引用存在（{{Gx}} 标记指向的 guards id 必须存在）/ 守护单一登记（guards 文本全局唯一；可执行内容跨字段逐字重复只告警不阻塞，提示收敛为 guards 登记 + 引用）（渲染产物过期只告警不阻塞）。exit 非 0 = 未全绿——**不派审**，先回 T1 按 stdout 校验报告修对应章节 JSON、重跑脚本至 exit 0 再进 T2。输入是 md 单文件时脚本 exit 1 并输出指引（全文见 `references/design-doc-schema.md` §11），按指引处理后另行发起。骨架完整性、引用对账、导航对齐这类机器可查问题在 T1 拦截，T2 各 reviewer 不报它们。
+进 T2 派审前，设计文档机器项必须全绿：`node <skill 安装位置>/scripts/check-design-doc.mjs <设计目录绝对路径>`（T1 `flow/write.md` Step 6 机器自检跑同一脚本）。脚本按十条规则判定：六文件完整与枚举合法 / id 全局唯一 / 导航对齐 / 跨章节引用与守护引用存在 / 分型一致 / 产物表触发完备 / 内容形态合法 / 穷举断言声明（warning 不阻塞）/ 渲染产物过期（warning 不阻塞）/ 守护单一登记——其中导航对齐 = reviewNav 与 decisions 的 decisionId 集合对账；跨章节引用与守护引用存在 = gapRefs / unitRefs / axiomRefs / goalRefs 指向的 id 必须在被引用数组中存在、{{Gx}} 守护引用指向的 guards id 必须在 decisions[].guards 登记中存在；内容形态合法 = 分型理由不重复前缀、文件条目括号配对；穷举断言声明 = 穷举断言行缺 searchCmd 登记时告警；守护单一登记 = guards 文本全局唯一，可执行内容跨字段逐字重复只告警不阻塞（提示收敛为 guards 登记 + 引用）。exit 非 0 = 未全绿——**不派审**，先回 T1 按 stdout 校验报告修对应章节 JSON、重跑脚本至 exit 0 再进 T2。输入是 md 单文件时脚本 exit 1 并输出指引（全文见 `references/design-doc-schema.md` §11），按指引处理后另行发起。骨架完整性、引用对账、导航对齐这类机器可查问题在 T1 拦截，T2 各 reviewer 不报它们。
 
 ## W1 workflow 发起（zcode 环境默认动作）
 

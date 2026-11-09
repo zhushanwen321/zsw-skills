@@ -20,11 +20,11 @@
 //      excluded=false 行 sync 非空、excluded=true 行 exclusionNote 必填
 //   7. 内容形态：typeRationale 不以分型名开头（渲染器已带「终态型（terminal）——」前缀，重复即冗余）；
 //      s5 units files 条目全/半角括号配对（不配对的说明括号使条目与后续文件粘连）
-//   8. warning（不阻塞）：穷举断言可复算——assumptions.statement / assumptionExclusions /
-//      stateCopies.exclusionNote 含「唯一 / 全集 / 限于」措辞的行同行无检索命令标记
-//      （grep / rg / 检索式）。warning 级是过渡分层：在途设计存量行未带检索命令，
-//      阻塞会使 T2 进场门槛批量 setup-failure；义务执行靠方向审按 must-fix 处置（模板
-//      D2 规定动作），存量清偿后可升级为阻塞
+//   8. warning（不阻塞）：穷举断言可复算——assumptions / assumptionExclusions / stateCopies
+//      行声明 exhaustive=true 但 searchCmd 为空（缺检索命令的穷举断言审查无法重跑对账）。
+//      warning 级是过渡分层：存量行未声明 exhaustive 字段，阻塞会使 T2 进场门槛批量
+//      setup-failure；义务执行靠方向审按 must-fix 处置（模板 D2 规定动作），存量清偿后
+//      可升级为阻塞
 //   9. warning（不阻塞）：rendered.md 缺失或早于任一 json 修改时间
 //   10. 单一登记（准则 14）：fail——guards[].text 两两精确重复（trim 后相等），同一守护全文
 //       须全局只登记一处；warning（不阻塞）——非 guards.text 字符串值中「无空白 ≥30 字符、

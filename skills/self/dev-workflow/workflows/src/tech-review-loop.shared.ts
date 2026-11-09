@@ -615,8 +615,6 @@ const TEMPLATE_BASENAMES: { dim: string; file: string }[] = [
 ];
 const TILDE_ROOT = "~/.agents/skills/tech-design-wf/agents";
 const RUBRIC_TILDE = "~/.agents/skills/tech-design-wf/review/rubric-design-doc.md";
-// 原则层（D 系列方向审攻击的产物表规格与触发条件来源，flow/review.md Step 2 同源）
-const PRINCIPLES_TILDE = "~/.agents/skills/tech-design-wf/references/principles.md";
 // 章节 JSON 字段规格（修复者编辑章节 JSON 的字段权威定义；渲染产物的命名 = 目录 basename
 // + .rendered.md，与渲染脚本一致）
 const SCHEMA_TILDE = "~/.agents/skills/tech-design-wf/references/design-doc-schema.md";
@@ -643,7 +641,6 @@ for (const t of TEMPLATE_BASENAMES) {
   templates.set(t.dim, overrides.get(t.dim) ?? expandTilde(`${TILDE_ROOT}/${t.file}`));
 }
 const rubricPath = expandTilde(RUBRIC_TILDE);
-const principlesPath = expandTilde(PRINCIPLES_TILDE);
 const schemaPath = expandTilde(SCHEMA_TILDE);
 const checkDesignCliAbs = expandTilde(CHECK_DESIGN_TILDE);
 const renderCliAbs = expandTilde(RENDER_TILDE);
@@ -678,7 +675,7 @@ if (probe.exitCode !== 0) {
 }
 
 // ── T2 进场门槛 + 渲染视图刷新（与 flow/review.md 手工路径同一实现） ──
-// check：对设计目录跑七条规则校验，exit 0 = 机器项全绿才派审；非 0 时 stdout 是逐项失败
+// check：对设计目录跑十条规则校验，exit 0 = 机器项全绿才派审；非 0 时 stdout 是逐项失败
 // 原因（md 输入则是迁移指引原文）——原样透传进 message，恢复动作可循
 const designChk = await world.run("node", [checkDesignCliAbs, designDoc]);
 if (designChk.exitCode !== 0) {
@@ -694,6 +691,18 @@ if (designChk.exitCode !== 0) {
     blocked: null,
     message: `设计文档机器项未全绿（check-design-doc.mjs exit ${designChk.exitCode}）：${designChk.stdout.trim() || designChk.stderr.trim()}。恢复动作：回 T1 按上述校验报告修复对应章节 JSON 后重跑脚本至 exit 0 再发起；输入为 md 文件时按校验输出中的指引处理`,
   };
+}
+// 机器 warning 消费者：exit 0 时 stdout 此前被静默丢弃——单一登记收敛引导（guards 残留 /
+// 跨字段逐字重复 warning）在循环内无接收方。warning 行（[标签] 开头）落 run 日志，并留给
+// 第 1 轮修复者处置（不阻塞判定；预检通过时的 warning 同机制传给下一轮修复者）
+let machineHints = "";
+const designHintLines = designChk.stdout
+  .split("\n")
+  .map((l) => l.trim())
+  .filter((l) => l.startsWith("["));
+if (designHintLines.length > 0) {
+  machineHints = designHintLines.join("\n");
+  log(`T2 进场机器提示（不阻塞，第 1 轮修复者处置）：\n${machineHints}`);
 }
 // render：幂等刷新阅读视图——check 对渲染过期只告警不阻塞，这里主动重渲染消除告警，
 // 保证方向审 / 三审读到的 rendered.md 与章节 JSON 一致（缺失则生成）
@@ -1026,7 +1035,7 @@ for (let round = 1; round <= maxRounds; round++) {
           "合并规则：",
           "- 同根因 = 两条发现指向设计文档同一处失实 / 同一缺失 / 同一矛盾（不同席位对同一问题的不同视角表述）→ 合并为一条：refs 取并集，title 一句话根因，guidance 合并为一份可执行操作清单（保留各自的可执行细节——改哪个章节 JSON 哪个条目、补什么内容、跑什么检索）。",
           "- 不同根因绝不合并；拿不准是否同根因 → 不合并（宁多勿并——错误合并会让修复漏掉一半）。",
-          "- guidance 枚举完备性：改写清单/枚举类字段（清单条目、端点枚举、时段枚举、形态列举等）时，对该字段做完备性枚举——列全全部合法成员，不是只改报告点名的那一项；同一内容在多个章节重复登记时，若可收敛为单一权威登记加引用（其他章节以决策 id 或条目标识引用）则 guidance 优先要求收敛，确需保留多处登记时列出全部登记点并要求逐字同步。",
+          "- guidance 枚举完备性：改写清单/枚举类字段（清单条目、端点枚举、时段枚举、形态列举等）时，对该字段做完备性枚举——列全全部合法成员，不是只改报告点名的那一项；同一内容在多个章节重复登记时，若可收敛为单一权威登记加引用则 guidance 优先要求收敛——可执行内容（正则/命令/守护类）的收敛走机器通道：登记在 s3-solution.json 的 decisions[].guards（{ id, text, note }，规格见 schema §6.3），消费处文本字段内联完整标记 {{Gx}} 引用（Gx 替换为登记的真实守护 id，不写「以决策 id 引用」式文字指引）；非可执行内容以章节字段 id 或条目标识引用。确需保留多处登记时列出全部登记点并要求逐字同步。",
           "- guidance 先验证后写入：正则/守护/命令类内容必须先实跑验证再写进指导——构造正例与反例样例（正例全命中、反例不命中），把样例与结果作为验证记录写进 guidance；验证用管道或临时文件进行，不修改设计文档与项目文件（与只读裁决约束兼容）。",
           "- guidance 自包含：修复者无需自行推断联动点——改哪个章节 JSON 的哪个字段、同步哪些跨章节引用、跑什么验证，逐条列清。",
           "",
@@ -1130,6 +1139,20 @@ for (let round = 1; round <= maxRounds; round++) {
         ].join("\n")
       : "";
 
+  // 机器提示块（check-design-doc warning 的消费者——machineHints 在 setup 与每轮预检通过
+  // 时赋值）：warning 不阻塞判定但须有接收方，否则单一登记收敛引导在循环内空转。构建时
+  // 消费并清空——同一批提示只进一轮修复者上下文，新一轮提示由新一轮预检产生
+  const machineHintBlock =
+    machineHints === ""
+      ? ""
+      : [
+          "",
+          "机器提示（check-design-doc.mjs 的 warning 行，不阻塞判定）：",
+          machineHints,
+          "单一登记类提示按其收敛建议处置（收敛为 decisions[].guards 登记 + {{<守护 id>}} 引用，或按准则 14 在决策节登记全部登记点清单）；不处置的在对应处置的 reenactment 或 revisionSummary 登记理由。",
+        ].join("\n");
+  machineHints = "";
+
   const fixer = agent(`文档修复者-r${round}`, FIXER_PERSONA);
   const baseFixInstructions = [
     `第 ${round} 轮设计文档修复（产物目录 ${roundAbs}）。`,
@@ -1144,12 +1167,13 @@ for (let round = 1; round <= maxRounds; round++) {
     "3. 方案性意见（需要用户裁决的方向变化，如推翻问题定义、方案主干、最小形态）修不动 → 不要硬改：status 取 \"blocked\"，并在 blocked 里申报（items=卡住的问题清单，reason=为什么需要用户裁决）；其余可修的照常完成并产出处置表。无方案性卡点时 status 取 \"done\"，返回体不得含 blocked 字段——不要在 blocked 里填「无卡点」之类的说明（引擎只认 status，blocked 不是表态字段）。",
     outstandingBlock,
     problemsBlock,
+    machineHintBlock,
     "",
     "修复纪律：",
     "- 反例重演：每条处置的 reenactment 写清该问题如何被发现，且修复后在修订稿上重演验证问题已消除。",
     "- 事实标注：你写入或触及的运行时、环境、宿主行为断言必须带核实状态——✅ 仅用于本会话亲自核实（读码/实测/静态查询）过的陈述，能静态核实的不许标 ⏳（先核实再写），设计期无法核实的写 ⏳ 前提并指向实施期探针。把推断或未尝试的查询写成事实/✅ 是下轮 must-fix 的头号来源（历次实测：连续 6 轮 must-fix 不降全部由此而来）。联动修改触及的每处既有断言同步重核实，防止标注在多次联动中丢失或失实。",
     "- 否决记录：方案对比中被否决的候选，修复时把否决理由写进「不采用」栏（decisions 的 rejected 字段），不删除候选项。",
-    "- 联动同步：修复触及的陈述须同步设计文档内关联章节 JSON（问题定义、方案对比、验收标准、风险登记、实施计划五处及其他关联处），不留前后矛盾；跨章节引用字段（decisions 的 gapRefs / unitRefs / axiomRefs、scenarios 的 goalRefs、meta.json reviewNav 的 decisionId）与被引用数组的 id 同步更新——改 id 必须同步全部引用处。",
+    "- 联动同步：修复触及的陈述须同步设计文档内关联章节 JSON（问题定义、方案对比、验收标准、风险登记、实施计划五处及其他关联处），不留前后矛盾；跨章节引用字段（decisions 的 gapRefs / unitRefs / axiomRefs、scenarios 的 goalRefs、meta.json reviewNav 的 decisionId）与被引用数组的 id 同步更新——改 id 必须同步全部引用处；守护单一登记（decisions 的 guards 登记与正文 {{Gx}} 引用）同步——新增/改写守护全文只改登记处一处，消费处文本字段内联 {{<守护 id>}} 引用（Gx = 登记的真实守护 id），不在正文逐字重复，登记全文的正文残留与跨字段逐字重复会被检查器 warning 点名（不阻塞，按提示收敛或在处置表登记理由）。",
     `- 渲染刷新：章节 JSON 每次修改后运行 node ${renderCliAbs} ${designDoc} 刷新渲染视图（rendered.md 由脚本生成、禁止手改；全部处置完成后确保已重渲染——下轮审查读渲染视图，视图过期会误判为未修复）。`,
     "- 方向审席的穷举断言类问题（「唯一 / 限于 / 全集」措辞）：修复 = 亲自跑检索（grep / ripgrep，含路径范围），把命令与命中清单登记进对应行的 evidence / exclusionEvidence / exclusionNote——登记后断言可复算，下轮对账重跑同一命令；需要动问题定义 / 方案主干 / 分型才能修的 → status 置 \"blocked\" 申报，不硬改。",
     "- 语言回归：修订语言与原稿一致（中文），术语沿用文档既有术语，不引入未解释的新术语。",
@@ -1182,7 +1206,7 @@ for (let round = 1; round <= maxRounds; round++) {
         : [
             withRetryContext(baseFixInstructions, fix, lastCheckReport),
             "你此前对设计文档的修订都保留在磁盘上，本轮按校验报告分类处理，不重复未指出的修改：",
-            "- [precheck] 类（渲染/机器校验红）：修复报告指出的章节 JSON 问题，修完重跑 node " + renderCliAbs + " " + designDoc + " 刷新渲染视图；",
+            "- [precheck] 类（渲染/机器校验红）：修复报告指出的章节 JSON 问题，修完重跑 node " + renderCliAbs + " " + designDoc + " 刷新渲染视图（check-design-doc 输出里的 warning 行是不阻塞提示：单一登记类按其收敛建议处理或登记理由，不算红）；",
             "- 其余类：处置表结构化返回问题——补齐缺失的 source 引用、修正字段形态，不动文档。",
             "重新返回完整 JSON（status / dispositions / revisionSummary，仅卡点时加 blocked——全量重新给出，不是增量补丁）。",
             `校验报告（每条 error 都必须在本轮修正）：\n${lastCheckReport}`,
@@ -1261,6 +1285,17 @@ for (let round = 1; round <= maxRounds; round++) {
         const mChk = await world.run("node", [checkDesignCliAbs, designDoc]);
         if (mChk.exitCode !== 0) {
           precheckErr = `设计文档机器校验未过（check-design-doc.mjs exit ${mChk.exitCode}）：${mChk.stdout.trim() || mChk.stderr.trim()}——按校验报告修复对应章节 JSON`;
+        } else {
+          // 预检通过的 warning 也要有消费者：落 run 日志 + 传给下一轮修复者（纯 warning
+          // 场景 exit 0，此前 stdout 在这里被静默丢弃）
+          const hintLines = mChk.stdout
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l.startsWith("["));
+          if (hintLines.length > 0) {
+            machineHints = hintLines.join("\n");
+            log(`机器提示（不阻塞，下一轮修复者处置）：\n${machineHints}`);
+          }
         }
       }
       if (precheckErr === "") {
