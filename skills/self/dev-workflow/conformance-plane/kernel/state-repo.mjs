@@ -14,7 +14,7 @@
 import { openSync, closeSync, readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, appendFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
-import { commandToFact, validateFact, validateCommand, checkRedLineThresholds } from "./facts.mjs";
+import { commandToFact, validateCommand, checkRedLineThresholds } from "./facts.mjs";
 import { fold, findOrphanEvidence } from "./state-fold.mjs";
 
 const EVENTS_FILE = "events.jsonl";
@@ -260,46 +260,6 @@ export async function appendCommands(root, commands, opts = {}) {
     const redLine = checkRedLineThresholds({ bytes, count: allFacts.length });
     writeSnapshot(root, { input: snap.input, lastSeq: seq, state, redLine });
     return { appended: appendedFacts.length, appendedFacts, redLine };
-  }, opts);
-}
-
-/**
- * 追加已构造事实（导入/测试通道）：事实必须自带连续 seq。语义约束同 appendCommands。
- */
-export async function appendFacts(root, factsInput, opts = {}) {
-  for (const f of factsInput) {
-    const check = validateFact(f);
-    if (!check.ok) {
-      const err = new Error(`事实未过 schema 校验：${check.errors.join("；")}`);
-      err.code = "invalid-fact";
-      throw err;
-    }
-  }
-  return withLock(root, async () => {
-    const snap = readSnapshot(root);
-    if (!snap) {
-      const err = new Error(`状态仓未初始化。恢复动作：先 initStateRepo。`);
-      err.code = "state-store-missing";
-      throw err;
-    }
-    const existing = readEvents(root);
-    const lastSeq = existing.length > 0 ? existing[existing.length - 1].seq : 0;
-    if (deriveArchived(snap, existing) && factsInput.some((f) => f.type !== "Unarchived")) throw archivedError(root);
-    for (const f of factsInput) {
-      lastSeq += 1;
-      if (f.seq !== lastSeq) {
-        const err = new Error(`追加事实 seq 不连续：期望 ${lastSeq}，实际 ${f.seq}。恢复动作：按现有事件流续编 seq。`);
-        err.code = "fact-seq-gap";
-        throw err;
-      }
-    }
-    appendFileSync(join(root, EVENTS_FILE), factsInput.map((f) => JSON.stringify(f)).join("\n") + "\n");
-    const allFacts = [...existing, ...factsInput];
-    const state = fold({ ...snap.input, facts: allFacts });
-    const bytes = statSync(join(root, EVENTS_FILE)).size;
-    const redLine = checkRedLineThresholds({ bytes, count: allFacts.length });
-    writeSnapshot(root, { input: snap.input, lastSeq, state, redLine });
-    return { appended: factsInput.length, appendedFacts: factsInput, redLine };
   }, opts);
 }
 
