@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WF = join(ROOT, "skills/self/dev-workflow/workflows");
-const NAMES = ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop"];
+const NAMES = ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop", "design-code-sync-v2"];
 
 const ts = createRequire(import.meta.url)("typescript");
 

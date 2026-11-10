@@ -785,7 +785,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "0.7.0"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.0.0"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // design-code-sync-loop — dev-flow-wf 技能 W4 终态同步循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts 与 tech-review-loop.dwf.ts（多脚本循环骨架
@@ -1059,6 +1059,33 @@ function parseProjectAddress(raw: string): ProjectAddress | null {
 function devFlowRoot(home: string, address: ProjectAddress): string {
   const base = `${home}/.agents/skill-data/dev-flow/${address.slug}`;
   return address.form === "workspace" ? `${base}/${address.worktreeName}` : base;
+}
+
+// ── cutover 标记入口拒启检查（sync-conformance-plane D8/G11：按设计包灰度切换、旧引擎只读）
+//    寻址 = skill-data tech-design 段 <slug>/<name>/cutover.json（工作区级共享、无 worktree
+//    段——skill-data-addressing.md §2；<name> = 设计文档 basename 去最后扩展名，与 dev-flow
+//    段 docName 同一计算）。标记由 cutover 命令（u-m5）写入；命中 = 该包已切换 v2 一致性
+//    控制平面管辖，本旧引擎拒启：不改旧状态、不写旧 final。只读探针，零写入。──
+const NODE_CUTOVER_EXISTS =
+  "try{process.stdout.write(require('fs').existsSync(process.argv[1])?'1':'0')}catch(e){process.stdout.write('0')}";
+
+/** cutover 拒启判定（setup 前置段，先于任何状态写入与 agent 派发）：返回 blocked=true 时
+ *  message 已含恢复动作（指向 v2）。标记不存在/探针失败 = 未切换放行——探针失败按
+ *  fail-open 处理（命中判定 = 标记在场；node 环境故障时后续 setup 同样无法进行，且旧包
+ *  只读期误拒启比漏拦代价高：拦错 = 存量包不可用，漏拦窗口 = 探针故障且标记在场的小概率
+ *  交集）。归档包重开对账范围（复活通道 Unarchived 解档）同样只走 v2，本入口保持拒启 */
+async function cutoverGuardBlock(home: string, address: ProjectAddress, docName: string): Promise<{ blocked: boolean; message: string }> {
+  const cutoverPath = `${home}/.agents/skill-data/tech-design/${address.slug}/${docName !== "" ? docName : "design"}/cutover.json`;
+  const r = await world.run("node", ["-e", NODE_CUTOVER_EXISTS, cutoverPath]);
+  const present = r.exitCode === 0 && r.stdout.trim() === "1";
+  if (!present) return { blocked: false, message: "" };
+  return {
+    blocked: true,
+    message:
+      `设计包已切换 v2 一致性控制平面（cutover 标记在场：${cutoverPath}）——旧终态同步引擎按 D8 只读裁决拒启，不读不写旧 final。` +
+      `恢复动作：经 saved workflow design-code-sync-v2 发起该包对账（v2 从 conformance 状态仓事件流续跑，身份与结论由事件派生）；` +
+      `归档包重开对账范围走 v2 复活通道（Unarchived 解档），旧引擎入口保持拒启。`,
+  };
 }
 
 // run manifest 探针组（skill-data-redesign §5.1：终态在 runDir 根写 run.json）：
@@ -1876,6 +1903,27 @@ const skillDataDir = devFlowRoot(homeDir, address);
 // runDir 命名：<skillDataDir>/<设计文档 basename 去扩展名>.sync/
 const docBase = designDoc.split("/").pop() ?? designDoc;
 const docName = docBase.replace(/\.[^.]+$/, "");
+
+// cutover 拒启检查（D8/G11，setup 前置第一步：已切换包的旧 W4 入口启动即拒启——
+// 命中即返回，不改旧状态、不写旧 final、不派任何 agent）
+const cutoverGuard = await cutoverGuardBlock(homeDir, address, docName);
+if (cutoverGuard.blocked) {
+  await obsCloseExecution("setup-failure");
+  return {
+    terminated: "setup-failure",
+    rounds: 0,
+    runDir: "",
+    designDoc,
+    matrixFile: "",
+    directionStats: { docRight: 0, codeRight: 0, contested: 0 },
+    retirement: { retired: [], kept: [] },
+    contestedList: [],
+    overdesignCandidates: [],
+    remaining: [],
+    message: cutoverGuard.message,
+  };
+}
+
 const runDir = `${skillDataDir}/${docName !== "" ? docName : "design"}.sync`;
 const matrixFile = `${runDir}/matrix.md`;
 const trajectoryFile = `${runDir}/trajectory.md`;

@@ -32,6 +32,7 @@ const PAIRS = [
   "wave-executor",
   "dev-consistency-loop",
   "design-code-sync-loop",
+  "design-code-sync-v2",
 ];
 
 // 探针注入不变量（维度 5）的单一权威源：skill-data.shared.ts（寻址算法唯一权威源，
@@ -98,6 +99,12 @@ const WHITELIST = new Set([
   "fail",
   "status",
   "terminated",
+  // —— v2 SyncV2Result interface 字段与四层结论 union 字面量（transpile 剥类型后仅 zcode 侧成串，同上形态） ——
+  "engineOutcome",
+  "integrationOutcome",
+  "remaining",
+  "not-started",
+  "verified-pending-integration",
 
   // —— B shim（pi 专属运行环境） ——
   "node:child_process",

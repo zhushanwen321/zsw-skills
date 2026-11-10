@@ -3,13 +3,14 @@ name: dev-flow-wf
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 0.7.0
+version: 1.0.0
 description: >-
   Use when 一份完整设计包（tech-design-wf 产出：设计文档 + 双格式 impl-plan + 审查终态）
   需要落地为已验收代码。dev-flow 的 workflow 版（灰度并行，老版保留可随时切回）：
   纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 → 终态同步 → 交付后守护。
   触发词：「wf 实施」「按设计包开发」「workflow 版实施」「设计包执行」。
-  含 W2 wave-executor / W3 dev-consistency-loop / W4 design-code-sync-loop 三个
+  含 W2 wave-executor / W3 dev-consistency-loop / W4 design-code-sync-v2（conformance
+  绑定包的对账引擎）与 design-code-sync-loop（未绑定 legacy 包只读期收尾）四个
   workflow 衔接（就绪前走内置手工路径）。W4 段含 design-code-sync 升级语义
   （三向功能对照矩阵 + 越权三问）。
   Not for 写/审设计文档（用 tech-design-wf 或老 tech-design）；无设计包的 bug 修复
@@ -42,7 +43,7 @@ description: >-
 | D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组流式槽位池并行（在途 ≤5；文档修复组按文件门控进同一派发池——不相交同池并行、相交回退串行段）+ Gate A 全量测试（红后归因分诊独立 phase：本批回归条目回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态，≤2 轮） | W3 dev-consistency-loop（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
 | D3 端到端验收 | 验收计划表 L3/L4 编译成 verify/inspect 节点（核心先行 + 短路）+ 验收失败修复循环（failed 入失败池 → 聚合裁决独立 phase（跨节点同根因合并/disputed 反证/文件不相交分组）→ 修复组独立 phase（fixer 修产品代码与验收资产，引擎按组 commit）→ 节点重置机器重验回调度循环，≤3 轮不收敛才熔断） | W2 第二实例化（手工路径 `flow/acceptance.md`） | 验收全绿 |
 | D4 收尾交付 | 交付汇总 + 功能分级登记 + 文档资产同步 + ADR 复审 + 最终 commit | 主 agent | `flow/acceptance.md` 收尾节 |
-| D5 终态同步 | 代码与设计双向校准：三向功能对照矩阵 + 越权三问 + 两级审查拓扑（模块审查 / 聚焦复审 / 修复组三处均为流式槽位池——在途 ≤ 各自池上限；修复组按重叠关闭集记账，每次记账经 log 行输出五要素） | W4 design-code-sync-loop（手工路径 `flow/sync.md`） | 矩阵 0 must-fix |
+| D5 终态同步 | 代码与设计差距收敛为固定义务覆盖率的一致性对账（义务表 → checker 派发（机械优先/语义缓存）→ 差距地址聚合 → 隔离变更集 → 集成器唯一写入门径 → 四层结论；状态唯一权威 = conformance-state 事件流，agent 无状态；未绑定 legacy 包由旧引擎只读期收尾，带 cutover 标记的包旧引擎入口拒启） | W4 v2 design-code-sync-v2（绑定包；手工路径 `flow/sync.md`）/ W4 legacy design-code-sync-loop（未绑定包收尾） | 引擎 completed + 覆盖率分母全 verified/waived |
 | D6 交付后守护 | 交付后修复回写纪律 + 按需定向对抗审查 | 主 agent | `flow/post-delivery.md`（[HISTORICAL] 原样） |
 
 段间不设用户确认（gate 驱动连续推进）；熔断终态（blocked / stuck / core-failed / contested / gate-a-failed / review-failure / fix-failure）停回主 agent 按 flow/execute.md 与 flow/consistency-review.md 的终态处置表处置——core-failed / gate-a-failed 在 D3/D2 是修复循环不收敛的出口（常态失败已由轮内聚合修复消化），终态自带归因材料（聚合清单 / 分诊报告 / disputed 反证）。
@@ -89,7 +90,7 @@ description: >-
 | `event` / `timestamp` / `sample_type` | start 或 end / ISO8601 / production（真实执行，缺省）或 selftest（测试执行） |
 | `outcome`（可选） | 仅出现在终态统一补记的 end 上，值 = 本次执行的终态词（如 completed / converged / blocked / setup-failure） |
 
-**生成与传递**：`task_id` 由主 agent 在 D0 编译时分配（建议 = 设计包 `<name>`），同一任务的 D0/D1/D2/D3/D4/D6 全段共用；`execution_id` 每次发起一个新的执行时分配（建议 = `<段名>-<发起时点短时间戳>`），同一 execution_id 的多次重发起共用（attempt 字段区分轮次）。W2（D1/D3）、W3（D2）与 W4（D5）已内建：发起时 args 同时传 `taskId` 与 `executionId` 即启用，stage 自动记录（D1/D3 按 exec-plan 的 mode 区分，D2 恒 D2，D5 恒 D5），步骤边界由引擎写入——W2 的 setup/finalize、W3 每轮的 review/aggregate/fix/gate-a、W4 的 setup（环境校验/矩阵初始化/框架对照规划）/review（机械信号扫描 + 并行模块审查，R2+ 含聚焦复审）/fix（并行修复）/retire（退役判定）/finalize（轮次耗尽收尾）。
+**生成与传递**：`task_id` 由主 agent 在 D0 编译时分配（建议 = 设计包 `<name>`），同一任务的 D0/D1/D2/D3/D4/D6 全段共用；`execution_id` 每次发起一个新的执行时分配（建议 = `<段名>-<发起时点短时间戳>`），同一 execution_id 的多次重发起共用（attempt 字段区分轮次）。W2（D1/D3）、W3（D2）与 W4（D5）已内建：发起时 args 同时传 `taskId` 与 `executionId` 即启用，stage 自动记录（D1/D3 按 exec-plan 的 mode 区分，D2 恒 D2，D5 恒 D5），步骤边界由引擎写入——W2 的 setup/finalize、W3 每轮的 review/aggregate/fix/gate-a、W4 v2 的 setup（义务表装载/workspace 清单/状态仓/裁决装载/宿主清扫）/fix（每轮 checker 派发与修复集成）、W4 legacy 的 setup（环境校验/矩阵初始化/框架对照规划）/review（机械信号扫描 + 并行模块审查，R2+ 含聚焦复审）/fix（并行修复）/retire（退役判定）/finalize（轮次耗尽收尾）。
 
 **可选兼容**：两参都不传 = 观测关闭、业务照常（存量调用不受影响）；只传其一 = 告警（含恢复动作）并关闭，不猜测意图；观测写失败 = 告警（同一文件只告警一次）不改业务终态——观测是辅助功能，故障不拖垮主流程。
 
@@ -128,9 +129,10 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 |----------|----|------|------|
 | W2 `wave-executor`（saved） | D1 / D3（两实例化） | `{ execPlan, taskId?, executionId?, sampleType? }` | completed / blocked / core-failed（统一失败处理中心：verify/inspect failed（dev 与 acceptance 模式一律）与 commit 门禁被拒入失败池 → 聚合裁决 → 修复组 → 机器重验（节点重跑 / 原 message 重试 commit），≤3 轮；终态携带 acceptanceFix = { rounds, disputed（聚合级与 fixer 级反证清单，人工裁决）, fixesDir }，非 null 时 disputed 必处置；轮内修不动的 commit 残留留 deferredCommits 呈报） |
 | W3 `dev-consistency-loop`（saved） | D2 | `{ execPlan, maxRounds?, reviewerTemplate?, attempt?, taskId?, executionId?, sampleType? }` | converged / stuck / gate-a-failed / review-failure / fix-failure（Gate A 红后归因分诊独立 phase ≤2 轮：本批回归条目（GA-id）回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态；产物构建失败先引擎重跑自愈（stale），仍败回注修复轮（fixer 修产物脚本/基建），回注轮耗尽才终态；终态回写 status.json events：consistency 终态一笔恒写 + gate-a 笔在 converged/gate-a-failed 恒写、stuck 且 Gate A 已跑时同写；必填字段双无条目降级登记项——deferredLedger 回流；attempt>1 时 Gate A 日志带 .attemptM 后缀） |
-| W4 `design-code-sync-loop`（saved） | D5 | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath?, plannerTemplate?, reviewerTemplate?, attempt?, taskId?, executionId?, sampleType? }` | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（修复组 commit 被仓库钩子拒时先派门禁修复 fixer 做合规修复（豁免标记/清单登记/指针跟改）+ 原 message 重试 ≤2 轮，仍拒才 fix-failure——真代码问题 fixer 返回空 fixed 转人工；模板路径与 attempt 缺省自动处理，attempt>1 历史产物不覆盖；终态含 overdesignCandidates——越权候选卡呈报） |
+| W4 v2 `design-code-sync-v2`（saved） | D5（conformance 绑定包） | `{ designPkg, projectRoot, declaredRepos, confirmedRepoIds?, sandboxRoot?, stateRoot?, confRoot?, reviewerTemplate?, fixerTemplate?, maxRounds?, rulingsFile?, taskId?, executionId?, sampleType? }` | 四层结论 scriptStatus / engineOutcome（completed / awaiting-ruling / stopped / failed）/ integrationOutcome（not-required / not-started / verified-pending-integration / integrated / rolled-back / failed）/ deliveryOutcome（pending / blocked——resolved 系列由主 agent 交付宣告/人工接管追加）；续跑 = 同 stateRoot 重发（事件流恢复），裁决续跑携 rulingsFile（respondsTo 锚点在停回 message）；文档侧差距走 doc-proposals 提案 + 裁决门径 |
+| W4 legacy `design-code-sync-loop`（saved） | D5（未绑定 legacy 包只读期收尾） | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath?, plannerTemplate?, reviewerTemplate?, attempt?, taskId?, executionId?, sampleType? }` | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（修复组 commit 被仓库钩子拒时先派门禁修复 fixer 做合规修复（豁免标记/清单登记/指针跟改）+ 原 message 重试 ≤2 轮，仍拒才 fix-failure——真代码问题 fixer 返回空 fixed 转人工；模板路径与 attempt 缺省自动处理，attempt>1 历史产物不覆盖；终态含 overdesignCandidates——越权候选卡呈报；setup 第一步 cutover 检查——已切换包拒启） |
 
-执行体按宿主环境选择：**zcode**（会话可见 CreateWorkflow 工具 / saved workflows）→ 上表 saved workflow 经 `CreateWorkflow saved` 发起；**pi**（subagent-workflow extension、workflow 工具可用）→ 本 skill 安装位置上级的 `../workflows/pi/<name>.js`（四件：wave-executor / dev-consistency-loop / design-code-sync-loop / tech-review-loop——tech-review-loop 属 tech-design-wf 的 W1，dev-flow-wf 运行只需前三件）复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run <name> --args k=v`——两版脚本业务逻辑逐行一致，仅 agent 调用层与文件头不同；--args 值全字符串，数字参数脚本内自动归一，数组型不支持。两版均未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：zcode workflow 用 ResumeWorkflowRun/AmendWorkflow，pi 重新 run（attempt 递增防产物覆盖），手工路径以 status.json + git log 对账，冲突以 git 为准）。
+执行体按宿主环境选择：**zcode**（会话可见 CreateWorkflow 工具 / saved workflows）→ 上表 saved workflow 经 `CreateWorkflow saved` 发起；**pi**（subagent-workflow extension、workflow 工具可用）→ 本 skill 安装位置上级的 `../workflows/pi/<name>.js`（五件：wave-executor / dev-consistency-loop / design-code-sync-loop / design-code-sync-v2 / tech-review-loop——tech-review-loop 属 tech-design-wf 的 W1，dev-flow-wf 运行只需前四件）复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run <name> --args k=v`——两版脚本业务逻辑逐行一致，仅 agent 调用层与文件头不同；--args 值全字符串，数字参数脚本内自动归一，数组型不支持。两版均未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：zcode workflow 用 ResumeWorkflowRun/AmendWorkflow，pi 重新 run（attempt 递增防产物覆盖），手工路径以 status.json + git log 对账，冲突以 git 为准）。
 
 **attempt 重发起纪律 [MANDATORY]**：对 run 重发起分两种形态，前提判据 = 脚本是否变化——
 

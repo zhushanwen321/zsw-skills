@@ -42,7 +42,7 @@ const SAVED_DIR = join(homedir(), ".zcode", "workflows");
 // 校验入口（zcode 发起即比对 saved 副本与仓内产物，漂移即抛错——机制与刻意不比 src/
 // 源的理由见层文件头注）
 const PROV_LAYER_PATH = join(SRC, "provenance.shared.ts");
-const NAMES = ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop"];
+const NAMES = ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop", "design-code-sync-v2"];
 // 观测门禁豁免名单：shared 源无 initObservation 调用点且登记在此的 workflow 跳过观测
 // 契约检查（跳过时打一行说明，不静默）。豁免是显式决定不是默认沉默——登记格式 = 双引号
 // workflow 名（须为 NAMES 成员），豁免必须附理由（写在条目行尾或紧邻注释，如「纯脚本
@@ -68,6 +68,7 @@ const SKILL_VERSION_SOURCES = {
   "wave-executor": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
   "dev-consistency-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
   "design-code-sync-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
+  "design-code-sync-v2": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
 };
 
 function readSkillVersion(skillMdPath, wfName) {
