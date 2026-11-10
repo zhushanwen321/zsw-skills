@@ -478,7 +478,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "1.1.0"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.1"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ── 常量 ──
 const DEFAULT_MAX_ROUNDS = 8;
 /** semantic 非法输出回喂上限（权威 = conformance-plane/checkers/registry.mjs MAX_SEMANTIC_REFEEDS，
@@ -549,7 +549,7 @@ function deriveInputs() {
 }
 // ── 领域探针（node -e；argv 传参、stdout JSON {ok, data|error} 返回。
 //    每个探针动态 import conformance-plane 模块——单源消费，无算法副本） ──
-const CMD_PRELUDE = "const conf=process.argv[1];const pathToFileURL=require('path').pathToFileURL;" +
+const CMD_PRELUDE = "const conf=process.argv[1];const pathToFileURL=require('url').pathToFileURL;" +
     "const mod=(p)=>import(pathToFileURL(conf+'/'+p).href);" +
     "const out=(o)=>process.stdout.write(JSON.stringify(o));" +
     "(async()=>{try{";
@@ -609,16 +609,16 @@ const PROBE_HASH_INPUTS = CMD_PRELUDE +
     CMD_EPILOG;
 // argv=[confRoot, cachePath, key] → 语义缓存读（D7：命中零 agent 调用）
 const PROBE_CACHE_GET = CMD_PRELUDE +
-    "const fs=require('fs');const p=process.argv[3];" +
+    "const fs=require('fs');const p=process.argv[2];" +
     "if(!fs.existsSync(p)){out({ok:true,verdict:null});return}" +
     "const store=JSON.parse(fs.readFileSync(p,'utf8'));" +
-    "out({ok:true,verdict:store[process.argv[4]]??null})" +
+    "out({ok:true,verdict:store[process.argv[3]]??null})" +
     CMD_EPILOG;
 // argv=[confRoot, cachePath, key, verdictJson] → 语义缓存写
 const PROBE_CACHE_SET = CMD_PRELUDE +
-    "const fs=require('fs');const p=process.argv[3];" +
+    "const fs=require('fs');const p=process.argv[2];" +
     "let store={};if(fs.existsSync(p)){try{store=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){store={}}}" +
-    "store[process.argv[4]]=JSON.parse(process.argv[5]);" +
+    "store[process.argv[3]]=JSON.parse(process.argv[4]);" +
     "fs.mkdirSync(require('path').dirname(p),{recursive:true});fs.writeFileSync(p,JSON.stringify(store,null,2));" +
     "out({ok:true})" +
     CMD_EPILOG;
@@ -966,6 +966,9 @@ const objBaseline = objBaselineRes.counts;
 await obsEnd("setup", null);
 // ── 对账循环 ──
 const cacheStats = { hits: 0, misses: 0 };
+// 集成器授权写入合计（逐仓 count-objects total 差值逐次累计）——集成器是 agent 阶段窗口内
+// 唯一授权写者（G4 防线②），收尾对账把它从窗口差值中扣除，避免正常集成触发失守误报
+const authorizedObjDelta = {};
 const backlogProposed = [];
 const regenerateTasks = [];
 let integrationOutcome = "not-required";
@@ -1062,16 +1065,18 @@ for (let round = 1; round <= inputs.maxRounds; round++) {
     }
     await obsEnd("fix", round);
 }
-// 收尾对象库对账（G4 防线②：agent 阶段前后逐仓 count-objects 合计不变；红灯走失败契约不自动清理）
+// 收尾对象库对账（G4 防线②：对账窗口 = agent 阶段——启动基线 + 集成器授权写入合计
+// （介入前后快照差值逐次累计）为期望值；剩余差值即 agent 产对象失守，红灯走失败契约
+// 不自动清理）
 const objAfterRes = await runProbe(PROBE_OBJ_COUNTS, [confRoot, JSON.stringify(inventory.map((r) => ({ repoId: r.repoId, realRoot: r.realRoot })))], "对象库收尾对账");
 if (!objAfterRes.ok)
     probeFail("对象库收尾对账", objAfterRes);
 const objAfter = objAfterRes.counts;
 const objViolations = Object.keys(objAfter)
-    .filter((repoId) => objAfter[repoId].total !== (objBaseline[repoId]?.total ?? -1))
+    .filter((repoId) => objAfter[repoId].total !== (objBaseline[repoId]?.total ?? -1) + (authorizedObjDelta[repoId] ?? 0))
     .map((repoId) => `${repoId}：${objBaseline[repoId]?.total ?? "?"} → ${objAfter[repoId].total}`);
 if (objViolations.length > 0) {
-    log(`WARN: 宿主共享对象库计数变化（${objViolations.join("；")}）——sandbox 内可能有产对象命令失守（G4 第④类禁止项）。恢复动作：核查本轮 changeset-fixer 执行记录；对象库残留不自动清理（D4 裁决），红灯事实随终态呈报`);
+    log(`WARN: 宿主共享对象库 agent 阶段窗口差值非零（${objViolations.join("；")}；集成器授权写入已按介入前后快照差值扣除）——sandbox 内可能有产对象命令失守（G4 第④类禁止项）。恢复动作：核查本轮 changeset-fixer 执行记录；对象库残留不自动清理（D4 裁决），红灯事实随终态呈报`);
 }
 // ── 终态 fold + 四层结论 ──
 const finalRead = await runProbe(PROBE_STATE_READ, [confRoot, stateRoot], "终态状态仓读取");
@@ -1494,9 +1499,23 @@ async function fixAndIntegrate(codeFail, round) {
         // 一次集成（唯一写入门径；状态仓同根——审计事件自动入流。V5：预检全量先行任一仓失败
         // 全部不应用 → 终值 failed；宿主挂钩拒绝同样全部不应用 → 终值 failed；ref 移动失败按
         // 跨仓回滚计划恢复 → 终值 rolled-back。终值 = 单次集成结论，不存在仓间互相覆盖）
+        // 介入前后逐仓快照：集成器的对象写入 = 授权写入，按实测差值累计进收尾对账的扣除项
+        // （回滚后 ref 已还原但对象残留同属集成器足迹，一并扣除——agent 失守检出不受影响）
+        const objCountsArgs = () => [confRoot, JSON.stringify(inventory.map((r) => ({ repoId: r.repoId, realRoot: r.realRoot })))];
+        const preIntegRes = await runProbe(PROBE_OBJ_COUNTS, objCountsArgs(), "集成前对象库快照");
+        if (!preIntegRes.ok)
+            probeFail("集成前对象库快照", preIntegRes);
+        const preInteg = preIntegRes.counts;
         const integrateRes = await runProbe(PROBE_INTEGRATE, [confRoot, manifestDir, stateRoot, "reconcile-engine"], "集成（多仓单变更集）");
         if (!integrateRes.ok)
             probeFail("集成（多仓单变更集）", integrateRes);
+        const postIntegRes = await runProbe(PROBE_OBJ_COUNTS, objCountsArgs(), "集成后对象库快照");
+        if (!postIntegRes.ok)
+            probeFail("集成后对象库快照", postIntegRes);
+        const postInteg = postIntegRes.counts;
+        for (const repoId of Object.keys(postInteg)) {
+            authorizedObjDelta[repoId] = (authorizedObjDelta[repoId] ?? 0) + (postInteg[repoId].total - (preInteg[repoId]?.total ?? 0));
+        }
         const outcome = integrateRes.outcome;
         const regen = integrateRes.regenerateTask;
         if (outcome !== "integrated" && regen !== null && regen !== undefined)
