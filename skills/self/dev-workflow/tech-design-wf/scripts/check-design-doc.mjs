@@ -14,7 +14,12 @@
 //   3. 导航对齐：meta.reviewNav[].decisionId 集合 == s3.decisions[].id 集合（A/B 级决策不得缺导航行）
 //   4. 引用存在：gapRefs / unitRefs / axiomRefs / goalRefs 引用的 id 在被引用数组中存在；
 //      {{<id>}} 守护引用 token（递归扫描六章节全部字符串值）指向 decisions[].guards 登记的
-//      id——{{...}} 是守护引用保留语法，正文不作字面量使用，凡 {{...}} 一律按引用校验
+//      id——{{...}} 是守护引用保留语法，正文不作字面量使用，凡 {{...}} 一律按引用校验；
+//      conformance 绑定扩展段（可选字段，conformance schemaVersion 2，规格见
+//      references/design-doc-schema.md §9b）：bindingId 锚定宿主条目（= 条目 id 或条目 id
+//      + "-" + 后缀）且包内全局唯一、不与章节条目 id 撞名；violationKind / severity 在
+//      词表内；evidenceInputs 元素非空、不重复、无守护引用语法——仅对带 conformance 字段
+//      的条目生效，无绑定文档零失败零警告（向后兼容存量设计包）
 //   5. 分型一致：terminal 必填 terminalForm 三字段与 migrationWaves；evolution 必须为空或缺失
 //   6. 产物表完备：verified 前提 evidence 非空；stateCopies 至少一行、nature 枚举合法、
 //      excluded=false 行 sync 非空、excluded=true 行 exclusionNote 必填
@@ -393,6 +398,113 @@ for (const { file, path, text } of allStrings) {
       `[引用] ${file} ${path} 引用了不存在的守护「${ref}」——{{...}} 是守护引用保留语法（守护在 s3-solution.json decisions[].guards 登记，${hint}）`,
     );
   }
+}
+
+// ── 规则 4 扩展段：conformance 绑定校验（可选字段，conformance schemaVersion 2）──
+// 词表纪律：violationKind 词表的唯一权威在 conformance-plane/kernel/facts.mjs VIOLATION_KINDS，
+// 本副本与权威源的一致性由 scripts/tests/obligation-identity.test.mjs 对账断言——扩词表必须
+// 两处同步并升 conformance schema 版本（references/design-doc-schema.md §9b）
+
+const CONFORMANCE_SCHEMA_VERSION = 2;
+const CONFORMANCE_VIOLATION_KINDS = [
+  "missing-implementation",
+  "behavior-mismatch",
+  "contract-mismatch",
+  "documentation-mismatch",
+  "test-evidence-missing",
+  "overimplementation",
+];
+const CONFORMANCE_SEVERITY_KINDS = ["must-fix", "suggestion", "info"];
+
+function checkConformanceBinding(binding, where, entryId, hostLoc, seenBindingIds) {
+  if (binding === null || typeof binding !== "object" || Array.isArray(binding)) {
+    failures.push(`[conformance] ${where} 绑定条目须为对象——字段规格见 references/design-doc-schema.md §9b（conformance schemaVersion ${CONFORMANCE_SCHEMA_VERSION}）`);
+    return;
+  }
+  // bindingId：缺省 = 宿主条目 id；显式值必须锚定宿主条目（= 条目 id 或条目 id + "-" + 后缀）
+  const bindingId = binding.bindingId ?? entryId;
+  if (typeof bindingId !== "string" || bindingId.trim() === "") {
+    failures.push(`[conformance] ${where} bindingId 为空——义务绑定 id 缺省取宿主条目 id，显式取值须为「${entryId}」或「${entryId}-后缀」形态`);
+  } else if (bindingId !== entryId && !bindingId.startsWith(`${entryId}-`)) {
+    failures.push(
+      `[conformance] ${where} bindingId「${bindingId}」未锚定宿主条目「${entryId}」——差距地址绑定 id 须指向存在的章节条目：取条目 id 本身，或条目 id + "-" + 后缀（同条目多绑定形态）`,
+    );
+  } else {
+    // 与其他章节条目 id 撞名：宿主自身 id 之外占用任何全局 id 会在状态仓绑定集里撞身份
+    if (globalIdLocations.has(bindingId) && !globalIdLocations.get(bindingId).includes(hostLoc)) {
+      failures.push(
+        `[conformance] ${where} bindingId「${bindingId}」与章节条目 id 撞名（已定义于 ${globalIdLocations.get(bindingId).join("、")}）——绑定 id 须全局唯一，改用「${entryId}-后缀」形态`,
+      );
+    }
+    if (seenBindingIds.has(bindingId)) {
+      failures.push(
+        `[conformance] ${where} bindingId「${bindingId}」重复出现于 ${seenBindingIds.get(bindingId)}——差距地址 (bindingId, repoId, violationKind) 的身份键须唯一`,
+      );
+    }
+    seenBindingIds.set(bindingId, where);
+  }
+  for (const field of ["repoId", "targetSelector", "checkerId"]) {
+    const v = binding[field];
+    if (typeof v !== "string" || v.trim() === "") {
+      failures.push(`[conformance] ${where} 字段 ${field} 缺失或为空——必填非空字符串（义务机器契约字段，规格见 §9b）`);
+    }
+  }
+  if (!CONFORMANCE_VIOLATION_KINDS.includes(binding.violationKind)) {
+    failures.push(
+      `[conformance] ${where} violationKind 值「${String(binding.violationKind ?? "缺失")}」不在词表——合法取值：${CONFORMANCE_VIOLATION_KINDS.join(" / ")}；扩词表须升 conformance schema 版本（当前 ${CONFORMANCE_SCHEMA_VERSION}）`,
+    );
+  }
+  if (!CONFORMANCE_SEVERITY_KINDS.includes(binding.severity)) {
+    failures.push(
+      `[conformance] ${where} severity 值「${String(binding.severity ?? "缺失")}」不在词表——合法取值：${CONFORMANCE_SEVERITY_KINDS.join(" / ")}；扩词表须升 conformance schema 版本（当前 ${CONFORMANCE_SCHEMA_VERSION}）`,
+    );
+  }
+  const inputs = binding.evidenceInputs;
+  if (!Array.isArray(inputs) || inputs.length === 0) {
+    failures.push(`[conformance] ${where} evidenceInputs 缺失或为空——义务检查依赖输入清单须为非空字符串数组（无输入的义务不可判定证据有效性）`);
+  } else {
+    const seen = new Set();
+    inputs.forEach((input, k) => {
+      if (typeof input !== "string" || input.trim() === "") {
+        failures.push(`[conformance] ${where} evidenceInputs[${k}] 为空或非字符串——每个元素须是具体输入名（路径 / 符号 / 章节引用）`);
+        return;
+      }
+      if (input.matchAll(GUARD_REF_RE).next().value !== undefined) {
+        failures.push(`[conformance] ${where} evidenceInputs[${k}] 使用了 {{...}} 守护引用保留语法——输入名须写实义，不用引用标记`);
+      }
+      if (seen.has(input)) {
+        failures.push(`[conformance] ${where} evidenceInputs[${k}]「${input}」组内重复——依赖输入清单不重复登记`);
+      }
+      seen.add(input);
+    });
+  }
+  if (binding.bindingVersion !== undefined && (typeof binding.bindingVersion !== "number" || !Number.isInteger(binding.bindingVersion) || binding.bindingVersion < 1)) {
+    failures.push(`[conformance] ${where} bindingVersion 须为 ≥1 的整数（缺省 1；绑定内容修订时 bump，旧证据按版本等值自动失效）`);
+  }
+}
+
+const seenConformanceBindingIds = new Map(); // bindingId -> 首次登记位置（包内全局唯一，跨章节去重）
+for (const [file, path, getItems] of ID_ARRAYS) {
+  const doc = docs[file];
+  if (doc === undefined) continue;
+  arr(getItems(doc)).forEach((entry, i) => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry) || entry.conformance === undefined) return;
+    const where = `${file} ${path}[${i}]（${entry.id ?? "缺 id"}）.conformance`;
+    if (typeof entry.id !== "string" || entry.id.trim() === "") {
+      failures.push(`[conformance] ${file} ${path}[${i}] 条目缺稳定 id——绑定锚定章节条目 id，无 id 条目不得声明 conformance`);
+      return;
+    }
+    if (Array.isArray(entry.conformance) && entry.conformance.length === 0) {
+      failures.push(`[conformance] ${where} 为空数组——声明绑定至少登记一条绑定对象；无绑定时删除该字段（叙述性声明不进覆盖率分母）`);
+      return;
+    }
+    const hostLoc = `${file} ${path}[${i}]`;
+    const isMulti = Array.isArray(entry.conformance);
+    const bindings = isMulti ? entry.conformance : [entry.conformance];
+    bindings.forEach((binding, k) =>
+      checkConformanceBinding(binding, isMulti ? `${where}[${k}]` : where, entry.id, hostLoc, seenConformanceBindingIds),
+    );
+  });
 }
 
 // ── 规则 5：分型一致 ──

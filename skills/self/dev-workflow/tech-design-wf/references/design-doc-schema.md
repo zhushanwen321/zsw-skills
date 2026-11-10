@@ -288,6 +288,29 @@ P7 上游约束原则的产物表（触发条件：设计依赖非本项目代�
 
 id 规则：各数组内 id 不重复，全部 id 数组的 id 全局唯一（不同前缀如 U / D 各自独立编号，天然不冲突；terminalForm.gapTable 与 decisions.guards 同用 `G` 前缀，两族编号互不重号）。建议前缀见各字段表。
 
+## 9b. conformance 绑定字段（可选，义务对账通道）
+
+设计文档章节 JSON 条目（§9 首表所列各 id 数组的条目）可携带可选 `conformance` 字段，把该条目登记为可机器对账的设计义务（obligation）：一致性对账的覆盖率分母只统计带绑定的条目，无绑定条目是叙述性声明、不进分母。义务语义仍以章节 JSON 为权威，绑定只是同一文件内的机器可检字段。本节字段规格的当前版本为 **conformance schemaVersion 2**（v1 = 无 conformance 字段的基础章节 schema；扩 violationKind / severity 词表或增删绑定字段必须升 schema 版本并在本节登记变更）。
+
+`conformance` 取值：单个绑定对象，或绑定对象数组（同一章节条目声明多个绑定，如分别绑定代码与测试）。
+
+**绑定对象行内字段**：
+
+| 字段 | 类型 | 必填 | 填写要求 |
+|---|---|---|---|
+| bindingId | string | 条目单绑定时可省（默认 = 条目 id）；多绑定或自定义时必填 | 义务绑定 id（差距地址三要素之一）：必须锚定宿主条目——取值 = 条目 id，或条目 id + `-` + 后缀（如条目 V1 分别绑定代码与测试两个绑定：`V1` 与 `V1-tests`）。全部 bindingId 在包内全局唯一，且不得与其他章节条目 id 撞名 |
+| repoId | string | 必填 | 义务归属仓 id（差距地址三要素之一）；由实施期 workspace 清单登记的真实仓库清单裁决其取值 |
+| targetSelector | string | 必填 | 目标选择器：被检对象的位置声明——文件路径 / 符号名 / 章节引用，一句话可定位 |
+| violationKind | string 枚举 | 必填 | 违例类别（差距地址三要素之一），初始词表六值：`missing-implementation` / `behavior-mismatch` / `contract-mismatch` / `documentation-mismatch` / `test-evidence-missing` / `overimplementation`；扩词表必须升 schema 版本。绑定不硬编码修复方向：`documentation-mismatch` 默认文档侧（设计文档错、实现对），其余类别默认代码侧；方向争议走裁决通道，文档侧修复一律走 doc-proposals 提案通道 |
+| checkerId | string | 必填 | 检查器登记 id；显式绑定但 checker 未注册时义务保持 open 并提示补 checker（不阻塞设计包校验） |
+| severity | string 枚举 | 必填 | 义务等级，初始词表三值：`must-fix` / `suggestion` / `info`（与现行审查等级词表同源）；扩词表必须升 schema 版本 |
+| evidenceInputs | string 数组 | 必填（非空） | 检查依赖输入清单（直接输入与声明依赖，如文件路径 / 符号名）；元素非空字符串且组内不重复；每个元素须是具体输入名，不得使用 `{{...}}` 守护引用保留语法 |
+| bindingVersion | 正整数 | 可省（默认 1） | 绑定版本号：绑定内容修订（含经 doc-proposals 提案应用）时必须 bump；证据按「输入哈希 + checker 版本 + 绑定版本」等值判定有效期，升版使旧证据自动失效 |
+
+**机器校验（check-design-doc.mjs 规则 4 扩展段）**：仅对带 `conformance` 字段的条目生效，无绑定文档零失败零警告（向后兼容存量设计包）。校验项：`conformance` 为对象或对象数组；必填字段齐备且形态合法；violationKind / severity 在词表内；bindingId 锚定宿主条目且全局唯一（含与全部章节条目 id 的撞名检查）；evidenceInputs 元素非空、不重复、无守护引用语法。
+
+**与下游平面的衔接**：差距地址 = `(bindingId, repoId, violationKind)`，义务摘要 = 规范化绑定 `{ bindingId, repoId, violationKind, bindingVersion }` 的内容哈希；提取器消费本字段生成义务表（`conformance-plane/extractors/obligations.mjs`），契约见 `conformance-plane/README.md`。
+
 ## 10. 渲染产物
 
 `<name>.rendered.md` 是从六章节 JSON 拼装的阅读视图：
