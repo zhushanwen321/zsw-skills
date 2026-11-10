@@ -34,6 +34,16 @@ scripts/           workflow 双平台构建与校验脚本
 | architecture-clean-domain-design | 以 DDD 与六边形架构为分析视角的领域建模与架构分析：统一语言、限界上下文、聚合不变量、圈层性质判定；只做映射与登记，不输出结构改造设计 |
 | workflow-authoring | 双平台 workflow 撰写与观测接入规范：单源构建结构、GUI 泳道约束、观测接入五步、检查门禁与数据落盘 |
 
+内部模块 `dev-workflow/conformance-plane/` — 设计义务一致性控制平面（D5 v2 对账引擎的领域核；模块地图与命令见 `skills/self/dev-workflow/conformance-plane/README.md`）：
+
+| 子目录 | 说明 |
+|--------|------|
+| kernel/ | 状态仓（append-only 事件 JSONL + 快照 + 单写者锁）、确定性 fold、证据哈希失效、事实 schema（全文事件词表唯一权威登记处） |
+| extractors/ + checkers/ | conformance 绑定义务提取（覆盖率分母只含绑定义务）、checker registry（退出契约 0/10/20）、语义缓存、backlog 采纳闭环 |
+| workspace/ + changeset/ + integration/ | 真实路径仓库清单、隔离 worktree sandbox（正式仓零写入）、多仓补丁 manifest、集成器唯一写入门径（apply 预检 + 宿主挂钩 + 两阶段提交）、文档提案裁决闭环 |
+| reports/ | 四层结论派生（scriptStatus / engineOutcome / integrationOutcome / deliveryOutcome，全部从事件流 fold 计算）与五视图渲染（current/final/matrix/trajectory/ledger，落盘设计包 `<name>/v2/`） |
+| migration/ | 旧 final 导入（alias + 人工映射裁决 + 四项结构校验 + 幂等重放）与按包灰度切换（cutover 标记、旧档改名归档 + tombstone 指针、Unarchived 复活通道） |
+
 ### code-optimize/ — 代码优化
 
 | Skill | 说明 |

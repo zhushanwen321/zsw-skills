@@ -34,6 +34,16 @@ scripts/           Dual-platform workflow build and validation scripts
 | architecture-clean-domain-design | Domain modeling and architecture analysis with DDD and hexagonal architecture as analysis lenses: ubiquitous language, bounded contexts, aggregate invariants, ring-nature mapping; records and maps only — never outputs structural transformation designs |
 | workflow-authoring | Authoring and observability onboarding guide for dual-platform workflow scripts: single-source build layout, GUI lane constraints, five-step observability onboarding, check gates, and data layout |
 
+Internal module `dev-workflow/conformance-plane/` — conformance control plane for design obligations (domain core of the D5 v2 reconciliation engine; module map and commands in `skills/self/dev-workflow/conformance-plane/README.md`):
+
+| Subdirectory | Description |
+|--------|------|
+| kernel/ | State store (append-only event JSONL + snapshot + single-writer lock), deterministic fold, evidence hash invalidation, fact schema (sole authority for the full event vocabulary) |
+| extractors/ + checkers/ | Conformance-binding obligation extraction (coverage denominator counts bound obligations only), checker registry (exit contract 0/10/20), semantic cache, backlog adoption loop |
+| workspace/ + changeset/ + integration/ | Real-path repo inventory, isolated worktree sandbox (zero writes to formal repos), multi-repo patch manifest, integrator as the sole write gate (apply precheck + host hooks + two-phase commit), document-proposal ruling loop |
+| reports/ | Four-layer outcome derivation (scriptStatus / engineOutcome / integrationOutcome / deliveryOutcome, all computed by folding the event stream) and five-view rendering (current/final/matrix/trajectory/ledger, written to the design package `<name>/v2/`) |
+| migration/ | Legacy final import (alias + manual mapping rulings + four structural validations + idempotent replay) and per-package cutover (cutover marker, legacy-final rename archive + tombstone pointer, Unarchived revival channel) |
+
 ### code-optimize/ — Code Optimization
 
 | Skill | Description |

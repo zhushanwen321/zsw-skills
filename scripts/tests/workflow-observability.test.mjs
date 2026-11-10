@@ -930,3 +930,527 @@ test("D5 pi：converged 事件序列与 zcode 对拍一致（除 timestamp）", 
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// ── 9. conformance-plane 四层结论与迁移链路（sync-conformance-plane U5/M5；观测分层断言）──
+//
+// 覆盖（设计编号属本设计包 sync-conformance-plane，裸用）：
+//   四层结论词表（段七/GA9）与跨模块同源；分层权威源与缺省映射（AX10 不可互相覆盖）
+//   V12 人工接管四层并存：scriptStatus=completed / engineOutcome=stopped /
+//        integrationOutcome=integrated / deliveryOutcome=resolved-by-main-agent
+//   V10 报告五视图落盘 <designPkg>/v2/（段七寻址）、删除后重建逐字节等价、事件 seq 无空洞、
+//        索引可丢弃（报告层零本地状态）
+//   V2/V9 导入半区：F2-1 两记录不合并、四项结构校验（引文/绑定/类别/同地址冲突人工确认）、
+//        幂等重放、round 目录派发史证据（SC11）、exempted.json 与 retirement/retireCleanup
+//        不入导入源（SC13/SC14 显式裁决）
+//   V9 cutover 链路：绑定补录前置→两变体扫描→改名归档+tombstone→旧入口拒启（真实
+//        cutoverGuardBlock）→复活通道（Unarchived 解档 + 标记保留 + tombstone 不变）
+//   skill-data-addressing.md 五项登记与代码常量一致（路径单一来源）
+//
+// 夹具全部落系统临时目录（mkdtempSync），不留仓库内产物。
+
+const CP = join(ROOT, "skills", "self", "dev-workflow", "conformance-plane");
+const outcomesMod = await import(join(CP, "reports", "outcomes.mjs"));
+const renderMod = await import(join(CP, "reports", "render.mjs"));
+const legacyMod = await import(join(CP, "migration", "legacy-import.mjs"));
+const cutoverMod = await import(join(CP, "migration", "cutover.mjs"));
+const factsMod = await import(join(CP, "kernel", "facts.mjs"));
+const evidenceMod = await import(join(CP, "kernel", "evidence.mjs"));
+const stateRepoMod = await import(join(CP, "kernel", "state-repo.mjs"));
+const stateFoldMod = await import(join(CP, "kernel", "state-fold.mjs"));
+const integratorMod = await import(join(CP, "integration", "integrator.mjs"));
+
+const M5_H1 = "1".repeat(64);
+const M5_H2 = "2".repeat(64);
+const M5_CHECKER = { checkerId: "sym", checkerVersion: "1.0.0" };
+const M5_BINDINGS = [
+  { bindingId: "GL2", repoId: "repo-main", violationKind: "missing-implementation", bindingVersion: 1 },
+  { bindingId: "PR1", repoId: "repo-docs", violationKind: "documentation-mismatch", bindingVersion: 1 },
+];
+const M5_REPOS = [{ repoId: "repo-main" }, { repoId: "repo-docs" }];
+const M5_ARTIFACTS = { "src/a.mjs": M5_H1, "docs/b.md": M5_H2 };
+
+/** 证据负载（AX4 五要素；输入名按绑定 repoId 映射到 M5_ARTIFACTS 现值） */
+function m5EvidencePayload(binding, { result = "pass", changesetId } = {}) {
+  return evidenceMod.computeEvidence({
+    address: factsMod.deriveAddress(binding),
+    binding,
+    checkerId: M5_CHECKER.checkerId,
+    checkerVersion: M5_CHECKER.checkerVersion,
+    inputs: [{ name: binding.repoId === "repo-main" ? "src/a.mjs" : "docs/b.md", hash: binding.repoId === "repo-main" ? M5_H1 : M5_H2 }],
+    result,
+    changesetId,
+  });
+}
+
+async function m5InitState(tmp, name) {
+  const root = join(tmp, name);
+  await stateRepoMod.initStateRepo(root, {
+    bindings: M5_BINDINGS,
+    repos: M5_REPOS,
+    checkerRuns: [M5_CHECKER],
+    changesets: [{ changesetId: "cs-1" }],
+    artifacts: M5_ARTIFACTS,
+  });
+  return root;
+}
+
+/** 从旧引擎单源提取真实 cutoverGuardBlock + 探针常量（零转抄；形态同 cutover-guard.test.mjs） */
+function m5LoadCutoverGuard() {
+  const src = readFileSync(join(ROOT, "skills", "self", "dev-workflow", "workflows", "src", "design-code-sync-loop.shared.ts"), "utf8");
+  const probe = src.match(/^const NODE_CUTOVER_EXISTS =\s*(.+);$/m);
+  const fn = src.match(/^async function cutoverGuardBlock\([\s\S]*?^\}$/m);
+  assert.ok(probe && fn, "旧引擎单源中提取 cutoverGuardBlock 失败——探针与实现失配须同步");
+  const js = transpile(`${probe[0]}\n${fn[0]}`);
+  return async (home, address, docName) => {
+    const sandbox = {
+      world: {
+        run: async (cmd, argv) => {
+          const { execFileSync } = await import("node:child_process");
+          const out = execFileSync(cmd, ["-e", argv[1], argv[2]], { encoding: "utf8" });
+          return { exitCode: 0, stdout: out, stderr: "" };
+        },
+      },
+    };
+    const guard = vm.runInNewContext(`${js}\ncutoverGuardBlock`, sandbox, { timeout: 15000 });
+    return guard(home, address, docName);
+  };
+}
+
+test("四层结论词表与设计段七逐值一致；partial 非终态枚举；跨模块词表同源（GA9）", () => {
+  // 词表逐值断言（§3 终态第七段）
+  assert.deepEqual([...outcomesMod.SCRIPT_STATUSES], ["running", "completed", "failed"]);
+  assert.deepEqual([...outcomesMod.ENGINE_OUTCOMES], ["completed", "awaiting-ruling", "stopped", "failed"]);
+  assert.deepEqual(
+    [...outcomesMod.INTEGRATION_OUTCOMES],
+    ["not-required", "not-started", "verified-pending-integration", "integrated", "rolled-back", "failed"],
+  );
+  assert.deepEqual([...outcomesMod.DELIVERY_OUTCOMES], ["pending", "resolved", "resolved-by-main-agent", "blocked"]);
+  // partial 只作事件中的瞬时逐仓状态，不是终态枚举（段七明文）——词表级固化
+  assert.ok(!outcomesMod.INTEGRATION_OUTCOMES.includes("partial"));
+  // 与 v2 引擎词表常量同源（单源提取比对，防两处词表漂移）
+  const v2src = readFileSync(join(ROOT, "skills", "self", "dev-workflow", "workflows", "src", "design-code-sync-v2.shared.ts"), "utf8");
+  const m = v2src.match(/const ENGINE_OUTCOMES = \[([^\]]+)\] as const/);
+  assert.ok(m, "v2 引擎单源未找到 ENGINE_OUTCOMES 常量");
+  assert.deepEqual(
+    m[1].split(",").map((s) => s.trim().replaceAll('"', "")),
+    [...outcomesMod.ENGINE_OUTCOMES],
+  );
+  assert.ok(v2src.includes("tech-design/${addr.slug}/${pkgName}/conformance-state"), "v2 引擎状态仓缺省寻址应与登记一致");
+  // 集成器终值词表 ⊆ 集成层词表（integration/integrator.mjs INTEGRATION_OUTCOMES）
+  for (const v of integratorMod.INTEGRATION_OUTCOMES) {
+    assert.ok(outcomesMod.INTEGRATION_OUTCOMES.includes(v), `集成器终值 ${v} 应在集成层词表内`);
+  }
+  // manual actor 同值（人工接管唯一合法身份）
+  assert.equal(outcomesMod.MANUAL_ACTOR, integratorMod.MANUAL_ACTOR);
+});
+
+test("四层派生：分层权威源、缺省映射与集成事实派生（段七/GA9/AX10）", () => {
+  // 引擎层权威：scriptStatus/engineOutcome 来自 engineReturn；非 completed → blocked（引擎 finalize 同映射）
+  let d = outcomesMod.deriveOutcomes({
+    facts: [],
+    bindings: M5_BINDINGS,
+    engineReturn: { scriptStatus: "completed", engineOutcome: "stopped", integrationOutcome: "not-required" },
+  });
+  assert.deepEqual(
+    [d.scriptStatus, d.engineOutcome, d.integrationOutcome, d.deliveryOutcome],
+    ["completed", "stopped", "not-required", "blocked"],
+  );
+  d = outcomesMod.deriveOutcomes({ facts: [], bindings: [], engineReturn: { scriptStatus: "completed", engineOutcome: "completed" } });
+  assert.equal(d.deliveryOutcome, "pending", "引擎 completed → 交付缺省 pending（resolved 系列由主 agent 追加）");
+  // engineReturn 缺省 → running + fold 降级派生（无地址无失败 → stopped 轮次语义）
+  d = outcomesMod.deriveOutcomes({ facts: [], bindings: [] });
+  assert.equal(d.scriptStatus, "running");
+  assert.equal(d.engineOutcome, "stopped");
+  assert.equal(d.layers.engineOutcome.source, "event-stream-fold");
+  // 词表外取值拒绝（错误带权威源与恢复动作）
+  assert.throws(() => outcomesMod.deriveOutcomes({ facts: [], engineReturn: { scriptStatus: "converged" } }), /词表/);
+  assert.throws(() => outcomesMod.deriveOutcomes({ facts: [], engineReturn: { engineOutcome: "converged" } }), /词表/);
+  // 集成失败事实 → failed（流派生）；rolled-back 事件流无专属事实 → 从引擎返回采纳
+  const ts = "2026-11-10T00:00:00.000Z";
+  const failFact = { type: "IntegrationPrecheckFailed", seq: 1, ts, actor: "integration-writer", repoId: "repo-main", command: "git apply --check", exitCode: 1, summary: "冲突", recovery: "重生成" };
+  d = outcomesMod.deriveOutcomes({ facts: [failFact], bindings: M5_BINDINGS });
+  assert.equal(d.integrationOutcome, "failed");
+  assert.equal(d.engineOutcome, "failed", "fold 降级派生：最新集成失败 → failed");
+  const successFact = { type: "IntegrationGateChecked", seq: 2, ts, actor: "integration-writer", repoId: "repo-main", command: "git update-ref", exitCode: 0, summary: "两阶段提交", recovery: "非失败记录，无需恢复", failure: false };
+  d = outcomesMod.deriveOutcomes({ facts: [failFact, successFact], bindings: M5_BINDINGS, engineReturn: { scriptStatus: "completed", engineOutcome: "failed", integrationOutcome: "rolled-back" } });
+  assert.equal(d.integrationOutcome, "integrated", "失败后的成功事实 → integrated（流内时序权威）");
+  d = outcomesMod.deriveOutcomes({ facts: [], bindings: [], engineReturn: { scriptStatus: "completed", engineOutcome: "failed", integrationOutcome: "rolled-back" } });
+  assert.equal(d.integrationOutcome, "rolled-back", "rolled-back 从引擎层在案事实采纳");
+  // awaiting-ruling fold 降级派生（在案请求 → awaiting-ruling + blocked）
+  const binding = M5_BINDINGS[0];
+  d = outcomesMod.deriveOutcomes({
+    facts: [{ type: "RulingRequested", seq: 1, ts, actor: "reconcile-engine", address: factsMod.deriveAddress(binding), question: "方向争议" }],
+    bindings: [binding],
+  });
+  assert.equal(d.engineOutcome, "awaiting-ruling");
+  assert.equal(d.deliveryOutcome, "blocked");
+});
+
+test("V12 人工接管四层并存：completed/stopped/integrated/resolved-by-main-agent 且引擎结论不被覆盖（AX10）", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-obs-m5-v12-"));
+  try {
+    const stateRoot = await m5InitState(tmp, "state");
+    // 引擎轮次：义务证据 fail 在案 → open；引擎轮次耗尽 stopped（终态返回）
+    await stateRepoMod.appendCommands(stateRoot, [
+      { type: "RecordEvidence", actor: "checker-wrapper", payload: m5EvidencePayload(M5_BINDINGS[0], { result: "fail" }) },
+    ]);
+    const engineReturn = { scriptStatus: "completed", engineOutcome: "stopped", integrationOutcome: "not-required" };
+    let derived = outcomesMod.deriveOutcomes({
+      facts: stateRepoMod.readEvents(stateRoot), bindings: M5_BINDINGS, artifacts: M5_ARTIFACTS, checkerRuns: [M5_CHECKER], engineReturn,
+    });
+    assert.deepEqual(
+      [derived.scriptStatus, derived.engineOutcome, derived.integrationOutcome, derived.deliveryOutcome],
+      ["completed", "stopped", "not-required", "blocked"],
+    );
+    // 人工接管：main-agent 以 manual 模式经集成器记录人工集成事件（同一门径），随后交付宣告
+    await stateRepoMod.appendCommands(stateRoot, [
+      {
+        type: "RecordIntegrationGate", actor: "main-agent",
+        payload: { repoId: "repo-main", command: "git update-ref refs/heads/main <cs-1-commit>", exitCode: 0, summary: "人工接管集成 cs-1（manual 门径）", recovery: "非失败记录，无需恢复", failure: false },
+      },
+    ]);
+    derived = outcomesMod.deriveOutcomes({
+      facts: stateRepoMod.readEvents(stateRoot), bindings: M5_BINDINGS, artifacts: M5_ARTIFACTS, checkerRuns: [M5_CHECKER], engineReturn,
+      delivery: { outcome: "resolved-by-main-agent", actor: "main-agent", changesetId: "cs-1", commitRefs: ["repo-main@abc1234"] },
+    });
+    // V12 通过标准：四层并存
+    assert.equal(derived.scriptStatus, "completed");
+    assert.equal(derived.engineOutcome, "stopped", "引擎结论不被后续集成事实覆盖（AX10 分层呈现）");
+    assert.equal(derived.integrationOutcome, "integrated");
+    assert.equal(derived.deliveryOutcome, "resolved-by-main-agent");
+    // 人工 actor、变更集与提交引用可见
+    assert.equal(derived.layers.manualIntegration.actor, "main-agent");
+    assert.equal(derived.layers.manualIntegration.mode, "manual");
+    assert.equal(derived.layers.deliveryDeclaration.changesetId, "cs-1");
+    assert.deepEqual(derived.layers.deliveryDeclaration.commitRefs, ["repo-main@abc1234"]);
+    // 凭空宣告拒绝：无流内接管事实时 resolved-by-main-agent 不可宣告（AX10 只能追加事件）
+    assert.throws(
+      () => outcomesMod.deriveOutcomes({ facts: [], bindings: [], delivery: { outcome: "resolved-by-main-agent", actor: "main-agent" } }),
+      (e) => e.code === "delivery-takeover-fact-missing",
+    );
+    // 引擎未完成时 resolved 交付宣告拒绝（人工接管场景应走 resolved-by-main-agent）
+    assert.throws(
+      () => outcomesMod.deriveOutcomes({
+        facts: stateRepoMod.readEvents(stateRoot), bindings: M5_BINDINGS, engineReturn,
+        delivery: { outcome: "resolved", actor: "main-agent" },
+      }),
+      (e) => e.code === "delivery-resolved-requires-completed",
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("报告五视图落盘 <designPkg>/v2/；删除后重建逐字节等价；事件 seq 无空洞；索引可丢弃（V10）", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-obs-m5-v10-"));
+  try {
+    const designPkg = join(tmp, "tech-design", "pkg-demo");
+    mkdirSync(designPkg, { recursive: true });
+    const stateRoot = await m5InitState(tmp, "v10-state");
+    await stateRepoMod.appendCommands(stateRoot, [
+      { type: "RecordEvidence", actor: "checker-wrapper", payload: m5EvidencePayload(M5_BINDINGS[0], { result: "pass", changesetId: "cs-1" }) },
+    ]);
+    const engineReturn = { scriptStatus: "completed", engineOutcome: "stopped", integrationOutcome: "verified-pending-integration" };
+    const r = renderMod.renderReports({ designPkg, stateRoot, engineReturn });
+    // 五视图全部落盘 tech-design 段 <name>/v2/（段七寻址；不与旧 D5 final 同址）
+    assert.equal(r.root, join(designPkg, "v2"));
+    for (const f of Object.values(renderMod.REPORT_VIEW_FILES)) {
+      assert.ok(existsSync(join(r.root, f)), `视图文件缺失：${f}`);
+    }
+    // fold 派生：verified pass + changeset + 无集成审计 → verified-pending-integration
+    assert.equal(r.outcomes.integrationOutcome, "verified-pending-integration");
+    assert.equal(r.outcomes.coverage.verified, 1);
+    assert.equal(r.outcomes.coverage.denominator, 2);
+    // V10：报告全部删除 → 重渲染 → 逐字节等价（报告全派生，AX3）
+    const before = {};
+    for (const [k, f] of Object.entries(renderMod.REPORT_VIEW_FILES)) before[k] = readFileSync(join(r.root, f), "utf8");
+    for (const f of Object.values(renderMod.REPORT_VIEW_FILES)) rmSync(join(r.root, f));
+    const r2 = renderMod.renderReports({ designPkg, stateRoot, engineReturn });
+    for (const [k, f] of Object.entries(renderMod.REPORT_VIEW_FILES)) {
+      assert.equal(readFileSync(join(r2.root, f), "utf8"), before[k], `视图 ${k} 删除后重建应逐字节等价`);
+    }
+    // 索引可丢弃：write=false 探针与落盘内容一致（报告层零本地状态）
+    const views = renderMod.buildReportViews({ designPkg, stateRoot, engineReturn });
+    assert.equal(JSON.stringify(views.current, null, 2) + "\n", before.current);
+    assert.ok(before.matrix.includes("| bindingId | repoId | violationKind |"));
+    assert.ok(before.trajectory.includes("| seq | ts | 事件 | actor | 摘要 |"));
+    assert.ok(before.ledger.includes("权威源"));
+    // 事件序列无空洞：fold 硬校验（seq 期望值从当前 lastSeq+1 连续；写侧 seq 由仓库
+    // appendCommands 在锁内统一分配——命令通道结构性无法产生空洞）
+    assert.throws(
+      () => stateFoldMod.fold({ bindings: M5_BINDINGS, facts: [{ type: "Unarchived", seq: 99, ts: "2026-11-10T00:00:00.000Z", actor: "main-agent", reason: "gap 注入" }] }),
+      (e) => e.code === "fact-seq-gap",
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("旧档导入：F2-1 两记录不合并、四项结构校验整批拒绝、幂等重放、派发史证据与排除字段（V2/V9 导入半区）", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-obs-m5-imp-"));
+  try {
+    // 旧档夹具（临时目录）：两个真实 F2-1 形态回归——同旧 id 两条不同差距记录
+    const syncDir = join(tmp, "dev-flow", "proj-aaa1111", "thesis-contract.sync");
+    const round1 = join(syncDir, "round-1");
+    mkdirSync(round1, { recursive: true });
+    writeFileSync(join(round1, "planner.json"), JSON.stringify({ role: "planner" }));
+    writeFileSync(join(round1, "fixer.json"), JSON.stringify({ role: "fixer" }));
+    writeFileSync(join(syncDir, "exempted.json"), JSON.stringify([{ id: "E1", word: "x", reason: "r" }]));
+    const legacyFinalPath = join(syncDir, "final.json");
+    writeFileSync(
+      legacyFinalPath,
+      JSON.stringify({
+        records: [
+          { id: "F2-1", gap: "组外登记表缺失 obligations 出口（模块 m2 的登记缺口）", severity: "must-fix" },
+          { id: "F2-1", gap: "data_as_of 字段缺实现（模块 m3 的数据契约缺口）", severity: "must-fix" },
+          { id: "F7", gap: "叙述性条目无实现锚点", severity: "info", retirement: { retired: ["old.md"] }, retireCleanup: { pending: true } },
+        ],
+        retirement: { retired: [] },
+        retireCleanup: { targets: [] },
+      }, null, 2),
+    );
+
+    const stateRoot = join(tmp, "pkg", "conformance-state");
+    mkdirSync(dirname(stateRoot), { recursive: true });
+    const bindings = [
+      { bindingId: "OB-M2", repoId: "repo-main", violationKind: "missing-implementation", bindingVersion: 1 },
+      { bindingId: "OB-M3", repoId: "repo-main", violationKind: "contract-mismatch", bindingVersion: 1 },
+    ];
+    await stateRepoMod.initStateRepo(stateRoot, { bindings, repos: [{ repoId: "repo-main" }], checkerRuns: [], changesets: [], artifacts: {} });
+
+    const map = {
+      package: "thesis-contract",
+      mappings: [
+        { legacyId: "F2-1", recordQuote: "组外登记表缺失 obligations 出口", bindingId: "OB-M2", repoId: "repo-main", violationKind: "missing-implementation", reason: "m2 组外登记差距承接" },
+        { legacyId: "F2-1", recordQuote: "data_as_of 字段缺实现", bindingId: "OB-M3", repoId: "repo-main", violationKind: "contract-mismatch", reason: "m3 data_as_of 差距承接" },
+      ],
+    };
+    const r = await legacyMod.importLegacyFinal({ legacyFinalPath, mapRaw: JSON.stringify(map), bindings, stateRoot, actor: "main-agent" });
+    // V2：F2-1 两记录分离为两个地址（不合并）；旧 id 只作 alias（永不参与新身份）
+    assert.equal(r.imported, 2);
+    assert.deepEqual(
+      r.addresses.map((a) => `${a.bindingId}|${a.repoId}|${a.violationKind}`).sort(),
+      ["OB-M2|repo-main|missing-implementation", "OB-M3|repo-main|contract-mismatch"],
+    );
+    assert.deepEqual(r.aliases.map((a) => a.alias), ["legacy:F2-1#1", "legacy:F2-1#2"]);
+    // 导入证据只承载 AX4 证据语义：retirement/retireCleanup/gap 等原文不入事实字段
+    for (const f of r.facts) {
+      assert.ok(!("retirement" in f) && !("retireCleanup" in f) && !("gap" in f), `导入事实不得携带排除字段：${JSON.stringify(f)}`);
+    }
+    // 幂等重放：同输入重跑 → imported=0 skipped=2，事件流不变
+    const r2 = await legacyMod.importLegacyFinal({ legacyFinalPath, mapRaw: JSON.stringify(map), bindings, stateRoot, actor: "main-agent" });
+    assert.equal(r2.imported, 0);
+    assert.equal(r2.skipped, 2);
+    assert.equal(stateRepoMod.readEvents(stateRoot).length, 2);
+    // 派发史证据（SC11）：round 目录 planner/fixer 产物清单只读收集
+    assert.equal(r.roundEvidence.length, 1);
+    assert.equal(r.roundEvidence[0].round, 1);
+    assert.deepEqual(r.roundEvidence[0].artifacts, ["fixer.json", "planner.json"]);
+    // exempted.json 不入导入源（SC13）：读取即拒绝
+    assert.throws(() => legacyMod.readLegacyFinal(join(syncDir, "exempted.json")), (e) => e.code === "exempted-file-not-importable");
+    // 无孤儿证据（V11 性质二在导入侧：legacy-import checker 已登记进状态仓）
+    assert.deepEqual(stateRepoMod.checkOrphanEvidence(stateRoot), []);
+
+    // 四项结构校验各自拒绝（整批不导入，错误带四项校验编号与恢复动作）
+    const cases = [
+      { name: "①引文未命中", map: { mappings: [{ ...map.mappings[0], recordQuote: "不存在的引文文本" }] }, match: /引文校验失败/ },
+      { name: "②绑定不存在", map: { mappings: [{ ...map.mappings[0], bindingId: "NO-SUCH" }] }, match: /绑定存在性校验失败/ },
+      { name: "③违例类别词表外", map: { mappings: [{ ...map.mappings[0], violationKind: "made-up-kind" }] }, match: /违例类别校验失败/ },
+      { name: "③b与绑定声明不一致", map: { mappings: [{ ...map.mappings[0], violationKind: "contract-mismatch" }] }, match: /地址一致性校验失败/ },
+      {
+        name: "④同地址冲突未人工确认",
+        map: { mappings: [map.mappings[0], { ...map.mappings[1], bindingId: "OB-M2", repoId: "repo-main", violationKind: "missing-implementation" }] },
+        match: /同地址冲突/,
+      },
+    ];
+    for (const c of cases) {
+      await assert.rejects(
+        legacyMod.importLegacyFinal({ legacyFinalPath, mapRaw: JSON.stringify(c.map), bindings, stateRoot }),
+        (e) => e.code === "legacy-map-invalid" && c.match.test(e.message),
+        `用例「${c.name}」应整批拒绝`,
+      );
+      assert.equal(stateRepoMod.readEvents(stateRoot).length, 2, `用例「${c.name}」不得部分导入`);
+    }
+    // ④人工确认通道：冲突组全部成员携带 confirm: true 后同地址映射可导入（显式裁决承接；
+    // 校验是映射文件的属性——即便部分条目此前已导入，组内未确认成员仍拒绝）
+    const confirmedMap = {
+      mappings: [
+        { ...map.mappings[0], confirm: true },
+        { ...map.mappings[1], bindingId: "OB-M2", repoId: "repo-main", violationKind: "missing-implementation", reason: "确属同一差距的重复报告", confirm: true },
+      ],
+    };
+    const r3 = await legacyMod.importLegacyFinal({ legacyFinalPath, mapRaw: JSON.stringify(confirmedMap), bindings, stateRoot });
+    assert.equal(r3.imported, 1, "确认后仅新记录落同地址；已导入记录幂等跳过");
+    const finalEvents = stateRepoMod.readEvents(stateRoot);
+    assert.equal(finalEvents.length, 3);
+    assert.equal(finalEvents[2].address.bindingId, "OB-M2");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("cutover 链路：绑定补录前置→两变体扫描→归档+tombstone→旧入口拒启→复活通道（V9）", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-obs-m5-cut-"));
+  try {
+    const home = tmp;
+    const slug = "proj-aaa1111";
+    const name = "thesis-contract";
+    const designPkg = join(home, ".agents", "skill-data", "tech-design", slug, name);
+    mkdirSync(designPkg, { recursive: true });
+    // 六章节 JSON（一条 conformance 绑定——迁移分支分母非空前置）
+    writeFileSync(join(designPkg, "meta.json"), JSON.stringify({
+      name, designType: "greenfield", typeRationale: "新包示意", priority: "P1", riskScore: 4, riskRationale: "示意",
+      reviewNav: [{ decisionId: "D1", anchor: "§3", level: "A", title: "t", criteria: "c", impact: "i" }], relatedDocs: [],
+    }));
+    writeFileSync(join(designPkg, "s1-context.json"), JSON.stringify({
+      background: "b",
+      goals: [{ id: "GL1", statement: "s", conformance: { bindingId: "GL1", repoId: "repo-main", targetSelector: "src/a.mjs", violationKind: "missing-implementation", checkerId: "sym", severity: "must-fix", evidenceInputs: ["src/a.mjs"] } }],
+      outOfScope: "o",
+    }));
+    // tech-design 段 final.json = T2 审查终态（cutover 禁触碰对象）——字节基线
+    const t2FinalPath = join(designPkg, "final.json");
+    writeFileSync(t2FinalPath, JSON.stringify({ stage: "T2", converged: true }));
+    const t2Before = readFileSync(t2FinalPath);
+
+    // dev-flow 段旧档：两变体 + 他包 decoy + 平铺产物 decoy（禁裸前缀的对照面）
+    const devFlowRoot = join(home, ".agents", "skill-data", "dev-flow", slug);
+    const syncPlain = join(devFlowRoot, `${name}.sync`);
+    const syncRendered = join(devFlowRoot, `${name}.rendered.sync`);
+    const syncOther = join(devFlowRoot, `${name}-other.sync`);
+    mkdirSync(join(syncPlain, "round-1"), { recursive: true });
+    mkdirSync(syncRendered, { recursive: true });
+    mkdirSync(syncOther, { recursive: true });
+    writeFileSync(join(syncPlain, "final.json"), JSON.stringify({
+      records: [{ id: "F2-1", gap: "组外登记表缺失 obligations 出口" }],
+      retirement: { retired: ["old.md"] }, retireCleanup: { pending: true },
+    }));
+    writeFileSync(join(syncRendered, "final.json"), JSON.stringify({ records: [{ id: "F3", gap: "rendered 形态的旧差距" }] }));
+    writeFileSync(join(syncOther, "final.json"), JSON.stringify({ records: [{ id: "F9", gap: "他包旧档，禁触碰" }] }));
+    writeFileSync(join(devFlowRoot, `${name}.ledger.md`), "# 平铺产物");
+    writeFileSync(join(syncPlain, "round-1", "planner.json"), "{}");
+
+    const stateRoot = join(designPkg, "conformance-state");
+    const bindings = [{ bindingId: "GL1", repoId: "repo-main", violationKind: "missing-implementation", bindingVersion: 1 }];
+    await stateRepoMod.initStateRepo(stateRoot, { bindings, repos: [{ repoId: "repo-main" }], checkerRuns: [], changesets: [], artifacts: {} });
+
+    // 分母为空的 migrate 分支拒绝（绑定补录前置检查；恢复动作指向补绑定或只读归档分支）
+    const emptyPkg = join(tmp, "tech-design", "empty-pkg");
+    mkdirSync(emptyPkg, { recursive: true });
+    writeFileSync(join(emptyPkg, "meta.json"), JSON.stringify({ name: "empty-pkg", designType: "evolution", typeRationale: "r", priority: "P2", riskScore: 1, riskRationale: "r", reviewNav: [], relatedDocs: [] }));
+    assert.throws(
+      () => cutoverMod.cutoverPackage({ designPkg: emptyPkg, devFlowRoot, pkgName: "empty-pkg", stateRoot: join(emptyPkg, "conformance-state") }),
+      (e) => e.code === "cutover-denominator-empty" && e.message.includes("readonly-archive"),
+      "分母为空的 migrate 切换应被前置检查拒绝",
+    );
+
+    // 导入半区（切换前，V9 步序：先导入映射 → 再标记管辖）：retirement 字段不入导入源
+    const map = { mappings: [{ legacyId: "F2-1", recordQuote: "组外登记表缺失 obligations 出口", bindingId: "GL1", repoId: "repo-main", violationKind: "missing-implementation", reason: "承接" }] };
+    const imp = await legacyMod.importLegacyFinal({ legacyFinalPath: join(syncPlain, "final.json"), mapRaw: JSON.stringify(map), bindings, stateRoot });
+    assert.equal(imp.imported, 1);
+    assert.ok(!("retirement" in imp.facts[0]) && !("retireCleanup" in imp.facts[0]));
+    assert.deepEqual(stateRepoMod.checkOrphanEvidence(stateRoot), [], "导入后无孤儿证据（legacy-import checker 登记在案）");
+
+    // 切换（migrate 分支）
+    const r = cutoverMod.cutoverPackage({ designPkg, devFlowRoot, pkgName: name, stateRoot, mode: "migrate" });
+    // 标记写入 <name>/cutover.json（+ docName 变体键——拒启探针两发起形态都命中）
+    assert.equal(r.markerPath, join(designPkg, "cutover.json"));
+    assert.equal(cutoverMod.readCutoverMarker(designPkg).engine, "v2");
+    assert.ok(existsSync(join(designPkg, "..", `${name}.rendered`, "cutover.json")), "docName 变体键应同写标记");
+    assert.equal(r.precheck.denominator, 1, "migrate 分支前置检查要求分母非空");
+    // 两变体全部改名归档 + tombstone 指针（deprecated + 权威地址 + 归档件地址）
+    assert.deepEqual(r.archived.map((a) => a.variant).sort(), ["plain", "rendered"]);
+    for (const dir of [syncPlain, syncRendered]) {
+      assert.ok(existsSync(join(dir, "final.legacy.json")), `归档件缺失：${dir}`);
+      const tomb = JSON.parse(readFileSync(join(dir, "final.json"), "utf8"));
+      assert.equal(tomb.deprecated, true);
+      assert.equal(tomb.authority.stateRoot, stateRoot);
+      assert.equal(tomb.authority.reportRoot, join(designPkg, "v2"));
+      assert.equal(tomb.archivedTo, join(dir, "final.legacy.json"));
+    }
+    // v2 报告落 <name>/v2/ 与旧档不同址（切换即渲染一次终态对照）
+    renderMod.renderReports({ designPkg, stateRoot, engineReturn: { scriptStatus: "completed", engineOutcome: "stopped", integrationOutcome: "not-required" } });
+    assert.ok(existsSync(join(designPkg, "v2", "final.json")));
+    // 禁裸前缀：他包目录与平铺产物零触碰
+    assert.ok(existsSync(join(syncOther, "final.json")) && !existsSync(join(syncOther, "final.legacy.json")), "他包目录禁触碰");
+    assert.ok(existsSync(join(devFlowRoot, `${name}.ledger.md`)), "平铺产物禁触碰");
+    // tech-design 段 T2 审查终态字节级不变（段七禁令）
+    assert.ok(t2Before.equals(readFileSync(t2FinalPath)), "T2 审查终态不得被切换触碰");
+    // 归档件保留 retirement/retireCleanup（随 final.legacy.json 归档、可人读找回——D8/SC14）
+    const archivedDoc = JSON.parse(readFileSync(join(syncPlain, "final.legacy.json"), "utf8"));
+    assert.deepEqual(archivedDoc.retirement, { retired: ["old.md"] });
+    assert.deepEqual(archivedDoc.retireCleanup, { pending: true });
+    // 重复切换拒绝（幂等保护；恢复动作指向复活通道）
+    assert.throws(
+      () => cutoverMod.cutoverPackage({ designPkg, devFlowRoot, pkgName: name, stateRoot }),
+      (e) => e.code === "cutover-already-marked",
+    );
+    // 状态仓转入归档态：普通命令拒写（state-store-archived），恢复动作指向复活通道
+    await assert.rejects(
+      stateRepoMod.appendCommands(stateRoot, [{ type: "RecordEvidence", actor: "checker-wrapper", payload: m5EvidencePayload(bindings[0], { result: "fail" }) }]),
+      (e) => e.code === "state-store-archived" && e.message.includes("复活通道"),
+    );
+
+    // 旧入口拒启：真实 cutoverGuardBlock 对该包 blocked（plain 与 rendered 两种发起形态都拒启；
+    // 他包目录不命中——探针精确匹配）
+    const guard = m5LoadCutoverGuard();
+    for (const docName of [name, `${name}.rendered`]) {
+      const blocked = await guard(home, { form: "single", slug }, docName);
+      assert.equal(blocked.blocked, true, `docName=${docName} 应拒启`);
+      assert.ok(blocked.message.includes("design-code-sync-v2"), "拒启 message 指向 v2");
+    }
+    const other = await guard(home, { form: "single", slug }, `${name}-other`);
+    assert.equal(other.blocked, false, "他包不命中拒启");
+
+    // 复活通道：Unarchived 解档 + 标记保留 + tombstone 不变 + 恢复追加
+    const tombBefore = readFileSync(join(syncPlain, "final.json"));
+    const rev = await cutoverMod.unarchivePackage({ stateRoot, designPkg, reason: "同包重开对账范围" });
+    assert.equal(rev.unarchived, true);
+    assert.equal(rev.markerRetained, true);
+    assert.equal(rev.event.type, "Unarchived");
+    assert.ok(existsSync(r.markerPath), "复活后 cutover 标记保留（旧引擎仍拒启，复活只走 v2）");
+    assert.ok(existsSync(join(designPkg, "..", `${name}.rendered`, "cutover.json")), "变体键标记同样保留");
+    assert.ok(tombBefore.equals(readFileSync(join(syncPlain, "final.json"))), "tombstone 指向不变");
+    // 解档后状态仓恢复追加（旧事件流不断链——seq 续编）
+    await stateRepoMod.appendCommands(stateRoot, [{ type: "RecordEvidence", actor: "checker-wrapper", payload: m5EvidencePayload(bindings[0], { result: "fail" }) }]);
+    const rebuilt = stateRepoMod.rebuild(stateRoot);
+    assert.equal(rebuilt.state.archived, false);
+    assert.equal(rebuilt.state.unarchivedSeen, true);
+    assert.deepEqual(rebuilt.facts.map((f) => f.seq), [1, 2, 3], "复活后事件 seq 连续续编");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("五项寻址登记与代码常量一致（skill-data-addressing.md §2 conformance-plane 附加寻址；路径单一来源）", () => {
+  const doc = readFileSync(join(ROOT, "skills", "self", "dev-workflow", "references", "skill-data-addressing.md"), "utf8");
+  const start = doc.indexOf("conformance-plane v2 附加寻址");
+  assert.ok(start > 0, "登记小节缺失");
+  const section = doc.slice(start);
+  // 五项登记在案：conformance-state 状态仓段 / sandbox 段 / cutover 标记 / v2 报告根 /
+  // 旧 final 归档件与 tombstone 寻址 + 两变体枚举键
+  for (const needle of [
+    "`<name>/conformance-state/`",
+    "`sandbox/`",
+    "cutover.json",
+    "`<name>/v2/`",
+    "final.legacy.json",
+    "tombstone",
+    "`<name>.sync/final.json`",
+    "`<name>.rendered.sync/final.json`",
+    "禁止裸前缀 glob",
+  ]) {
+    assert.ok(section.includes(needle), `登记缺失：${needle}`);
+  }
+  // 常量与登记一致（路径单一来源；常量定义处注释指向登记行）
+  assert.equal(cutoverMod.CUTOVER_MARKER_NAME, "cutover.json");
+  assert.equal(cutoverMod.STATE_DIRNAME, "conformance-state");
+  assert.equal(cutoverMod.LEGACY_ARCHIVE_NAME, "final.legacy.json");
+  assert.equal(cutoverMod.TOMBSTONE_NAME, "final.json");
+  assert.equal(renderMod.REPORT_DIRNAME, "v2");
+  assert.deepEqual(cutoverMod.LEGACY_SYNC_VARIANTS.map((v) => v.variant), ["plain", "rendered"]);
+  assert.equal(legacyMod.LEGACY_ARCHIVE_NAME, cutoverMod.LEGACY_ARCHIVE_NAME, "归档件名跨模块同值");
+  for (const f of ["migration/cutover.mjs", "reports/render.mjs", "migration/legacy-import.mjs"]) {
+    const src = readFileSync(join(CP, ...f.split("/")), "utf8");
+    assert.ok(src.includes("skill-data-addressing.md"), `${f} 模块头/常量注释应指向登记行`);
+  }
+});

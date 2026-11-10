@@ -36,10 +36,20 @@
 | tech-design（设计包） | `~/.agents/skill-data/tech-design/<ws-slug>/` | `~/.agents/skill-data/tech-design/<project-slug>/` |
 | dev-flow（执行态） | `~/.agents/skill-data/dev-flow/<ws-slug>/<worktreeName>/` | `~/.agents/skill-data/dev-flow/<project-slug>/` |
 | 观测事件（不随寻址变化） | `~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl` | 同左 |
+| conformance-state（v2 状态仓，tech-design 段内） | `~/.agents/skill-data/tech-design/<ws-slug>/<name>/conformance-state/` | `~/.agents/skill-data/tech-design/<project-slug>/<name>/conformance-state/` |
+| sandbox（worktree 检出段，dev-flow 段内） | `~/.agents/skill-data/dev-flow/<ws-slug>/<worktreeName>/sandbox/` | `~/.agents/skill-data/dev-flow/<project-slug>/sandbox/` |
 
 - **tech-design 段 = 工作区级共享、无 worktree 段**：设计包是仓库级资产，任何 worktree 的入口门都发现同一份设计包。`<ws-slug>/` 内部排布与平铺目录一致：`<name>/`（六章节 JSON 权威源）、`<name>.rendered.md`、`<name>.impl-plan.md` / `.impl-plan.json`、`<name>.symbol-watchlist.json`、`<name>.plan-review.md` 平铺其下；T2 审查产物在 `<name>/round-N/` 与 `<name>/final.json`、`<name>/run.json`。
 - **dev-flow 段 = worktree 级隔离**：执行态与 git 实物对账、中断后恢复都绑定该 worktree 的检出状态，所以 worktreeName 单独成段。段内文件：`<name>.exec-plan.json`、`<name>.status.json`、`<name>.run.json`、`<name>.ledger.md`、`<name>.coverage.md`、`<name>.runlog/`、`<name>.prompts/`、`<name>.verify/`、`<name>.sync/round-N/`。
 - **不随寻址变化的段**：观测事件按 task-id 直读、不携带 projectRoot；skill-data 下其他技能段各按自己的约定，不在本约定范围。
+- **conformance-plane v2 附加寻址（M5 报告与切换；代码侧常量单一来源 = `skills/self/dev-workflow/conformance-plane/migration/cutover.mjs` 与 `reports/render.mjs` 的登记注释）**：
+  - **conformance-state 状态仓段**：tech-design 段 `<name>/conformance-state/`——事件 JSONL 与快照唯一权威（v2 对账引擎 `stateRoot` 缺省同值；粒度每包一仓，见 dev-workflow conformance-plane README）。
+  - **sandbox 段**：dev-flow 段下 `sandbox/` 子目录（单仓 `<project-slug>/sandbox/`、工作区 `<ws-slug>/<worktreeName>/sandbox/`）——隔离 worktree 检出目录固定段（目标仓外固定段；worktree sandbox 机制寻址）。
+  - **cutover 标记**：tech-design 段 `<name>/cutover.json`（工作区级共享、无 worktree 段；权威落盘位置）及 docName 变体键 `<name>.rendered/cutover.json`（cutover 双写同内容标记）——按包灰度切换标记；旧 W4 setup 与 flow/sync.md 手工入口第一步按 `<slug>/<docName>/cutover.json` 探测（docName = 发起时设计文档 basename 去扩展名，可含 `.rendered` 后缀），命中即拒启并指向 v2（design-code-sync-loop.shared.ts `cutoverGuardBlock`）；两变体键齐写保证 plain / rendered 两种发起形态都命中。
+  - **v2 报告根**：tech-design 段 `<name>/v2/`（五视图 current/final/matrix/trajectory/ledger；与 cutover 标记同段，不与旧 D5 final 同址同名冲突）。
+  - **旧 final 归档件与 tombstone 寻址**：原地址 = dev-flow 段 `<project-slug|ws-slug>/[<worktreeName>/]<docName>.sync/final.json`；cutover 逐一改名归档为同目录 `final.legacy.json`，并在原地址回写 tombstone 指针（deprecated 标记 + conformance-state 权威地址 + 归档件地址）——旧寻址外部读者按原地址读到的是指针，不再是可当作当前终态的内容。
+  - **cutover 扫描 docName 两变体枚举键**：`<name>.sync/final.json` 与 `<name>.rendered.sync/final.json` 两个变体精确匹配（`<name>` 与 dev-flow 段 docName 同源于设计文档 basename，docName 可含 `.rendered` 后缀；同包历史运行可产生两种前缀变体）；禁止裸前缀 glob（裸前缀会误伤他包目录）；tech-design 段 `<name>/final.json` 属 T2 审查终态（写入者 W1 tech-review-loop），不在 cutover 处置范围。
+  - **归档态与复活**：归档是快照 input 的逻辑标记（`input.archived`，派生谓词），非物理只读；复活通道追加 Unarchived（退出归档）事件解档并恢复追加，cutover 标记保留（旧引擎仍拒启，复活只走 v2）。
 
 路径取值一律经寻址探针实得（工作流入参 projectRoot），主 agent 与文档不手算 slug。
 
