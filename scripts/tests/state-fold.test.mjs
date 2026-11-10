@@ -234,6 +234,41 @@ test("快照 + 增量 fold 必须等价全量 fold（RL2）", () => {
   assert.equal(incremental.seq, full.seq);
 });
 
+test("快照 + 增量等价跨集成审计事件：集成审计在场后新 pass 证据不得重回 pending-integration（RL2 回归）", () => {
+  const input = baseInput();
+  const ev = (seq) => fact("EvidenceRecorded", seq, {
+    address: ADDR_IMPL,
+    obligationHash: facts.obligationSummaryHash(input.bindings[1]),
+    checkerId: "symbol-scan",
+    checkerVersion: "1.0.0",
+    bindingVersion: 2,
+    inputs: [{ name: "repo-a/src/main.js", hash: "b".repeat(64) }],
+    result: "pass",
+    changesetId: "cs-1",
+  });
+  const gate = (seq) => fact("IntegrationGateChecked", seq, {
+    repoId: "repo-a",
+    command: "git apply --check",
+    exitCode: 0,
+    summary: "预检通过",
+    recovery: "非失败记录，无需恢复",
+    failure: false,
+  });
+  const factsList = [ev(1), gate(2), ev(3)];
+  const full = fold({ ...input, facts: factsList });
+  // 快照切在集成审计之后、新 pass 证据之前——集成审计在场标记必须随快照携带
+  const snapshotState = fold({ ...input, facts: factsList.slice(0, 2) });
+  const incremental = fold({ ...input, facts: factsList.slice(2), initialState: snapshotState });
+  assert.equal(
+    JSON.stringify(incremental),
+    JSON.stringify(full),
+    "集成审计事件跨快照续 fold 必须与全量 fold 逐字节等价（integrationSeen 随快照携带）",
+  );
+  const impl = full.addresses[full.keys[facts.canonicalJson(ADDR_IMPL)]];
+  assert.equal(impl.conclusion, "verified", "集成审计在场后新 pass 证据的终态是 verified（V12 分层）");
+  assert.equal(impl.pendingIntegration, false);
+});
+
 test("seq 不连续或非正的事实序列被 fold 拒绝（事件序列无空洞）", () => {
   const input = baseInput();
   assert.throws(() => fold({ ...input, facts: [sampleFacts()[0], sampleFacts()[2]] }), /seq/);

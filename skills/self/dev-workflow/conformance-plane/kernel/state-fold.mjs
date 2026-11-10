@@ -32,6 +32,7 @@ function emptyAddressState(address) {
     evidence: { status: "none", reasons: [] }, // none | valid | invalid（invalid 时 reasons 可查，V3）
     pendingIntegration: false,
     integrationBlocked: false,
+    integrationSeen: false, // 该 repo 集成审计事实已在场——随快照携带（RL2 快照+增量等价全量 fold）
     lastCheckerFailure: null,
     lastRuling: null,
   };
@@ -150,7 +151,7 @@ export function fold(input) {
           }
           s.pendingIntegration =
             s.verification === "verified" && typeof f.changesetId === "string" &&
-            !s.integrationBlocked && !s._integrationSeen;
+            !s.integrationBlocked && !s.integrationSeen;
         }
         break;
       }
@@ -159,7 +160,7 @@ export function fold(input) {
         const repoId = f.repoId;
         for (const s of addresses.values()) {
           if (s.address.repoId !== repoId) continue;
-          s._integrationSeen = true;
+          s.integrationSeen = true;
           if (f.type === "IntegrationPrecheckFailed" || f.failure === true) {
             s.integrationBlocked = true;
             s.pendingIntegration = false;
@@ -195,8 +196,9 @@ export function fold(input) {
     else if (s.verification === "verified") s.conclusion = s.pendingIntegration ? "pending-integration" : "verified";
     else s.conclusion = "open";
     delete s._evidenceFacts;
-    delete s._integrationSeen;
-    // pendingRulingSeq 保留在产物中：initialState 续 fold 的 respondsTo 配对校验依赖它（seq 引用，非谓词）
+    // pendingRulingSeq / integrationSeen 保留在产物中：initialState 续 fold 依赖它们保持与全量 fold
+    // 等价（RL2）——respondsTo 配对校验依赖 pendingRulingSeq，pass 证据的 pending-integration 派生
+    // 依赖 integrationSeen；两者都是流内事实在场标记（seq/布尔），非结论谓词（AX5 不涉）
   }
 
   return {
