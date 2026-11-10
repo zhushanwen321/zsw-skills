@@ -435,7 +435,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "1.0.0"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.0"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // design-code-sync-v2 — dev-flow-wf 技能 W4 v2 一致性对账引擎（sync-conformance-plane
 // U4/M4：D5 从 issue 循环升级为「设计义务 + 证据 + 隔离变更集」对账）
@@ -1630,9 +1630,12 @@ async function requestDocProposal(docFail: ObligationRow[], round: number): Prom
   return true;
 }
 
-// ── 代码侧变更集：sandbox → fixer → manifest → 集成（AX6/D4/AX7；两失败分支可区分） ──
+// ── 代码侧变更集：sandbox → fixer → 多仓单 manifest → 一次集成（AX6/D4/AX7/D5/V5） ──
 async function fixAndIntegrate(codeFail: ObligationRow[], round: number): Promise<"integrated" | "failed" | "rolled-back"> {
-  // 按 repoId 分组（同仓 fail 义务一组 → 一个 sandbox / 一个变更集——多仓逐仓 manifest）
+  // 按 repoId 分组（同仓 fail 义务一组 → 一个 sandbox）；全部仓共享单 manifest、一次
+  // integrateChangeset（D5：每个变更集携带多仓补丁 manifest 与逐仓目标树哈希；V5：预检
+  // 全量先行任一仓失败全部不应用、ref 移动失败按跨仓回滚计划恢复——原子性由集成器单次
+  // 调用承载，引擎不在仓间拆分变更集）
   const byRepo = new Map<string, ObligationRow[]>();
   for (const o of codeFail) {
     const list = byRepo.get(o.repoId) ?? [];
@@ -1640,98 +1643,90 @@ async function fixAndIntegrate(codeFail: ObligationRow[], round: number): Promis
     byRepo.set(o.repoId, list);
   }
   const changesetId = `cs-r${round}`;
+  const manifestDir = `${stateRoot}-changesets/${changesetId}`;
   const sandboxHandles: { repoId: string; repoRoot: string; dir: string; branch: string; baseCommit: string }[] = [];
-  let integratedAny = false;
+  const manifestRepos: { repoId: string; repoRoot: string; dir: string; branch: string; changesetId: string; baseCommit: string }[] = [];
 
-  for (const [repoId, group] of byRepo) {
-    const repo = repoById.get(repoId);
-    if (repo === undefined) continue;
-    const repoChangesetId = `${changesetId}-${repoId}`.replace(/[^A-Za-z0-9._-]/g, "-");
-    const createRes = await runProbe(PROBE_SANDBOX_CREATE, [confRoot, repo.realRoot, sandboxRoot, repoChangesetId], `sandbox 创建（${repoId}）`);
-    if (!createRes.ok) probeFail(`sandbox 创建（${repoId}）`, createRes);
-    const sandbox = createRes.sandbox as { repoRoot: string; dir: string; branch: string; changesetId: string; baseCommit: string };
-    sandboxHandles.push({ repoId, repoRoot: sandbox.repoRoot, dir: sandbox.dir, branch: sandbox.branch, baseCommit: sandbox.baseCommit });
+  try {
+    for (const [repoId, group] of byRepo) {
+      const repo = repoById.get(repoId);
+      if (repo === undefined) continue;
+      // sandbox id 逐仓后缀（检出目录与临时分支须在 sandboxRoot 内逐仓唯一；manifest 级 id 统一）
+      const repoSandboxId = `${changesetId}-${repoId}`.replace(/[^A-Za-z0-9._-]/g, "-");
+      const createRes = await runProbe(PROBE_SANDBOX_CREATE, [confRoot, repo.realRoot, sandboxRoot, repoSandboxId], `sandbox 创建（${repoId}）`);
+      if (!createRes.ok) probeFail(`sandbox 创建（${repoId}）`, createRes);
+      const sandbox = createRes.sandbox as { repoRoot: string; dir: string; branch: string; changesetId: string; baseCommit: string };
+      sandboxHandles.push({ repoId, repoRoot: sandbox.repoRoot, dir: sandbox.dir, branch: sandbox.branch, baseCommit: sandbox.baseCommit });
 
-    // fixer 派发（无状态：最小义务包 + sandbox 快照 + 禁令注入）
-    const fixerAgent = agent(`changeset-fix-r${round}-${repoId}`, "");
-    const packages = group.map((o) => ({
-      binding: o.binding,
-      address: o.address,
-      targetSelector: o.targetSelector,
-      severity: o.severity,
-      declaration: o.declaration,
-    }));
-    const prompt = [
-      `隔离补丁生成（对账 R${round}，仓 ${repoId}）：在 sandbox 工作树内修复下列义务差距——只改 sandbox 内文件，绝不触碰正式仓。`,
-      `第一步：Read 补丁生成模板 ${fixerTplAbs}——按其中任务契约执行（含产对象禁令）。`,
-      `sandbox（worktree 检出，基线 ${sandbox.baseCommit.slice(0, 12)}）：${sandbox.dir}——用绝对路径 Read/Edit/Write 只修改此目录内文件。`,
-      `【产对象禁令（模板义务，违者对象库对账红灯）】sandbox 内禁止 git add / git commit / git stash / git hash-object——worktree 与宿主仓共用对象库，任何产对象命令都写宿主 .git/objects；补丁由引擎以工作树级 diff 收集，你只负责把文件内容改对。`,
-      `最小义务包（逐条修复申报 bindingId 原样引用；禁自报身份与终态）：${wrapUntrusted(JSON.stringify(packages))}`,
-      `仓库真实根（只读参照，禁止写入）：${repo.realRoot}。`,
-      `完成后返回 JSON：{fixes: [{bindingId, description}], affectedFiles: [sandbox 内相对路径], deferred: [{bindingId, reason}]}。删除/移除一段现有实现的修复动作不要执行——放入 deferred（越权候选呈报用户裁决）。`,
-    ].join("\n");
-    let plan: FixerPlan | null = null;
-    try {
-      plan = (await fixerAgent.ask<FixerPlan>(prompt)) as FixerPlan | null;
-    } catch (e) {
-      log(`WARN: changeset-fixer 失败（${repoId}）：${e instanceof Error ? e.message : String(e)}——该仓本轮无补丁，义务保持 open 下轮重派`);
+      // fixer 派发（无状态：最小义务包 + sandbox 快照 + 禁令注入）
+      const fixerAgent = agent(`changeset-fix-r${round}-${repoId}`, "");
+      const packages = group.map((o) => ({
+        binding: o.binding,
+        address: o.address,
+        targetSelector: o.targetSelector,
+        severity: o.severity,
+        declaration: o.declaration,
+      }));
+      const prompt = [
+        `隔离补丁生成（对账 R${round}，仓 ${repoId}）：在 sandbox 工作树内修复下列义务差距——只改 sandbox 内文件，绝不触碰正式仓。`,
+        `第一步：Read 补丁生成模板 ${fixerTplAbs}——按其中任务契约执行（含产对象禁令）。`,
+        `sandbox（worktree 检出，基线 ${sandbox.baseCommit.slice(0, 12)}）：${sandbox.dir}——用绝对路径 Read/Edit/Write 只修改此目录内文件。`,
+        `【产对象禁令（模板义务，违者对象库对账红灯）】sandbox 内禁止 git add / git commit / git stash / git hash-object——worktree 与宿主仓共用对象库，任何产对象命令都写宿主 .git/objects；补丁由引擎以工作树级 diff 收集，你只负责把文件内容改对。`,
+        `最小义务包（逐条修复申报 bindingId 原样引用；禁自报身份与终态）：${wrapUntrusted(JSON.stringify(packages))}`,
+        `仓库真实根（只读参照，禁止写入）：${repo.realRoot}。`,
+        `完成后返回 JSON：{fixes: [{bindingId, description}], affectedFiles: [sandbox 内相对路径], deferred: [{bindingId, reason}]}。删除/移除一段现有实现的修复动作不要执行——放入 deferred（越权候选呈报用户裁决）。`,
+      ].join("\n");
+      let plan: FixerPlan | null = null;
+      try {
+        plan = (await fixerAgent.ask<FixerPlan>(prompt)) as FixerPlan | null;
+      } catch (e) {
+        log(`WARN: changeset-fixer 失败（${repoId}）：${e instanceof Error ? e.message : String(e)}——该仓本轮无补丁，义务保持 open 下轮重派`);
+      }
+      // 收集口径 = 工作树全量 diff（fixer 申报仅审计参照，不限定 pathspec——漏申报不丢补丁）
+      manifestRepos.push({
+        repoId,
+        repoRoot: sandbox.repoRoot,
+        dir: sandbox.dir,
+        branch: sandbox.branch,
+        changesetId: sandbox.changesetId,
+        baseCommit: sandbox.baseCommit,
+      });
     }
-    const declaredFiles = plan !== null && Array.isArray(plan.affectedFiles) ? plan.affectedFiles : [];
-    // manifest 收集（工作树级 diff，零对象写入；受影响义务的申报文件限定 pathspec）
-    const scopeFiles = new Set<string>();
-    for (const o of group) {
-      const m = o.targetSelector.startsWith("path:") ? o.targetSelector.slice(5) : "";
-      if (m !== "") scopeFiles.add(m);
-    }
-    for (const f of declaredFiles) scopeFiles.add(f);
-    const collectRes = await runProbe(
-      PROBE_MANIFEST_COLLECT,
-      [
-        confRoot,
-        repoChangesetId,
-        `${stateRoot}-changesets/${repoChangesetId}`,
-        JSON.stringify([
-          {
-            repoId,
-            repoRoot: sandbox.repoRoot,
-            dir: sandbox.dir,
-            branch: sandbox.branch,
-            changesetId: sandbox.changesetId,
-            baseCommit: sandbox.baseCommit,
-          },
-        ]),
-      ],
-      `manifest 收集（${repoId}）`,
-    );
-    if (!collectRes.ok) probeFail(`manifest 收集（${repoId}）`, collectRes);
+
+    if (manifestRepos.length === 0) return "integrated";
+
+    // 多仓单 manifest 收集（工作树级 diff，零对象写入；零变更仓 entry hasChanges=false，
+    // 集成器按 no-changes 逐仓跳过——fixer 无产出的仓不阻塞其余仓正常集成）
+    const collectRes = await runProbe(PROBE_MANIFEST_COLLECT, [confRoot, changesetId, manifestDir, JSON.stringify(manifestRepos)], "manifest 收集（多仓单变更集）");
+    if (!collectRes.ok) probeFail("manifest 收集（多仓单变更集）", collectRes);
     const manifest = collectRes.manifest as { changesetId: string; changesetHash: string; repos: { repoId: string; hasChanges: boolean }[] };
-    const hasChanges = manifest.repos.some((r) => r.hasChanges);
-    if (!hasChanges) {
-      log(`WARN: 仓 ${repoId} 的 sandbox 零变更（fixer 申报与工作树 diff 均空）——义务保持 open 下轮重派`);
-      await releaseSandboxHandle(sandboxHandles[sandboxHandles.length - 1]);
-      sandboxHandles.pop();
-      continue;
+    for (const r of manifest.repos) {
+      if (!r.hasChanges) {
+        log(`WARN: 仓 ${r.repoId} 的 sandbox 零变更（fixer 申报与工作树 diff 均空）——义务保持 open 下轮重派`);
+      }
     }
-    // 集成（唯一写入门径；状态仓同根——审计事件自动入流；manual 判定 = actor main-agent 不用于本通道）
-    const integrateRes = await runProbe(PROBE_INTEGRATE, [confRoot, `${stateRoot}-changesets/${repoChangesetId}`, stateRoot, "reconcile-engine"], `集成（${repoId}）`);
-    if (!integrateRes.ok) probeFail(`集成（${repoId}）`, integrateRes);
+
+    // 一次集成（唯一写入门径；状态仓同根——审计事件自动入流。V5：预检全量先行任一仓失败
+    // 全部不应用 → 终值 failed；宿主挂钩拒绝同样全部不应用 → 终值 failed；ref 移动失败按
+    // 跨仓回滚计划恢复 → 终值 rolled-back。终值 = 单次集成结论，不存在仓间互相覆盖）
+    const integrateRes = await runProbe(PROBE_INTEGRATE, [confRoot, manifestDir, stateRoot, "reconcile-engine"], "集成（多仓单变更集）");
+    if (!integrateRes.ok) probeFail("集成（多仓单变更集）", integrateRes);
     const outcome = integrateRes.outcome as string;
-    if (outcome === "integrated") {
-      integratedAny = true;
-      integrationOutcome = "integrated";
-    } else if (outcome === "failed") {
-      const regen = integrateRes.regenerateTask as { changesetId: string; repos: string[]; reason: string; instruction: string } | null;
-      if (regen !== null && regen !== undefined) regenerateTasks.push(regen);
-      if (integrationOutcome !== "integrated") integrationOutcome = "failed";
-    } else if (outcome === "rolled-back") {
-      if (integrationOutcome !== "integrated") integrationOutcome = "rolled-back";
+    const regen = integrateRes.regenerateTask as { changesetId: string; repos: string[]; reason: string; instruction: string } | null;
+    if (outcome !== "integrated" && regen !== null && regen !== undefined) regenerateTasks.push(regen);
+    if (outcome === "failed") {
+      integrationOutcome = "failed";
+      return "failed";
     }
-    await releaseSandboxHandle(sandboxHandles[sandboxHandles.length - 1]);
-    sandboxHandles.pop();
+    if (outcome === "rolled-back") {
+      integrationOutcome = "rolled-back";
+      return "rolled-back";
+    }
+    integrationOutcome = "integrated";
+    return "integrated";
+  } finally {
+    for (const h of sandboxHandles) await releaseSandboxHandle(h);
   }
-  if (integrationOutcome === "failed" && !integratedAny) return "failed";
-  if (integrationOutcome === "rolled-back" && !integratedAny) return "rolled-back";
-  return "integrated";
 }
 
 async function releaseSandboxHandle(h: { repoId: string; repoRoot: string; dir: string; branch: string; baseCommit: string }): Promise<void> {
