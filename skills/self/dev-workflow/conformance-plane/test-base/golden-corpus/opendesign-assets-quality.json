@@ -1,0 +1,242 @@
+{
+  "packageId": "opendesign-assets-quality",
+  "source": {
+    "segment": "dev-flow",
+    "slug": "tai-ji-yang-workspace-8a67843d",
+    "worktree": "main",
+    "runDir": "opendesign-assets-quality.rendered.sync",
+    "extractedFrom": "final.json（14 个 round 目录、reconciliation 54 条、terminated=converged、takeover 记录主 agent 接管）+ rulings.json（F1-31 code-right 裁决）",
+    "note": "结构性脱敏样本：仅保留义务身份、状态流转与结论骨架；裁决引文以一句话摘要替代原文，哈希为确定性占位值，不携带完整会话内容"
+  },
+  "input": {
+    "archived": false,
+    "bindings": [
+      {
+        "bindingId": "F1-31",
+        "repoId": "taiji-host",
+        "violationKind": "behavior-mismatch",
+        "bindingVersion": 1
+      },
+      {
+        "bindingId": "F3-1",
+        "repoId": "taiji-host",
+        "violationKind": "missing-implementation",
+        "bindingVersion": 1
+      }
+    ],
+    "repos": [
+      {
+        "repoId": "taiji-host"
+      }
+    ],
+    "checkerRuns": [
+      {
+        "checkerId": "symbol-scan",
+        "checkerVersion": "1.0.0"
+      },
+      {
+        "checkerId": "semantic-review",
+        "checkerVersion": "0.3.0"
+      }
+    ],
+    "changesets": [
+      {
+        "changesetId": "cs-opendesign-r5"
+      }
+    ],
+    "artifacts": {
+      "taiji-host/src/agent-preset-registry.js": "3333333333333333333333333333333333333333333333333333333333333333",
+      "taiji-host/src/quality-loop.js": "4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  },
+  "script": [
+    {
+      "role": "checker",
+      "actor": "checker-wrapper",
+      "command": {
+        "type": "RecordEvidence",
+        "payload": {
+          "address": {
+            "bindingId": "F3-1",
+            "repoId": "taiji-host",
+            "violationKind": "missing-implementation"
+          },
+          "checkerId": "symbol-scan",
+          "checkerVersion": "1.0.0",
+          "bindingVersion": 1,
+          "result": "fail",
+          "inputs": [
+            {
+              "name": "taiji-host/src/quality-loop.js",
+              "hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            }
+          ],
+          "obligationHash": "f8c411092eee0137b4ecbba8b9aff0aedf9e079a9cddaed9ed3db48093291f1d"
+        }
+      }
+    },
+    {
+      "role": "fixer",
+      "actor": "changeset-fixer",
+      "command": {
+        "type": "RecordEvidence",
+        "payload": {
+          "address": {
+            "bindingId": "F3-1",
+            "repoId": "taiji-host",
+            "violationKind": "missing-implementation"
+          },
+          "checkerId": "symbol-scan",
+          "checkerVersion": "1.0.0",
+          "bindingVersion": 1,
+          "result": "pass",
+          "changesetId": "cs-opendesign-r5",
+          "inputs": [
+            {
+              "name": "taiji-host/src/quality-loop.js",
+              "hash": "4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "obligationHash": "f8c411092eee0137b4ecbba8b9aff0aedf9e079a9cddaed9ed3db48093291f1d"
+        }
+      }
+    },
+    {
+      "role": "arbiter",
+      "actor": "main-agent",
+      "command": {
+        "type": "RequestRuling",
+        "payload": {
+          "address": {
+            "bindingId": "F1-31",
+            "repoId": "taiji-host",
+            "violationKind": "behavior-mismatch"
+          },
+          "question": "resume 降级 vs 自愈机制：修复方向是代码侧补自愈还是维持声明降级？（真实方向争议）"
+        }
+      }
+    },
+    {
+      "role": "arbiter",
+      "actor": "main-agent",
+      "command": {
+        "type": "RecordRuling",
+        "payload": {
+          "address": {
+            "bindingId": "F1-31",
+            "repoId": "taiji-host",
+            "violationKind": "behavior-mismatch"
+          },
+          "direction": "code-right",
+          "respondsTo": 3
+        }
+      }
+    },
+    {
+      "role": "checker",
+      "actor": "checker-wrapper",
+      "command": {
+        "type": "RecordEvidence",
+        "payload": {
+          "address": {
+            "bindingId": "F1-31",
+            "repoId": "taiji-host",
+            "violationKind": "behavior-mismatch"
+          },
+          "checkerId": "semantic-review",
+          "checkerVersion": "0.3.0",
+          "bindingVersion": 1,
+          "result": "pass",
+          "inputs": [
+            {
+              "name": "taiji-host/src/agent-preset-registry.js",
+              "hash": "3333333333333333333333333333333333333333333333333333333333333333"
+            }
+          ],
+          "obligationHash": "89a5437c8c9084b995b906837eb4255c089b0950bf1b22cfddb568cccf6a9db2"
+        }
+      }
+    },
+    {
+      "role": "checker",
+      "actor": "checker-wrapper",
+      "command": {
+        "type": "RecordEvidence",
+        "payload": {
+          "address": {
+            "bindingId": "F3-1",
+            "repoId": "taiji-host",
+            "violationKind": "missing-implementation"
+          },
+          "checkerId": "semantic-review",
+          "checkerVersion": "0.3.0",
+          "bindingVersion": 1,
+          "result": "fail",
+          "inputs": [
+            {
+              "name": "taiji-host/src/quality-loop.js",
+              "hash": "4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "obligationHash": "f8c411092eee0137b4ecbba8b9aff0aedf9e079a9cddaed9ed3db48093291f1d"
+        }
+      }
+    },
+    {
+      "role": "main-agent",
+      "actor": "main-agent",
+      "command": {
+        "type": "RecordEvidence",
+        "payload": {
+          "address": {
+            "bindingId": "F3-1",
+            "repoId": "taiji-host",
+            "violationKind": "missing-implementation"
+          },
+          "checkerId": "semantic-review",
+          "checkerVersion": "0.3.0",
+          "bindingVersion": 1,
+          "result": "pass",
+          "changesetId": "cs-opendesign-r5",
+          "inputs": [
+            {
+              "name": "taiji-host/src/quality-loop.js",
+              "hash": "4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "obligationHash": "f8c411092eee0137b4ecbba8b9aff0aedf9e079a9cddaed9ed3db48093291f1d"
+        }
+      }
+    },
+    {
+      "role": "integrator",
+      "actor": "integrator",
+      "command": {
+        "type": "RecordIntegrationGate",
+        "payload": {
+          "repoId": "taiji-host",
+          "command": "git -C taiji-host log --oneline -1",
+          "exitCode": 0,
+          "summary": "两阶段提交 ref 移动不隐式触发挂钩；apply 预检已执行同一宿主挂钩",
+          "recovery": "非失败记录，无需恢复",
+          "failure": false
+        }
+      }
+    }
+  ],
+  "expectations": {
+    "distinctAddresses": [
+      "F1-31|taiji-host|behavior-mismatch",
+      "F3-1|taiji-host|missing-implementation"
+    ],
+    "finalConclusions": {
+      "F1-31|taiji-host|behavior-mismatch": "verified",
+      "F3-1|taiji-host|missing-implementation": "verified"
+    },
+    "evidenceNotBoundToHead": "证据 inputs 只绑定工作区文件路径哈希；HEAD 指针变化不影响证据有效性（round-3 HEAD 误判场景：工作区内容正确但 HEAD 旧，证据不得因 HEAD 旧而失效）"
+  },
+  "bindingsProvenance": {
+    "F1-31": "真实裁决条目：resume 降级 vs 自愈机制方向争议，rulings.json 裁决 code-right",
+    "F3-1": "takeover 记录的 must-fix 条目：第五轮 stuck（F3-1 超 2 轮）后主 agent 接管收尾"
+  }
+}

@@ -1,0 +1,420 @@
+// state-fold.test.mjs — 领域核与确定性 fold 单元测试（sync-conformance-plane U1/M1）
+//
+// 覆盖（设计守护与场景编号属本设计包 sync-conformance-plane，编号裸用）：
+//   1. 事件词表与 facts.mjs schema 逐名一致：设计具名 7 事件
+//      （RulingRequested/RulingRecorded/BacklogAdopted/CheckerFailed/IntegrationGateChecked/
+//       IntegrationPrecheckFailed/Unarchived）+ 领域核登记的 EvidenceRecorded（AX4 证据落流载体）
+//      逐一可用合法样本过 validateFact、缺必填字段样本被拒（U1 检查点「逐名一致，防词表分裂」）
+//   2. 重放稳定（G2 --replay-equivalence / RL2）：同事件序 → 同状态，两次 fold 逐字节相等；
+//      快照 input + 增量 fold 必须等价全量 fold
+//   3. 状态谓词派生不存储（AX5 / D3）：awaiting-ruling / verified / pending-integration /
+//      archived 全部由 fold 派生——事实对象与快照 input 中不存在谓词字段；
+//      CheckerFailed 不伪造 verified、义务保持 open 且失败四要素可查
+//   4. 事件量红灯阈值常量（D2）：50 MB / 10 万条为可判定探针
+//
+// 运行：node --test scripts/tests/state-fold.test.mjs
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const CP = join(ROOT, "skills", "self", "dev-workflow", "conformance-plane", "kernel");
+
+const facts = await import(join(CP, "facts.mjs"));
+const { fold, findOrphanEvidence } = await import(join(CP, "state-fold.mjs"));
+
+/** 设计具名词表（权威源：sync-conformance-plane rendered §3 终态段四/五/六/七 + M5 复活通道） */
+const DESIGN_NAMED_EVENTS = [
+  "RulingRequested",
+  "RulingRecorded",
+  "BacklogAdopted",
+  "CheckerFailed",
+  "IntegrationGateChecked",
+  "IntegrationPrecheckFailed",
+  "Unarchived",
+];
+
+const ADDR_DOC = { bindingId: "GL1", repoId: "repo-a", violationKind: "documentation-mismatch" };
+const ADDR_IMPL = { bindingId: "V12", repoId: "repo-a", violationKind: "missing-implementation" };
+
+function baseInput() {
+  return {
+    archived: false,
+    bindings: [
+      { bindingId: "GL1", repoId: "repo-a", violationKind: "documentation-mismatch", bindingVersion: 1 },
+      { bindingId: "V12", repoId: "repo-a", violationKind: "missing-implementation", bindingVersion: 2 },
+    ],
+    repos: [{ repoId: "repo-a" }],
+    checkerRuns: [
+      { checkerId: "symbol-scan", checkerVersion: "1.0.0" },
+      { checkerId: "semantic-review", checkerVersion: "0.3.0" },
+    ],
+    changesets: [{ changesetId: "cs-1" }],
+    artifacts: { "repo-a/docs/design.md": "a".repeat(64), "repo-a/src/main.js": "b".repeat(64) },
+  };
+}
+
+/** 构造带合法 seq/ts/actor 的事实 */
+function fact(type, seq, payload, actor = "engine") {
+  return { type, seq, ts: "2026-11-10T10:00:00.000Z", actor, ...payload };
+}
+
+// ---------------------------------------------------------------------------
+// 1. 事件词表与 schema 逐名一致
+// ---------------------------------------------------------------------------
+
+test("词表包含设计具名 7 事件与领域核登记的 EvidenceRecorded，且无未知成员", () => {
+  for (const name of DESIGN_NAMED_EVENTS) {
+    assert.ok(facts.EVENT_TYPES.includes(name), `设计具名事件 ${name} 必须登记于 EVENT_TYPES`);
+  }
+  assert.ok(facts.EVENT_TYPES.includes("EvidenceRecorded"), "AX4 证据落流载体 EvidenceRecorded 必须登记");
+  assert.equal(
+    facts.EVENT_TYPES.length,
+    new Set(facts.EVENT_TYPES).size,
+    "EVENT_TYPES 不得有重复成员（词表分裂即重复登记的红灯）",
+  );
+  assert.deepEqual(
+    facts.EVENT_TYPES.filter((t) => DESIGN_NAMED_EVENTS.includes(t)),
+    DESIGN_NAMED_EVENTS,
+    "具名 7 事件的词表内次序无关，但成员集必须恰等",
+  );
+});
+
+test("每个词表事件都有 payload schema 且合法样本逐一通过 validateFact", () => {
+  assert.deepEqual(
+    [...Object.keys(facts.EVENT_PAYLOAD_SCHEMAS)].sort(),
+    [...facts.EVENT_TYPES].sort(),
+    "EVENT_PAYLOAD_SCHEMAS 键集必须与 EVENT_TYPES 完全一致（逐名一致的 schema 形态）",
+  );
+  const samples = {
+    RulingRequested: { address: ADDR_DOC, question: "该差距修复方向是代码侧还是文档侧？" },
+    RulingRecorded: { address: ADDR_DOC, direction: "doc-right", respondsTo: 1 },
+    BacklogAdopted: {
+      backlogId: "BL-1",
+      newBinding: { bindingId: "GL1.r2", repoId: "repo-a", violationKind: "documentation-mismatch", bindingVersion: 1 },
+    },
+    CheckerFailed: {
+      address: ADDR_IMPL,
+      command: "node check.js",
+      exitCode: 20,
+      summary: "semantic checker 连续两次输出非法 JSON",
+      recovery: "修复 checker 后重跑；义务保持 open",
+    },
+    IntegrationGateChecked: {
+      repoId: "repo-a",
+      command: "git -C repo-a pre-commit",
+      exitCode: 0,
+      summary: "两阶段提交 ref 移动不隐式触发挂钩，预检已执行同一挂钩",
+      recovery: "非失败记录，无需恢复",
+      failure: false,
+    },
+    IntegrationPrecheckFailed: {
+      repoId: "repo-a",
+      command: "git apply --check",
+      exitCode: 1,
+      summary: "补丁与目标树冲突",
+      recovery: "重新生成变更集后再次集成",
+    },
+    Unarchived: { reason: "同包重开对账范围，v2 复活通道解档" },
+    EvidenceRecorded: {
+      address: ADDR_IMPL,
+      obligationHash: "c".repeat(64),
+      checkerId: "symbol-scan",
+      checkerVersion: "1.0.0",
+      bindingVersion: 2,
+      inputs: [{ name: "repo-a/src/main.js", hash: "b".repeat(64) }],
+      result: "pass",
+    },
+  };
+  assert.deepEqual(
+    Object.keys(samples).sort(),
+    [...facts.EVENT_TYPES].sort(),
+    "样本表必须覆盖全部词表事件（新增事件名未配样本 = 词表与 schema 不一致）",
+  );
+  let seq = 1;
+  for (const type of facts.EVENT_TYPES) {
+    const ok = facts.validateFact(fact(type, seq++, samples[type]));
+    assert.ok(ok.ok, `${type} 合法样本应通过校验：${JSON.stringify(ok.errors)}`);
+  }
+});
+
+test("缺必填字段 / 词表外 type / 非法地址形态逐一被 validateFact 拒绝", () => {
+  const bad = [
+    fact("RulingRequested", 1, { address: ADDR_DOC }), // 缺 question
+    fact("RulingRequested", 2, { question: "缺地址" }),
+    fact("NoSuchEvent", 3, {}), // 词表外
+    fact("CheckerFailed", 4, { address: ADDR_IMPL, command: "c", exitCode: 20, summary: "缺恢复动作" }),
+    fact("RulingRecorded", 5, { address: ADDR_DOC, direction: "随便写", respondsTo: 1 }), // direction 词表外
+    fact("EvidenceRecorded", 6, {
+      address: { bindingId: "GL1", repoId: "repo-a", violationKind: "词表外语义" },
+      obligationHash: "c".repeat(64),
+      checkerId: "symbol-scan",
+      checkerVersion: "1.0.0",
+      bindingVersion: 1,
+      inputs: [{ name: "x", hash: "b".repeat(64) }],
+      result: "pass",
+    }), // violationKind 词表外
+    fact("EvidenceRecorded", 7, {
+      address: ADDR_IMPL,
+      obligationHash: "短哈希",
+      checkerId: "symbol-scan",
+      checkerVersion: "1.0.0",
+      bindingVersion: 2,
+      inputs: [{ name: "x", hash: "b".repeat(64) }],
+      result: "pass",
+    }), // 哈希形态非法
+  ];
+  for (const f of bad) {
+    const ok = facts.validateFact(f);
+    assert.ok(!ok.ok, `非法事实应被拒绝：${JSON.stringify(f)}`);
+  }
+});
+
+test("命令词表与事件词表一一对应，commandToFact 产出可过 validateFact 的事实", () => {
+  assert.equal(facts.COMMAND_TYPES.length, facts.EVENT_TYPES.length, "命令与事件一一对应");
+  assert.deepEqual(
+    facts.COMMAND_TYPES.map((c) => facts.COMMAND_TO_EVENT[c]).sort(),
+    [...facts.EVENT_TYPES].sort(),
+    "COMMAND_TO_EVENT 必须覆盖全部事件名且无多余映射",
+  );
+  const cmd = { type: "RequestRuling", actor: "main-agent", payload: { address: ADDR_DOC, question: "方向？" } };
+  const check = facts.validateCommand(cmd);
+  assert.ok(check.ok, `合法命令应通过校验：${JSON.stringify(check.errors)}`);
+  const f = facts.commandToFact(cmd, { seq: 1, ts: "2026-11-10T10:00:00.000Z" });
+  assert.equal(f.type, "RulingRequested");
+  assert.ok(facts.validateFact(f).ok, "commandToFact 产出必须过 validateFact");
+  const badCheck = facts.validateCommand({ type: "NoSuchCommand", actor: "x", payload: {} });
+  assert.ok(!badCheck.ok, "词表外命令必须被拒");
+});
+
+// ---------------------------------------------------------------------------
+// 2. 重放稳定与快照等价（G2 / RL2）
+// ---------------------------------------------------------------------------
+
+function sampleFacts() {
+  return [
+    fact("EvidenceRecorded", 1, {
+      address: ADDR_IMPL,
+      obligationHash: "c".repeat(64),
+      checkerId: "symbol-scan",
+      checkerVersion: "1.0.0",
+      bindingVersion: 2,
+      inputs: [{ name: "repo-a/src/main.js", hash: "b".repeat(64) }],
+      result: "pass",
+    }),
+    fact("RulingRequested", 2, { address: ADDR_DOC, question: "方向争议" }),
+    fact("RulingRecorded", 3, { address: ADDR_DOC, direction: "doc-right", respondsTo: 2 }),
+  ];
+}
+
+test("重放稳定：同事件序两次 fold 状态逐字节相等（含结论轨迹）", () => {
+  const input = baseInput();
+  const factsList = sampleFacts();
+  const s1 = fold({ ...input, facts: factsList });
+  const s2 = fold({ ...input, facts: [...factsList] });
+  assert.equal(JSON.stringify(s1), JSON.stringify(s2), "同序事件两次 fold 必须逐字节相等");
+  // 乱序事件不是合法事件流：权威只接受 seq 连续序列（同序重放是唯一合法重放）
+  assert.throws(
+    () => fold({ ...input, facts: [factsList[1], factsList[0], factsList[2]] }),
+    /seq/,
+    "乱序事件必须被 seq 连续性校验拒绝（不存在乱序等价问题）",
+  );
+});
+
+test("快照 + 增量 fold 必须等价全量 fold（RL2）", () => {
+  const input = baseInput();
+  const factsList = sampleFacts();
+  const full = fold({ ...input, facts: factsList });
+  // 模拟续跑：快照保存已 fold 到 seq=2 的状态，增量只 fold seq=3 的事件（respondsTo 依赖快照先验）
+  const snapshotState = fold({ ...input, facts: factsList.slice(0, 2) });
+  const incremental = fold({ ...input, facts: factsList.slice(2), initialState: snapshotState });
+  assert.equal(JSON.stringify(incremental), JSON.stringify(full), "快照+增量产物必须与全量 fold 逐字节等价");
+  assert.equal(incremental.seq, full.seq);
+});
+
+test("seq 不连续或非正的事实序列被 fold 拒绝（事件序列无空洞）", () => {
+  const input = baseInput();
+  assert.throws(() => fold({ ...input, facts: [sampleFacts()[0], sampleFacts()[2]] }), /seq/);
+  assert.throws(() => fold({ ...input, facts: [{ ...sampleFacts()[0], seq: 0 }] }), /seq/);
+});
+
+// ---------------------------------------------------------------------------
+// 3. 状态谓词派生不存储（AX5 / D3）
+// ---------------------------------------------------------------------------
+
+test("谓词不落存储：事实对象与快照 input 均不含谓词字段，谓词只存在于 fold 产物", () => {
+  const input = baseInput();
+  const factsList = sampleFacts();
+  const state = fold({ ...input, facts: factsList });
+  // 输入侧（持久权威）不含任何谓词/结论字段
+  for (const f of factsList) {
+    for (const forbidden of ["conclusion", "verified", "awaitingRuling", "pendingIntegration", "status"]) {
+      assert.ok(!(forbidden in f), `事实对象不得携带持久状态字段 ${forbidden}（AX5）`);
+    }
+  }
+  assert.ok(!("conclusion" in input), "快照 input 不得携带结论字段（AX5）");
+  // 产物侧谓词在场（派生谓词是 fold 的输出，不是存储）
+  const docKey = state.keys[JSON.stringify(ADDR_DOC)] ?? state.keys[facts.canonicalJson(ADDR_DOC)];
+  assert.ok(state.addresses[docKey], "fold 产物必须含地址键索引");
+  assert.ok(typeof state.addresses[docKey].conclusion === "string");
+});
+
+test("awaiting-ruling 由未应答 RulingRequested 派生，RulingRecorded 后解除", () => {
+  const input = baseInput();
+  const req = fact("RulingRequested", 1, { address: ADDR_DOC, question: "方向？" });
+  const only = fold({ ...input, facts: [req] });
+  const docOnly = only.addresses[only.keys[facts.canonicalJson(ADDR_DOC)]];
+  assert.equal(docOnly.conclusion, "awaiting-ruling");
+  assert.equal(docOnly.awaitingRuling, true);
+  const answered = fold({
+    ...input,
+    facts: [req, fact("RulingRecorded", 2, { address: ADDR_DOC, direction: "doc-right", respondsTo: 1 })],
+  });
+  const docAnswered = answered.addresses[answered.keys[facts.canonicalJson(ADDR_DOC)]];
+  assert.equal(docAnswered.awaitingRuling, false);
+  assert.equal(docAnswered.conclusion, "open");
+});
+
+test("verified / pending-integration 由有效 pass 证据派生；证据是唯一 verified 来源", () => {
+  const input = baseInput();
+  const ev = fact("EvidenceRecorded", 1, {
+    address: ADDR_IMPL,
+    obligationHash: facts.obligationSummaryHash(input.bindings[1]),
+    checkerId: "symbol-scan",
+    checkerVersion: "1.0.0",
+    bindingVersion: 2,
+    inputs: [{ name: "repo-a/src/main.js", hash: "b".repeat(64) }],
+    result: "pass",
+  });
+  const verifiedState = fold({ ...input, facts: [ev] });
+  const impl = verifiedState.addresses[verifiedState.keys[facts.canonicalJson(ADDR_IMPL)]];
+  assert.equal(impl.conclusion, "verified");
+  assert.equal(impl.verification, "verified");
+  assert.equal(impl.pendingIntegration, false);
+  // 无任何集成事实时 verified 不等于 pending-integration；出现集成审计事实后离开 pending-integration
+  const withGate = fold({
+    ...input,
+    facts: [
+      ev,
+      fact("IntegrationGateChecked", 2, {
+        repoId: "repo-a",
+        command: "git apply --check",
+        exitCode: 0,
+        summary: "预检通过",
+        recovery: "非失败记录，无需恢复",
+        failure: false,
+      }),
+    ],
+  });
+  const impl2 = withGate.addresses[withGate.keys[facts.canonicalJson(ADDR_IMPL)]];
+  assert.equal(impl2.pendingIntegration, false, "集成审计事实在场时不得停留 pending-integration");
+});
+
+test("CheckerFailed 不伪造 verified：义务保持 open，失败四要素（命令/退出码/摘要/恢复动作）可查", () => {
+  const input = baseInput();
+  const f = fact("CheckerFailed", 1, {
+    address: ADDR_IMPL,
+    command: "node semantic-check.mjs",
+    exitCode: 20,
+    summary: "checker 自身失败",
+    recovery: "修复 checker 后重跑",
+  });
+  const state = fold({ ...input, facts: [f] });
+  const impl = state.addresses[state.keys[facts.canonicalJson(ADDR_IMPL)]];
+  assert.equal(impl.conclusion, "open", "checker 失败必须保持义务 open（设计段五）");
+  assert.equal(impl.verification, "unverified");
+  assert.deepEqual(
+    { command: impl.lastCheckerFailure.command, exitCode: impl.lastCheckerFailure.exitCode,
+      summary: impl.lastCheckerFailure.summary, recovery: impl.lastCheckerFailure.recovery },
+    { command: "node semantic-check.mjs", exitCode: 20, summary: "checker 自身失败", recovery: "修复 checker 后重跑" },
+  );
+});
+
+test("归档态是派生谓词：archived 输入 + Unarchived 事件解档，无归档存储字段被事件改写", () => {
+  const input = baseInput();
+  assert.equal(fold({ ...input, archived: true, facts: [] }).archived, true, "归档输入直接派生归档态");
+  const un = fold({ ...input, archived: true, facts: [fact("Unarchived", 1, { reason: "复活通道解档" })] });
+  assert.equal(un.archived, false, "Unarchived 事件必须解档（M5 复活通道）");
+  // 解档后可继续派生新事实状态
+  const after = fold({
+    ...input,
+    archived: true,
+    facts: [
+      fact("Unarchived", 1, { reason: "复活通道解档" }),
+      fact("EvidenceRecorded", 2, {
+        address: ADDR_IMPL,
+        obligationHash: facts.obligationSummaryHash(input.bindings[1]),
+        checkerId: "symbol-scan",
+        checkerVersion: "1.0.0",
+        bindingVersion: 2,
+        inputs: [{ name: "repo-a/src/main.js", hash: "b".repeat(64) }],
+        result: "pass",
+      }),
+    ],
+  });
+  const impl = after.addresses[after.keys[facts.canonicalJson(ADDR_IMPL)]];
+  assert.equal(impl.conclusion, "verified", "解档后事件继续参与 fold");
+});
+
+test("地址不可解析（bindingId 不在绑定集）在 fold 中报错，身份一致性可判定（AX2）", () => {
+  const input = baseInput();
+  const orphan = fact("RulingRequested", 1, {
+    address: { bindingId: "NOPE", repoId: "repo-a", violationKind: "documentation-mismatch" },
+    question: "?",
+  });
+  assert.throws(() => fold({ ...input, facts: [orphan] }), /bindingId|绑定/);
+  // repoId / violationKind 与绑定声明不一致同样拒绝
+  const mismatched = fact("RulingRequested", 1, {
+    address: { bindingId: "GL1", repoId: "repo-b", violationKind: "documentation-mismatch" },
+    question: "?",
+  });
+  assert.throws(() => fold({ ...input, facts: [mismatched] }), /repoId/);
+});
+
+test("无孤儿证据检测器：binding/repo/checker run/changeset 引用缺失逐一可检出", () => {
+  const input = baseInput();
+  const ev = (seq, changesetId) => fact("EvidenceRecorded", seq, {
+    address: ADDR_IMPL,
+    obligationHash: facts.obligationSummaryHash(input.bindings[1]),
+    checkerId: "symbol-scan",
+    checkerVersion: "1.0.0",
+    bindingVersion: 2,
+    inputs: [{ name: "repo-a/src/main.js", hash: "b".repeat(64) }],
+    result: "pass",
+    ...(changesetId ? { changesetId } : {}),
+  });
+  assert.deepEqual(findOrphanEvidence({ ...input, facts: [ev(1, "cs-1")] }), [], "全存在引用无孤儿");
+  const orphans = findOrphanEvidence({
+    ...input,
+    repos: [],
+    checkerRuns: [],
+    changesets: [{ changesetId: "cs-1" }],
+    facts: [ev(1, "cs-ghost")],
+  });
+  assert.equal(orphans.length, 3, "repo/checkerRun/changeset 三类孤儿引用各报一条");
+  assert.ok(orphans.some((o) => o.kind === "repo"));
+  assert.ok(orphans.some((o) => o.kind === "checker-run"));
+  assert.ok(orphans.some((o) => o.kind === "changeset" && o.ref === "cs-ghost"));
+});
+
+// ---------------------------------------------------------------------------
+// 4. 事件量红灯阈值（D2）
+// ---------------------------------------------------------------------------
+
+test("红灯探针常量：50 MB / 10 万条，超限与未超限可判定（D2 登记阈值）", () => {
+  assert.equal(facts.RED_LINE_THRESHOLDS.maxEventJsonlBytes, 50 * 1024 * 1024);
+  assert.equal(facts.RED_LINE_THRESHOLDS.maxEventCount, 100000);
+  const ok = facts.checkRedLineThresholds({ bytes: 1024, count: 10 });
+  assert.equal(ok.exceeded, false);
+  const red = facts.checkRedLineThresholds({
+    bytes: facts.RED_LINE_THRESHOLDS.maxEventJsonlBytes + 1,
+    count: 5,
+  });
+  assert.equal(red.exceeded, true);
+  assert.ok(red.violations.some((v) => v.kind === "bytes"));
+  const redCount = facts.checkRedLineThresholds({ bytes: 1, count: facts.RED_LINE_THRESHOLDS.maxEventCount + 1 });
+  assert.equal(redCount.exceeded, true);
+  assert.ok(redCount.violations.some((v) => v.kind === "count"));
+});

@@ -1,0 +1,247 @@
+{
+  "packageId": "thesis-contract",
+  "source": {
+    "segment": "dev-flow",
+    "slug": "Stock-df390a8b",
+    "runDir": "thesis-contract.rendered.sync",
+    "extractedFrom": "final.json（ledger 41 条、terminated=stuck）",
+    "note": "结构性脱敏样本：仅保留义务身份、状态流转与结论骨架；gap/位置描述以一句话摘要替代原文，哈希为确定性占位值，不携带完整会话内容"
+  },
+  "input": {
+    "archived": false,
+    "bindings": [
+      {
+        "bindingId": "F2-1",
+        "repoId": "stock-docs",
+        "violationKind": "documentation-mismatch",
+        "bindingVersion": 1
+      },
+      {
+        "bindingId": "F2-1-data-as-of",
+        "repoId": "stock-plugins",
+        "violationKind": "missing-implementation",
+        "bindingVersion": 1
+      }
+    ],
+    "repos": [
+      {
+        "repoId": "stock-plugins"
+      },
+      {
+        "repoId": "stock-docs"
+      }
+    ],
+    "checkerRuns": [
+      {
+        "checkerId": "symbol-scan",
+        "checkerVersion": "1.0.0"
+      },
+      {
+        "checkerId": "semantic-review",
+        "checkerVersion": "0.3.0"
+      }
+    ],
+    "changesets": [
+      {
+        "changesetId": "cs-thesis-r4"
+      }
+    ],
+    "artifacts": {
+      "stock-docs/AGENTS.md": "1111111111111111111111111111111111111111111111111111111111111111",
+      "stock-plugins/lib/thesis-contract.js": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  },
+  "script": [
+    {
+      "role": "checker",
+      "actor": "checker-wrapper",
+      "command": {
+        "type": "RecordEvidence",
+        "payload": {
+          "address": {
+            "bindingId": "F2-1",
+            "repoId": "stock-docs",
+            "violationKind": "documentation-mismatch"
+          },
+          "checkerId": "symbol-scan",
+          "checkerVersion": "1.0.0",
+          "bindingVersion": 1,
+          "result": "fail",
+          "inputs": [
+            {
+              "name": "stock-docs/AGENTS.md",
+              "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ],
+          "obligationHash": "93d59eaaece29245f4e6ab10d124674271bd860d927b695c3be37680ee1965a7"
+        }
+      }
+    },
+    {
+      "role": "fixer",
+      "actor": "changeset-fixer",
+      "command": {
+        "type": "RecordEvidence",
+        "payload": {
+          "address": {
+            "bindingId": "F2-1",
+            "repoId": "stock-docs",
+            "violationKind": "documentation-mismatch"
+          },
+          "checkerId": "symbol-scan",
+          "checkerVersion": "1.0.0",
+          "bindingVersion": 1,
+          "result": "pass",
+          "changesetId": "cs-thesis-r4",
+          "inputs": [
+            {
+              "name": "stock-docs/AGENTS.md",
+              "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+            }
+          ],
+          "obligationHash": "93d59eaaece29245f4e6ab10d124674271bd860d927b695c3be37680ee1965a7"
+        }
+      }
+    },
+    {
+      "role": "checker",
+      "actor": "checker-wrapper",
+      "command": {
+        "type": "RecordEvidence",
+        "payload": {
+          "address": {
+            "bindingId": "F2-1-data-as-of",
+            "repoId": "stock-plugins",
+            "violationKind": "missing-implementation"
+          },
+          "checkerId": "semantic-review",
+          "checkerVersion": "0.3.0",
+          "bindingVersion": 1,
+          "result": "fail",
+          "inputs": [
+            {
+              "name": "stock-plugins/lib/thesis-contract.js",
+              "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          ],
+          "obligationHash": "26e86b07d8543e90fc14a900e198667fa68909a2334bacce1b75682110385b36"
+        }
+      }
+    },
+    {
+      "role": "arbiter",
+      "actor": "main-agent",
+      "command": {
+        "type": "RequestRuling",
+        "payload": {
+          "address": {
+            "bindingId": "F2-1-data-as-of",
+            "repoId": "stock-plugins",
+            "violationKind": "missing-implementation"
+          },
+          "question": "data_as_of 权威锚缺失：修复方向是代码侧补字段还是文档侧改声明？（方向争议，卡死链路起点）"
+        }
+      }
+    },
+    {
+      "role": "arbiter",
+      "actor": "main-agent",
+      "command": {
+        "type": "RecordRuling",
+        "payload": {
+          "address": {
+            "bindingId": "F2-1-data-as-of",
+            "repoId": "stock-plugins",
+            "violationKind": "missing-implementation"
+          },
+          "direction": "doc-right",
+          "respondsTo": 4
+        }
+      }
+    },
+    {
+      "role": "fixer",
+      "actor": "changeset-fixer",
+      "command": {
+        "type": "RecordEvidence",
+        "payload": {
+          "address": {
+            "bindingId": "F2-1-data-as-of",
+            "repoId": "stock-plugins",
+            "violationKind": "missing-implementation"
+          },
+          "checkerId": "semantic-review",
+          "checkerVersion": "0.3.0",
+          "bindingVersion": 1,
+          "result": "fail",
+          "inputs": [
+            {
+              "name": "stock-plugins/lib/thesis-contract.js",
+              "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          ],
+          "obligationHash": "26e86b07d8543e90fc14a900e198667fa68909a2334bacce1b75682110385b36"
+        }
+      }
+    },
+    {
+      "role": "checker",
+      "actor": "semantic-checker",
+      "command": {
+        "type": "RecordCheckerFailure",
+        "payload": {
+          "address": {
+            "bindingId": "F2-1-data-as-of",
+            "repoId": "stock-plugins",
+            "violationKind": "missing-implementation"
+          },
+          "command": "node semantic-review.mjs --binding F2-1-data-as-of",
+          "exitCode": 20,
+          "summary": "semantic checker 连续两次输出非法 JSON，回喂耗尽",
+          "recovery": "修复 checker 输出契约后重跑；义务保持 open，不伪造 verified"
+        }
+      }
+    },
+    {
+      "role": "checker",
+      "actor": "checker-wrapper",
+      "command": {
+        "type": "RecordEvidence",
+        "payload": {
+          "address": {
+            "bindingId": "F2-1-data-as-of",
+            "repoId": "stock-plugins",
+            "violationKind": "missing-implementation"
+          },
+          "checkerId": "semantic-review",
+          "checkerVersion": "0.3.0",
+          "bindingVersion": 1,
+          "result": "pass",
+          "changesetId": "cs-thesis-r4",
+          "inputs": [
+            {
+              "name": "stock-plugins/lib/thesis-contract.js",
+              "hash": "2222222222222222222222222222222222222222222222222222222222222222"
+            }
+          ],
+          "obligationHash": "26e86b07d8543e90fc14a900e198667fa68909a2334bacce1b75682110385b36"
+        }
+      }
+    }
+  ],
+  "expectations": {
+    "distinctAddresses": [
+      "F2-1|stock-docs|documentation-mismatch",
+      "F2-1-data-as-of|stock-plugins|missing-implementation"
+    ],
+    "finalConclusions": {
+      "F2-1|stock-docs|documentation-mismatch": "pending-integration",
+      "F2-1-data-as-of|stock-plugins|missing-implementation": "pending-integration"
+    },
+    "note": "终态 pending-integration 而非 verified：两个义务的收敛证据都引用变更集 cs-thesis-r4 且夹具内无集成审计事实——真实包 terminated=stuck、集成器（M3）尚未接管，修复待集成。与 opendesign 夹具（集成审计在场 → verified）构成两谓词并存的对照样本"
+  },
+  "bindingsProvenance": {
+    "F2-1": "旧 ledger F2-1 第一条（owner m2）：修复组外正当扩展登记，映射为文档侧义务",
+    "F2-1-data-as-of": "旧 ledger F2-1 第二条（owner m3）：ThesisVersion 缺论点级 data_as_of 字段，must-fix——旧身份同 id 两条不同义务，导入映射拆分为两个 bindingId"
+  }
+}

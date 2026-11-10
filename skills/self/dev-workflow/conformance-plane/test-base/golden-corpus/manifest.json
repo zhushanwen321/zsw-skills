@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "purpose": "两个真实设计包的最小化重放夹具（sync-conformance-plane U1/M1）：驱动 golden-corpus.test.mjs 的结论单调与无孤儿证据两性质断言（设计场景 V11 / G8 / RL8）",
+  "sanitization": "结构性脱敏：保留义务身份（bindingId/repoId/violationKind）、事件流转骨架与结论；语义描述压缩为一句话摘要；内容哈希为确定性占位值（非真实文件哈希）；不携带完整会话内容",
+  "packages": [
+    {
+      "packageId": "thesis-contract",
+      "fixture": "thesis-contract.json",
+      "sourceSegment": "dev-flow/<slug=Stock-df390a8b>/thesis-contract.rendered.sync",
+      "baseline": { "roundDirs": 8, "jsonFiles": 42, "sizeKb": 572, "ledgerEntries": 41, "terminated": "stuck" },
+      "replays": "重复 id 卡死链路：旧 ledger 同一 F2-1 承载两条不同义务，导入映射拆分为两个 bindingId 后地址分离、重放稳定（V2）"
+    },
+    {
+      "packageId": "opendesign-assets-quality",
+      "fixture": "opendesign-assets-quality.json",
+      "sourceSegment": "dev-flow/<slug=tai-ji-yang-workspace-8a67843d>/main/opendesign-assets-quality.rendered.sync",
+      "baseline": { "roundDirs": 14, "jsonFiles": 57, "sizeKb": 616, "reconciliation": 54, "terminated": "converged", "takeover": "第五轮 stuck 后主 agent 接管收尾" },
+      "replays": "HEAD 误判链路（round-3：工作区内容正确但 HEAD 旧——证据只绑定工作区内容哈希，不绑 HEAD）+ 主 agent 接管（actor=main-agent 事实追加）+ 集成审计事件"
+    }
+  ],
+  "addressForm": "bindingId|repoId|violationKind（AX2 派生差距地址）"
+}
