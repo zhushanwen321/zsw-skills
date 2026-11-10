@@ -33,7 +33,7 @@ parameters:
       description: "conformance-state 状态仓根绝对路径（缺省 = tech-design 段 <name>/conformance-state）；续跑 = 同根重发"
     confRoot:
       type: string
-      description: "conformance-plane 模块根绝对路径（缺省 ~/.agents/skills/dev-workflow/conformance-plane）"
+      description: "conformance-plane 模块根绝对路径（缺省 <projectRoot>/skills/self/dev-workflow/conformance-plane——仓库内模块直读）"
     reviewerTemplate:
       type: string
       description: "语义检查 agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/conformance-reviewer.md）"

@@ -85,7 +85,7 @@ const BUILTIN_DET_CHECKER_VERSION = "1.0.0";
 /** semantic agent checker 登记 id（与 conformance-reviewer 模板对齐；版本随模板契约演进升号） */
 const SEMANTIC_CHECKER_ID = "conformance-review";
 const SEMANTIC_CHECKER_VERSION = "1.0.0";
-const TILDE_CONF_ROOT = "~/.agents/skills/dev-workflow/conformance-plane";
+// confRoot 缺省 = <projectRoot>/skills/self/dev-workflow/conformance-plane（仓库内模块直读；~/.agents/skills/dev-workflow 不是独立安装软链，旧缺省不可达）
 const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/conformance-reviewer.md";
 const TILDE_FIXER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/changeset-fixer.md";
 /** 四层结论词表（段七，GA9）：引擎产 scriptStatus/engineOutcome/integrationOutcome；
@@ -148,7 +148,7 @@ function deriveInputs(): NarrowedInputs {
   const confirmedRaw = typeof args.confirmedRepoIds === "string" ? args.confirmedRepoIds.trim() : "";
   const sandboxRoot = typeof args.sandboxRoot === "string" && args.sandboxRoot.trim() !== "" ? args.sandboxRoot.trim() : "";
   const stateRoot = typeof args.stateRoot === "string" && args.stateRoot.trim() !== "" ? args.stateRoot.trim() : "";
-  const confRoot = typeof args.confRoot === "string" && args.confRoot.trim() !== "" ? args.confRoot.trim() : TILDE_CONF_ROOT;
+  const confRoot = typeof args.confRoot === "string" && args.confRoot.trim() !== "" ? args.confRoot.trim() : projectRoot + "/skills/self/dev-workflow/conformance-plane";
   const reviewerTemplate =
     typeof args.reviewerTemplate === "string" && args.reviewerTemplate.trim() !== "" ? args.reviewerTemplate.trim() : TILDE_REVIEWER_TEMPLATE;
   const fixerTemplate = typeof args.fixerTemplate === "string" && args.fixerTemplate.trim() !== "" ? args.fixerTemplate.trim() : TILDE_FIXER_TEMPLATE;

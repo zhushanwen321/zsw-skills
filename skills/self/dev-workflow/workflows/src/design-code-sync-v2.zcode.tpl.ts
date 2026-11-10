@@ -38,8 +38,8 @@ args:
       续跑 = 同根重发（事件流续跑，身份与结论由事件派生）
   confRoot:
     type: string
-    description: conformance-plane 模块根绝对路径（缺省 ~/.agents/skills/dev-workflow/conformance-plane）；
-      按路径直读消费（引擎经 node 子进程动态 import 其 kernel/extractors/checkers/changeset/integration 模块）
+    description: "conformance-plane 模块根绝对路径（缺省 <projectRoot>/skills/self/dev-workflow/conformance-plane——仓库内模块直读）；
+      按路径直读消费（引擎经 node 子进程动态 import 其 kernel/extractors/checkers/changeset/integration 模块）"
   reviewerTemplate:
     type: string
     description: 语义检查 agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/conformance-reviewer.md）

@@ -33,7 +33,7 @@ parameters:
       description: "conformance-state 状态仓根绝对路径（缺省 = tech-design 段 <name>/conformance-state）；续跑 = 同根重发"
     confRoot:
       type: string
-      description: "conformance-plane 模块根绝对路径（缺省 ~/.agents/skills/dev-workflow/conformance-plane）"
+      description: "conformance-plane 模块根绝对路径（缺省 <projectRoot>/skills/self/dev-workflow/conformance-plane——仓库内模块直读）"
     reviewerTemplate:
       type: string
       description: "语义检查 agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/conformance-reviewer.md）"
@@ -478,7 +478,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "1.1.2"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.3"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ── 常量 ──
 const DEFAULT_MAX_ROUNDS = 8;
 /** semantic 非法输出回喂上限（权威 = conformance-plane/checkers/registry.mjs MAX_SEMANTIC_REFEEDS，
@@ -492,7 +492,7 @@ const BUILTIN_DET_CHECKER_VERSION = "1.0.0";
 /** semantic agent checker 登记 id（与 conformance-reviewer 模板对齐；版本随模板契约演进升号） */
 const SEMANTIC_CHECKER_ID = "conformance-review";
 const SEMANTIC_CHECKER_VERSION = "1.0.0";
-const TILDE_CONF_ROOT = "~/.agents/skills/dev-workflow/conformance-plane";
+// confRoot 缺省 = <projectRoot>/skills/self/dev-workflow/conformance-plane（仓库内模块直读；~/.agents/skills/dev-workflow 不是独立安装软链，旧缺省不可达）
 const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/conformance-reviewer.md";
 const TILDE_FIXER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/changeset-fixer.md";
 /** 四层结论词表（段七，GA9）：引擎产 scriptStatus/engineOutcome/integrationOutcome；
@@ -532,7 +532,7 @@ function deriveInputs() {
     const confirmedRaw = typeof args.confirmedRepoIds === "string" ? args.confirmedRepoIds.trim() : "";
     const sandboxRoot = typeof args.sandboxRoot === "string" && args.sandboxRoot.trim() !== "" ? args.sandboxRoot.trim() : "";
     const stateRoot = typeof args.stateRoot === "string" && args.stateRoot.trim() !== "" ? args.stateRoot.trim() : "";
-    const confRoot = typeof args.confRoot === "string" && args.confRoot.trim() !== "" ? args.confRoot.trim() : TILDE_CONF_ROOT;
+    const confRoot = typeof args.confRoot === "string" && args.confRoot.trim() !== "" ? args.confRoot.trim() : projectRoot + "/skills/self/dev-workflow/conformance-plane";
     const reviewerTemplate = typeof args.reviewerTemplate === "string" && args.reviewerTemplate.trim() !== "" ? args.reviewerTemplate.trim() : TILDE_REVIEWER_TEMPLATE;
     const fixerTemplate = typeof args.fixerTemplate === "string" && args.fixerTemplate.trim() !== "" ? args.fixerTemplate.trim() : TILDE_FIXER_TEMPLATE;
     let maxRounds = DEFAULT_MAX_ROUNDS;
