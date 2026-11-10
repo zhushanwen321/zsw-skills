@@ -1,6 +1,6 @@
 # D5 终态同步 — W4 design-code-sync-loop 契约与手工路径
 
-> 把「代码实现 vs 设计文档」差距收敛到 0 must-fix 的**双向**校准循环。审查对象 = **当前 HEAD 终态全量**（不是 diff 区间——交付后的修复 commit 不在任何流水线记录里，只有全量对照能抓到）。报告落 `~/.agents/skill-data/dev-flow/<project-slug>/<name>.sync/round-N/`。
+> 把「代码实现 vs 设计文档」差距收敛到 0 must-fix 的**双向**校准循环。审查对象 = **当前 HEAD 终态全量**（不是 diff 区间——交付后的修复 commit 不在任何流水线记录里，只有全量对照能抓到；该口径仅适用首轮全量审查 R1——R2+ 聚焦复审核实基准 = 工作区实物，见「修复纪律」）。报告落 `~/.agents/skill-data/dev-flow/<project-slug>/<name>.sync/round-N/`。
 
 ## W4 workflow 契约（zcode 环境默认动作）
 
@@ -31,7 +31,7 @@ args: { designDoc, implPlan, projectRoot, maxRounds?, statusPath?, watchlist, ru
 终态: converged / contested / stuck + setup/planner/review/fix/retire/io-failure
 ```
 
-**阶段事件观测步骤边界**（stage=D5，引擎写入；SKILL「阶段事件观测」节）：setup = 环境校验 / 三道前置硬校验（attempt 防覆盖 / 词表指纹 / 裁决记录装载）/ 矩阵初始化 / 框架对照规划（planner 失败随 setup 窗口补终态）；review = 机械信号扫描 + 并行模块审查（R1）或机械/清理对账 + 聚焦复审（R2+），round = 轮次；fix = 并行修复与组级 commit；retire = 退役判定（转清理条目回下轮修复时自然结束，converged / retire-failure 的 end 随终态统一补记）；finalize 仅在轮次耗尽兜底路径出现。
+**阶段事件观测步骤边界**（stage=D5，引擎写入；SKILL「阶段事件观测」节）：setup = 环境校验 / 三道前置硬校验（attempt 防覆盖 / 词表指纹 / 裁决记录装载）/ 矩阵初始化 / 框架对照规划（planner 失败随 setup 窗口补终态）；review = 机械信号扫描 + 并行模块审查（R1）或机械/清理对账 + 聚焦复审（R2+），round = 轮次；fix = 并行修复 + 组级 commit 与多组触及归属提交；retire = 退役判定（转清理条目回下轮修复时自然结束，converged / retire-failure 的 end 随终态统一补记）；finalize 仅在轮次耗尽兜底路径出现。
 
 **setup 三道前置硬校验**（任一不过 = setup-failure，派发任何 reviewer 之前拒启）：① attempt 防覆盖——显式 attempt ≤ runDir 已有最大序号即拒启（防覆盖历史轮次产物）；② 词表指纹校验（watchlist 的 sourceFingerprints 与「设计文档 + impl-plan.md」当前内容 sha256 一致才放行——文档任何改动都会使指纹不等，语义强于旧反引号词集比对）——watchlist 缺失、缺指纹字段（旧版生成器产物）或指纹不等即拒启，预检结果缓存供 R1 机械步立项消费；③ 裁决记录装载——传入 rulings 时读失败或格式畸形（非顶层数组 / 元素缺 id+direction / 有效元素为 0）即拒启（fail-closed：静默丢裁决 = 已裁项被重判为争议的直接通道）。
 
@@ -42,6 +42,8 @@ phase 1  framework-scan（planner，1 agent）：
    输入 = 设计文档(§3 机制/§5 拆分) × 代码目录结构 × HEAD 终态 × impl-plan × 关联登记清单
    职责 = ① 框架级对照（架构/分层/数据流与设计的差异——架构漂移直接进矩阵顶层行）
           ② 模块分解 ModulePlan[]（结构化，驱动 phase 2 fan-out）
+   开审前跑跨包编号撞号消歧扫描：node ~/.agents/skills/design-code-sync/scripts/id-collision-scan.mjs --package <设计包目录> --project <projectRoot>
+   （退出码 2 = 命中撞号——把消歧登记随模块 focus 下发，防多包同号 id 被跨包误判归属）
 phase 2  module fan-out：modules.map(m => agent(`module-${m.id}`))——并行
    模块 reviewer：矩阵行填充 + 越权三问 + 注释口径 + findings
    （prompt 注入 impl-plan 路径——其 notes 含历轮裁决处置记录，判方向前先查——与已裁决记录块；
@@ -52,6 +54,8 @@ phase 3+ 修复循环：双向修复 → 聚焦复审 →（轮）→ 退役判�
 **流程排序**：机器信号（符号词表 grep 脚本步，词源 = T3 词表 watchlist）紧跟 planner 框架扫描执行立项（确定性信号先行），修复随第一轮修复组进行，语义判级归 reviewer 复核。机械条目被 fixer 核实为不该扫描的词（上游符号等）时走 exempt 豁免申报——条目转豁免终态、落 `runDir/exempted.json` 登记并随终态 exemptList 呈报主 agent 终审，不要求删改文档。
 
 **修复分组确定性校验（reconcileGroups）**：`modules[].files` 是 LLM 自报字段，并行 fixer 组间文件相交 = 冲突——组间 files 相交传递闭包合并 + 无效组过滤 + 覆盖兜底（脚本，不信任 planner 自觉）。
+
+**多组触及文件的归属提交**（2026-11-11 改）：fixer 修复自报改动超出本组认领范围时跨组交集出现（典型经 affectedFiles 申报），此类文件不再冻结留盘——修复组记账完成后引擎做确定性归属提交，前提全部满足才提交：① 文件在磁盘存在且有实质改动（tracked 文件相对 HEAD diff 非空；untracked 新文件盘上存在即实质改动；gitignore 产物与 projectRoot 外的 skill-data 产物不可提交，不适用）；② 涉组各自的修复申报 selfCheck 复跑证据链完好（零失败——复跑失败的组不具备替涉组文件背书的资格）。满足 → 引擎按文件提交，commit message 注明 multi-claim attribution 与涉组/条目 id 清单；任一不满足 → 维持残留登记（留盘不提交，随终态 residualFiles 呈报主 agent 判归属）。归属提交在全部记账单元排空后完成、先于聚焦复审——复审读到的工作区与 commit 状态一致，不再出现「工作区已修、HEAD 未修被判 not-fixed」的假性不收敛空转。
 
 ## 方向语义（权威定义，勿反向）
 
@@ -91,8 +95,8 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 
 - 所有等级（must-fix/suggestion/info）当轮修完不留尾巴；修复前重演 fix-hint，建议站不住换更稳方案并说明
 - **波及扫描**：每修一处 grep 同模式实例（同类注释/测试文件头/其他文档引用点）——组内实例一并修（漂移从来不是单点）；组外文件里的同模式实例不改（并行冲突），在条目 description 标注「组外波及：<位置>」留给聚焦复审立项（下轮经组外波及标注通道回流）
-- 修复组按模块分组并行（范围声明互斥 ≤5）；每组核验过即 commit（组级一笔）；subagent 禁 git 写
-- **聚焦复审**（R2+）：只审上轮修复成立 + 是否引入新差距，不重查已确认项
+- 修复组按模块分组并行（范围声明互斥 ≤5）；每组核验过即 commit（组级一笔）；多组触及文件由引擎确定性归属提交（前提与回落语义见「修复分组确定性校验」节）；subagent 禁 git 写
+- **聚焦复审**（R2+）：只审上轮修复成立 + 是否引入新差距，不重查已确认项。**核实基准 = 工作区实物**（用 Read 直接读项目文件核实到行级）——修复是否已 commit / 是否已写入仓库不构成 fixed 或 not-fixed 的判据，禁止用 git show / git diff HEAD 等读 HEAD 版本替代工作区核验（「审查对象 = HEAD 终态全量」仅是 R1 首轮全量审查语境）；引擎侧对账同口径——机械步重跑与退役清理词干重扫读的都是工作区内容（git grep 无 rev 参数），复审须与其一致
 
 ## 争议仲裁与 contested 分流
 
@@ -111,7 +115,7 @@ a. 代码 ↔ 设计文档（主对照）→ framework-scan + 模块 reviewer；
 
 **处置记录义务**：终态处置表任一行的处置动作与结果（含用户对 contested / overdesignCandidates 的裁决），append 一笔到 `<name>.ledger.md`——引擎终态已写入未决清单（见下方终态清单字段），主 agent 处置一项即追加记录一项；W4 终态全量另在 `runDir/final.json`（attempt 不覆盖）。
 
-**终态清单字段**（final.json）：`contestedList`（contested 条目，待用户裁决）/ `contestedBlockedList`（连坐冻结条目，元素 {id, location, blockedBy: [争议条目 id]}，随争议一并处置）/ `arbiterSettledList`（仲裁改判条目，元素 {id, direction, quote, quoteLocation?: {source, lineStart, lineEnd}, anchorRef, reasoning}，供用户抽查翻案——quoteLocation 是引文行段锚，复审按它核对引文仍成立）/ `contestedDefaultedList`（suggestion 级 contested 被引擎强制改判 doc-right 的条目，元素 {id, location}）/ `exemptList`（符号豁免待终审）/ `delegatedList`（职责域外待重派）/ `overdesignCandidates`（过度/存疑候选卡待裁决）/ `remaining`（open 残余条目）。
+**终态清单字段**（final.json）：`contestedList`（contested 条目，待用户裁决）/ `contestedBlockedList`（连坐冻结条目，元素 {id, location, blockedBy: [争议条目 id]}，随争议一并处置）/ `arbiterSettledList`（仲裁改判条目，元素 {id, direction, quote, quoteLocation?: {source, lineStart, lineEnd}, anchorRef, reasoning}，供用户抽查翻案——quoteLocation 是引文行段锚，复审按它核对引文仍成立）/ `contestedDefaultedList`（suggestion 级 contested 被引擎强制改判 doc-right 的条目，元素 {id, location}）/ `exemptList`（符号豁免待终审）/ `delegatedList`（职责域外待重派）/ `overdesignCandidates`（过度/存疑候选卡待裁决）/ `remaining`（open 残余条目）/ `residualFiles`（工作区残留改动：无组认领的改动按「各组只对自己的改动负责」裁决留盘；多组触及文件仅在归属提交前提不满足时进此清单，元素带 `（G1/G2 多组认领冲突）` 涉组标注——判归属后处置，禁静默丢弃）。
 
 **衔接**：W4 修复触及验收场景表覆盖行为时，主 agent 重跑受影响场景（局部重验，不重开整门）。
 

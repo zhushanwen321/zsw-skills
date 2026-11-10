@@ -785,7 +785,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "0.6.0"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.7.0"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // design-code-sync-loop — dev-flow-wf 技能 W4 终态同步循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts 与 tech-review-loop.dwf.ts（多脚本循环骨架
@@ -1488,14 +1488,17 @@ function normFixOutcome(raw: FixOutcome, rootDir: string): FixOutcome {
 /** selfCheck 复跑（2026-11-04 字段化配套）：fixer 申报的 command 由引擎复跑，输出与
  *  actual 等值比对（trim 后全等，超长截 4000 字符）——比对对象是机器产的确定性输出、
  *  判据（等值）引擎持有，非模式命中。复跑失败/不等只 WARN 不阻塞（文档组自检是软门，
- *  聚焦复审按 WARN 线索聚焦核验），不假装确定性 */
-async function rerunSelfChecks(groupLabel: string, fixes: FixRecord[]): Promise<void> {
+ *  聚焦复审按 WARN 线索聚焦核验），不假装确定性。返回失败条目 id 清单（复跑退出码非 0 /
+ *  输出不等值 / 执行失败三类均计）——多组触及文件的归属提交以「涉组证据链完好」为前提
+ *  消费该清单（2026-11-11 归属提交语义），复跑失败的组不具备替其涉组文件背书的资格 */
+async function rerunSelfChecks(groupLabel: string, fixes: FixRecord[]): Promise<string[]> {
   const RERUN_WRAP =
     "var cp=require('child_process');var code=0,out='';try{out=String(cp.execFileSync('/bin/sh',['-c',process.argv[1]],{cwd:process.argv[2],encoding:'utf8',maxBuffer:33554432,timeout:120000}))}catch(e){code=typeof e.status==='number'?e.status:-1;out=String(e.stdout||'')+String(e.stderr||'')};console.log(JSON.stringify({code:code,out:out}))";
   const normOut = (s: string): string => {
     const t = s.trim();
     return t.length > 4000 ? `${t.slice(0, 4000)}…(截断)` : t;
   };
+  const failed: string[] = [];
   for (const fx of fixes) {
     if (fx.selfCheck.command.trim() === "") continue;
     // 审计纪律：引擎替 fixer 执行了什么必须可审计——复跑日志落 command 全文（红队 E2 修正）
@@ -1508,16 +1511,20 @@ async function rerunSelfChecks(groupLabel: string, fixes: FixRecord[]): Promise<
       const declaredExpected = normOut(fx.selfCheck.expected);
       // 等值通过前置 exit 0（红队 E3：失败形态拼接可凑等值，非零退出不算自检通过）
       if (parsed.code !== 0) {
+        failed.push(fx.issueId);
         log(`WARN: 组 ${groupLabel} 条目 ${fx.issueId} selfCheck 复跑退出码 ${parsed.code}（非 0）——自检未通过，聚焦复审按此聚焦核验`);
       } else if (rerun !== declared) {
+        failed.push(fx.issueId);
         log(`WARN: 组 ${groupLabel} 条目 ${fx.issueId} selfCheck 复跑与申报不等值（${fx.selfCheck.kind}）——自检证据存疑，聚焦复审按此聚焦核验`);
       } else {
         log(`组 ${groupLabel} 条目 ${fx.issueId} selfCheck 复跑等值通过（${fx.selfCheck.kind}${declaredExpected !== "" && declaredExpected !== declared ? `；注：申报 expected 与 actual 不一致（expected=${declaredExpected.slice(0, 80)}）` : ""}）`);
       }
     } catch (e) {
+      failed.push(fx.issueId);
       log(`WARN: 组 ${groupLabel} 条目 ${fx.issueId} selfCheck 复跑执行失败（${String(e).slice(0, 120)}）——聚焦复审按此聚焦核验`);
     }
   }
+  return failed;
 }
 
 /** 退役判定返回防御：数组/字段窄化 */
@@ -2940,7 +2947,7 @@ function resumeReReviewPrelude(owner: string, mm: ModulePlanRec | undefined): st
     owner === "planner"
       ? "你是终态同步的两级审查第一级（framework-scan planner）。本次运行为断点续跑：R1 框架对照与模块分解在先前运行已完成，条目清单自先前终态档案载入、争议条目已按用户裁决重绑定方向；你此刻做的是修复后的聚焦复审（只审上轮修复影响面，不重查已确认项）。"
       : "你是终态同步的模块审查者。本次运行为断点续跑：本模块 R1 全量审查在先前运行已完成，条目清单自先前终态档案载入；你此刻做的是修复后的聚焦复审（只审上轮修复影响面，不重查已确认项）。",
-    `仓库 ${projectRoot}；设计文档 ${designDoc}；impl-plan ${implPlan}；审查基线 = 当前 HEAD（${headHash}）——审查对象是 HEAD 终态全量，不是 diff 区间。`,
+    `仓库 ${projectRoot}；设计文档 ${designDoc}；impl-plan ${implPlan}；R1 曾以 HEAD 全量（${headHash.slice(0, 12)}）为审查对象（首轮语境）；本轮聚焦复审核实基准 = 工作区实物（「是否已 commit」不构成判据）。`,
     `你的任务契约模板：${owner === "planner" ? plannerTplAbs : reviewerTplAbs}——按其中任务契约执行。`,
   ];
   if (owner !== "planner" && mm) {
@@ -2965,10 +2972,19 @@ function reReviewPrompt(round: number, scopeFindings: FindingRecord[]): string {
   return [
     `终态同步聚焦复审（第 ${round} 轮）：只审上轮修复影响面，不重查已确认项。`,
     "",
+    "核实基准（本轮生效，覆盖前情里的 R1 基线口径）：以工作区实物为准——用 Read 直接读项目文件核实到行级；修复是否已 commit / 是否已写入仓库不构成 fixed 或 not-fixed 的判据，禁止用 git show / git diff HEAD 等读 HEAD 版本替代工作区实物核验（R1 的「审查对象 = HEAD 终态全量」仅是首轮全量审查语境，不适用于本轮）。引擎在每轮修复后按组提交或归属提交工作区改动；个别改动可能仍留工作区（见下方残留清单）——核实其内容，内容成立即判 fixed。",
+    "",
     runlogDutyLine(`sync-re-r${round}`),
     "",
-    "上轮你范围内条目及其修复记录（修复方声称，不算证据，必须亲自读文件核实到行级）：",
+    "上轮你范围内条目及其修复记录（修复方声称，不算证据，必须亲自读工作区文件核实到行级）：",
     wrapUntrusted(JSON.stringify(payload)),
+    residualFiles.size > 0
+      ? [
+          "",
+          "引擎登记的工作区残留改动（未提交留盘、非缺陷信号；核实其中修复时直接读工作区内容）：",
+          wrapUntrusted([...residualFiles].map((s) => `- ${s}`).join("\n")),
+        ].join("\n")
+      : "",
     "",
     "对账规则（reconciliation 每条必填，prevId 原样引用上方 id）：",
     "- 确认修复成立（附你读到的事实）→ fixed",
@@ -3270,7 +3286,11 @@ async function retireClosure(round: number, seqStart: number): Promise<RetireClo
   return { kind: "done" };
 }
 
-async function commitGroupFiles(round: number, gid: string, count: number, files: string[]): Promise<void> {
+/** msgOverride：非空时替换默认 commit message（多组触及文件的归属提交复用本函数的
+ *  add/差异检查/--only 提交/钩子修复链路——2026-11-11 归属提交语义）。
+ *  返回 true = commit 真实执行；false = 无可提交内容/与 HEAD 无差异而静默返回
+ *  （钩子修复 2 轮仍拒仍走 throw——归属提交消费方据此回落残留登记，不误报成功） */
+async function commitGroupFiles(round: number, gid: string, count: number, files: string[], msgOverride?: string): Promise<boolean> {
   const staged: string[] = [];
   const skipped: string[] = [];
   for (const p of files) {
@@ -3299,7 +3319,7 @@ async function commitGroupFiles(round: number, gid: string, count: number, files
   }
   if (staged.length === 0) {
     log(`  ${gid}: 无可提交文件（改动均在 gitignore 产物或为空）——不 commit`);
-    return;
+    return false;
   }
   // 路径限定（沿 W2 GIT_ADD_COMMIT 惯例）：--only + pathspec 把提交范围固定在本组文件——
   // 预检对脏工作区仅 WARN 不阻断，无 pathspec 时 index 里预存 staged 内容会被卷入组 commit，
@@ -3308,9 +3328,9 @@ async function commitGroupFiles(round: number, gid: string, count: number, files
   const has = await world.run("git", ["-C", projectRoot, "diff", "--cached", "--quiet", "--", ...rels]);
   if (has.exitCode === 0) {
     log(`  ${gid}: staged 内容与 HEAD 无差异——不 commit`);
-    return;
+    return false;
   }
-  const msg = `fix: design-code-sync R${round} ${gid} (${count} findings)`;
+  const msg = msgOverride ?? `fix: design-code-sync R${round} ${gid} (${count} findings)`;
   const runCommit = (tryRels: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> =>
     world.run("git", ["-C", projectRoot, "commit", "--only", "-m", msg, "--", ...tryRels]);
   const c = await runCommit(rels);
@@ -3374,7 +3394,7 @@ async function commitGroupFiles(round: number, gid: string, count: number, files
       const c2 = await runCommit([...new Set([...rels, ...extraRels])]);
       if (c2.exitCode === 0) {
         log(`  ${gid}: commit 首次被拒，经第 ${cgRound} 轮门禁修复后提交成功（追加合规文件 ${extraRels.length} 个）`);
-        return;
+        return true;
       }
       log(`WARN: ${gid} 第 ${cgRound} 轮门禁修复后重试仍被拒：${(c2.stderr !== "" ? c2.stderr : c2.stdout).trim()}`);
     }
@@ -3383,6 +3403,7 @@ async function commitGroupFiles(round: number, gid: string, count: number, files
     );
   }
   log(`  ${gid}: commit（${staged.length} 文件）`);
+  return true;
 }
 
 log(
@@ -4240,7 +4261,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     g: FixGroup,
     activeById: Map<string, FindingRecord>,
     round: number,
-  ): Promise<{ g: FixGroup; o: FixOutcome }> {
+  ): Promise<{ g: FixGroup; o: FixOutcome; selfCheckFailed: string[] }> {
     const basePrompt = fixerPrompt(g, activeById);
     let prompt = basePrompt;
     for (let i = 0; ; i++) {
@@ -4259,8 +4280,8 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       const es = esCheckGroup(g, norm);
       if (es.length === 0) {
         if (i > 0) log(`  [fix-selfheal] 组 ${g.id} 第 ${i} 次纠正回喂后覆盖校验通过`);
-        await rerunSelfChecks(`同步修复-R${round}-${g.id}`, norm.fixes);
-        return { g, o: norm };
+        const selfCheckFailed = await rerunSelfChecks(`同步修复-R${round}-${g.id}`, norm.fixes);
+        return { g, o: norm, selfCheckFailed };
       }
       if (i >= FIX_SELFHEAL_MAX) {
         throw new Error(`ES 校验违规（自愈 ${FIX_SELFHEAL_MAX} 次纠正回喂后仍违规）：${g.id} ${es.join("；")}。恢复动作：检查 fixer 返回 issueId 引用；在途编辑已留工作区未提交，接管前先 git status 盘点`);
@@ -4292,7 +4313,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
     const runs = groups.map((g) => ({
       g,
       snapshot: null as Map<string, string | null> | null,
-      outcome: null as { g: FixGroup; o: FixOutcome } | null,
+      outcome: null as { g: FixGroup; o: FixOutcome; selfCheckFailed: string[] } | null,
       dispatchAt: null as number | null,
       finishAt: null as number | null,
       queued: false,
@@ -4382,6 +4403,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       let unclaimed = 0; // 本单元记账即留盘呈报的无认领数（挂起条件已不成立）
       let hung = 0; // 挂起待后续记账单元重判的无认领数
       let conflicted = 0;
+      const multiClaim: { path: string; owners: string[] }[] = []; // 多组触及文件——ES 检查后做归属提交判定
       for (const p of changed) {
         const owners = claims.filter((c) => c.files.has(p)).map((c) => c.gid);
         if (owners.length === 0) {
@@ -4401,9 +4423,9 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
           }
         } else if (owners.length > 1) {
           pendingUnclaimed.delete(p);
-          // 多组认领（并行冲突）：提交任何一版都会丢另一组的工作——不提交留盘，
-          // 相关条目经下轮聚焦复审自然重派对账，冲突文件随终态呈报人工合并
-          residualFiles.add(`${rel(p)}（${owners.join("/")} 多组认领冲突）`);
+          // 多组触及（2026-11-11 改）：不再无条件冻结留盘——收集后由归属提交判定闭环
+          // （见下方 attribution 段）；判定不通过才回落残留登记随终态呈报
+          multiClaim.push({ path: p, owners });
           conflicted += 1;
         } else {
           pendingUnclaimed.delete(p);
@@ -4412,7 +4434,7 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       }
       if (unclaimed > 0 || hung > 0 || conflicted > 0) {
         log(
-          `WARN: 本记账单元 ${unclaimed} 项无组认领留盘 + ${hung} 项无认领挂起（池内仍有未记账组，随后续记账单元重判）+ ${conflicted} 项多组认领冲突——不提交留盘（认领唯一的各组照常提交），随终态 residualFiles 呈报`,
+          `WARN: 本记账单元 ${unclaimed} 项无组认领留盘 + ${hung} 项无认领挂起（池内仍有未记账组，随后续记账单元重判）+ ${conflicted} 项多组触及（进入归属提交判定）——认领唯一的各组照常提交`,
         );
       }
       // ES 断言——逐组校验已前移进 askFixOutcomeSelfHeal 的 run 内自愈纠正环，此处
@@ -4421,6 +4443,80 @@ for (let round = 1; round <= maxRounds && finalResult === null; round++) {
       const es = unit.flatMap(({ g, outcome }) => esCheckGroup(g, outcome!.o).map((v) => `${g.id} ${v}`));
       if (es.length > 0) {
         throw new Error(`ES 校验违规：${es.join("；")}。恢复动作：检查 fixer 返回 issueId 引用；在途编辑已留工作区未提交，接管前先 git status 盘点`);
+      }
+      // ── 多组触及文件的归属提交（循环内闭环，2026-11-11）：旧语义对多组认领文件一律
+      // 冻结留盘（residualFiles 呈报主 agent 人工归属）——修复实际已完整落盘却不进
+      // commit，聚焦复审读到「工作区已修、HEAD 未修」即判 not-fixed 并新立项 must-fix，
+      // 实测空转到 stuck（opendesign-assets-quality attempt2：must 轨迹 1→0→2→3→4），
+      // 被迫主 agent 人工补提交才收敛。新语义 = 引擎确定性归属提交，前提全部满足：
+      //   ① 文件在磁盘存在且有实质改动（tracked 相对 HEAD diff 非空；untracked 新文件
+      //     盘上存在即实质改动；gitignore 产物不可提交，不适用归属提交）
+      //   ② 涉组各自的修复申报 selfCheck 复跑证据链完好（零失败——复跑失败的组不具备
+      //     替涉组文件背书的资格）
+      // 满足 → 引擎按文件提交（commit message 注明 multi-claim attribution + 涉及组与
+      // 条目 id 清单）；任一不满足 → 维持旧语义（残留登记 + residualFiles 终态呈报）。
+      // 时点 = 本记账单元 ES 检查通过之后：关闭集记账保证涉组的全部重叠执行窗口已关闭，
+      // 盘上内容即涉组的最终合并结果（非重叠的后派组若再改同一文件，其改动由其自身
+      // 记账单元照常提交）；全部单元的记账（含归属提交）在 fix 阶段末尾 accountChain
+      // 排空后完成，先于聚焦复审——复审读到的工作区与 commit 状态一致，不再假性不收敛
+      if (multiClaim.length > 0) {
+        for (const mc of multiClaim) {
+          const rp = rel(mc.path);
+          const underRoot = rp !== mc.path; // rel 仅在 projectRoot 内时改写（越界路径原样返回）
+          const ownerRuns = mc.owners
+            .map((gid) => unit.find((r) => r.g.id === gid))
+            .filter((r): r is (typeof unit)[number] => r !== undefined);
+          const evidenceBroken = ownerRuns.filter((r) => r.outcome!.selfCheckFailed.length > 0);
+          // 不可提交形态前置判定（任一命中 = 维持旧残留语义）：盘上不存在 / projectRoot 外
+          // （skill-data 产物，本就不入 git——code-right 条目共改的 designDoc 多组触及即此
+          // 形态）/ gitignore 产物 / 与 HEAD 无实质差异 / 涉组证据链破损
+          const ig = underRoot ? await world.run("git", ["-C", projectRoot, "check-ignore", "--", rp]) : null;
+          const ls = underRoot ? await world.run("git", ["-C", projectRoot, "ls-files", "--", rp]) : null;
+          const tracked = ls !== null && ls.stdout.trim() !== "";
+          let substantive = false;
+          if (underRoot && tracked) {
+            const df = await world.run("git", ["-C", projectRoot, "diff", "HEAD", "--quiet", "--", rp]);
+            substantive = df.exitCode === 1;
+          } else if (underRoot) {
+            substantive = true; // 未跟踪新文件：盘上存在即实质改动（新增文件本身就是改动）
+          }
+          const exists = await pathExists(mc.path);
+          const ok =
+            exists && underRoot && ig !== null && ig.exitCode !== 0 && substantive && evidenceBroken.length === 0;
+          if (!ok) {
+            const why = !exists
+              ? "文件已不在磁盘（删除形态不适用归属提交）"
+              : !underRoot
+                ? "在 projectRoot 外（skill-data 产物，本就不入 git）——改动留盘即可"
+                : ig !== null && ig.exitCode === 0
+                  ? "gitignore 产物不可提交"
+                  : !substantive
+                    ? "与 HEAD 无实质差异（无内容可提交）"
+                    : `涉组 selfCheck 复跑证据链破损（${evidenceBroken.map((r) => `${r.g.id}:[${r.outcome!.selfCheckFailed.join(",")}]`).join("、")}）`;
+            log(`WARN: 多组触及 ${rp}（${mc.owners.join("/")}）不适用归属提交：${why}——维持残留登记，随终态 residualFiles 呈报`);
+            residualFiles.add(`${rp}（${mc.owners.join("/")} 多组认领冲突）`);
+            continue;
+          }
+          // 条目 id 清单 = 涉组内编辑目标集命中该文件的条目（归属依据）；无一命中（纯
+          // affectedFiles 申报形态）时回退组全量条目清单
+          const idsFor = (r: (typeof unit)[number]): string[] => {
+            const relevant = r.g.issueIds.filter((id) => {
+              const f = ledgerById(id);
+              return f !== undefined && new Set(findingEditFiles(f)).has(mc.path);
+            });
+            return relevant.length > 0 ? relevant : r.g.issueIds;
+          };
+          const detail = ownerRuns.map((r) => `${r.g.id}:${idsFor(r).join(",")}`).join("; ");
+          const msg = `fix: design-code-sync R${round} multi-claim attribution ${rp} (${ownerRuns.length} groups: ${detail})`;
+          const committed = await commitGroupFiles(round, `multi-claim-${fileSafe(rp)}`, 0, [mc.path], msg);
+          if (committed) {
+            log(`多组触及 ${rp} 归属提交完成（涉组 ${mc.owners.join("/")}，证据链完好）——不再进 residualFiles`);
+            continue;
+          }
+          // add 失败或探针与提交之间内容被改回一致（如在途组回写）——按承诺回落残留登记
+          log(`WARN: 多组触及 ${rp} 归属提交未执行（add 失败或内容已与 HEAD 一致）——维持残留登记，随终态 residualFiles 呈报`);
+          residualFiles.add(`${rp}（${mc.owners.join("/")} 多组认领冲突）`);
+        }
       }
       // 组级一笔 commit（引擎执行，fixer 全程无 git 写）+ 申报消费——与改造前逐批一致，
       // 仅执行粒度从批换记账单元

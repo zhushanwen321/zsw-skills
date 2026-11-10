@@ -382,8 +382,8 @@ function r2PrevContextBlock(owner, mm, projectRoot, designDoc, implPlan, headHas
       ? "你是终态同步的两级审查第一级（framework-scan planner），此前已做 R1 框架对照与模块分解。"
       : "你是终态同步的模块审查者，此前已做 R1 模块全量审查。",
     owner === "planner"
-      ? `仓库 ${projectRoot}；设计文档 ${designDoc}；impl-plan ${implPlan}；审查基线 = 当前 HEAD（${headHash}）——审查对象是 HEAD 终态全量，不是 diff 区间。`
-      : `仓库 ${projectRoot}；设计文档 ${designDoc}；审查基线 = 当前 HEAD（${headHash}）。`,
+      ? `仓库 ${projectRoot}；设计文档 ${designDoc}；impl-plan ${implPlan}；R1 曾以 HEAD 全量（${headHash.slice(0, 12)}）为审查对象（首轮语境）；本轮聚焦复审核实基准 = 工作区实物（「是否已 commit」不构成判据）。`
+      : `仓库 ${projectRoot}；设计文档 ${designDoc}；R1 曾以 HEAD 全量（${headHash.slice(0, 12)}）为审查对象（首轮语境）；本轮聚焦复审核实基准 = 工作区实物。`,
     `你的任务契约模板：${owner === "planner" ? plannerTplAbs : reviewerTplAbs}。`,
   ];
   if (owner !== "planner" && mm) {

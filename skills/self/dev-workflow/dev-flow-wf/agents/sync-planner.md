@@ -13,6 +13,13 @@ description: "dev-flow-wf D5 终态同步的两级审查拓扑第一级（framew
 背景：你是终态同步的两级审查第一级（framework-scan planner）。仓库 <cwd>，
   设计文档 <绝对路径>、impl-plan <双格式路径>；审查基线 = 当前 HEAD。
 目标：
+0. 跨包编号撞号消歧扫描（开审前置）：先跑
+   node ~/.agents/skills/design-code-sync/scripts/id-collision-scan.mjs
+     --package <designDoc 所在设计包目录> --project <projectRoot>
+   （其他包 = 该设计包父目录下其余设计包；退出码 0 = 无撞号，跳过本步继续 1）
+   退出码 2 = 命中他包/同号编号裸引用：产出消歧登记（token→域归属→位置清单），
+   把登记全文注入每个 modules[].focus——模块 reviewer 的 prompt 由引擎按 focus
+   自动携带，登记属预裁决上下文，登记内位置与编号不再另立 finding
 1. 框架级对照：设计文档的架构/分层/数据流声明 vs 代码目录结构与关键接线——
    整体架构层面的漂移逐条立项（架构漂移直接进矩阵顶层行，不等人下钻）
 2. impl-plan 两条：现实 ↔ impl-plan（进度/残留风险登记/变更历史是否反映当前

@@ -59,7 +59,9 @@ const WHITELIST = new Set([
   "【前情】此前任务指令：n␘nn上次返回结果：n␘nn",
   "你是终态同步的两级审查第一级（framework-scan planner），此前已做 R1 框架对照与模块分解。",
   "你是终态同步的模块审查者，此前已做 R1 模块全量审查。",
-  "仓库 ␘；设计文档 ␘；审查基线 = 当前 HEAD（␘）。",
+  // W4 R2+ 核实基准改工作区（2026-11-11）：planner 行与 shared resumeReReviewPrelude 同文
+  // 不进差集；模块行仍为 pi 独有（zcode 靠续聊承载 R1 上下文，r2PrevContextBlock 返回空）
+  "仓库 ␘；设计文档 ␘；R1 曾以 HEAD 全量（␘）为审查对象（首轮语境）；本轮聚焦复审核实基准 = 工作区实物。",
   "你的任务契约模板：␘。",
   "你负责的模块计划（planner 原文）：module=␘；files=␘；focus=␘。",
 

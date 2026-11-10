@@ -66,7 +66,7 @@ stdout `PASS` 才继续步骤 4。校验集与 W2 引擎的 validatePlan 及 W3 
 
 ### 4. 逐节点 promptFile 构造
 
-每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·范围声明·验收条款/设计文档对应节摘录/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：测试 = 仅跑 testCommand 及其触及的测试文件，明写禁止包级全量套件与跨包扫描——全量回归由 D2 Gate A 统一承担，testCommand 覆盖不了改动行为时在 deviations 申报、不自行扩跑；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组；宿主无 structured-output 工具时在回复中用 json 代码块返回同构对象，解析失败视同本次汇报无效打回重报）/ 约束（范围声明清单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报/过程记录义务：临时待办·需裁决事项·复盘观察随时 append 到 `<name>.runlog/<unitId>.md`（任务书内写绝对路径；一行一条 `[HH:MM] 类型: 一句话事实`，不替代 JSON 返回契约——SKILL「运行记录」节））。
+每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·范围声明·验收条款/设计文档对应节摘录/编号域约定——本设计包的编号（场景/单元/裁决/验收项等 id）在文档与注释中裸用，引用其他设计包（历史代次或并行包）的同形编号一律带域前缀标注（形态 `<包域>·<编号>`，存量形态「V1·D6」），防止跨包同号撞号——同形编号并存会让终态同步审查逐条误报/漏判归属/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：测试 = 仅跑 testCommand 及其触及的测试文件，明写禁止包级全量套件与跨包扫描——全量回归由 D2 Gate A 统一承担，testCommand 覆盖不了改动行为时在 deviations 申报、不自行扩跑；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组；宿主无 structured-output 工具时在回复中用 json 代码块返回同构对象，解析失败视同本次汇报无效打回重报）/ 约束（范围声明清单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报/过程记录义务：临时待办·需裁决事项·复盘观察随时 append 到 `<name>.runlog/<unitId>.md`（任务书内写绝对路径；一行一条 `[HH:MM] 类型: 一句话事实`，不替代 JSON 返回契约——SKILL「运行记录」节））。
 
 ### 5. 初始 status.json + 运行档案初始化
 
