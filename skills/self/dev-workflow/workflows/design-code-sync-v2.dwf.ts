@@ -22,9 +22,9 @@ args:
     required: true
   declaredRepos:
     type: string
-    description: workspace 登记清单 JSON（数组 [{repoId, path, editableRoot?}]，path 相对
+    description: "workspace 登记清单 JSON（数组 [{repoId, path, editableRoot?}]，path 相对
       projectRoot 或绝对——inventory 提案输入；传参即主 agent 确认（M4 形态），未确认仓库
-      拒启。绑定 repoId 必须全部在确认清单内（AX9 未登记仓库是非法目标）
+      拒启。绑定 repoId 必须全部在确认清单内（AX9 未登记仓库是非法目标）"
     required: true
   confirmedRepoIds:
     type: string
@@ -51,9 +51,9 @@ args:
     description: 对账轮次上限（缺省 8；耗尽仍有 open = engineOutcome stopped）
   rulingsFile:
     type: string
-    description: 用户裁决记录 json 绝对路径（续跑通道；元素 {address: {bindingId, repoId,
-      violationKind}, direction: code-right|doc-right|waived, respondsTo}——respondsTo 取
-      上次终态 message 的在案锚点；发起时装载入流（RecordRuling），awaiting-ruling 解除）
+    description: "用户裁决记录 json 绝对路径（续跑通道；元素 address 为对象 {bindingId,
+      repoId, violationKind}，direction 为 code-right|doc-right|waived，respondsTo 取
+      上次终态 message 的在案锚点；发起时装载入流（RecordRuling），awaiting-ruling 解除）"
   taskId:
     type: string
     description: 观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测）
@@ -435,7 +435,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "1.1.1"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.2"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // design-code-sync-v2 — dev-flow-wf 技能 W4 v2 一致性对账引擎（sync-conformance-plane
 // U4/M4：D5 从 issue 循环升级为「设计义务 + 证据 + 隔离变更集」对账）
