@@ -1157,9 +1157,11 @@ test("报告五视图落盘 <designPkg>/v2/；删除后重建逐字节等价；�
     for (const f of Object.values(renderMod.REPORT_VIEW_FILES)) {
       assert.ok(existsSync(join(r.root, f)), `视图文件缺失：${f}`);
     }
-    // fold 派生：verified pass + changeset + 无集成审计 → verified-pending-integration
+    // fold 派生：verified pass + changeset + 无集成审计 → verified-pending-integration；
+    // 覆盖率完成域 = verified/waived（D6）：pending-integration 非终态，单列计数不折算进 verified
     assert.equal(r.outcomes.integrationOutcome, "verified-pending-integration");
-    assert.equal(r.outcomes.coverage.verified, 1);
+    assert.equal(r.outcomes.coverage.verified, 0);
+    assert.equal(r.outcomes.coverage.pendingIntegration, 1);
     assert.equal(r.outcomes.coverage.denominator, 2);
     // V10：报告全部删除 → 重渲染 → 逐字节等价（报告全派生，AX3）
     const before = {};

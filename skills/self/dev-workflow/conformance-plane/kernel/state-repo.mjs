@@ -24,6 +24,13 @@ const LOCK_FILE = "lock";
 /** 锁默认参数（设计段四口径；测试以注入参数覆盖行为、以本常量断言默认值） */
 export const LOCK_DEFAULTS = Object.freeze({ pollMs: 1000, timeoutMs: 30000 });
 
+/**
+ * 空/残缺元数据锁的孤儿判定阈值：写入间隙（openSync(wx) 成功到 writeFileSync 写元数据）为
+ * 毫秒级，1s 轮询天然跨过；空锁文件超过该时长仍无元数据 = 持有者在写入间隙崩溃（进程死亡
+ * 不再有机会补写元数据），按孤儿锁清理。
+ */
+export const EMPTY_LOCK_ORPHAN_MS = 10_000;
+
 // ---------------------------------------------------------------------------
 // 错误形态：每条错误必须同时携带事实、权威源指向与恢复动作
 // ---------------------------------------------------------------------------
@@ -32,8 +39,10 @@ function busyError(root, waitedMs) {
   const err = new Error(
     `state-store-busy：状态仓锁等待超时（等了 ${waitedMs}ms）。` +
       `权威源：${join(root, LOCK_FILE)} 的持有者。` +
-      `恢复动作：确认无活动写者后重试；若锁持有进程已死亡，下一次获取会自动清理陈旧锁；` +
-      `确认残留时人工删除该 lock 文件后重发。`,
+      `恢复动作：残留锁已自动清理两类——元数据在场且持有进程死亡（pid 不存在或启动时间不符）、` +
+      `空/残缺元数据锁超龄（>${EMPTY_LOCK_ORPHAN_MS}ms，持有者死于写入间隙）；` +
+      `其余形态（活进程持锁、空锁未超龄）属持有中，等待其释放；` +
+      `确认持有者已消失但锁仍残留时，人工删除锁文件 ${join(root, LOCK_FILE)} 后重发。`,
   );
   err.code = "state-store-busy";
   return err;
@@ -85,6 +94,11 @@ async function sleep(ms) {
 /**
  * 获取单写者锁。opts = { pollMs, timeoutMs }（缺省 LOCK_DEFAULTS）。
  * 返回 { release() }；非阻塞失败立即抛 state-store-busy（timeoutMs=0），等待超限同抛。
+ *
+ * 已知限制（TOCTOU，登记不修——D6 审查发现 3 问题二，移交后续裁决）：判死到 unlink 之间存在
+ * 竞争窗口——原持有者恰在此间隙释放、新持有者以 wx 接入时，本次 unlink 会误删新锁。触发条件 =
+ * 「陈旧锁清理判定」与「unlink 执行」之间发生「原持有者释放 + 新持有者获取」的完整序列；
+ * 概率极低（要求死亡持有者的锁与新获取在毫秒级窗口内交接），当前接受。
  */
 export async function acquireLock(root, opts = {}) {
   const pollMs = opts.pollMs ?? LOCK_DEFAULTS.pollMs;
@@ -100,16 +114,28 @@ export async function acquireLock(root, opts = {}) {
     } catch (e) {
       if (e.code !== "EEXIST") throw e;
       // 锁被占用：持有裁决与死亡清理（设计段四「进程死亡可清理」）。
-      // 持有裁决语义（bl-4）：空元数据 / 残缺 JSON = 持有者 openSync(wx) 成功到 writeFileSync
-      // 写元数据之间的合法写入间隙（1s 轮询天然覆盖），视为「持有中」——不清理、不抢锁，
-      // 继续轮询。清理条件收紧为「元数据在场且持有者死亡（pid 不存在或启动时间不符 = pid 复用）」。
+      // 元数据在场：清理条件 = 持有者死亡（pid 不存在或启动时间不符 = pid 复用）。
+      // 空/残缺元数据（bl-4 + D6 发现 3）：写入间隙为毫秒级（openSync(wx) 成功到
+      // writeFileSync 写元数据之间），1s 轮询天然覆盖；空锁超过 EMPTY_LOCK_ORPHAN_MS
+      // 仍无元数据 = 持有者死于写入间隙（不会再补写），按孤儿锁清理；未超龄视为持有中
+      // 继续轮询（不清理、不抢锁）。
       let meta = null;
       try {
         meta = JSON.parse(readFileSync(lockPath, "utf8"));
       } catch {
-        meta = null; // 空锁文件 / 残缺 JSON：写入间隙形态，按持有中处理
+        meta = null; // 空锁文件 / 残缺 JSON：写入间隙或孤儿形态，按年龄裁决
       }
-      if (!meta || holderAlive(meta)) {
+      if (meta === null) {
+        if (Date.now() - statSync(lockPath).mtimeMs > EMPTY_LOCK_ORPHAN_MS) {
+          // 空锁超龄：持有者已在写入间隙崩溃，孤儿锁清理后立即重试获取
+          unlinkSync(lockPath);
+          continue;
+        }
+        if (Date.now() >= deadline) throw busyError(root, timeoutMs);
+        await sleep(pollMs);
+        continue;
+      }
+      if (holderAlive(meta)) {
         if (Date.now() >= deadline) throw busyError(root, timeoutMs);
         await sleep(pollMs);
         continue;

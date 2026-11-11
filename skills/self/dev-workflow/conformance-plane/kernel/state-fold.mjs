@@ -80,8 +80,22 @@ export function fold(input) {
     }
     unarchivedSeen = Boolean(initialState.unarchivedSeen);
     lastSeq = initialState.seq;
-    for (const r of initialState.integrationSeenRepos ?? []) integrationSeenRepos.add(r);
-    for (const r of initialState.integrationBlockedRepos ?? []) integrationBlockedRepos.add(r);
+    // RL2 等价性前提：repo 级集成审计聚合必须随快照携带。旧格式快照缺聚合字段时增量 fold
+    // 会把已发生的集成审计当空集，pending-integration 派生静默失真（旧快照增量 fold 得
+    // pending-integration、全量 fold 得 verified）——显式拒绝，不做从地址段补全的部分迁移
+    // （地址段本身可能已丢「审计先于地址首现」的事实，补全是不完整迁移）。
+    if (!Array.isArray(initialState.integrationSeenRepos) || !Array.isArray(initialState.integrationBlockedRepos)) {
+      const err = new Error(
+        "快照为旧格式（缺 integrationSeenRepos / integrationBlockedRepos 聚合字段），" +
+          "快照 + 增量 fold 等价全量 fold（RL2）对该快照不成立，拒绝续 fold。" +
+          "恢复动作：快照为旧格式——用 rebuild（kernel/state-repo.mjs）或全量 fold 从事件流重建快照后重试" +
+          "（生产链 appendCommands/rebuild 全走全量 fold，不受影响；磁盘旧快照下次追加会被重写为新格式）。",
+      );
+      err.code = "snapshot-legacy-format";
+      throw err;
+    }
+    for (const r of initialState.integrationSeenRepos) integrationSeenRepos.add(r);
+    for (const r of initialState.integrationBlockedRepos) integrationBlockedRepos.add(r);
   }
 
   // 事件序列无空洞：seq 从当前 lastSeq+1 起连续（AX3 权威完整性）

@@ -137,9 +137,10 @@ function repoInput(table) {
 }
 
 /**
- * 覆盖率（对账判据）：分母 = 绑定义务集；分子只计终态结论（verified/waived——停止判据词表）；
- * pending-integration 不是完成态（变更集就绪但集成未发生），单列计数不进分子。
- * 完备性口径：satisfied + pendingIntegration + open = 分母（每义务地址恰一结论桶）。
+ * 覆盖率（对账判据）：分母 = 绑定义务集；分子只计终态结论（verified/waived——完成域词表，
+ * D6）；pending-integration 不是完成态（变更集就绪但集成未发生），awaiting-ruling 是裁决
+ * 在案——两值各单列计数不进分子。
+ * 完备性口径：satisfied + pendingIntegration + awaitingRuling + open = 分母（每义务地址恰一结论桶）。
  */
 function coverage(state, table) {
   const denominator = table.obligations.length;
@@ -147,8 +148,9 @@ function coverage(state, table) {
   const conclusions = [...keys].map((k) => state.addresses[k]?.conclusion ?? "open");
   const satisfied = conclusions.filter((c) => c === "verified" || c === "waived").length;
   const pendingIntegration = conclusions.filter((c) => c === "pending-integration").length;
+  const awaitingRuling = conclusions.filter((c) => c === "awaiting-ruling").length;
   const open = conclusions.filter((c) => c === "open").length;
-  return { denominator, satisfied, pendingIntegration, open, ratio: denominator === 0 ? null : satisfied / denominator };
+  return { denominator, satisfied, pendingIntegration, awaitingRuling, open, ratio: denominator === 0 ? null : satisfied / denominator };
 }
 
 // ---------------------------------------------------------------------------
@@ -168,15 +170,19 @@ test("覆盖率分母 = 绑定义务集：9 条目 2 绑定 → 分母 2，未�
   assert.equal(cov.satisfied, 0);
 });
 
-test("coverage 口径对齐停止判据词表：waived 计分子、pending-integration 单列不进分子、三桶合计 = 分母（bl-2）", () => {
+test("coverage 口径对齐完成域词表：waived 计分子、pending-integration/awaiting-ruling 各单列不进分子、四桶合计 = 分母、五值词表每值至少一地址（bl-2）", () => {
   const mkFact = (type, seq, payload) => ({ type, seq, ts: "2026-11-11T00:00:00.000Z", actor: "engine", ...payload });
   const addrV = { bindingId: "GL2", repoId: "repo-main", violationKind: "missing-implementation" };
   const addrW = { bindingId: "PR1", repoId: "repo-main", violationKind: "overimplementation" };
   const addrP = { bindingId: "PX", repoId: "repo-main", violationKind: "missing-implementation" };
+  const addrA = { bindingId: "PA", repoId: "repo-main", violationKind: "missing-implementation" };
+  const addrO = { bindingId: "PO", repoId: "repo-main", violationKind: "overimplementation" };
   const bindings = [
     { ...addrV, bindingVersion: 1 },
     { ...addrW, bindingVersion: 1 },
     { ...addrP, bindingVersion: 1 },
+    { ...addrA, bindingVersion: 1 },
+    { ...addrO, bindingVersion: 1 },
   ];
   const input = {
     archived: false,
@@ -211,20 +217,38 @@ test("coverage 口径对齐停止判据词表：waived 计分子、pending-integ
       result: "pass",
       changesetId: "cs-new",
     }),
+    // PA：在案未应答裁决 → awaiting-ruling（非完成态，不进分子）
+    mkFact("RulingRequested", 5, { address: addrA, question: "方向争议待裁决" }),
+    // PO：fail 证据 → open（失败不伪造 verified，段五）
+    mkFact("EvidenceRecorded", 6, {
+      address: addrO,
+      obligationHash: facts.obligationSummaryHash(bindings[4]),
+      checkerId: "symbol-scan",
+      checkerVersion: "1.0.0",
+      bindingVersion: 1,
+      inputs: [{ name: "src/b.mjs", hash: H2 }],
+      result: "fail",
+    }),
   ];
   const state = fold({ ...input, facts: factsList });
-  const table = { obligations: [addrV, addrW, addrP].map((address) => ({ address })) };
+  const table = { obligations: [addrV, addrW, addrP, addrA, addrO].map((address) => ({ address })) };
   const cov = coverage(state, table);
-  assert.equal(cov.denominator, 3);
+  assert.equal(cov.denominator, 5);
   assert.equal(cov.satisfied, 2, "分子只计终态：verified 1 + waived 1");
-  assert.equal(cov.pendingIntegration, 1, "pending-integration 单列计数，不进分子（停止判据不含它）");
-  assert.equal(cov.open, 0);
-  assert.equal(cov.ratio, 2 / 3, "覆盖率 = 终态数 / 分母（pending-integration 不折算为完成）");
+  assert.equal(cov.pendingIntegration, 1, "pending-integration 单列计数，不进分子（完成域不含它）");
+  assert.equal(cov.awaitingRuling, 1, "awaiting-ruling 单列计数，不进分子（裁决在案非完成态）");
+  assert.equal(cov.open, 1);
+  assert.equal(cov.ratio, 2 / 5, "覆盖率 = 终态数 / 分母（pending-integration / awaiting-ruling 不折算为完成）");
   assert.equal(
-    cov.satisfied + cov.pendingIntegration + cov.open,
+    cov.satisfied + cov.pendingIntegration + cov.awaitingRuling + cov.open,
     cov.denominator,
-    "完备性口径：verified + waived + pending-integration + open = 分母（每义务地址恰一结论桶）",
+    "完备性口径：verified + waived + pending-integration + awaiting-ruling + open = 分母（每义务地址恰一结论桶）",
   );
+  // 五值词表每值至少一地址：CONCLUSIONS 的全部取值在本用例 fold 产物中逐一在场
+  const seen = new Set(Object.values(state.addresses).map((s) => s.conclusion));
+  for (const c of ["open", "awaiting-ruling", "verified", "pending-integration", "waived"]) {
+    assert.ok(seen.has(c), `五值词表成员 ${c} 必须在混布用例 fold 产物中至少一地址`);
+  }
 });
 
 // ---------------------------------------------------------------------------

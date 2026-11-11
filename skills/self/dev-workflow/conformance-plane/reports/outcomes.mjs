@@ -67,14 +67,15 @@ export const MANUAL_ACTOR = "main-agent";
 // ---------------------------------------------------------------------------
 
 /**
- * 义务终态派生（与 v2 引擎 derivedConclusion 同一规则；AX8/段七）：
- *   awaiting-ruling（fold 结论）> verified（verified / pending-integration 均视为已验证）>
- *   waived（裁决 waived 且无有效 pass）> open
+ * 义务终态派生（与 v2 引擎 derivedConclusion 同一规则；AX8/段七；D6 完成域 = verified/waived）：
+ *   awaiting-ruling（fold 结论）> verified > waived（裁决 waived 且无有效 pass）> open；
+ *   pending-integration 原样返回——非终态：证据绑定内容未落正式仓（沙箱变更集），
+ *   折算进完成态会重建「工作区已修未提交」失败模式（D6 裁决口径）。
  */
 export function derivedConclusion(st) {
   if (st === undefined || st === null) return "open";
   if (st.conclusion === "awaiting-ruling") return "awaiting-ruling";
-  if (st.conclusion === "verified" || st.conclusion === "pending-integration") return "verified";
+  if (st.conclusion === "verified" || st.conclusion === "pending-integration") return st.conclusion;
   if (st.lastRuling?.direction === "waived") return "waived";
   return "open";
 }
@@ -111,8 +112,9 @@ export function deriveIntegrationOutcomeFromFacts({ facts, foldState }) {
 
 /**
  * engineOutcome 的 fold 降级派生（engineReturn 缺省时启用；v2 引擎 finalize 同一判定序）：
- *   全部义务终态（verified/waived）→ completed；存在 awaiting → awaiting-ruling；
- *   最新集成事实为失败 → failed；其余（轮次耗尽语义）→ stopped。
+ *   全部义务完成态（verified/waived）→ completed；存在 awaiting → awaiting-ruling；
+ *   最新集成事实为失败 → failed；其余（轮次耗尽语义，含 pending-integration——非终态，
+ *   D6 完成域 = verified/waived，集成在场后才 verified）→ stopped。
  */
 export function foldEngineOutcome({ facts, bindings = [], artifacts = {}, checkerRuns = [] }) {
   const state = fold({ bindings, facts, artifacts, checkerRuns });
@@ -233,14 +235,16 @@ export function deriveOutcomes({ facts, bindings = [], artifacts = {}, checkerRu
   // ── 第四层 deliveryOutcome：宣告在场用宣告，否则引擎缺省映射（completed → pending，否则 blocked）──
   const deliveryOutcome = declaration !== null ? declaration.outcome : engineOutcome === "completed" ? ENGINE_DELIVERY_DEFAULTS.completed : ENGINE_DELIVERY_BLOCKED;
 
-  // ── 覆盖率（AX8：分母只含绑定义务；unbound 叙述不进）──
-  const coverage = { denominator: bindings.length, verified: 0, waived: 0, open: 0, awaitingRuling: 0 };
+  // ── 覆盖率（AX8：分母只含绑定义务；unbound 叙述不进。完成域 = verified/waived（D6），
+  //    pending-integration 非终态单列 pendingIntegration 桶，不折算进 verified）──
+  const coverage = { denominator: bindings.length, verified: 0, waived: 0, open: 0, awaitingRuling: 0, pendingIntegration: 0 };
   for (const b of bindings) {
     const st = foldState.addresses[`${b.bindingId}|${b.repoId}|${b.violationKind}`];
     const c = derivedConclusion(st);
     if (c === "verified") coverage.verified += 1;
     else if (c === "waived") coverage.waived += 1;
     else if (c === "awaiting-ruling") coverage.awaitingRuling += 1;
+    else if (c === "pending-integration") coverage.pendingIntegration += 1;
     else coverage.open += 1;
   }
 

@@ -340,6 +340,32 @@ test("repo 级集成审计聚合：审计先于地址首现 → pass 证据仍 v
   );
 });
 
+test("旧格式 initialState（缺 repo 级聚合字段）显式拒绝，错误含恢复动作；新格式正常续 fold（RL2 前提）", () => {
+  const input = baseInput();
+  const factsList = sampleFacts();
+  // 旧格式快照：手工剥掉 repo 级聚合字段（bl-7 引入该字段之前的快照形态）——
+  // 增量 fold 会把已发生的集成审计当空集、pending-integration 派生静默失真，必须显式拒绝
+  const legacy = fold({ ...input, facts: factsList.slice(0, 2) });
+  const legacyStripped = JSON.parse(
+    JSON.stringify({ ...legacy, integrationSeenRepos: undefined, integrationBlockedRepos: undefined }),
+  );
+  assert.throws(
+    () => fold({ ...input, facts: factsList.slice(2), initialState: legacyStripped }),
+    (err) => err.code === "snapshot-legacy-format" && /旧格式/.test(err.message) && /rebuild/.test(err.message) && /恢复动作/.test(err.message),
+    "缺任一聚合字段的 initialState 必须抛 snapshot-legacy-format，错误指向 rebuild/全量 fold 重建入口",
+  );
+  // 只缺一个字段同样拒绝（任一缺失都破坏 RL2 等价性前提）
+  const halfStripped = JSON.parse(JSON.stringify({ ...legacy, integrationBlockedRepos: undefined }));
+  assert.throws(
+    () => fold({ ...input, facts: factsList.slice(2), initialState: halfStripped }),
+    (err) => err.code === "snapshot-legacy-format",
+  );
+  // 新格式快照（fold 产物自带两字段）正常续 fold 且与全量等价（既有 RL2 行为不回归）
+  const incremental = fold({ ...input, facts: factsList.slice(2), initialState: legacy });
+  const full = fold({ ...input, facts: factsList });
+  assert.equal(JSON.stringify(incremental), JSON.stringify(full), "含聚合字段的快照续 fold 保持 RL2 等价");
+});
+
 test("seq 不连续或非正的事实序列被 fold 拒绝（事件序列无空洞）", () => {
   const input = baseInput();
   assert.throws(() => fold({ ...input, facts: [sampleFacts()[0], sampleFacts()[2]] }), /seq/);

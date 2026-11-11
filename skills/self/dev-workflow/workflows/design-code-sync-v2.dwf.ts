@@ -435,7 +435,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "1.1.3"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.4"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // design-code-sync-v2 — dev-flow-wf 技能 W4 v2 一致性对账引擎（sync-conformance-plane
 // U4/M4：D5 从 issue 循环升级为「设计义务 + 证据 + 隔离变更集」对账）
@@ -871,12 +871,14 @@ interface AddressState {
   pendingRulingSeq?: number | null;
 }
 
-/** 终态派生（AX8/段七）：verified（有效 pass 证据）> waived（裁决 waived 且无有效 pass）>
- *  open；awaiting-ruling 由 fold conclusion 直接给出。引擎唯一裁决依据，agent 不可申报 */
-function derivedConclusion(st: AddressState | undefined): "verified" | "waived" | "open" | "awaiting-ruling" {
+/** 终态派生（AX8/段七；D6 完成域 = verified/waived）：verified（有效 pass 证据）>
+ *  waived（裁决 waived 且无有效 pass）> open；awaiting-ruling 由 fold conclusion 直接给出；
+ *  pending-integration 原样返回——非终态（证据绑定内容未落正式仓（沙箱变更集），折算进
+ *  完成态会重建「工作区已修未提交」失败模式，D6 裁决口径）。引擎唯一裁决依据，agent 不可申报 */
+function derivedConclusion(st: AddressState | undefined): "verified" | "waived" | "open" | "awaiting-ruling" | "pending-integration" {
   if (st === undefined) return "open";
   if (st.conclusion === "awaiting-ruling") return "awaiting-ruling";
-  if (st.conclusion === "verified" || st.conclusion === "pending-integration") return "verified";
+  if (st.conclusion === "verified" || st.conclusion === "pending-integration") return st.conclusion;
   if (st.lastRuling?.direction === "waived") return "waived";
   return "open";
 }
@@ -895,10 +897,12 @@ interface SyncV2Result {
   rounds: number;
   designPkg: string;
   stateRoot: string;
-  /** 义务表版本与覆盖率（分母 = 全部 conformance 绑定义务，AX8） */
+  /** 义务表版本与覆盖率（分母 = 全部 conformance 绑定义务，AX8；完成域 = verified/waived，
+   *  pending-integration 非终态单列 pendingIntegration 桶，不折算进 verified——D6 裁决口径） */
   tableVersion: string;
-  coverage: { denominator: number; verified: number; waived: number; open: number; awaitingRuling: number };
-  /** 残余 open 地址（stopped/failed 时随终态呈报；地址 = 引擎派生，非 agent 自报） */
+  coverage: { denominator: number; verified: number; waived: number; open: number; awaitingRuling: number; pendingIntegration: number };
+  /** 残余未达终态地址（open / pending-integration——stopped/failed 时随终态呈报并标注状态；
+   *  地址 = 引擎派生，非 agent 自报） */
   remaining: { bindingId: string; repoId: string; violationKind: string; conclusion: string; hint: string }[];
   /** backlog 提案（未映射观察——proposed 状态，不影响覆盖率分母，呈报主 agent triage） */
   backlogProposed: { backlogId: string; observation: string }[];
@@ -931,7 +935,7 @@ if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
     designPkg: "",
     stateRoot: "",
     tableVersion: "",
-    coverage: { denominator: 0, verified: 0, waived: 0, open: 0, awaitingRuling: 0 },
+    coverage: { denominator: 0, verified: 0, waived: 0, open: 0, awaitingRuling: 0, pendingIntegration: 0 },
     remaining: [],
     backlogProposed: [],
     regenerateTasks: [],
@@ -961,7 +965,7 @@ if (inputs.problems.length > 0) {
     designPkg: inputs.designPkg,
     stateRoot: "",
     tableVersion: "",
-    coverage: { denominator: 0, verified: 0, waived: 0, open: 0, awaitingRuling: 0 },
+    coverage: { denominator: 0, verified: 0, waived: 0, open: 0, awaitingRuling: 0, pendingIntegration: 0 },
     remaining: [],
     backlogProposed: [],
     regenerateTasks: [],
@@ -1003,7 +1007,7 @@ if (addr === null) {
     designPkg: inputs.designPkg,
     stateRoot: "",
     tableVersion: "",
-    coverage: { denominator: 0, verified: 0, waived: 0, open: 0, awaitingRuling: 0 },
+    coverage: { denominator: 0, verified: 0, waived: 0, open: 0, awaitingRuling: 0, pendingIntegration: 0 },
     remaining: [],
     backlogProposed: [],
     regenerateTasks: [],
@@ -1036,7 +1040,7 @@ if (obligations.length === 0) {
     designPkg: inputs.designPkg,
     stateRoot,
     tableVersion: table.tableVersion,
-    coverage: { denominator: 0, verified: 0, waived: 0, open: 0, awaitingRuling: 0 },
+    coverage: { denominator: 0, verified: 0, waived: 0, open: 0, awaitingRuling: 0, pendingIntegration: 0 },
     remaining: [],
     backlogProposed: [],
     regenerateTasks: [],
@@ -1061,7 +1065,7 @@ try {
     designPkg: inputs.designPkg,
     stateRoot,
     tableVersion: table.tableVersion,
-    coverage: { denominator: obligations.length, verified: 0, waived: 0, open: obligations.length, awaitingRuling: 0 },
+    coverage: { denominator: obligations.length, verified: 0, waived: 0, open: obligations.length, awaitingRuling: 0, pendingIntegration: 0 },
     remaining: [],
     backlogProposed: [],
     regenerateTasks: [],
@@ -1088,7 +1092,7 @@ if (unknownRepoObligations.length > 0) {
     designPkg: inputs.designPkg,
     stateRoot,
     tableVersion: table.tableVersion,
-    coverage: { denominator: obligations.length, verified: 0, waived: 0, open: obligations.length, awaitingRuling: 0 },
+    coverage: { denominator: obligations.length, verified: 0, waived: 0, open: obligations.length, awaitingRuling: 0, pendingIntegration: 0 },
     remaining: [],
     backlogProposed: [],
     regenerateTasks: [],
@@ -1168,8 +1172,12 @@ for (let round = 1; round <= inputs.maxRounds; round++) {
   state = readRes.state as typeof state;
   const addrKeyOf = (o: ObligationRow): string => `${o.bindingId}|${o.repoId}|${o.violationKind}`;
 
+  // 完成域 = verified/waived（D6 裁决口径）：pending-integration 非终态，单列 pendingList——
+  // 它的缺项是集成不是检查（证据已有效，checker 重派无意义），不派 checker、不阻塞 awaiting
+  // 早停；全部桶清空才 completed，否则继续轮，maxRounds 耗尽随 remaining 呈报（含 pending 条目）
   const openList: ObligationRow[] = [];
   const awaitingList: ObligationRow[] = [];
+  const pendingList: ObligationRow[] = [];
   let verifiedCount = 0;
   let waivedCount = 0;
   for (const o of obligations) {
@@ -1177,10 +1185,11 @@ for (let round = 1; round <= inputs.maxRounds; round++) {
     if (c === "verified") verifiedCount++;
     else if (c === "waived") waivedCount++;
     else if (c === "awaiting-ruling") awaitingList.push(o);
+    else if (c === "pending-integration") pendingList.push(o);
     else openList.push(o);
   }
 
-  if (openList.length === 0 && awaitingList.length === 0) {
+  if (openList.length === 0 && awaitingList.length === 0 && pendingList.length === 0) {
     engineOutcome = "completed";
     stopMessage = `全部义务达终态（verified ${verifiedCount} / waived ${waivedCount}，分母 ${obligations.length}）`;
     await obsEnd("fix", round);
@@ -1274,13 +1283,26 @@ const remaining: SyncV2Result["remaining"] = [];
 let fVerified = 0;
 let fWaived = 0;
 let fAwaiting = 0;
+let fPendingIntegration = 0;
+let fOpen = 0;
 for (const o of obligations) {
   const st = finalState.addresses[addrKeyOf2(o)];
   const c = derivedConclusion(st);
   if (c === "verified") fVerified++;
   else if (c === "waived") fWaived++;
   else if (c === "awaiting-ruling") fAwaiting++;
-  else {
+  else if (c === "pending-integration") {
+    // pending-integration 条目随 remaining 呈报并标注其状态（D6：非终态——集成在场后才 verified）
+    fPendingIntegration++;
+    remaining.push({
+      bindingId: o.bindingId,
+      repoId: o.repoId,
+      violationKind: o.violationKind,
+      conclusion: c,
+      hint: "变更集就绪待集成（证据绑定内容未落正式仓，非终态）——恢复：经集成器门径集成该变更集后重审（集成审计在场即 verified）",
+    });
+  } else {
+    fOpen++;
     const lcf = st?.lastCheckerFailure;
     remaining.push({
       bindingId: o.bindingId,
@@ -1297,7 +1319,10 @@ if (engineOutcome !== "completed" && engineOutcome !== "awaiting-ruling" && engi
   engineOutcome = "stopped";
 }
 if (engineOutcome === "stopped" && stopMessage === "") {
-  stopMessage = `轮次耗尽（maxRounds=${inputs.maxRounds}）仍有 open 义务`;
+  stopMessage =
+    `轮次耗尽（maxRounds=${inputs.maxRounds}）仍有未达终态义务（open ${fOpen}` +
+    (fPendingIntegration > 0 ? ` / pending-integration ${fPendingIntegration}——非终态（D6 完成域 = verified/waived），集成在场后才 verified` : "") +
+    `）`;
 }
 if (engineOutcome === "completed" && remaining.length > 0) {
   engineOutcome = "stopped";
@@ -1313,7 +1338,7 @@ const result: SyncV2Result = {
   designPkg: inputs.designPkg,
   stateRoot,
   tableVersion: table.tableVersion,
-  coverage: { denominator: obligations.length, verified: fVerified, waived: fWaived, open: remaining.length, awaitingRuling: fAwaiting },
+  coverage: { denominator: obligations.length, verified: fVerified, waived: fWaived, open: fOpen, awaitingRuling: fAwaiting, pendingIntegration: fPendingIntegration },
   remaining,
   backlogProposed,
   regenerateTasks,

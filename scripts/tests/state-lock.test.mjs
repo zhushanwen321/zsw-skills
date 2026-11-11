@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -242,6 +242,44 @@ test("空锁间隙结束后元数据为死亡持有者 → 等待者按陈旧锁
 });
 
 // ---------------------------------------------------------------------------
+// 空锁年龄裁决（D6 发现 3）：空/残缺元数据锁超龄 = 持有者死于写入间隙，按孤儿清理；
+// 未超龄 = 写入间隙持有中，不清理继续轮询。
+// ---------------------------------------------------------------------------
+
+test("空锁超龄（mtime 距今超阈值）被按孤儿锁清理，等待者成功获得锁", async (t) => {
+  const root = tmpRoot(t);
+  const lockPath = join(root, "lock");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(lockPath, ""); // 空/残缺元数据形态
+  // mtime 手工回拨到阈值之外（模拟持有者在写入间隙崩溃后时间流逝）
+  const stale = new Date(Date.now() - repo.EMPTY_LOCK_ORPHAN_MS - 5000);
+  utimesSync(lockPath, stale, stale);
+  const handle = await repo.acquireLock(root, { pollMs: 20, timeoutMs: 2000 });
+  const meta = JSON.parse(readFileSync(lockPath, "utf8"));
+  assert.equal(meta.pid, process.pid, "超龄空锁被清理后本进程获得锁（元数据为本进程）");
+  await handle.release();
+  assert.ok(!existsSync(lockPath), "释放后锁文件删除");
+});
+
+test("空锁未超龄不清理：视为写入间隙持有中，等待至 busy 且锁文件保持原样", async (t) => {
+  const root = tmpRoot(t);
+  const lockPath = join(root, "lock");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(lockPath, ""); // 刚写入的空锁（mtime = now，写入间隙形态）
+  await assert.rejects(
+    () => repo.acquireLock(root, { pollMs: 20, timeoutMs: 120 }),
+    (err) => {
+      assert.equal(err.code, "state-store-busy");
+      assert.match(err.message, /空|超龄/, "busy 文案须覆盖空锁未超龄分支（持有中等待）");
+      return true;
+    },
+    "未超龄空锁必须按持有中处理（等待超时 busy，不得清理抢锁）",
+  );
+  assert.equal(readFileSync(lockPath, "utf8"), "", "未超龄空锁不被等待者清理或重写");
+  assert.equal(existsSync(lockPath), true, "锁文件仍在（未超龄不触发孤儿清理）");
+});
+
+// ---------------------------------------------------------------------------
 // 真实跨进程并发（bl-3）：spawn 两个 node 子进程同时 acquireLock 同一锁路径。
 // 本机 darwin 实测口径；linux 本机无环境未实测（spawn/acquireLock 语义 POSIX 通用，
 // 无平台分支代码，理论可迁移）——沿用任务书 deviation 登记，不做同进程 Promise.all 模拟。
@@ -289,17 +327,17 @@ test("真实跨进程并发：两子进程同时抢同一锁，任一时刻恰�
   assert.equal(acqB.event, "acquired");
   assert.notEqual(acqA.pid, acqB.pid, "两事件来自不同进程（真实跨进程，非同进程模拟）");
   assert.ok(relA.releasedAt >= acqA.acquiredAt && relB.releasedAt >= acqB.acquiredAt, "各自持有区间自洽");
-  // 互斥判定：两个进程的持有区间 [acquiredAt, releasedAt] 不得相交（恰一持有）
-  const overlap = acqA.acquiredAt <= relB.releasedAt && acqB.acquiredAt <= relA.releasedAt;
+  // 互斥判定（真判据）：后获得者不早于先持有者释放（串行持有，区间不相交）。
+  // Date.now() 为毫秒分辨率：同毫秒「释放→获得」两时间戳相等，区间端点相触不算重叠——
+  // 重叠判定取严格小于，否则同毫秒交接被误判为并行双持（假红灯）
+  const overlap = acqA.acquiredAt < relB.releasedAt && acqB.acquiredAt < relA.releasedAt;
   assert.ok(!overlap, "两个子进程的锁持有区间不得重叠（跨进程互斥）");
-  // 释放后另一进程获得：后获者的 acquiredAt 不早于先获者的 releasedAt（无重叠的另一种表述）
   const [first, second] = acqA.acquiredAt <= acqB.acquiredAt ? [acqA, acqB] : [acqB, acqA];
   const firstRel = acqA.acquiredAt <= acqB.acquiredAt ? relA.releasedAt : relB.releasedAt;
   assert.ok(
-    second.acquiredAt >= first.acquiredAt,
-    "两进程先后获得锁（互斥不泄漏，非双双立即成功）",
+    second.acquiredAt >= firstRel,
+    "后获得者的获得时刻不早于先持有者的释放时刻（串行持有，互斥不泄漏）",
   );
-  assert.ok(firstRel >= first.acquiredAt && second.acquiredAt > 0, "后获得者真实完成获取（等待或直接获得均计）");
 });
 
 // ---------------------------------------------------------------------------
