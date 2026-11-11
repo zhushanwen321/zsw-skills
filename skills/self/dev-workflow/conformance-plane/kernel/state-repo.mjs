@@ -35,6 +35,26 @@ export const EMPTY_LOCK_ORPHAN_MS = 10_000;
 // 错误形态：每条错误必须同时携带事实、权威源指向与恢复动作
 // ---------------------------------------------------------------------------
 
+/** 锁文件 mtime（不存在返回 0——调用方以超龄分支语义裁决，空锁超龄必然存在过） */
+function lockMtimeMs(lockPath) {
+  try {
+    return statSync(lockPath).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/** 存在即删除；不存在（并发清理竞态）返回 false，调用方转轮询而非抛裸 ENOENT。导出仅供单测 */
+export function removeIfPresent(lockPath) {
+  try {
+    unlinkSync(lockPath);
+    return true;
+  } catch (err) {
+    if (err && err.code === "ENOENT") return false;
+    throw err;
+  }
+}
+
 function busyError(root, waitedMs) {
   const err = new Error(
     `state-store-busy：状态仓锁等待超时（等了 ${waitedMs}ms）。` +
@@ -126,9 +146,14 @@ export async function acquireLock(root, opts = {}) {
         meta = null; // 空锁文件 / 残缺 JSON：写入间隙或孤儿形态，按年龄裁决
       }
       if (meta === null) {
-        if (Date.now() - statSync(lockPath).mtimeMs > EMPTY_LOCK_ORPHAN_MS) {
-          // 空锁超龄：持有者已在写入间隙崩溃，孤儿锁清理后立即重试获取
-          unlinkSync(lockPath);
+        if (Date.now() - lockMtimeMs(lockPath) > EMPTY_LOCK_ORPHAN_MS) {
+          // 空锁超龄：持有者已在写入间隙崩溃，孤儿锁清理后立即重试获取。
+          // ENOENT = 并发等待者已抢先清理同一孤儿锁——转常规轮询重试，不抛裸 fs 错误
+          //（D6 二轮审查 minor：错误契约要求带恢复动作，不走裸传播）
+          if (!removeIfPresent(lockPath)) {
+            if (Date.now() >= deadline) throw busyError(root, timeoutMs);
+            await sleep(pollMs);
+          }
           continue;
         }
         if (Date.now() >= deadline) throw busyError(root, timeoutMs);
@@ -140,8 +165,11 @@ export async function acquireLock(root, opts = {}) {
         await sleep(pollMs);
         continue;
       }
-      // 元数据在场且持有者死亡 → 清理陈旧锁后立即重试获取
-      unlinkSync(lockPath);
+      // 元数据在场且持有者死亡 → 清理陈旧锁后立即重试获取（ENOENT 同上：并发清理竞态转轮询）
+      if (!removeIfPresent(lockPath)) {
+        if (Date.now() >= deadline) throw busyError(root, timeoutMs);
+        await sleep(pollMs);
+      }
       continue;
     }
     try {

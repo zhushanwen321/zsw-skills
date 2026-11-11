@@ -379,3 +379,17 @@ test("归档态拒写普通命令、放行 Unarchived 且解档后恢复追加�
   assert.equal(res.appended, 1, "解档后恢复追加");
   assert.equal(repo.readEvents(root).length, 2);
 });
+
+// D6 二轮审查 minor：并发清理竞态守卫——removeIfPresent 语义（ENOENT 转 false，其他错误照抛）
+test("removeIfPresent：存在则删除返回 true；已消失（并发清理竞态）返回 false 不抛裸 ENOENT；非 ENOENT fs 错误照抛", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "lock-race-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const target = join(dir, "orphan.lock");
+  writeFileSync(target, "");
+  assert.equal(repo.removeIfPresent(target), true, "存在 → 删除成功");
+  assert.equal(existsSync(target), false);
+  assert.equal(repo.removeIfPresent(target), false, "已消失（并发清理竞态）→ false，不抛裸 ENOENT");
+  const sub = join(dir, "sub");
+  mkdirSync(sub);
+  assert.throws(() => repo.removeIfPresent(sub), (e) => e.code !== "ENOENT", "非 ENOENT fs 错误照抛（不吞错）");
+});
