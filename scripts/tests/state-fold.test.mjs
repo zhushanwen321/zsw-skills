@@ -23,7 +23,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CP = join(ROOT, "skills", "self", "dev-workflow", "conformance-plane", "kernel");
 
 const facts = await import(join(CP, "facts.mjs"));
-const { fold, findOrphanEvidence } = await import(join(CP, "state-fold.mjs"));
+const { fold, findOrphanEvidence, CONCLUSIONS } = await import(join(CP, "state-fold.mjs"));
 
 /** 设计具名词表（权威源：sync-conformance-plane rendered §3 终态段四/五/六/七 + M5 复活通道） */
 const DESIGN_NAMED_EVENTS = [
@@ -269,6 +269,77 @@ test("快照 + 增量等价跨集成审计事件：集成审计在场后新 pass
   assert.equal(impl.pendingIntegration, false);
 });
 
+test("repo 级集成审计聚合：审计先于地址首现 → pass 证据仍 verified（结论与入场顺序无关，bl-7）", () => {
+  const input = baseInput();
+  const ev = (seq) => fact("EvidenceRecorded", seq, {
+    address: ADDR_IMPL,
+    obligationHash: facts.obligationSummaryHash(input.bindings[1]),
+    checkerId: "symbol-scan",
+    checkerVersion: "1.0.0",
+    bindingVersion: 2,
+    inputs: [{ name: "repo-a/src/main.js", hash: "b".repeat(64) }],
+    result: "pass",
+    changesetId: "cs-1",
+  });
+  const gateOk = (seq) => fact("IntegrationGateChecked", seq, {
+    repoId: "repo-a",
+    command: "git apply --check",
+    exitCode: 0,
+    summary: "预检通过",
+    recovery: "非失败记录，无需恢复",
+    failure: false,
+  });
+  // 审计 seq=1 在前、地址首现（pass 证据）seq=2 在后：修复前该形态错误返回 pending-integration
+  const auditFirst = fold({ ...input, facts: [gateOk(1), ev(2)] });
+  const implA = auditFirst.addresses[auditFirst.keys[facts.canonicalJson(ADDR_IMPL)]];
+  assert.equal(implA.conclusion, "verified", "集成审计 seq 在前、地址 pass 证据在后 → verified（repo 级聚合不丢先至事件）");
+  assert.equal(implA.integrationSeen, true, "首现前的集成成功审计必须进地址聚合标记");
+  assert.equal(implA.pendingIntegration, false);
+  // 与反序（地址先入场）等价：两序结论一致
+  const auditLast = fold({ ...input, facts: [ev(1), gateOk(2)] });
+  const implB = auditLast.addresses[auditLast.keys[facts.canonicalJson(ADDR_IMPL)]];
+  assert.equal(implB.conclusion, "verified", "地址先入场、审计后入场 → 同判 verified");
+  assert.equal(JSON.stringify(implA.conclusion) + JSON.stringify(implA.pendingIntegration), JSON.stringify(implB.conclusion) + JSON.stringify(implB.pendingIntegration), "两种入场顺序结论等价");
+  // 挂钩拒绝形态（failure=true）先于首现：blocked 在场，pending-integration 同样退场
+  const gateFail = (seq) => fact("IntegrationGateChecked", seq, {
+    repoId: "repo-a",
+    command: "git -C repo-a pre-commit",
+    exitCode: 1,
+    summary: "挂钩拒绝",
+    recovery: "重新生成变更集",
+    failure: true,
+  });
+  const blockedFirst = fold({ ...input, facts: [gateFail(1), ev(2)] });
+  const implC = blockedFirst.addresses[blockedFirst.keys[facts.canonicalJson(ADDR_IMPL)]];
+  assert.equal(implC.conclusion, "verified", "挂钩拒绝审计先于首现 → pending-integration 退场");
+  assert.equal(implC.integrationBlocked, true);
+  // IntegrationPrecheckFailed 先于首现同理
+  const precheckFirst = fold({
+    ...input,
+    facts: [
+      fact("IntegrationPrecheckFailed", 1, {
+        repoId: "repo-a",
+        command: "git apply --check",
+        exitCode: 1,
+        summary: "补丁冲突",
+        recovery: "重新生成变更集",
+      }),
+      ev(2),
+    ],
+  });
+  const implD = precheckFirst.addresses[precheckFirst.keys[facts.canonicalJson(ADDR_IMPL)]];
+  assert.equal(implD.conclusion, "verified", "预检失败审计先于首现 → pending-integration 退场");
+  assert.equal(implD.integrationBlocked, true);
+  // 跨快照续 fold 等价：审计在上一批、地址首现在增量批
+  const snapshotState = fold({ ...input, facts: [gateOk(1)] });
+  const incremental = fold({ ...input, facts: [ev(2)], initialState: snapshotState });
+  assert.equal(
+    JSON.stringify(incremental),
+    JSON.stringify(auditFirst),
+    "审计先于首现的跨快照续 fold 与全量 fold 逐字节等价（RL2）",
+  );
+});
+
 test("seq 不连续或非正的事实序列被 fold 拒绝（事件序列无空洞）", () => {
   const input = baseInput();
   assert.throws(() => fold({ ...input, facts: [sampleFacts()[0], sampleFacts()[2]] }), /seq/);
@@ -310,6 +381,84 @@ test("awaiting-ruling 由未应答 RulingRequested 派生，RulingRecorded 后�
   const docAnswered = answered.addresses[answered.keys[facts.canonicalJson(ADDR_DOC)]];
   assert.equal(docAnswered.awaitingRuling, false);
   assert.equal(docAnswered.conclusion, "open");
+});
+
+test("RulingRecorded(direction=waived) 后地址终态派生为 waived；重放稳定；verified 优先与最新裁决覆盖（bl-1）", () => {
+  const input = baseInput();
+  const req = fact("RulingRequested", 1, { address: ADDR_DOC, question: "该义务是否豁免（设计撤回声明）？" });
+  const rec = fact("RulingRecorded", 2, { address: ADDR_DOC, direction: "waived", respondsTo: 1 });
+  const state = fold({ ...input, facts: [req, rec] });
+  const doc = state.addresses[state.keys[facts.canonicalJson(ADDR_DOC)]];
+  assert.equal(doc.awaitingRuling, false);
+  assert.equal(doc.lastRuling.direction, "waived");
+  assert.equal(doc.conclusion, "waived", "waived 裁决后 fold 层终态为 waived（权威源不分裂，workflow 层自然贯通）");
+  // 同序重放稳定
+  const replay = fold({ ...input, facts: [{ ...req }, { ...rec }] });
+  assert.equal(JSON.stringify(state), JSON.stringify(replay), "同序重放逐字节相等");
+  // 有效 pass 证据优先级高于 waived（与 workflow 层终态派生同序：awaiting-ruling > verified > waived）
+  const ev = fact("EvidenceRecorded", 3, {
+    address: ADDR_DOC,
+    obligationHash: facts.obligationSummaryHash(input.bindings[0]),
+    checkerId: "symbol-scan",
+    checkerVersion: "1.0.0",
+    bindingVersion: 1,
+    inputs: [{ name: "repo-a/docs/design.md", hash: "a".repeat(64) }],
+    result: "pass",
+  });
+  const afterPass = fold({ ...input, facts: [req, rec, ev] });
+  assert.equal(
+    afterPass.addresses[afterPass.keys[facts.canonicalJson(ADDR_DOC)]].conclusion,
+    "verified",
+    "有效 pass 证据在场时 verified 优先于 waived（与 workflow 层终态派生同序）",
+  );
+  // 最新裁决方向决定 waived 终态去留：waived 后重新裁决 code-right → 回 open
+  const req2 = fact("RulingRequested", 3, { address: ADDR_DOC, question: "重新裁决方向" });
+  const rec2 = fact("RulingRecorded", 4, { address: ADDR_DOC, direction: "code-right", respondsTo: 3 });
+  const reRuled = fold({ ...input, facts: [req, rec, req2, rec2] });
+  assert.equal(
+    reRuled.addresses[reRuled.keys[facts.canonicalJson(ADDR_DOC)]].conclusion,
+    "open",
+    "最新裁决 direction 非 waived 时 waived 终态解除（direction 随 lastRuling 覆盖）",
+  );
+});
+
+test("conclusion 词表常量 CONCLUSIONS：五值齐备、冻结、无重复（收敛循环产出域唯一权威登记）", () => {
+  assert.deepEqual(
+    [...CONCLUSIONS].sort(),
+    ["awaiting-ruling", "open", "pending-integration", "verified", "waived"],
+    "结论词表必须与收敛循环产出域一致（waived 与 verified/open 并列登记）",
+  );
+  assert.ok(Object.isFrozen(CONCLUSIONS), "词表常量必须冻结");
+  assert.equal(CONCLUSIONS.length, new Set(CONCLUSIONS).size, "词表不得有重复成员");
+  // 派生出的 conclusion 全部落在词表内：waived 流 + pending-integration 流混合断言
+  const input = baseInput();
+  const waivedStream = fold({
+    ...input,
+    facts: [
+      fact("RulingRequested", 1, { address: ADDR_DOC, question: "豁免？" }),
+      fact("RulingRecorded", 2, { address: ADDR_DOC, direction: "waived", respondsTo: 1 }),
+    ],
+  });
+  const pendingStream = fold({
+    ...input,
+    facts: [
+      fact("EvidenceRecorded", 1, {
+        address: ADDR_IMPL,
+        obligationHash: facts.obligationSummaryHash(input.bindings[1]),
+        checkerId: "symbol-scan",
+        checkerVersion: "1.0.0",
+        bindingVersion: 2,
+        inputs: [{ name: "repo-a/src/main.js", hash: "b".repeat(64) }],
+        result: "pass",
+        changesetId: "cs-1",
+      }),
+    ],
+  });
+  for (const s of [...Object.values(waivedStream.addresses), ...Object.values(pendingStream.addresses)]) {
+    assert.ok(CONCLUSIONS.includes(s.conclusion), `结论 ${s.conclusion} 必须落在 CONCLUSIONS 词表内`);
+  }
+  assert.equal(waivedStream.addresses[waivedStream.keys[facts.canonicalJson(ADDR_DOC)]].conclusion, "waived");
+  assert.equal(pendingStream.addresses[pendingStream.keys[facts.canonicalJson(ADDR_IMPL)]].conclusion, "pending-integration");
 });
 
 test("verified / pending-integration 由有效 pass 证据派生；证据是唯一 verified 来源", () => {

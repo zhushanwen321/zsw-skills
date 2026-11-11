@@ -213,7 +213,7 @@ async function recordArtifacts(inputHashes) {
   ]);
   await appendCommands(stateRoot, sim2.run().commands);
   const stateWaived = rebuild(stateRoot);
-  step("裁决 waived 后地址结论派生为 waived（引擎终态派生口径）", stateWaived.state.addresses["D2|root|behavior-mismatch"].lastRuling?.direction === "waived" && stateWaived.state.addresses["D2|root|behavior-mismatch"].conclusion === "open");
+  step("裁决 waived 后地址结论派生为 waived（引擎终态派生口径）", stateWaived.state.addresses["D2|root|behavior-mismatch"].lastRuling?.direction === "waived" && stateWaived.state.addresses["D2|root|behavior-mismatch"].conclusion === "waived");
   step("模拟器命令全部过词表校验（calls 轨迹完整）", sim1.run === undefined ? false : true, "sim1/sim2 构造即校验（invalid-simulator-command 抛错路径未触发）");
 
   // ── V13：checker 失败契约（deterministic 退出 20 / semantic 非法输出回喂耗尽 → CheckerFailed） ──

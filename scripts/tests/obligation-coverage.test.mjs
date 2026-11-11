@@ -136,12 +136,19 @@ function repoInput(table) {
   };
 }
 
-/** 覆盖率（对账判据）：分母 = 绑定义务集；verified/pending-integration 地址计分子 */
+/**
+ * 覆盖率（对账判据）：分母 = 绑定义务集；分子只计终态结论（verified/waived——停止判据词表）；
+ * pending-integration 不是完成态（变更集就绪但集成未发生），单列计数不进分子。
+ * 完备性口径：satisfied + pendingIntegration + open = 分母（每义务地址恰一结论桶）。
+ */
 function coverage(state, table) {
   const denominator = table.obligations.length;
   const keys = new Set(table.obligations.map((o) => state.keys[facts.canonicalJson(o.address)]).filter(Boolean));
-  const satisfied = [...keys].filter((k) => ["verified", "pending-integration"].includes(state.addresses[k]?.conclusion)).length;
-  return { denominator, satisfied, ratio: denominator === 0 ? null : satisfied / denominator };
+  const conclusions = [...keys].map((k) => state.addresses[k]?.conclusion ?? "open");
+  const satisfied = conclusions.filter((c) => c === "verified" || c === "waived").length;
+  const pendingIntegration = conclusions.filter((c) => c === "pending-integration").length;
+  const open = conclusions.filter((c) => c === "open").length;
+  return { denominator, satisfied, pendingIntegration, open, ratio: denominator === 0 ? null : satisfied / denominator };
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +166,65 @@ test("覆盖率分母 = 绑定义务集：9 条目 2 绑定 → 分母 2，未�
   const cov = coverage(state, table);
   assert.equal(cov.denominator, 2, "分母只含绑定义务（未绑定 GL1/AS1/D1/OPT*/V1/U1 不进分母）");
   assert.equal(cov.satisfied, 0);
+});
+
+test("coverage 口径对齐停止判据词表：waived 计分子、pending-integration 单列不进分子、三桶合计 = 分母（bl-2）", () => {
+  const mkFact = (type, seq, payload) => ({ type, seq, ts: "2026-11-11T00:00:00.000Z", actor: "engine", ...payload });
+  const addrV = { bindingId: "GL2", repoId: "repo-main", violationKind: "missing-implementation" };
+  const addrW = { bindingId: "PR1", repoId: "repo-main", violationKind: "overimplementation" };
+  const addrP = { bindingId: "PX", repoId: "repo-main", violationKind: "missing-implementation" };
+  const bindings = [
+    { ...addrV, bindingVersion: 1 },
+    { ...addrW, bindingVersion: 1 },
+    { ...addrP, bindingVersion: 1 },
+  ];
+  const input = {
+    archived: false,
+    bindings,
+    repos: [{ repoId: "repo-main" }],
+    checkerRuns: [{ checkerId: "symbol-scan", checkerVersion: "1.0.0" }],
+    changesets: [{ changesetId: "cs-new" }],
+    artifacts: { "src/a.mjs": H1, "src/b.mjs": H2 },
+  };
+  const factsList = [
+    // GL2：有效 pass 证据（无变更集引用）→ verified（终态，计分子）
+    mkFact("EvidenceRecorded", 1, {
+      address: addrV,
+      obligationHash: facts.obligationSummaryHash(bindings[0]),
+      checkerId: "symbol-scan",
+      checkerVersion: "1.0.0",
+      bindingVersion: 1,
+      inputs: [{ name: "src/a.mjs", hash: H1 }],
+      result: "pass",
+    }),
+    // PR1：waived 裁决 → waived（终态，计分子）
+    mkFact("RulingRequested", 2, { address: addrW, question: "是否豁免？" }),
+    mkFact("RulingRecorded", 3, { address: addrW, direction: "waived", respondsTo: 2 }),
+    // PX：变更集就绪待集成（无集成审计事实）→ pending-integration（非完成态，不进分子）
+    mkFact("EvidenceRecorded", 4, {
+      address: addrP,
+      obligationHash: facts.obligationSummaryHash(bindings[2]),
+      checkerId: "symbol-scan",
+      checkerVersion: "1.0.0",
+      bindingVersion: 1,
+      inputs: [{ name: "src/a.mjs", hash: H1 }],
+      result: "pass",
+      changesetId: "cs-new",
+    }),
+  ];
+  const state = fold({ ...input, facts: factsList });
+  const table = { obligations: [addrV, addrW, addrP].map((address) => ({ address })) };
+  const cov = coverage(state, table);
+  assert.equal(cov.denominator, 3);
+  assert.equal(cov.satisfied, 2, "分子只计终态：verified 1 + waived 1");
+  assert.equal(cov.pendingIntegration, 1, "pending-integration 单列计数，不进分子（停止判据不含它）");
+  assert.equal(cov.open, 0);
+  assert.equal(cov.ratio, 2 / 3, "覆盖率 = 终态数 / 分母（pending-integration 不折算为完成）");
+  assert.equal(
+    cov.satisfied + cov.pendingIntegration + cov.open,
+    cov.denominator,
+    "完备性口径：verified + waived + pending-integration + open = 分母（每义务地址恰一结论桶）",
+  );
 });
 
 // ---------------------------------------------------------------------------

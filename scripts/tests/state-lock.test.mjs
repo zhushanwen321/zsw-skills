@@ -10,7 +10,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -183,6 +183,123 @@ test("活进程持真实元数据的锁不被误清（死亡判定不误报）",
   } finally {
     await holder.release();
   }
+});
+
+// ---------------------------------------------------------------------------
+// 写入间隙（空锁文件）持有裁决（bl-4）：openSync(wx) 成功到写元数据之间的空文件
+// 是合法写入间隙，视为「持有中」——等待者不清理、不抢锁，1s 轮询（测试用注入短轮询）
+// 天然覆盖该间隙；清理条件收紧为「元数据在场且 pid 死亡」。
+// ---------------------------------------------------------------------------
+
+test("空锁文件是写入间隙：等待者不清理不抢锁，元数据出现（活持有者）后按正常互斥裁决（bl-4）", async (t) => {
+  const root = tmpRoot(t);
+  const lockPath = join(root, "lock");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(lockPath, ""); // 手工构造 openSync(wx) 已成功、元数据未写入的间隙形态
+  // 等待者轮询：空元数据 = 持有中——不清理、不抢锁、持续等待
+  const waiter = repo.acquireLock(root, { pollMs: 20, timeoutMs: 500 });
+  let settled = false;
+  waiter.then(
+    () => { settled = true; },
+    () => { settled = true; },
+  );
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(settled, false, "写入间隙内等待者持续轮询：既不提前 busy 也不抢先获得锁");
+  assert.equal(readFileSync(lockPath, "utf8"), "", "等待期间空锁文件不得被等待者清理或重写（非持有者不得动它）");
+  // 元数据出现且持有者存活 → 按正常互斥裁决：持续等待直至 busy
+  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: repo.processStartTime(process.pid), acquiredAt: "2026-11-11T00:00:00.000Z" }));
+  await assert.rejects(
+    () => waiter,
+    (err) => err.code === "state-store-busy",
+    "空锁间隙结束后元数据为活持有者 → 正常互斥，等待超时返回 state-store-busy",
+  );
+  const finalMeta = JSON.parse(readFileSync(lockPath, "utf8"));
+  assert.equal(finalMeta.pid, process.pid, "全程等待者的清理通道未触发：锁元数据仍是最初写入者的");
+});
+
+test("空锁间隙结束后元数据为死亡持有者 → 等待者按陈旧锁清理并成功获得（bl-4 联动）", async (t) => {
+  const root = tmpRoot(t);
+  const lockPath = join(root, "lock");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(lockPath, "");
+  // 造一个真实存在过、现已退出的进程 pid 与其启动时间
+  const probe = spawnSync("node", ["-e", "setTimeout(() => {}, 50)"], { encoding: "utf8" });
+  const deadPid = probe.pid;
+  await new Promise((r) => setTimeout(r, 150));
+  const waiter = repo.acquireLock(root, { pollMs: 20, timeoutMs: 2000 });
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(readFileSync(lockPath, "utf8"), "", "空锁期间等待者不得清理");
+  // 死亡持有者元数据出现 → 下一轮轮询按「元数据在场且 pid 死亡」清理并获锁
+  writeFileSync(
+    lockPath,
+    JSON.stringify({ pid: deadPid, startedAt: repo.processStartTime(deadPid) ?? repo.processStartTime(process.pid), acquiredAt: "2026-11-11T00:00:00.000Z" }),
+  );
+  const handle = await waiter;
+  const meta = JSON.parse(readFileSync(lockPath, "utf8"));
+  assert.equal(meta.pid, process.pid, "死亡持有者的锁被清理后等待者获得锁");
+  await handle.release();
+  assert.ok(!existsSync(lockPath), "释放后锁文件删除");
+});
+
+// ---------------------------------------------------------------------------
+// 真实跨进程并发（bl-3）：spawn 两个 node 子进程同时 acquireLock 同一锁路径。
+// 本机 darwin 实测口径；linux 本机无环境未实测（spawn/acquireLock 语义 POSIX 通用，
+// 无平台分支代码，理论可迁移）——沿用任务书 deviation 登记，不做同进程 Promise.all 模拟。
+// ---------------------------------------------------------------------------
+
+test("真实跨进程并发：两子进程同时抢同一锁，任一时刻恰一持有（区间不重叠），释放后另一进程获得（bl-3）", async (t) => {
+  const root = tmpRoot(t);
+  // 子进程脚本落系统临时目录（tmpRoot 在 os.tmpdir 下），通过绝对路径 import kernel
+  const childScript = join(root, "lock-racer-child.mjs");
+  writeFileSync(
+    childScript,
+    [
+      `import { acquireLock } from ${JSON.stringify(join(CP, "state-repo.mjs"))};`,
+      `const root = process.argv[2];`,
+      `const holdMs = Number(process.argv[3] ?? 400);`,
+      `const handle = await acquireLock(root, { pollMs: 25, timeoutMs: 5000 });`,
+      `const acquiredAt = Date.now();`,
+      `console.log(JSON.stringify({ event: "acquired", pid: process.pid, acquiredAt }));`,
+      `await new Promise((r) => setTimeout(r, holdMs));`,
+      `const releasedAt = Date.now();`,
+      `handle.release();`,
+      `console.log(JSON.stringify({ event: "released", pid: process.pid, releasedAt }));`,
+      `process.exit(0);`,
+    ].join("\n"),
+  );
+  const runChild = () =>
+    new Promise((resolve) => {
+      const c = spawn(process.execPath, [childScript, root, "400"], { stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      c.stdout.on("data", (d) => { out += d; });
+      c.stderr.on("data", (d) => { out += d; });
+      c.on("close", (code) => resolve({ code, out }));
+    });
+  const [a, b] = await Promise.all([runChild(), runChild()]);
+  assert.equal(a.code, 0, `子进程 A 正常退出：${a.out}`);
+  assert.equal(b.code, 0, `子进程 B 正常退出：${b.out}`);
+  const parseEvents = ({ out }, label) => {
+    const lines = out.split("\n").filter((l) => l.trim().startsWith("{"));
+    assert.equal(lines.length, 2, `${label} 必须产出 acquired + released 两行事件`);
+    return lines.map((l) => JSON.parse(l));
+  };
+  const [acqA, relA] = parseEvents(a, "A");
+  const [acqB, relB] = parseEvents(b, "B");
+  assert.equal(acqA.event, "acquired");
+  assert.equal(acqB.event, "acquired");
+  assert.notEqual(acqA.pid, acqB.pid, "两事件来自不同进程（真实跨进程，非同进程模拟）");
+  assert.ok(relA.releasedAt >= acqA.acquiredAt && relB.releasedAt >= acqB.acquiredAt, "各自持有区间自洽");
+  // 互斥判定：两个进程的持有区间 [acquiredAt, releasedAt] 不得相交（恰一持有）
+  const overlap = acqA.acquiredAt <= relB.releasedAt && acqB.acquiredAt <= relA.releasedAt;
+  assert.ok(!overlap, "两个子进程的锁持有区间不得重叠（跨进程互斥）");
+  // 释放后另一进程获得：后获者的 acquiredAt 不早于先获者的 releasedAt（无重叠的另一种表述）
+  const [first, second] = acqA.acquiredAt <= acqB.acquiredAt ? [acqA, acqB] : [acqB, acqA];
+  const firstRel = acqA.acquiredAt <= acqB.acquiredAt ? relA.releasedAt : relB.releasedAt;
+  assert.ok(
+    second.acquiredAt >= first.acquiredAt,
+    "两进程先后获得锁（互斥不泄漏，非双双立即成功）",
+  );
+  assert.ok(firstRel >= first.acquiredAt && second.acquiredAt > 0, "后获得者真实完成获取（等待或直接获得均计）");
 });
 
 // ---------------------------------------------------------------------------

@@ -6,16 +6,22 @@
 //   D3   evidenceValid 由全部输入、checker 版本与绑定版本等值计算；谓词不落存储
 //   同序事件重放结论不变（G2 --replay-equivalence / RL2；快照 + 增量 fold 等价全量 fold）
 //
-// 结论派生规则（每地址，按事件时序收敛，缺省 open）：
+// 结论派生规则（每地址，按事件时序收敛，缺省 open；优先级与 workflow 层终态派生同序，
+// workflow 层（design-code-sync-v2 derivedConclusion / reports/outcomes.mjs）消费 fold conclusion 自然贯通）：
 //   1. awaiting-ruling  —— 存在未应答的 RulingRequested（V8 裁决续跑）
 //   2. verified / pending-integration —— 最新 pass 证据经 evaluateEvidence 判定有效：
 //        证据携带 changesetId（变更集就绪，AX7）且该 repo 无集成审计事实 → pending-integration
 //        其余（无变更集引用，或集成审计事实已在场）→ verified
-//   3. CheckerFailed 不伪造 verified：义务保持 open，失败四要素留存 lastCheckerFailure 可查（段五）
-//   4. archived 是包级派生谓词：输入归档标记 + Unarchived 事件解档（段七复活通道，M5）
+//   3. waived —— 最新裁决 direction=waived 且无更高优先结论（AX8 义务终态；新一轮
+//      RulingRequested 重新打开裁决流程回到 awaiting-ruling，direction 变更随 lastRuling 覆盖）
+//   4. CheckerFailed 不伪造 verified：义务保持 open，失败四要素留存 lastCheckerFailure 可查（段五）
+//   5. archived 是包级派生谓词：输入归档标记 + Unarchived 事件解档（段七复活通道，M5）
 
 import { canonicalJson, validateFact, obligationSummaryHash } from "./facts.mjs";
 import { evaluateEvidence } from "./evidence.mjs";
+
+/** 地址结论词表（fold 派生唯一产出域；扩词表必须同步结论收敛循环分支） */
+export const CONCLUSIONS = Object.freeze(["open", "awaiting-ruling", "verified", "pending-integration", "waived"]);
 
 /** 地址派生键：bindingId|repoId|violationKind（AX2） */
 export function addressKey(address) {
@@ -32,7 +38,9 @@ function emptyAddressState(address) {
     evidence: { status: "none", reasons: [] }, // none | valid | invalid（invalid 时 reasons 可查，V3）
     pendingIntegration: false,
     integrationBlocked: false,
-    integrationSeen: false, // 该 repo 集成审计事实已在场——随快照携带（RL2 快照+增量等价全量 fold）
+    // 该 repo 集成成功审计（IntegrationGateChecked failure !== true）已在场——创建时由 repo 级
+    // 预扫描聚合初始化（事件先于地址首现不丢失），随快照携带（RL2 快照+增量等价全量 fold）
+    integrationSeen: false,
     lastCheckerFailure: null,
     lastRuling: null,
   };
@@ -57,6 +65,14 @@ export function fold(input) {
   const keys = {};
   let unarchivedSeen = false;
   let lastSeq = 0;
+  // repo 级集成审计聚合（预扫描全部事件，地址首现前即建立）：集成审计事实是 repo 级事实，
+  // 不得依赖地址入场顺序——事件先于地址首现时结论必须与后于首现一致。两集合与下方事件
+  // 循环分支共用同一判定式：阻断 = IntegrationPrecheckFailed 或 failure === true（挂钩拒绝）；
+  // 集成成功在场 = IntegrationGateChecked 且 failure !== true。
+  // 快照切点可能落在「repo 级事件已发生、地址未首现」之间，聚合随快照携带（RL2：快照+增量
+  // 等价全量 fold），initialState 携带的历史聚合与本批预扫描并集生效。
+  const integrationSeenRepos = new Set();
+  const integrationBlockedRepos = new Set();
   if (initialState) {
     for (const s of Object.values(initialState.addresses)) {
       addresses.set(s.key, structuredClone(s));
@@ -64,6 +80,8 @@ export function fold(input) {
     }
     unarchivedSeen = Boolean(initialState.unarchivedSeen);
     lastSeq = initialState.seq;
+    for (const r of initialState.integrationSeenRepos ?? []) integrationSeenRepos.add(r);
+    for (const r of initialState.integrationBlockedRepos ?? []) integrationBlockedRepos.add(r);
   }
 
   // 事件序列无空洞：seq 从当前 lastSeq+1 起连续（AX3 权威完整性）
@@ -75,6 +93,15 @@ export function fold(input) {
       throw err;
     }
     expect++;
+  }
+
+  // repo 级聚合预扫描：合并本批全部事件（排序输出保证产物逐字节确定性，RL2）
+  for (const f of facts) {
+    if (f.type === "IntegrationGateChecked") {
+      (f.failure === true ? integrationBlockedRepos : integrationSeenRepos).add(f.repoId);
+    } else if (f.type === "IntegrationPrecheckFailed") {
+      integrationBlockedRepos.add(f.repoId);
+    }
   }
 
   const resolveAddress = (f) => {
@@ -93,7 +120,11 @@ export function fold(input) {
     }
     const key = addressKey(f.address);
     if (!addresses.has(key)) {
-      addresses.set(key, emptyAddressState(f.address));
+      const s = emptyAddressState(f.address);
+      // 创建即携带本批全流聚合终值（含首现之前的同 repo 集成审计事件效果）
+      s.integrationSeen = integrationSeenRepos.has(f.address.repoId);
+      s.integrationBlocked = integrationBlockedRepos.has(f.address.repoId);
+      addresses.set(key, s);
       keys[canonicalJson(f.address)] = key;
     }
     return addresses.get(key);
@@ -137,8 +168,6 @@ export function fold(input) {
       }
       case "EvidenceRecorded": {
         const s = resolveAddress(f);
-        const evidenceFacts = (s._evidenceFacts ??= []);
-        evidenceFacts.push(f);
         if (f.result === "pass") {
           // 只由最新 pass 证据派生有效性（内容变化自动失效，AX4/D3）
           const verdict = evaluateEvidence(f, { bindings, checkerRuns, artifacts });
@@ -157,16 +186,15 @@ export function fold(input) {
       }
       case "IntegrationGateChecked":
       case "IntegrationPrecheckFailed": {
+        // repo 级聚合已在预扫描完成（integrationSeenRepos / integrationBlockedRepos）；此处对
+        // 已入场地址做幂等更新，判定式与预扫描一致。集成审计在场 = 离开 pending-integration（V12 分层）
         const repoId = f.repoId;
+        const blocked = f.type === "IntegrationPrecheckFailed" || f.failure === true;
         for (const s of addresses.values()) {
           if (s.address.repoId !== repoId) continue;
-          s.integrationSeen = true;
-          if (f.type === "IntegrationPrecheckFailed" || f.failure === true) {
-            s.integrationBlocked = true;
-            s.pendingIntegration = false;
-          } else {
-            s.pendingIntegration = false; // 集成审计在场 = 离开 pending-integration（V12 分层）
-          }
+          if (blocked) s.integrationBlocked = true;
+          else s.integrationSeen = true;
+          s.pendingIntegration = false;
         }
         break;
       }
@@ -190,12 +218,13 @@ export function fold(input) {
     }
   }
 
-  // 结论收敛（优先级：awaiting-ruling > verified/pending-integration > open；CheckerFailed 保持 open）
+  // 结论收敛（优先级与头部派生规则一致：awaiting-ruling > verified/pending-integration > waived > open；
+  // CheckerFailed 保持 open；waived 按最新裁决方向派生——RulingRecorded direction 变更随 lastRuling 覆盖）
   for (const s of addresses.values()) {
     if (s.awaitingRuling) s.conclusion = "awaiting-ruling";
     else if (s.verification === "verified") s.conclusion = s.pendingIntegration ? "pending-integration" : "verified";
+    else if (s.lastRuling?.direction === "waived") s.conclusion = "waived";
     else s.conclusion = "open";
-    delete s._evidenceFacts;
     // pendingRulingSeq / integrationSeen 保留在产物中：initialState 续 fold 依赖它们保持与全量 fold
     // 等价（RL2）——respondsTo 配对校验依赖 pendingRulingSeq，pass 证据的 pending-integration 派生
     // 依赖 integrationSeen；两者都是流内事实在场标记（seq/布尔），非结论谓词（AX5 不涉）
@@ -207,6 +236,9 @@ export function fold(input) {
     seq: lastSeq,
     keys,
     addresses: Object.fromEntries(addresses),
+    // repo 级聚合随产物/快照携带（排序数组保证逐字节确定性）；initialState 续 fold 时并入
+    integrationSeenRepos: [...integrationSeenRepos].sort(),
+    integrationBlockedRepos: [...integrationBlockedRepos].sort(),
     summary: {
       byConclusion: countBy([...addresses.values()].map((s) => s.conclusion)),
       archived: Boolean(archived) && !unarchivedSeen,

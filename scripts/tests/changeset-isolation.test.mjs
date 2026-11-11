@@ -46,6 +46,23 @@ const { createSandbox, releaseSandbox, sweepHost, measureObjectCounts, hostResid
 const { createManifest, readManifest, verifyManifest } = manifestMod;
 const { integrateChangeset } = integratorMod;
 
+/**
+ * 测试自有工具（原 sandbox.mjs 导出下沉至此，bl-8/bl-6 裁决）：agent 阶段禁用命令检查义务——
+ * 禁产对象命令（FORBIDDEN_OBJECT_COMMANDS）命中即拒。设计防线只有两层（模板 prompt 注入 +
+ * 收尾 count-objects 对账），引擎不接线本检查；此处仅供测试断言命令清单检查行为。
+ */
+function assertNoObjectCommands(commands) {
+  const offenders = commands.filter((c) => FORBIDDEN_OBJECT_COMMANDS.includes(c));
+  if (offenders.length > 0) {
+    const err = new Error(
+      `sandbox 内禁用产对象命令（第④类裁决）：${offenders.join(", ")}。` +
+        `恢复动作：改用工作树级 diff 产补丁（git diff / git diff --no-index）；产对象只发生在集成器阶段。`,
+    );
+    err.code = "forbidden-object-command";
+    throw err;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 夹具基座（全部落 os.tmpdir；对项目仓零 git 写操作）
 // ---------------------------------------------------------------------------
@@ -252,7 +269,7 @@ test("反例注入可检出：sandbox 内 git add 使宿主对象库计数增长
     assert.equal(HOST_WRITE_POINTS.find((w) => w.kind === "shared-object-store").policy, "forbidden");
     assert.deepEqual([...FORBIDDEN_OBJECT_COMMANDS], ["add", "commit", "stash", "hash-object"]);
     assert.throws(
-      () => sandboxMod.assertNoObjectCommands(["add"]),
+      () => assertNoObjectCommands(["add"]),
       (e) => e.code === "forbidden-object-command" && /恢复动作/.test(e.message),
       "命令清单检查器拒绝禁产命令",
     );

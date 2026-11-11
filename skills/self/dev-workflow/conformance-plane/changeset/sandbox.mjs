@@ -55,7 +55,7 @@ export const HOST_WRITE_POINTS = Object.freeze([
   },
 ]);
 
-/** 禁产对象命令清单（第④类裁决的命令面；agent 在 sandbox 内禁止使用） */
+/** 禁产对象命令清单（第④类裁决的禁用命令清单；agent 在 sandbox 内禁止使用） */
 export const FORBIDDEN_OBJECT_COMMANDS = Object.freeze(["add", "commit", "stash", "hash-object"]);
 
 /** worktree 临时分支前缀（②类写入点的命名空间；清扫通道按此前缀识别孤儿分支） */
@@ -223,16 +223,4 @@ export function hostResidueProbe(repoRoot, { branchPrefix = SANDBOX_BRANCH_PREFI
   const status = gitOk(repoRoot, ["status", "--porcelain"], "status-failed", "git status --porcelain");
   const dirtyFiles = status.split("\n").filter((l) => l.trim() !== "");
   return { worktreeEntries, sandboxBranches, dirtyFiles };
-}
-
-/** sandbox 内禁产对象命令清单的运行时提示（agent 阶段检查义务；检测载体见 HOST_WRITE_POINTS[3]） */
-export function assertNoObjectCommands(commands) {
-  const offenders = commands.filter((c) => FORBIDDEN_OBJECT_COMMANDS.includes(c));
-  if (offenders.length > 0) {
-    throw sandboxError(
-      "forbidden-object-command",
-      `sandbox 内禁用产对象命令（第④类裁决）：${offenders.join(", ")}。` +
-        `恢复动作：改用工作树级 diff 产补丁（git diff / git diff --no-index）；产对象只发生在集成器阶段。`,
-    );
-  }
 }

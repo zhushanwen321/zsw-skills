@@ -99,19 +99,22 @@ export async function acquireLock(root, opts = {}) {
       fd = openSync(lockPath, "wx");
     } catch (e) {
       if (e.code !== "EEXIST") throw e;
-      // 锁被占用：死亡进程锁清理（设计段四「进程死亡可清理」）
+      // 锁被占用：持有裁决与死亡清理（设计段四「进程死亡可清理」）。
+      // 持有裁决语义（bl-4）：空元数据 / 残缺 JSON = 持有者 openSync(wx) 成功到 writeFileSync
+      // 写元数据之间的合法写入间隙（1s 轮询天然覆盖），视为「持有中」——不清理、不抢锁，
+      // 继续轮询。清理条件收紧为「元数据在场且持有者死亡（pid 不存在或启动时间不符 = pid 复用）」。
       let meta = null;
       try {
         meta = JSON.parse(readFileSync(lockPath, "utf8"));
       } catch {
-        /* 元数据残缺按陈旧锁处理 */
+        meta = null; // 空锁文件 / 残缺 JSON：写入间隙形态，按持有中处理
       }
-      if (meta && holderAlive(meta)) {
+      if (!meta || holderAlive(meta)) {
         if (Date.now() >= deadline) throw busyError(root, timeoutMs);
         await sleep(pollMs);
         continue;
       }
-      // 持有者死亡 / pid 复用 / 元数据残缺 → 清理陈旧锁后立即重试获取
+      // 元数据在场且持有者死亡 → 清理陈旧锁后立即重试获取
       unlinkSync(lockPath);
       continue;
     }
