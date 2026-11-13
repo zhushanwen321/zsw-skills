@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // check-no-text-assertion.mjs — 断言路径文字匹配防回潮门禁（2026-11-04 结构化断言改造配套）
 //
-// 背景：四技能 workflow 引擎的断言已按「结构化断言改造」字段化（判定依据 = agent 产结构化
+// 背景：workflow 引擎的断言已按「结构化断言改造」字段化（判定依据 = agent 产结构化
 // 字段或 JSON 文件；自由文本/工具输出上的字面搜索判定全部退役——审计与分析见
 // dev-workflow 门禁文本匹配审计）。本脚本防两类回潮：
 //   ① 已退役判定点的字面匹配复活；
@@ -31,6 +31,9 @@ const TARGETS = [
   "skills/self/dev-workflow/workflows/src/design-code-sync-loop.shared.ts",
   "skills/self/dev-workflow/workflows/src/wave-executor.shared.ts",
   "skills/self/dev-workflow/workflows/src/tech-review-loop.shared.ts",
+  "skills/self/dev-workflow/workflows/src/contract-design.shared.ts",
+  "skills/self/dev-workflow/workflows/src/candidate-build.shared.ts",
+  "skills/self/dev-workflow/workflows/src/independent-assurance.shared.ts",
 ];
 // 覆盖六类字面匹配 API（2026-11-04 审查缺陷 7 修正：只扫三类会漏 .match/.exec/
 // startsWith/endsWith 回潮——本次退役的判定点恰有 /词表符号.../.exec 与 startsWith("[process]") 形态）

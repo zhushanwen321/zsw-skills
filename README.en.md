@@ -29,6 +29,7 @@ scripts/           Dual-platform workflow build and validation scripts
 |-------|-------------|
 | tech-design-wf | Produces a complete design package in three stages: design document writing → adversarial review loop → implementation plan (impl-plan in dual formats) |
 | dev-flow-wf | Turn the complete design package produced by tech-design-wf into accepted code |
+| delivery-wf | Generic design and delivery skill: product contracts, candidate implementation, independent assurance, and a single delivery verdict; includes dual-platform workflows and risk-scaled execution |
 | symbol-watchlist | Symbol watchlist generation and self-check tool (extract-backticks.mjs): shared contract carrier for tech-design-wf T3 watchlist production and dev-flow-wf D5 pre-launch self-check |
 | design-code-sync | Keep code implementation and design documents in sync |
 | architecture-clean-domain-design | Domain modeling and architecture analysis with DDD and hexagonal architecture as analysis lenses: ubiquitous language, bounded contexts, aggregate invariants, ring-nature mapping; records and maps only — never outputs structural transformation designs |

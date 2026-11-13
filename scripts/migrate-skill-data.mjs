@@ -10,7 +10,7 @@
 //
 // 检测算法唯一来源 = skills/self/dev-workflow/workflows/src/skill-data.shared.ts
 // 的 NODE_PROJECT_ADDRESS 探针。本脚本不复制算法：启动时读单源文件、vm 取探针串，
-// 对每个 projectRoot 以 `node -e <探针> <root>` 实跑（与四个 workflow 运行期同一
+// 对每个 projectRoot 以 `node -e <探针> <root>` 实跑（与各 workflow 运行期同一
 // 子进程通道）。单源文件按产物形态约束不导出模块符号（zcode 产物禁 import/export），
 // 探针串即它的可执行契约。
 //

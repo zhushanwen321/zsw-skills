@@ -8,9 +8,9 @@
 //   1. 改技能自有文件未 bump → 拦（非 0 退出 + 恢复动作文案在场）
 //   2. 改技能自有文件且 bump（产物同步重建）→ 放行
 //   3. 改 workflows/src/ 纯注释（产物零 diff）→ 放行（规则 2 豁免）
-//   4. 改 workflows/src/ 且产物变、未 bump → 拦（两技能联动文案，两个技能各一条）
+//   4. 改 workflows/src/ 且产物变、未 bump → 拦（全部技能联动文案，每个技能各一条）
 //   5. frontmatter bump 后产物未重建 → 拦（规则 3 版本戳一致性）
-//   6. 共享源 + 产物变 + 两技能联动 bump → 放行（规则 2 的正向路径）
+//   6. 共享源 + 产物变 + 全部技能联动 bump → 放行（规则 2 的正向路径）
 //   7. 工作区未暂存改动不参与判定 → 放行（提交门只对索引内容负责）
 //
 // 运行：node scripts/tests/check-version-discipline.test.mjs
@@ -28,6 +28,7 @@ const WORKFLOWS = "skills/self/dev-workflow/workflows";
 const SKILL_DIRS = {
   "tech-design-wf": "skills/self/dev-workflow/tech-design-wf",
   "dev-flow-wf": "skills/self/dev-workflow/dev-flow-wf",
+  "delivery-wf": "skills/self/dev-workflow/delivery-wf",
 };
 // 与检查器 PRODUCT_SKILL 同域的产物清单（新增产物时两处同步）
 const PRODUCTS = [
@@ -39,6 +40,14 @@ const PRODUCTS = [
   "pi/dev-consistency-loop.js",
   "design-code-sync-loop.dwf.ts",
   "pi/design-code-sync-loop.js",
+  "design-code-sync-v2.dwf.ts",
+  "pi/design-code-sync-v2.js",
+  "contract-design.dwf.ts",
+  "pi/contract-design.js",
+  "candidate-build.dwf.ts",
+  "pi/candidate-build.js",
+  "independent-assurance.dwf.ts",
+  "pi/independent-assurance.js",
 ];
 
 const skillMd = (name, version) => `---\nname: ${name}\nversion: ${version}\ndescription: fixture\n---\n\n# ${name}\n`;
@@ -56,7 +65,7 @@ function git(root, args) {
   return r.stdout;
 }
 
-/** 最小 fixture 仓：两技能 frontmatter + 各自一个自有文件 + 共享源 + 八份带版本戳的产物 */
+/** 最小 fixture 仓：三技能 frontmatter + 各自一个自有文件 + 共享源 + 全部带版本戳的产物 */
 function makeFixture() {
   const root = mkdtempSync(join(tmpdir(), "version-discipline-"));
   for (const [skill, dir] of Object.entries(SKILL_DIRS)) {
@@ -147,7 +156,7 @@ test("改 workflows/src/ 纯注释（产物零 diff）→ 放行", (t) => {
   assert.match(r.output, /逐字节相同 → 豁免/);
 });
 
-test("改 workflows/src/ 且产物变、未 bump → 拦（两技能联动文案）", (t) => {
+test("改 workflows/src/ 且产物变、未 bump → 拦（全部技能联动文案）", (t) => {
   const root = makeFixture();
   cleanup(t, root);
   appendLine(root, `${WORKFLOWS}/src/skill-data.shared.ts`, "// 行为变更");
@@ -159,7 +168,8 @@ test("改 workflows/src/ 且产物变、未 bump → 拦（两技能联动文案
   assert.match(r.output, /规则 2（共享源联动）/);
   assert.match(r.output, /tech-design-wf/);
   assert.match(r.output, /dev-flow-wf/);
-  assert.match(r.output, /两技能联动升版本/);
+  assert.match(r.output, /delivery-wf/);
+  assert.match(r.output, /全部技能联动升版本/);
   assert.match(r.output, /恢复动作：/);
 });
 
@@ -176,12 +186,13 @@ test("frontmatter bump 后产物未重建 → 拦（版本戳一致性）", (t) 
   assert.match(r.output, /node scripts\/build-workflows\.mjs/);
 });
 
-test("共享源 + 产物变 + 两技能联动 bump → 放行", (t) => {
+test("共享源 + 产物变 + 全部技能联动 bump → 放行", (t) => {
   const root = makeFixture();
   cleanup(t, root);
   appendLine(root, `${WORKFLOWS}/src/skill-data.shared.ts`, "// 行为变更");
   setSkillVersion(root, "tech-design-wf", "0.1.1");
   setSkillVersion(root, "dev-flow-wf", "0.1.1");
+  setSkillVersion(root, "delivery-wf", "0.1.1");
   for (const rel of PRODUCTS) {
     appendLine(root, `${WORKFLOWS}/${rel}`, "// 产物随共享源变化");
     setStamp(root, rel, "0.1.1");

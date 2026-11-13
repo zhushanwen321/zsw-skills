@@ -627,16 +627,16 @@ test("workflow-observe.mjs：裸 --help / -h 打印用法 exit 0（先于子命�
 
 // ── 7. 构建器 ──
 
-test("构建器：全量 --check 不漏检（四个 workflow 全部接入观测且三平台产物一致）", () => {
-  // 断言口径：全量 --check 必须覆盖全部四个 workflow（不悄悄漏检禁碰文件）且四份产物
+test("构建器：全量 --check 不漏检（全部 workflow 接入观测且三平台产物一致）", () => {
+  // 断言口径：全量 --check 必须覆盖全部 workflow（不悄悄漏检禁碰文件）且各份产物
   // 在三个落点（仓内双平台 + ~/.zcode/workflows saved 副本）全部一致
   const r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
   assert.equal(r.status, 0, `全量 --check 应全绿：\n${r.stdout}\n${r.stderr}`);
-  for (const name of ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop"]) {
+  for (const name of ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop", "design-code-sync-v2", "contract-design", "candidate-build", "independent-assurance"]) {
     assert.ok(r.stdout.includes(name), `全量 --check 输出须覆盖 ${name}（不得漏检）`);
     assert.ok(r.stdout.includes(`${name}.dwf.ts（一致）`), `${name} 产物应一致：\n${r.stdout}\n${r.stderr}`);
   }
-  assert.ok(!r.stdout.includes("未接入观测"), "四个 workflow 均已接入观测，不应再出现未接入分支");
+  assert.ok(!r.stdout.includes("未接入观测"), "全部 workflow 均已接入观测，不应再出现未接入分支");
   assert.ok(r.stdout.includes("stage=D5"), "design-code-sync-loop 应输出 D5 观测契约行");
 });
 
@@ -644,7 +644,7 @@ test("构建器：--only 未知名报错 exit 2；--only 全部 workflow 构建�
   let r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "no-such"], { encoding: "utf8" });
   assert.equal(r.status, 2);
   assert.ok(r.stderr.includes("未知 workflow 名"), r.stderr);
-  r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "tech-review-loop,wave-executor,dev-consistency-loop,design-code-sync-loop"], { encoding: "utf8" });
+  r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "tech-review-loop,wave-executor,dev-consistency-loop,design-code-sync-loop,design-code-sync-v2,contract-design,candidate-build,independent-assurance"], { encoding: "utf8" });
   assert.equal(r.status, 0, `--only 构建应绿：\n${r.stdout}\n${r.stderr}`);
   assert.ok(r.stdout.includes("--only 生效"), r.stdout);
   assert.ok(r.stdout.includes("观测契约"), "构建应输出观测契约核对结果");
@@ -1454,5 +1454,716 @@ test("五项寻址登记与代码常量一致（skill-data-addressing.md §2 con
   for (const f of ["migration/cutover.mjs", "reports/render.mjs", "migration/legacy-import.mjs"]) {
     const src = readFileSync(join(CP, ...f.split("/")), "utf8");
     assert.ok(src.includes("skill-data-addressing.md"), `${f} 模块头/常量注释应指向登记行`);
+  }
+});
+
+// ── 10. delivery-wf 三 workflow（DESIGN / BUILD / ASSURE）双平台真实产物 ──
+//
+// 源文件先于产物落盘是常态（workflow 实现者写 src/，主会话统一构建产物）——产物未生成
+// 或内嵌 SKILL_VERSION 落后于 SKILL.md frontmatter 时本节跳过并说明原因，构建后
+// （node scripts/build-workflows.mjs）自动启用；跳过不是静默的，node --test 会在
+// 输出中逐条打印 skip 原因。
+const DELIVERY_WFS = ["contract-design", "candidate-build", "independent-assurance"];
+const DELIVERY_SKILL_VERSION =
+  readFileSync(join(ROOT, "skills/self/dev-workflow/delivery-wf/SKILL.md"), "utf8").match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m)?.[1] ?? null;
+const DELIVERY_PRODUCTS_READY = DELIVERY_SKILL_VERSION !== null && DELIVERY_WFS.every((n) => {
+  for (const p of [join(WF, `${n}.dwf.ts`), join(WF, "pi", `${n}.js`)]) {
+    if (!existsSync(p)) return false;
+    if (!readFileSync(p, "utf8").includes(`const SKILL_VERSION = "${DELIVERY_SKILL_VERSION}";`)) return false;
+  }
+  return true;
+});
+const DELIVERY_SKIP_REASON =
+  `delivery-wf 双平台产物未生成或内嵌 SKILL_VERSION 落后于 SKILL.md frontmatter（当前 ${DELIVERY_SKILL_VERSION ?? "无版本"}）` +
+  "——主会话跑 node scripts/build-workflows.mjs 后本节用例启用";
+
+/** 事件写入凭据桩（模拟 delivery-gate init 输出的角色私钥：builderKey 只进 candidate-build、assuranceKey 只进 independent-assurance） */
+const DELIVERY_BUILDER_KEY = "-----BEGIN PRIVATE KEY-----\nStubBuilderKeyForTests\n-----END PRIVATE KEY-----\n";
+const DELIVERY_ASSURANCE_KEY = "-----BEGIN PRIVATE KEY-----\nStubAssuranceKeyForTests\n-----END PRIVATE KEY-----\n";
+/** 用户凭据桩（approve-contract / accept-risk 的 --user-key；绝不注入 workflow） */
+const DELIVERY_USER_KEY = "-----BEGIN PRIVATE KEY-----\nStubUserKeyForTests\n-----END PRIVATE KEY-----\n";
+/** 桩裁决器缺省 verdict：state/missing 形态对齐 delivery-gate buildVerdict 输出 */
+const DELIVERY_BASE_VERDICT = {
+  state: "implementing", taskId: "obs-task", revision: "rev1", contractVersion: 1,
+  requirements: [], implementedIncrementIds: [], openFindings: [],
+  missing: {
+    contractApproval: false, incrementIds: [], evidence: [],
+    assuranceCompleted: false, explorationCompleted: false, riskAcceptances: [],
+  },
+  nextAction: "stub", generatedBy: "delivery-gate", generatedAt: "2026-01-01T00:00:00.000Z",
+};
+
+/** 构造 delivery 最小环境：项目根 + 任务目录（契约/增量/事件）+ 假 skill（角色提示词
+ *  + 桩裁决器：evaluate 按 verdicts 队列出参——多元素逐个弹出、剩最后一个时重复；
+ *  append 强制 --key 私钥与事件 actor 角色匹配（跨角色私钥拒绝），并把事件落盘
+ *  events.jsonl 供断言；approve-contract/accept-risk 强制 --user-key）。
+ *  withSkill=false 时省略 skill 目录——setup 必读路径缺失即 setup-failure 场景 */
+function makeDeliveryScaffold(home, { withSkill = true, verdicts = [], events = [], requirements, incrementItems } = {}) {
+  const projectRoot = join(home, "proj");
+  mkdirSync(projectRoot, { recursive: true });
+  const taskDir = join(home, "task");
+  mkdirSync(join(taskDir, "evidence"), { recursive: true });
+  writeFileSync(join(taskDir, "task.json"), JSON.stringify({ schemaVersion: 1, taskId: "obs-task", projectRoot }));
+  writeFileSync(join(taskDir, "events.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + (events.length ? "\n" : ""));
+  writeFileSync(join(taskDir, "contract.json"), JSON.stringify({
+    schemaVersion: 1, contractVersion: 1, taskId: "obs-task", projectRoot,
+    objective: "观测验证用目标",
+    requirements: requirements ?? [{ id: "R1", kind: "goal", statement: "外部可观察行为", required: true, riskAcceptable: false, evidenceKinds: ["inspection"] }],
+    nonGoals: [], riskLevel: "low", exploratoryReview: "not-required", reviewDimensions: [],
+  }));
+  writeFileSync(join(taskDir, "solution.md"), "# 解决方案\n");
+  writeFileSync(join(taskDir, "increments.json"), JSON.stringify({
+    schemaVersion: 1, contractVersion: 1,
+    items: incrementItems ?? [{ id: "I1", title: "首个增量", requirementIds: ["R1"] }],
+  }));
+  if (withSkill) {
+    const roles = join(home, ".agents/skills/delivery-wf/references/roles");
+    const scripts = join(home, ".agents/skills/delivery-wf/scripts");
+    mkdirSync(roles, { recursive: true });
+    mkdirSync(scripts, { recursive: true });
+    for (const r of ["designer", "contract-reviewer", "builder", "coverage-reviewer", "explorer"]) {
+      writeFileSync(join(roles, `${r}.md`), `# ${r} 桩角色\n`);
+    }
+    writeFileSync(join(scripts, "gate-verdicts.json"), JSON.stringify(verdicts.length > 0 ? verdicts : [DELIVERY_BASE_VERDICT]));
+    writeFileSync(join(scripts, "delivery-gate.mjs"), [
+      "import fs from 'node:fs';",
+      "import path from 'node:path';",
+      "const cmd = process.argv[2];",
+      "const argv = process.argv.slice(3);",
+      "const opt = (n) => { const i = argv.indexOf('--' + n); return i >= 0 ? argv[i + 1] : undefined; };",
+      "if (cmd === 'evaluate') {",
+      "  const p = path.join(path.dirname(process.argv[1]), 'gate-verdicts.json');",
+      "  const list = JSON.parse(fs.readFileSync(p, 'utf8'));",
+      "  const verdict = list.length > 1 ? list.shift() : list[0];",
+      "  fs.writeFileSync(p, JSON.stringify(list));",
+      "  process.stdout.write(JSON.stringify(verdict));",
+      "  process.exit(0);",
+      "}",
+      "if (cmd === 'validate-contract') process.exit(0);",
+      "if (cmd === 'append') {",
+      "  const key = opt('key');",
+      "  if (typeof key !== 'string' || !key.includes('PRIVATE KEY')) {",
+      "    process.stderr.write('append 需要有效 --key 私钥');",
+      "    process.exit(2);",
+      "  }",
+      "  const event = JSON.parse(opt('event'));",
+      "  const actorKeyMark = { builder: 'StubBuilderKeyForTests', assurance: 'StubAssuranceKeyForTests' };",
+      "  const expectedMark = event.actor === 'user' ? 'StubUserKeyForTests' : actorKeyMark[event.actor];",
+      "  if (expectedMark && !key.includes(expectedMark)) {",
+      "    process.stderr.write('私钥角色与事件 actor 不匹配：' + event.actor);",
+      "    process.exit(2);",
+      "  }",
+      "  fs.appendFileSync(path.join(opt('task-dir'), 'events.jsonl'), JSON.stringify(event) + '\\n');",
+      "  process.exit(0);",
+      "}",
+      "if (cmd === 'approve-contract' || cmd === 'accept-risk') {",
+      "  const key = opt('user-key');",
+      "  if (typeof key !== 'string' || !key.includes('PRIVATE KEY')) {",
+      "    process.stderr.write(cmd + ' 需要 --user-key 私钥');",
+      "    process.exit(2);",
+      "  }",
+      "  process.exit(0);",
+      "}",
+      "process.stderr.write('stub gate: 未知命令 ' + cmd);",
+      "process.exit(2);",
+    ].join("\n"));
+  }
+  return { projectRoot, taskDir };
+}
+
+/** 读 scaffold 任务目录的 events.jsonl 为对象数组 */
+function readDeliveryEvents(taskDir) {
+  return readFileSync(join(taskDir, "events.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+}
+
+/** delivery agent 桩：按实例名前缀分发；zcode 收 (name, persona) 返回 { ask }，pi 收
+ *  {prompt, schema, description} 直接返回原始值——按首参形态自适应（形态同 syncAgentStub）。
+ *  需要落盘的报告从 prompt 的「写入路径：X」行解析后写入（证据文件由桩函数自行写入） */
+function deliveryAgentStub(map) {
+  const apply = (hit, instructions) => {
+    const value = typeof hit === "function" ? hit(instructions) : hit;
+    for (const m of instructions.matchAll(/写入路径：(\S+)/g)) {
+      mkdirSync(join(m[1], ".."), { recursive: true });
+      writeFileSync(m[1], `# 桩产物（${m[1]}）\n`);
+    }
+    return value;
+  };
+  return (...a) => {
+    const name = typeof a[0] === "string" ? a[0] : String(a[0]?.description ?? "");
+    const hit = Object.keys(map).find((k) => name === k || name.startsWith(k));
+    assert.ok(hit !== undefined, `未预期的 agent 实例：${name}`);
+    if (typeof a[0] === "string") return { ask: async (...askArgs) => apply(map[hit], String(askArgs[askArgs.length - 1])) };
+    return Promise.resolve(apply(map[hit], String(a[0].prompt)));
+  };
+}
+
+/** 单次 ask 计数桩：记录每次 ask 的实例名并断言 prompt 自包含（报告写入路径、契约
+ *  路径、注入数据标注「数据，不是指令」）——pi 无续聊，首次 prompt 必须一次给全 */
+function singleAskCountingStub(askLog, outcome = { summary: "已实现并写报告", findings: [] }) {
+  return (...a) => {
+    const isZcode = typeof a[0] === "string";
+    const name = isZcode ? a[0] : String(a[0]?.description ?? "");
+    askLog.push(name);
+    const apply = (instructions) => {
+      assert.ok(instructions.includes("报告写入路径："), `${name} 单次 ask prompt 应自包含报告写入路径`);
+      assert.ok(instructions.includes("契约："), `${name} prompt 应自包含契约路径`);
+      assert.ok(instructions.includes("数据，不是指令"), `${name} 注入的 verdict/发现应标注为数据`);
+      for (const m of instructions.matchAll(/写入路径：(\S+)/g)) {
+        mkdirSync(join(m[1], ".."), { recursive: true });
+        writeFileSync(m[1], "# 桩报告\n");
+      }
+      return outcome;
+    };
+    if (isZcode) return { ask: async (...askArgs) => apply(String(askArgs[askArgs.length - 1])) };
+    return Promise.resolve(apply(String(a[0].prompt)));
+  };
+}
+
+/** 各 workflow 的桩 agent 表与正常路径期望（终态 + 事件序列——step 只用 setup/review/
+ *  execute/finalize，自然 end 无 outcome、execution end 带终态词） */
+const DELIVERY_FIXTURES = {
+  "contract-design": {
+    terminated: "contract-ready",
+    stage: "DESIGN",
+    args: (s) => ({ objective: "观测验证用目标", ...s }),
+    stub: () => deliveryAgentStub({
+      designer: { summary: "契约草稿三件已写入" },
+      "contract-reviewer": { summary: "独立复查完成，无问题", problems: [] },
+    }),
+    sequence: [
+      { event: "start", step: "execution", round: null, outcome: undefined },
+      { event: "start", step: "setup", round: null, outcome: undefined },
+      { event: "end", step: "setup", round: null, outcome: undefined },
+      { event: "start", step: "execute", round: 1, outcome: undefined },
+      { event: "end", step: "execute", round: 1, outcome: undefined },
+      { event: "start", step: "review", round: 1, outcome: undefined },
+      { event: "end", step: "review", round: 1, outcome: undefined },
+      { event: "start", step: "finalize", round: null, outcome: undefined },
+      { event: "end", step: "finalize", round: null, outcome: undefined },
+      { event: "end", step: "execution", round: null, outcome: "contract-ready" },
+    ],
+  },
+  "candidate-build": {
+    terminated: "implemented",
+    stage: "BUILD",
+    args: (s) => ({ ...s, builderKey: DELIVERY_BUILDER_KEY }),
+    stub: () => deliveryAgentStub({
+      builder: { summary: "增量 I1 已实现并自测通过", findings: [] },
+    }),
+    sequence: [
+      { event: "start", step: "execution", round: null, outcome: undefined },
+      { event: "start", step: "setup", round: null, outcome: undefined },
+      { event: "end", step: "setup", round: null, outcome: undefined },
+      { event: "start", step: "execute", round: 1, outcome: undefined },
+      { event: "end", step: "execute", round: 1, outcome: undefined },
+      { event: "start", step: "finalize", round: null, outcome: undefined },
+      { event: "end", step: "finalize", round: null, outcome: undefined },
+      { event: "end", step: "execution", round: null, outcome: "implemented" },
+    ],
+  },
+  "independent-assurance": {
+    terminated: "assurance-completed",
+    stage: "ASSURE",
+    args: (s) => ({ ...s, assuranceKey: DELIVERY_ASSURANCE_KEY }),
+    stub: (s) => deliveryAgentStub({
+      "coverage-review": () => {
+        const artifact = `${s.taskDir}/evidence/cov-R1-inspection.log`;
+        writeFileSync(artifact, "原始检视记录（桩）\n");
+        return {
+          summary: "逐项核对完成",
+          evidence: [{ requirementId: "R1", kind: "inspection", result: "verified", artifact }],
+          findings: [],
+          resolvedFindingIds: [],
+        };
+      },
+    }),
+    sequence: [
+      { event: "start", step: "execution", round: null, outcome: undefined },
+      { event: "start", step: "setup", round: null, outcome: undefined },
+      { event: "end", step: "setup", round: null, outcome: undefined },
+      { event: "start", step: "review", round: 1, outcome: undefined },
+      { event: "end", step: "review", round: 1, outcome: undefined },
+      { event: "start", step: "execute", round: 1, outcome: undefined },
+      { event: "end", step: "execute", round: 1, outcome: undefined },
+      { event: "start", step: "finalize", round: null, outcome: undefined },
+      { event: "end", step: "finalize", round: null, outcome: undefined },
+      { event: "end", step: "execution", round: null, outcome: "assurance-completed" },
+    ],
+  },
+};
+
+/** 三 workflow 通用 zcode 执行（脚手架 + 桩 agent + 观测参数） */
+async function runDeliveryZcode(home, name, executionId, extraObs = {}) {
+  const fixture = DELIVERY_FIXTURES[name];
+  const s = makeDeliveryScaffold(home);
+  return runZcodeArtifact(
+    home,
+    fixture.args({ projectRoot: s.projectRoot, taskDir: s.taskDir, ...obsArgs("t-dwf", executionId, extraObs) }),
+    fixture.stub(s),
+    name,
+  );
+}
+
+test("delivery-wf zcode：三 workflow setup-failure（skill 未装）4 行完整事件与 stage/skill 字段", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  for (const name of DELIVERY_WFS) {
+    const home = tmpHome();
+    try {
+      const s = makeDeliveryScaffold(home, { withSkill: false });
+      const { result } = await runZcodeArtifact(
+        home,
+        DELIVERY_FIXTURES[name].args({ projectRoot: s.projectRoot, taskDir: s.taskDir, ...obsArgs("t-dwf", "e-sf") }),
+        undefined,
+        name,
+      );
+      assert.equal(result.terminated, "setup-failure", `${name} 应在必读路径缺失时 setup-failure`);
+      assert.ok(result.message.includes("恢复动作"), `${name} 失败消息应含恢复动作`);
+      const lines = readJsonl(home, "t-dwf", "e-sf");
+      assert.deepEqual(
+        lines.map((l) => ({ event: l.event, step: l.step, outcome: l.outcome })),
+        [
+          { event: "start", step: "execution", outcome: undefined },
+          { event: "start", step: "setup", outcome: undefined },
+          { event: "end", step: "setup", outcome: "setup-failure" },
+          { event: "end", step: "execution", outcome: "setup-failure" },
+        ],
+        `${name} setup-failure 事件序列`,
+      );
+      lines.forEach((l) => assertContract(l, { task_id: "t-dwf", execution_id: "e-sf", skill: "delivery-wf", stage: DELIVERY_FIXTURES[name].stage }));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("delivery-wf pi：setup-failure 双平台对拍一致（除 timestamp）", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  const home = tmpHome();
+  const prevHome = process.env.HOME;
+  process.env.HOME = home; // pi 壳 world.run 走 spawnSync 继承进程 env
+  try {
+    const piLinesByName = new Map();
+    for (const name of DELIVERY_WFS) {
+      const s = makeDeliveryScaffold(home, { withSkill: false });
+      const { result } = await runPiArtifact(
+        home,
+        DELIVERY_FIXTURES[name].args({ projectRoot: s.projectRoot, taskDir: s.taskDir, ...obsArgs("t-dwf", "e-pi-sf") }),
+        undefined,
+        name,
+      );
+      assert.equal(result.terminated, "setup-failure", `${name} pi 应 setup-failure`);
+      piLinesByName.set(name, readJsonl(home, "t-dwf", "e-pi-sf").map(({ timestamp, ...rest }) => rest));
+    }
+    const zcHome = tmpHome();
+    try {
+      for (const name of DELIVERY_WFS) {
+        const s = makeDeliveryScaffold(zcHome, { withSkill: false });
+        await runZcodeArtifact(
+          zcHome,
+          DELIVERY_FIXTURES[name].args({ projectRoot: s.projectRoot, taskDir: s.taskDir, ...obsArgs("t-dwf", "e-pi-sf") }),
+          undefined,
+          name,
+        );
+        const zcLines = readJsonl(zcHome, "t-dwf", "e-pi-sf").map(({ timestamp, ...rest }) => rest);
+        assert.deepEqual(piLinesByName.get(name), zcLines, `${name} 双平台 setup-failure 事件应逐字段一致`);
+      }
+    } finally {
+      rmSync(zcHome, { recursive: true, force: true });
+    }
+  } finally {
+    process.env.HOME = prevHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("delivery-wf zcode：正常路径事件序列逐行断言（contract-ready / implemented / assurance-completed）", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  for (const name of DELIVERY_WFS) {
+    const fixture = DELIVERY_FIXTURES[name];
+    const home = tmpHome();
+    try {
+      const { result, logs } = await runDeliveryZcode(home, name, "e-ok", { sampleType: "selftest" });
+      assert.equal(result.terminated, fixture.terminated, `${name} 正常路径终态：${result.message}`);
+      const lines = readJsonl(home, "t-dwf", "e-ok");
+      assert.deepEqual(
+        lines.map((l) => ({ event: l.event, step: l.step, round: l.round, outcome: l.outcome })),
+        fixture.sequence,
+        `${name} 正常路径事件序列`,
+      );
+      lines.forEach((l) =>
+        assertContract(l, { task_id: "t-dwf", execution_id: "e-ok", skill: "delivery-wf", stage: fixture.stage, sample_type: "selftest" }),
+      );
+      assert.ok(lines.every((l) => l.attempt === null), "delivery workflow 不做 attempt 自动检测，应恒 null");
+      assert.ok(!logs.some((l) => l.includes("WARN: 观测")), `不应有观测告警：${logs.join("|")}`);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("delivery-wf zcode：不传观测参数业务照常、无观测文件无告警", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  for (const name of DELIVERY_WFS) {
+    const fixture = DELIVERY_FIXTURES[name];
+    const home = tmpHome();
+    try {
+      const s = makeDeliveryScaffold(home);
+      const { result, logs } = await runZcodeArtifact(
+        home,
+        fixture.args({ projectRoot: s.projectRoot, taskDir: s.taskDir }),
+        fixture.stub(s),
+        name,
+      );
+      assert.equal(result.terminated, fixture.terminated, `${name} 无观测参数业务照常：${result.message}`);
+      assert.ok(!existsSync(join(home, ".agents/skill-data/workflow-observability")), `${name} 不应创建观测根目录`);
+      assert.ok(!logs.some((l) => l.includes("WARN: 观测")), `${name} 合法关闭不告警`);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("delivery-wf pi：正常路径双平台对拍一致（除 timestamp）", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  const home = tmpHome();
+  const prevHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const piLinesByName = new Map();
+    for (const name of DELIVERY_WFS) {
+      const fixture = DELIVERY_FIXTURES[name];
+      const s = makeDeliveryScaffold(home);
+      const { result } = await runPiArtifact(
+        home,
+        fixture.args({ projectRoot: s.projectRoot, taskDir: s.taskDir, ...obsArgs("t-dwf", "e-pi-ok") }),
+        fixture.stub(s),
+        name,
+      );
+      assert.equal(result.terminated, fixture.terminated, `${name} pi 正常路径终态：${result.message}`);
+      piLinesByName.set(name, readJsonl(home, "t-dwf", "e-pi-ok").map(({ timestamp, ...rest }) => rest));
+    }
+    const zcHome = tmpHome();
+    try {
+      for (const name of DELIVERY_WFS) {
+        const { result } = await runDeliveryZcode(zcHome, name, "e-pi-ok");
+        assert.equal(result.terminated, DELIVERY_FIXTURES[name].terminated);
+        const zcLines = readJsonl(zcHome, "t-dwf", "e-pi-ok").map(({ timestamp, ...rest }) => rest);
+        assert.deepEqual(piLinesByName.get(name), zcLines, `${name} 双平台正常路径事件应逐字段一致`);
+      }
+    } finally {
+      rmSync(zcHome, { recursive: true, force: true });
+    }
+  } finally {
+    process.env.HOME = prevHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("delivery-wf zcode：independent-assurance 探索分支——explorer 与 coverage 并行派发且维度全覆盖", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  const home = tmpHome();
+  try {
+    const s = makeDeliveryScaffold(home);
+    // 高风险契约：探索性审查 required + 两个维度
+    const contractPath = join(s.taskDir, "contract.json");
+    const contract = JSON.parse(readFileSync(contractPath, "utf8"));
+    contract.riskLevel = "high";
+    contract.exploratoryReview = "required";
+    contract.reviewDimensions = ["边界条件", "错误路径"];
+    writeFileSync(contractPath, JSON.stringify(contract));
+    const asked = [];
+    const agent = (name) => {
+      asked.push(name);
+      return {
+        ask: async (...a) => {
+          const instructions = String(a[a.length - 1]);
+          for (const m of instructions.matchAll(/写入路径：(\S+)/g)) writeFileSync(m[1], "# 桩报告\n");
+          if (name.startsWith("coverage")) {
+            const artifact = `${s.taskDir}/evidence/cov-R1-inspection.log`;
+            writeFileSync(artifact, "原始检视记录（桩）\n");
+            return {
+              summary: "逐项核对完成",
+              evidence: [{ requirementId: "R1", kind: "inspection", result: "verified", artifact }],
+              findings: [],
+              resolvedFindingIds: [],
+            };
+          }
+          return { summary: "探索完成", dimensions: ["边界条件", "错误路径"], findings: [] };
+        },
+      };
+    };
+    const { result } = await runZcodeArtifact(
+      home,
+      { projectRoot: s.projectRoot, taskDir: s.taskDir, assuranceKey: DELIVERY_ASSURANCE_KEY, ...obsArgs("t-dwf", "e-exp") },
+      agent,
+      "independent-assurance",
+    );
+    assert.equal(result.terminated, "assurance-completed", `探索分支应走完保证流程：${result.message}`);
+    assert.deepEqual(asked, ["coverage-review", "explorer-review"], "coverage 与 explorer 两席都应被派发（前缀互斥）");
+    const lines = readJsonl(home, "t-dwf", "e-exp");
+    assert.deepEqual(
+      lines.map((l) => ({ event: l.event, step: l.step, round: l.round, outcome: l.outcome })),
+      DELIVERY_FIXTURES["independent-assurance"].sequence,
+      "探索分支事件序列应与基础路径同构（两位角色同一 review 轮内并行）",
+    );
+    const evidenceFiles = readdirSync(join(s.taskDir, "evidence"));
+    for (const prefix of ["coverage-", "exploration-", "assurance-"]) {
+      assert.ok(evidenceFiles.some((f) => f.startsWith(prefix)), `evidence/ 应含 ${prefix}* 报告：${evidenceFiles.join(", ")}`);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("delivery-wf zcode：前置状态门禁——draft/contract-approved/missing.incrementIds 拒绝且不派 agent", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  const cases = [
+    { name: "candidate-build", verdict: { ...DELIVERY_BASE_VERDICT, state: "draft" }, needle: "draft" },
+    { name: "independent-assurance", verdict: { ...DELIVERY_BASE_VERDICT, state: "draft" }, needle: "draft" },
+    { name: "independent-assurance", verdict: { ...DELIVERY_BASE_VERDICT, state: "contract-approved" }, needle: "contract-approved" },
+    {
+      name: "independent-assurance",
+      verdict: { ...DELIVERY_BASE_VERDICT, missing: { ...DELIVERY_BASE_VERDICT.missing, incrementIds: ["I1"] } },
+      needle: "missing.incrementIds",
+    },
+  ];
+  for (const c of cases) {
+    const home = tmpHome();
+    try {
+      const s = makeDeliveryScaffold(home, { verdicts: [c.verdict] });
+      const workflowArgs = c.name === "candidate-build"
+        ? { builderKey: DELIVERY_BUILDER_KEY }
+        : { assuranceKey: DELIVERY_ASSURANCE_KEY };
+      const { result } = await runZcodeArtifact(
+        home,
+        { projectRoot: s.projectRoot, taskDir: s.taskDir, ...workflowArgs },
+        undefined,
+        c.name,
+      );
+      assert.equal(result.terminated, "setup-failure", `${c.name}/${c.needle} 应被前置门禁拒绝：${result.message}`);
+      assert.ok(result.message.includes(c.needle), `${c.name}/${c.needle} 消息应点名拒绝原因`);
+      assert.ok(result.message.includes("恢复动作"), `${c.name}/${c.needle} 消息应含恢复动作`);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("delivery-wf 双平台：candidate-build 每增量单次 builder ask 且 prompt 自包含", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  const home = tmpHome();
+  const prevHome = process.env.HOME;
+  process.env.HOME = home; // pi 壳 world.run 走 spawnSync 继承进程 env
+  try {
+    const piAsk = [];
+    const s = makeDeliveryScaffold(home);
+    const { result } = await runPiArtifact(
+      home,
+      { projectRoot: s.projectRoot, taskDir: s.taskDir, builderKey: DELIVERY_BUILDER_KEY },
+      singleAskCountingStub(piAsk),
+      "candidate-build",
+    );
+    assert.equal(result.terminated, "implemented", `pi 单次 ask 正常路径：${result.message}`);
+    assert.deepEqual(piAsk, ["builder-I1"], "pi 每增量只 ask 一次（无续聊，不二次补报告）");
+    assert.ok(
+      readDeliveryEvents(s.taskDir).some((e) => e.type === "ImplementationRecorded" && e.incrementId === "I1"),
+      "pi append 应带 --key 通过桩校验并落盘实现事件",
+    );
+    const zcHome = tmpHome();
+    try {
+      const zcAsk = [];
+      const zcS = makeDeliveryScaffold(zcHome);
+      const { result: zcResult, logs } = await runZcodeArtifact(
+        zcHome,
+        { projectRoot: zcS.projectRoot, taskDir: zcS.taskDir, builderKey: DELIVERY_BUILDER_KEY },
+        singleAskCountingStub(zcAsk),
+        "candidate-build",
+      );
+      assert.equal(zcResult.terminated, "implemented", `zcode 单次 ask 正常路径：${zcResult.message}`);
+      assert.deepEqual(zcAsk, ["builder-I1"], "zcode 每增量只 ask 一次");
+      const reportFile = readdirSync(join(zcS.taskDir, "evidence")).find((f) => f.startsWith("implementation-"));
+      assert.ok(reportFile !== undefined, "实现报告应存在");
+      assert.ok(
+        readFileSync(join(zcS.taskDir, "evidence", reportFile), "utf8").includes("引擎测试摘要"),
+        "引擎应把测试摘要追加进实现报告",
+      );
+    } finally {
+      rmSync(zcHome, { recursive: true, force: true });
+    }
+  } finally {
+    process.env.HOME = prevHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("delivery-wf zcode：修复轮仅 rework 命中未决发现/失败证据的增量，旧实现事件保留", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  const twoReqs = [
+    { id: "R1", kind: "goal", statement: "行为一", required: true, riskAcceptable: false, evidenceKinds: ["inspection"] },
+    { id: "R2", kind: "goal", statement: "行为二", required: true, riskAcceptable: false, evidenceKinds: ["inspection"] },
+  ];
+  const twoItems = [
+    { id: "I1", title: "增量一", requirementIds: ["R1"] },
+    { id: "I2", title: "增量二", requirementIds: ["R2"] },
+  ];
+  const implEvent = (incrementId, revision) => ({
+    eventId: `ev-impl-${incrementId}-${revision}`, type: "ImplementationRecorded", actor: "builder",
+    contractVersion: 1, revision, summary: `旧实现 ${incrementId}`, incrementId, artifact: "/dev/null",
+    recordedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const scenarios = [
+    {
+      label: "未决发现命中 R1 → 只 rework I1",
+      verdict: {
+        ...DELIVERY_BASE_VERDICT, implementedIncrementIds: ["I1", "I2"],
+        openFindings: [{ findingId: "F1", requirementIds: ["R1"], severity: "blocker", artifact: "/dev/null", riskAccepted: false }],
+      },
+      expected: ["I1"],
+    },
+    {
+      label: "当前 failed 证据命中 R2 → 只 rework I2",
+      verdict: {
+        ...DELIVERY_BASE_VERDICT, implementedIncrementIds: ["I1", "I2"],
+        requirements: [
+          { id: "R1", required: true, riskAcceptable: false, status: "verified", evidence: [], riskAccepted: false },
+          { id: "R2", required: true, riskAcceptable: false, status: "failed", evidence: [], riskAccepted: false },
+        ],
+      },
+      expected: ["I2"],
+    },
+    {
+      label: "无关联需求的 blocker 发现 → 全部增量 rework",
+      verdict: {
+        ...DELIVERY_BASE_VERDICT, implementedIncrementIds: ["I1", "I2"],
+        openFindings: [{ findingId: "F9", requirementIds: [], severity: "blocker", artifact: "/dev/null", riskAccepted: false }],
+      },
+      expected: ["I1", "I2"],
+    },
+  ];
+  for (const scenario of scenarios) {
+    const home = tmpHome();
+    try {
+      const s = makeDeliveryScaffold(home, {
+        verdicts: [scenario.verdict],
+        events: [implEvent("I1", "rev0"), implEvent("I2", "rev0")],
+        requirements: twoReqs,
+        incrementItems: twoItems,
+      });
+      const asked = [];
+      const { result, logs } = await runZcodeArtifact(
+        home,
+        { projectRoot: s.projectRoot, taskDir: s.taskDir, builderKey: DELIVERY_BUILDER_KEY },
+        singleAskCountingStub(asked),
+        "candidate-build",
+      );
+      assert.equal(result.terminated, "implemented", `${scenario.label}：${result.message}`);
+      assert.deepEqual(asked, scenario.expected.map((id) => `builder-${id}`), scenario.label);
+      const appended = readDeliveryEvents(s.taskDir);
+      assert.equal(
+        appended.filter((e) => e.type === "ImplementationRecorded" && e.revision === "rev0").length,
+        2,
+        `${scenario.label}：旧实现事件必须保留`,
+      );
+      assert.deepEqual(
+        appended.filter((e) => e.type === "ImplementationRecorded" && e.revision === "rev1").map((e) => e.incrementId),
+        scenario.expected,
+        `${scenario.label}：仅命中增量追加新实现事件`,
+      );
+      if (!scenario.expected.includes("I2")) {
+        assert.ok(logs.some((l) => l.includes("I2")), `${scenario.label}：跳过未命中增量应有日志说明`);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("delivery-wf zcode：testCommand 无法执行属基础设施失败——不登记 FindingRaised，build-failed 前 re-evaluate", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  const home = tmpHome();
+  try {
+    const s = makeDeliveryScaffold(home, {
+      incrementItems: [{ id: "I1", title: "首个增量", requirementIds: ["R1"], testCommand: { program: "no-such-bin-zzz", args: [] } }],
+    });
+    const asked = [];
+    const { result } = await runZcodeArtifact(
+      home,
+      { projectRoot: s.projectRoot, taskDir: s.taskDir, builderKey: DELIVERY_BUILDER_KEY },
+      singleAskCountingStub(asked),
+      "candidate-build",
+    );
+    assert.equal(result.terminated, "build-failed", `应 build-failed：${result.message}`);
+    assert.ok(result.message.includes("无法执行"), "失败消息应说明 testCommand 无法执行");
+    assert.ok(result.verdict !== null && result.verdict.state === "implementing", "build-failed 返回的 verdict 应为重新 evaluate 的当前裁决");
+    assert.ok(!readDeliveryEvents(s.taskDir).some((e) => e.type === "FindingRaised"), "基础设施失败不得登记 FindingRaised");
+    assert.ok(readdirSync(join(s.taskDir, "evidence")).some((f) => f.startsWith("build-failure-")), "failure 产物应落盘");
+    assert.deepEqual(asked, ["builder-I1"], "失败路径同样只有单次 ask");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("delivery-wf zcode：testCommand 退出非零登记关联增量需求的 blocker finding；builder 产品发现照常登记", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  const home = tmpHome();
+  try {
+    // 产品测试失败（命令可执行、退出码 3）：登记关联该增量需求的 blocker finding
+    const s = makeDeliveryScaffold(home, {
+      incrementItems: [{ id: "I1", title: "首个增量", requirementIds: ["R1"], testCommand: { program: "node", args: ["-e", "process.exit(3)"] } }],
+    });
+    const { result } = await runZcodeArtifact(
+      home,
+      { projectRoot: s.projectRoot, taskDir: s.taskDir, builderKey: DELIVERY_BUILDER_KEY },
+      singleAskCountingStub([]),
+      "candidate-build",
+    );
+    assert.equal(result.terminated, "build-failed");
+    const raised = readDeliveryEvents(s.taskDir).filter((e) => e.type === "FindingRaised");
+    assert.equal(raised.length, 1, "测试失败登记一条 blocker finding");
+    assert.equal(raised[0].severity, "blocker");
+    assert.deepEqual(raised[0].requirementIds, ["R1"], "finding 应关联该增量声明的需求，供下轮修复轮精准 rework");
+    assert.ok(result.verdict !== null, "build-failed 返回前重新 evaluate，verdict 非空");
+    // 基础设施失败叠加 builder 产品申报：产品发现照常登记，基础设施错误本身不登记
+    const home2 = tmpHome();
+    try {
+      const s2 = makeDeliveryScaffold(home2, {
+        incrementItems: [{ id: "I1", title: "首个增量", requirementIds: ["R1"], testCommand: { program: "no-such-bin-zzz", args: [] } }],
+      });
+      const { result: r2 } = await runZcodeArtifact(
+        home2,
+        { projectRoot: s2.projectRoot, taskDir: s2.taskDir, builderKey: DELIVERY_BUILDER_KEY },
+        singleAskCountingStub([], {
+          summary: "已实现并写报告",
+          findings: [{ summary: "产品缺陷：边界处理缺失", requirementIds: ["R1"], severity: "non-blocker" }],
+        }),
+        "candidate-build",
+      );
+      assert.equal(r2.terminated, "build-failed");
+      const raised2 = readDeliveryEvents(s2.taskDir).filter((e) => e.type === "FindingRaised");
+      assert.deepEqual(
+        raised2.map((e) => e.summary),
+        ["产品缺陷：边界处理缺失"],
+        "builder 申报的产品发现照常登记；基础设施失败自身不登记 finding",
+      );
+    } finally {
+      rmSync(home2, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("delivery-wf zcode：independent-assurance revision 漂移显式 assurance-failed，本轮事件带 setup revision", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+  const home = tmpHome();
+  try {
+    const s = makeDeliveryScaffold(home, {
+      verdicts: [
+        { ...DELIVERY_BASE_VERDICT, state: "candidate" },
+        { ...DELIVERY_BASE_VERDICT, state: "candidate", revision: "rev2" },
+      ],
+    });
+    const { result } = await runZcodeArtifact(
+      home,
+      { projectRoot: s.projectRoot, taskDir: s.taskDir, assuranceKey: DELIVERY_ASSURANCE_KEY },
+      DELIVERY_FIXTURES["independent-assurance"].stub(s),
+      "independent-assurance",
+    );
+    assert.equal(result.terminated, "assurance-failed", `revision 漂移应显式失败：${result.message}`);
+    assert.ok(result.message.includes("rev1") && result.message.includes("rev2"), "消息应比对 setup 与 finalize revision");
+    assert.ok(result.message.includes("失效"), "消息应说明本轮证据失效");
+    assert.ok(result.verdict !== null && result.verdict.revision === "rev2", "漂移时 verdict 应为当前裁决（rev2）");
+    const appended = readDeliveryEvents(s.taskDir);
+    assert.ok(appended.length > 0 && appended.every((e) => e.revision === "rev1"), "本轮以 setup revision 追加的事件全部带 rev1");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });

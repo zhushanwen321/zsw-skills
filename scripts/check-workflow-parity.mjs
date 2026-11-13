@@ -2,7 +2,7 @@
 // check-workflow-parity.mjs — zcode/pi 双平台 workflow 脚本对账守卫
 //
 // 用法：
-//   node scripts/check-workflow-parity.mjs            对账四对脚本，违规 exit 1
+//   node scripts/check-workflow-parity.mjs            对账全部脚本对，违规 exit 1
 //   node scripts/check-workflow-parity.mjs --update   打印当前真实差集（人工核对后回填 WHITELIST）
 //
 // 对账域 = 两侧「正文段」的字符串字面量静态文本（词法扫描提取；模板串 ${} 表达式
@@ -33,10 +33,13 @@ const PAIRS = [
   "dev-consistency-loop",
   "design-code-sync-loop",
   "design-code-sync-v2",
+  "contract-design",
+  "candidate-build",
+  "independent-assurance",
 ];
 
 // 探针注入不变量（维度 5）的单一权威源：skill-data.shared.ts（寻址算法唯一权威源，
-// 构建器整层注入四产物）。提取方式 = 按行正则抓单行字符串常量值——该文件头注的形态
+// 构建器整层注入全部产物）。提取方式 = 按行正则抓单行字符串常量值——该文件头注的形态
 // 约束（探针常量单行、串内无双引号与反斜杠）是本提取的依赖，破坏即在此报错
 const SKILL_DATA_SRC = join(ROOT, DIR, "src", "skill-data.shared.ts");
 const PROBE_CONST_NAMES = ["NODE_PROBE_HOME", "NODE_PROJECT_SLUG"];
@@ -77,7 +80,7 @@ const WHITELIST = new Set([
   "runs 一次性无续跑通道，修订脚本后重跑即可。",
   "退役判定 agent 返回无效（␘）。恢复动作：同步修复成果已在工作区/commit 中，AmendWorkflow 修订退役 prompt 后重跑",
   "退役判定 agent 返回无效（␘）。恢复动作：同步修复成果已在工作区/commit 中，修订脚本退役 prompt 后重跑",
-  // —— 迁移期活条目（W3/W4 未切分，整句 G 措辞仍在产物中；四对全迁完后删除） ——
+  // —— 迁移期活条目（W3/W4 未切分，整句 G 措辞仍在产物中；全部壳迁移完后删除） ——
   "参数校验失败：␘。恢复动作：修正参数后经 CreateWorkflow 重新发起；若修订续跑（AmendWorkflow）：args 不透传、attempt 留空会自动递增使节点缓存零命中从头重跑——参数值与 attempt 原值一并固化进脚本常量再 amend",
   "参数校验失败：␘。恢复动作：修正参数后重新 workflow run 发起（pi runs 一次性：修订脚本后重跑即可，防产物覆盖用 attempt 递增）",
   // —— 拼接壳 G 常量（恢复指引拆为壳常量后两侧措辞各自成串；W1 已迁移） ——
@@ -105,6 +108,11 @@ const WHITELIST = new Set([
   "remaining",
   "not-started",
   "verified-pending-integration",
+  // —— delivery-wf independent-assurance EvidenceConclusion.kind union 与 requirements
+  //    类型标注的证据类型字面量（同上形态：仅 zcode 侧类型位置成串；业务串两侧同文） ——
+  "command",
+  "scenario",
+  "inspection",
 
   // —— B shim（pi 专属运行环境） ——
   "node:child_process",

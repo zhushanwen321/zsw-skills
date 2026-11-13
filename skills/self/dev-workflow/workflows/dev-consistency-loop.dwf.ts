@@ -590,10 +590,10 @@ async function obsCloseExecution(outcome: string): Promise<void> {
 //   git 不可用（非 git 目录 / git 失败）或 |S| < 2 → 单仓形态兜底，输出与现行
 //   算法逐字节相同（AX5：单仓项目寻址零变化）。projectRoot 不存在时第一步
 //   realpath 抛错退出（设计内失败形态）。
-// 消费方 = 四个业务 workflow 的探针引用点（node -e 子进程通道，argv 传
+// 消费方 = 各业务 workflow 的探针引用点（node -e 子进程通道，argv 传
 // projectRoot；NODE_PROJECT_ADDRESS 输出 JSON 契约
 // { form: "workspace"|"single", slug, workspaceRoot?, worktreeName? }）；
-// 构建器（scripts/build-workflows.mjs）把本文件全文整层拼进四个产物（启动校验层
+// 构建器（scripts/build-workflows.mjs）把本文件全文整层拼进全部产物（启动校验层
 // 之后、观测层之后、业务正文之前），业务源不再内联探针串——改算法只改本文件，
 // 产物重建即全量生效。
 //
@@ -646,7 +646,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "1.1.4"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.5"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
 // W3 dev-consistency-loop — dev-flow-wf D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：

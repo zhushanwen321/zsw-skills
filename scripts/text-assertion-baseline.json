@@ -183,197 +183,197 @@
    "protocol-parse"
   ],
   [
-   399,
+   426,
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
    "enum-check"
   ],
   [
-   405,
+   432,
    "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");",
    "path-set"
   ],
   [
-   436,
+   463,
    "const watchlist = watchlistRaw.startsWith(\"/\") ? watchlistRaw : \"\";",
    "path-set"
   ],
   [
-   457,
+   484,
    "const abs = p.startsWith(\"/\");",
    "path-set"
   ],
   [
-   554,
+   581,
    ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));",
    "path-set"
   ],
   [
-   694,
+   721,
    "const abs = tok.startsWith(\"/\") ? tok : `${rootDir}/${tok}`;",
    "path-set"
   ],
   [
-   695,
+   722,
    "if (!affected.includes(abs)) affected.push(abs);",
    "path-set"
   ],
   [
-   815,
+   849,
    ".map((fp) => (fp.trim().startsWith(\"/\") ? fp.trim() : `${rootDir}/${fp.trim()}`));",
    "path-set"
   ],
   [
-   896,
+   930,
    "if (fi.some((f) => fj.includes(f))) {",
    "enum-check"
   ],
   [
-   918,
+   952,
    "if (rest.startsWith(\"\\\"\") && rest.endsWith(\"\\\"\") && rest.length >= 2) rest = rest.slice(1, -1);",
    "protocol-parse"
   ],
   [
-   919,
+   953,
    "if (rest.includes(\" -> \")) {",
    "protocol-parse"
   ],
   [
-   936,
+   970,
    "if (token.length < 3 || !token.includes(\"/\")) return \"\";",
    "path-set"
   ],
   [
-   937,
+   971,
    "return /\\.[A-Za-z0-9]+$/.test(token) ? token : \"\";",
    "path-set"
   ],
   [
-   1006,
+   1040,
    "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${homeDir}/${p.slice(2)}` : p);",
    "path-set"
   ],
   [
-   1128,
+   1183,
    "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +",
    "protocol-parse"
   ],
   [
-   1129,
+   1184,
    "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +",
    "protocol-parse"
   ],
   [
-   1133,
+   1188,
    "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;",
    "format-validation"
   ],
   [
-   1387,
+   1442,
    "const rel = (p: string): string => (p.startsWith(`${projectRoot}/`) ? p.slice(projectRoot.length + 1) : p);",
    "path-set"
   ],
   [
-   1388,
+   1443,
    "const pathUnderRoot = (p: string): string => (p.startsWith(\"/\") ? p : `${projectRoot}/${p}`);",
    "path-set"
   ],
   [
-   1500,
+   1555,
    "if (m) for (const fp of m.files) if (!base.includes(fp)) base.push(fp);",
    "enum-check"
   ],
   [
-   1704,
+   1759,
    ".filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)))",
    "enum-check"
   ],
   [
-   2063,
+   2118,
    "else if (typeof m[\"command\"] === \"string\" && ALWAYS_PASS_CMD_RE.test(m[\"command\"].trim())) badSc.push(`${i + 1}（selfCheck.command 须是对受影响文件的真实检查命令，不得是 shell 恒过/恒",
    "format-validation"
   ],
   [
-   2070,
+   2125,
    "const impure = (o[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));",
    "format-validation"
   ],
   [
-   2319,
+   2383,
    "if (src === designDoc || src === implPlan || src.startsWith(`${runDir}/`) || src.startsWith(`${retirementDestDir}/`)) {",
    "path-set"
   ],
   [
-   2392,
+   2456,
    "return !pathUnderRoot(f).startsWith(`${retirementDestDir}/`);",
    "path-set"
   ],
   [
-   2495,
+   2563,
    "if (!p.startsWith(`${projectRoot}/`)) {",
    "path-set"
   ],
   [
-   2572,
+   2640,
    "const extraAbs = rep.fixed.filter((p2) => p2 !== \"\").map((p2) => (p2.startsWith(\"/\") ? p2 : `${projectRoot}/${p2}`));",
    "path-set"
   ],
   [
-   2575,
+   2643,
    "if (!p2.startsWith(`${projectRoot}/`) || !(await pathExists(p2))) {",
    "path-set"
   ],
   [
-   2672,
+   2741,
    "const blockers = loaded.filter((c) => c.status === \"frozen\" && findingEditFiles(c).some((p) => findingEditFiles(f).includes(p)));",
    "enum-check"
   ],
   [
-   2743,
+   2812,
    "return n === null || !n.startsWith(`${projectRoot}/`);",
    "path-set"
   ],
   [
-   2827,
+   2896,
    "terr.add(tok.startsWith(\"/\") ? tok : `${projectRoot}/${tok}`);",
    "path-set"
   ],
   [
-   2838,
+   2907,
    "if (segs[i].includes(\"*\") || segs[i].endsWith(\"...\")) cut = i;",
    "path-set"
   ],
   [
-   2848,
+   2917,
    "if (d.startsWith(fp)) return false;",
    "path-set"
   ],
   [
-   2854,
+   2923,
    "if (d.startsWith(`${base}/`)) return false;",
    "path-set"
   ],
   [
-   3103,
+   3172,
    "return !pathUnderRoot(hf).startsWith(`${retirementDestDir}/`);",
    "path-set"
   ],
   [
-   3429,
+   3498,
    "if (!g.issueIds.includes(fx.issueId)) es.push(`fixes 引用未知条目 ${fx.issueId}`);",
    "enum-check"
   ],
   [
-   3432,
+   3501,
    "if (!g.issueIds.includes(d.issueId)) es.push(`deferred 引用未知条目 ${d.issueId}`);",
    "enum-check"
   ],
   [
-   3439,
+   3508,
    "if (!g.issueIds.includes(d.issueId)) es.push(`exempt 引用未知条目 ${d.issueId}`);",
    "enum-check"
   ],
   [
-   3444,
+   3513,
    "if (!g.issueIds.includes(d.issueId)) es.push(`delegated 引用未知条目 ${d.issueId}`);",
    "enum-check"
   ]
@@ -610,6 +610,52 @@
    1294,
    ".filter((l) => l.startsWith(\"[\"));",
    "protocol-parse"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/contract-design.shared.ts": [
+  [
+   71,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "format-validation"
+  ],
+  [
+   99,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
+   "protocol-parse"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/candidate-build.shared.ts": [
+  [
+   88,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "format-validation"
+  ],
+  [
+   129,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
+   "protocol-parse"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/independent-assurance.shared.ts": [
+  [
+   94,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "format-validation"
+  ],
+  [
+   135,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
+   "protocol-parse"
+  ],
+  [
+   244,
+   "return typeof value === \"string\" && value.startsWith(evidenceRoot) && value.length > evidenceRoot.length && !value.split(\"/\").includes(\"..\");",
+   "path-set"
+  ],
+  [
+   289,
+   "if (!value.dimensions.includes(dimension)) return `探索维度未覆盖：${dimension}`;",
+   "enum-check"
   ]
  ]
 }

@@ -42,7 +42,16 @@ const SAVED_DIR = join(homedir(), ".zcode", "workflows");
 // 校验入口（zcode 发起即比对 saved 副本与仓内产物，漂移即抛错——机制与刻意不比 src/
 // 源的理由见层文件头注）
 const PROV_LAYER_PATH = join(SRC, "provenance.shared.ts");
-const NAMES = ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop", "design-code-sync-v2"];
+const NAMES = [
+  "tech-review-loop",
+  "wave-executor",
+  "dev-consistency-loop",
+  "design-code-sync-loop",
+  "design-code-sync-v2",
+  "contract-design",
+  "candidate-build",
+  "independent-assurance",
+];
 // 观测门禁豁免名单：shared 源无 initObservation 调用点且登记在此的 workflow 跳过观测
 // 契约检查（跳过时打一行说明，不静默）。豁免是显式决定不是默认沉默——登记格式 = 双引号
 // workflow 名（须为 NAMES 成员），豁免必须附理由（写在条目行尾或紧邻注释，如「纯脚本
@@ -53,14 +62,14 @@ const OBS_EXEMPT = new Set();
 // 构建时把该文件全文拼在业务正文之前（obsCtx 为 let，业务顶层赋值依赖声明在前）；
 // 未接入的 workflow 不拼。观测层只此一份，业务 shared 禁止拷贝副本
 const OBS_LAYER_PATH = join(SRC, "observability.shared.ts");
-// 寻址层单一构建输入（skill-data 目录寻址：slug 探针算法唯一权威源）：四个 workflow
+// 寻址层单一构建输入（skill-data 目录寻址：slug 探针算法唯一权威源）：全部 workflow
 // 全部消费 NODE_PROBE_HOME / NODE_PROJECT_SLUG，构建时无条件全文拼接（启动校验层与
 // 观测层之后、业务正文之前——纯常量声明，与业务无声明顺序依赖）。层文件形态约束
 //（无 import/export、探针常量单行）见 skill-data.shared.ts 头注
 const SKILL_DATA_LAYER_PATH = join(SRC, "skill-data.shared.ts");
 
 // ── 版本权威映射：workflow → 所属技能 SKILL.md frontmatter version（手动 semver 唯一权威）──
-// 注入形态 = `const SKILL_VERSION = "<值>";` 常量行，拼在业务正文之前（四个产物同构）；
+// 注入形态 = `const SKILL_VERSION = "<值>";` 常量行，拼在业务正文之前（全部产物同构）；
 // 业务源直接引用 SKILL_VERSION 盖产物载体（run.json / status.json / final.json / ledger）。
 // 版本戳比对（--check）：产物内嵌值 ≠ frontmatter 当前值 → 红灯（拦 bump 后忘重建）
 const SKILL_VERSION_SOURCES = {
@@ -69,6 +78,9 @@ const SKILL_VERSION_SOURCES = {
   "dev-consistency-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
   "design-code-sync-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
   "design-code-sync-v2": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
+  "contract-design": join(ROOT, "skills/self/dev-workflow/delivery-wf/SKILL.md"),
+  "candidate-build": join(ROOT, "skills/self/dev-workflow/delivery-wf/SKILL.md"),
+  "independent-assurance": join(ROOT, "skills/self/dev-workflow/delivery-wf/SKILL.md"),
 };
 
 function readSkillVersion(skillMdPath, wfName) {
@@ -96,7 +108,7 @@ function readSkillVersion(skillMdPath, wfName) {
 const OBS_EVENT_FIELDS = ["execution_id", "task_id", "skill", "stage", "step", "round", "attempt", "event", "timestamp", "sample_type", "skill_version"];
 // stage 词表 = workflow 在所属流程的阶段编号（T2 = tech-design 审查；D1/D3 = dev-flow
 // 开发/验收执行；D2 = dev-flow 一致性审查；D5 = dev-flow 终态同步）
-const OBS_STAGES = new Set(["T2", "D1", "D3", "D2", "D5"]);
+const OBS_STAGES = new Set(["T2", "D1", "D3", "D2", "D5", "DESIGN", "BUILD", "ASSURE"]);
 // stage 实参允许字面量三元（wave-executor 按 exec-plan mode 分叉 D1/D3）——三元比较
 // 里的非 stage 字面量在此显式登记豁免（同 check-workflow-parity 的白名单模式：新值
 // 先确认不属于 stage 再登记）
@@ -105,7 +117,7 @@ const OBS_STAGE_LITERALS_IGNORE = new Set(["dev", "acceptance"]);
 const OBS_STEPS = new Set(["execution", "setup", "review", "aggregate", "fix", "execute", "finalize", "gate-a", "retire"]);
 // canonical skill 词表 = 事件 skill 字段的合法值（所属技能名，不是 workflow 脚本名——
 // 统计入口按技能过滤，曾因写成 workflow 名被过滤掉，2026-11-01 实测）
-const OBS_SKILLS = new Set(["tech-design-wf", "dev-flow-wf"]);
+const OBS_SKILLS = new Set(["tech-design-wf", "dev-flow-wf", "delivery-wf"]);
 
 /** 观测契约核对：shared 已接入观测（initObservation 在场）时校验——stage/step 词表、
  *  十字段在场（对照单一观测层 observability.shared.ts）、终态统一补记出口在场、两侧产物
@@ -351,7 +363,7 @@ for (const name of names) {
     readFileSync(sharedPath, "utf8");
   } catch {
     if (check) {
-      console.error(`✗ ${name}: 缺 ${sharedPath.slice(ROOT.length + 1)}——四对应全部完成切分后不得再缺`);
+      console.error(`✗ ${name}: 缺 ${sharedPath.slice(ROOT.length + 1)}——全部 workflow 源文件必须齐备`);
       dirty++;
     } else {
       console.log(`跳过 ${name}（src 未迁移）`);
@@ -392,7 +404,7 @@ for (const name of names) {
   if (provZc === provPi) {
     throw new Error(`${name}: 启动校验层尾部缺少顶层调用行（await provenanceCheck();）——pi 剥除规则失效`);
   }
-  // 寻址层拼接（四个 workflow 无条件；层内不得派 agent）
+  // 寻址层拼接（全部 workflow 无条件；层内不得派 agent）
   const skillDataLayer = (() => {
     try {
       return readFileSync(SKILL_DATA_LAYER_PATH, "utf8");
@@ -403,7 +415,7 @@ for (const name of names) {
   if (/agent\(/.test(skillDataLayer)) {
     throw new Error(`${name}: 寻址层中出现 agent( 调用点（不应发生——寻址层是纯常量声明）`);
   }
-  // 版本常量注入（四个产物同构）：单一行常量，业务源引用它盖产物载体（run.json /
+  // 版本常量注入（全部产物同构）：单一行常量，业务源引用它盖产物载体（run.json /
   // status.json / final.json / ledger 追加笔）。声明先于业务正文——shared 源内引用合法；
   // 行内不放反引号/插值，pi 词法改写与 TS 剥离均按普通代码行透传
   const versionLine = `const SKILL_VERSION = "${skillVersion}"; // 构建注入自 ${relative(join(ROOT, "skills/self/dev-workflow"), SKILL_VERSION_SOURCES[name])} frontmatter version（唯一权威）\n`;

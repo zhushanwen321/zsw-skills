@@ -2,14 +2,14 @@
 // check-version-discipline.mjs — 技能版本纪律检查器（设计 AX3 的强制器）
 //
 // 三条规则（bump 判定口径全设计统一，与设计 D2 一致）：
-//   规则 1（bump 对账）：staged 触及技能自有文件（tech-design-wf/ 与 dev-flow-wf/ 目录下
-//     全部文件：SKILL.md / flow / agents / references / 技能 scripts），对应技能 frontmatter
-//     version 必须在同一次提交中 bump（staged 值 ≠ HEAD 值）。文档类改动无产物 diff，
-//     但直接驱动手工路径行为，同规则覆盖。
+//   规则 1（bump 对账）：staged 触及技能自有文件（tech-design-wf/、dev-flow-wf/ 与
+//     delivery-wf/ 目录下全部文件：SKILL.md / flow / agents / references / 技能 scripts），
+//     对应技能 frontmatter version 必须在同一次提交中 bump（staged 值 ≠ HEAD 值）。
+//     文档类改动无产物 diff，但直接驱动手工路径行为，同规则覆盖。
 //   规则 2（共享源联动）：staged 含 workflows/src/ 改动时，以产物逐字节 diff 判定——
 //     产物（skills/self/dev-workflow/workflows/ 下除 src/ 外的全部文件）与 HEAD 逐字节
 //     相同 → 豁免（共享构建源的唯一行为出口是产物，纯注释改动零产物 diff）；产物有变 →
-//     两技能联动要求 bump（两个 frontmatter 都须 bump）。
+//     全部技能联动要求 bump（每个 frontmatter 都须 bump）。
 //   规则 3（版本戳一致性）：产物内嵌 SKILL_VERSION 必须等于对应技能 frontmatter 当前值
 //     （拦 bump 后忘重建）。检查器直接读两侧值比对，不改 scripts/build-workflows.mjs。
 //
@@ -87,6 +87,7 @@ if (repoCheck.status !== 0 || repoCheck.stdout.toString("utf8").trim() !== "true
 const SKILLS = [
   { name: "tech-design-wf", dir: "skills/self/dev-workflow/tech-design-wf" },
   { name: "dev-flow-wf", dir: "skills/self/dev-workflow/dev-flow-wf" },
+  { name: "delivery-wf", dir: "skills/self/dev-workflow/delivery-wf" },
 ];
 const WORKFLOWS = "skills/self/dev-workflow/workflows";
 const SHARED_SRC_PREFIX = `${WORKFLOWS}/src/`;
@@ -101,6 +102,14 @@ const PRODUCT_SKILL = {
   "pi/dev-consistency-loop.js": "dev-flow-wf",
   "design-code-sync-loop.dwf.ts": "dev-flow-wf",
   "pi/design-code-sync-loop.js": "dev-flow-wf",
+  "design-code-sync-v2.dwf.ts": "dev-flow-wf",
+  "pi/design-code-sync-v2.js": "dev-flow-wf",
+  "contract-design.dwf.ts": "delivery-wf",
+  "pi/contract-design.js": "delivery-wf",
+  "candidate-build.dwf.ts": "delivery-wf",
+  "pi/candidate-build.js": "delivery-wf",
+  "independent-assurance.dwf.ts": "delivery-wf",
+  "pi/independent-assurance.js": "delivery-wf",
 };
 const STAMP_RE = /const SKILL_VERSION = "([^"]*)";/;
 const VERSION_RE = /^version:\s*(\d+\.\d+\.\d+)\s*$/m;
@@ -166,7 +175,7 @@ for (const skill of SKILLS) {
 
 // ── 规则 2：共享源联动（产物逐字节 diff） ──
 const sharedTouched = stagedFiles.filter((p) => p.startsWith(SHARED_SRC_PREFIX)).sort();
-let rule2State = "none"; // none = 无共享源变更；exempt = 有变更但产物零 diff；linked = 产物变且两技能已联动 bump
+let rule2State = "none"; // none = 无共享源变更；exempt = 有变更但产物零 diff；linked = 产物变且全部技能已联动 bump
 if (sharedTouched.length > 0) {
   rule2State = "exempt";
   const productSet = new Set(
@@ -193,14 +202,14 @@ if (sharedTouched.length > 0) {
         title: `规则 2（共享源联动）：workflows/src/ 的 staged 改动改变了产物，但 ${skill.name} 版本未联动 bump`,
         details: [
           `未 bump 的技能：${skill.name}（HEAD ${v.headVersion} → staged ${v.stagedVersion}）`,
-          `权威源：scripts/build-workflows.mjs 从两 SKILL.md frontmatter version 注入产物 SKILL_VERSION；共享构建源的唯一行为出口是产物`,
+          `权威源：scripts/build-workflows.mjs 从各 SKILL.md frontmatter version 注入产物 SKILL_VERSION；共享构建源的唯一行为出口是产物`,
           `共享构建源：`,
           ...sharedTouched.map((p) => `  - ${p}`),
           `产物逐字节 diff（${changedProducts.length} 份，与 HEAD 比较）：`,
           ...changedProducts.map((p) => `  - ${p}`),
         ],
         recovery:
-          `共享构建源变更使产物变化时两技能联动升版本：把两个 SKILL.md frontmatter 的 version 都升号，` +
+          `共享构建源变更使产物变化时全部技能联动升版本：把每个 SKILL.md frontmatter 的 version 都升号，` +
           `重跑 node scripts/build-workflows.mjs 重建产物后重新 git add 再提交；` +
           `若本次共享源改动是纯注释、不应改变产物，重跑构建确认产物与 HEAD 逐字节相同即自动豁免`,
       });
@@ -261,7 +270,7 @@ if (violations.length === 0) {
       rule2State === "exempt"
         ? "共享源变更零产物 diff 已豁免"
         : rule2State === "linked"
-          ? "共享源变更使产物变化，两技能版本已联动 bump"
+          ? "共享源变更使产物变化，全部技能版本已联动 bump"
           : "无共享源变更"
     }`,
     `规则 3：${stampCount} 份产物版本戳一致`,
@@ -280,5 +289,5 @@ violations.forEach((v, i) => {
   console.error(`   恢复动作：${v.recovery}`);
 });
 console.error("");
-console.error("处置：逐条按恢复动作修正 → git add 修正后的文件 → 重新提交。版本语义见两技能 SKILL.md frontmatter 紧邻注释。");
+console.error("处置：逐条按恢复动作修正 → git add 修正后的文件 → 重新提交。版本语义见各技能 SKILL.md frontmatter 紧邻注释。");
 process.exit(1);

@@ -1,10 +1,10 @@
-// skill-usage-stats.test.mjs — 四技能统一统计命令独立局部测试
+// skill-usage-stats.test.mjs — 五技能统一统计命令独立局部测试
 //
 // 覆盖（对应实现：scripts/skill-usage-stats.mjs）：
 //   1. executionId 精确关联：run ↔ 观测 JSONL（attribution=observed、窗口时间归属 actor/node）
 //   2. taskId 跨技能 / 跨 attempt 汇总（byTask）
 //   3. 并行时间口径分开：区间并集 < actor 时长相加
-//   4. legacy 分类器：execPlan/designDoc/implPlan/base + 名称 → 四技能 + T2/D1/D2/D3/D5/
+//   4. legacy 分类器：execPlan/designDoc/implPlan/base/taskDir + 名称 → 五技能 + T2/D1/D2/D3/D5/
 //      gates/branch-review/pr-lifecycle，恒标 attribution=estimated；认不出 → unclassified
 //   5. 手工段（D0 等只有事件没有 run）：耗时照报、token = unknown（null，不写 0）
 //   6. 坏 JSONL / 缺字段事件 / 未配对 start / 孤儿 end 显式计数
@@ -659,7 +659,7 @@ function writeObservations(home) {
     ev(common({ task_id: "task-selftest", execution_id: "d0-selftest", stage: "D0", step: "compile", event: "start", timestamp: T(6, 0), sample_type: "selftest" })),
     ev(common({ task_id: "task-selftest", execution_id: "d0-selftest", stage: "D0", step: "compile", event: "end", timestamp: T(6, 5), sample_type: "selftest", outcome: "completed" })),
   ]);
-  // 引擎名事件（历史形态 skill=tech-review-loop，非四技能名）——统计侧归一
+  // 引擎名事件（历史形态 skill=tech-review-loop，非五技能名）——统计侧归一
   write("task-alias", "alias-exec", [
     ev(ver("0.1.0", { task_id: "task-alias", execution_id: "alias-exec", skill: "tech-review-loop", stage: "T2", step: "review", event: "start", timestamp: T(13, 0) })),
     ev(ver("0.1.0", { task_id: "task-alias", execution_id: "alias-exec", skill: "tech-review-loop", stage: "T2", step: "review", event: "end", timestamp: T(13, 30), outcome: "converged" })),
@@ -802,7 +802,7 @@ test("byTask：同 taskId 跨技能 + 跨 attempt 串联；arg: 前缀与 legacy
 });
 
 // ── 3. legacy 分类器 ──
-test("legacy 分类器：四技能与阶段映射 + estimated 标记 + unclassified 计数", (t) => {
+test("legacy 分类器：五技能与阶段映射 + estimated 标记 + unclassified 计数", (t) => {
   const { runScript } = setupEnv(t);
   const res = runScript(["--format", "json"]);
   assert.equal(res.status, 0, res.stderr);
@@ -841,6 +841,26 @@ test("legacy 分类器：四技能与阶段映射 + estimated 标记 + unclassif
 
   // 用量覆盖：unknown 计数来自 ghost run（无 actor 且 run token=0）与手工段
   assert.ok(report.totals.usageCoverage.unknown >= 1);
+});
+
+test("legacy 分类器：delivery-wf 三个 workflow 按 taskDir 与名称归阶段", (t) => {
+  const { home, runScript } = setupEnv(t);
+  const fixturePath = join(home, "fixtures.json");
+  const fixtures = JSON.parse(readFileSync(fixturePath, "utf8"));
+  for (const name of ["contract-design", "candidate-build", "independent-assurance"]) {
+    fixtures.zcode.runs.push(baseRun({ id: `dwfrun-${name}`, name, args: { taskDir: "/tmp/delivery-task" } }));
+  }
+  fixtures.zcode.count = `${fixtures.zcode.runs.length} of ${fixtures.zcode.runs.length} total`;
+  writeFileSync(fixturePath, JSON.stringify(fixtures));
+  const res = runScript(["--format", "json"]);
+  assert.equal(res.status, 0, res.stderr);
+  const report = JSON.parse(res.stdout);
+  for (const [name, stage] of [["contract-design", "DESIGN"], ["candidate-build", "BUILD"], ["independent-assurance", "ASSURE"]]) {
+    const run = report.runs.find((r) => r.id === `dwfrun-${name}`);
+    assert.equal(run.skill, "delivery-wf");
+    assert.equal(run.stage, stage);
+    assert.equal(run.attribution, "estimated");
+  }
 });
 
 // ── 3b. run 级 token 对账三类 ──

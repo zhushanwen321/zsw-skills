@@ -3,7 +3,7 @@ name: dev-flow-wf
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 1.1.4
+version: 1.1.5
 description: >-
   Use when 一份完整设计包（tech-design-wf 产出：设计文档 + 双格式 impl-plan + 审查终态）
   需要落地为已验收代码。dev-flow 的 workflow 版（灰度并行，老版保留可随时切回）：
@@ -110,7 +110,7 @@ ln -sf <zsw-skills 检出根>/skills/self/dev-workflow/workflows/src/observabili
 
 用法错误 exit 2（stderr 含恢复动作）、写失败 exit 1。一次外部步骤 = 一对 start/end；整个执行结束时再记一对 `step=execution` 的 start/end（end 带 `--outcome <终态词>`）。
 
-**统计入口**：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs` 汇总 tech-design-wf / dev-flow-wf / dev-merge / pr-cr-fix 四技能的耗时与 token（双平台数据经 `agent-session-reader usage` CLI 采集——zcode `--zcode`、pi `--pi=<目录>`；观测事件直读观测根 JSONL，此外不直连任何数据库或会话文件）：
+**统计入口**：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs` 汇总 tech-design-wf / dev-flow-wf / delivery-wf / dev-merge / pr-cr-fix 五技能的耗时与 token（双平台数据经 `agent-session-reader usage` CLI 采集——zcode `--zcode`、pi `--pi=<目录>`；观测事件直读观测根 JSONL，此外不直连任何数据库或会话文件）：
 
 ```bash
 node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --skill dev-flow-wf --since 2026-10-01   # 单技能 + 时间窗（table 输出）
@@ -118,7 +118,7 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --format json --output
 node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taiji/agent --group stage --group model  # 追加 pi 数据目录与分组维度
 ```
 
-- 选项：`--skill`（四技能或 all，可重复）、`--since`/`--until`（透传 usage CLI）、`--format table|json`、`--group stage|step|role|model|status`（可重复）、`--pi-agent-dir`（可重复，给出即替换缺省 `~/.pi/agent`；zcode 恒参与）、`--include-selftest`（缺省只算 production）、`--output <路径>`。未知参数与非法值 exit 2（含恢复动作），帮助 `--help`。
+- 选项：`--skill`（五技能或 all，可重复）、`--since`/`--until`（透传 usage CLI）、`--format table|json`、`--group stage|step|role|model|status`（可重复）、`--pi-agent-dir`（可重复，给出即替换缺省 `~/.pi/agent`；zcode 恒参与）、`--include-selftest`（缺省只算 production）、`--output <路径>`。未知参数与非法值 exit 2（含恢复动作），帮助 `--help`。
 - 归因口径恒分开报：`observed` = run 带 `executionId` 且与观测 JSONL 精确关联（阶段/步骤窗口由事件 start/end 配对，actor/node 按时间重叠归窗）；`estimated` = 历史 run 按 run 名 + args（designDoc/execPlan/implPlan/base 等）+ actor 名称归类——精度低于 observed，两者不得相加视为同精度。认不出的进 unclassified 计数与明细。
 - token 用 usage CLI 重算值（不读 spent_tokens / tokensReported 自报值）；时间双口径分开报：经历（证据区间并集=日历实际经过）与耗时相加（run duration 累加）。手工段（D0/D4/D6 只有事件没有模型用量）耗时照报、token 记 unknown 不写 0。坏 JSONL、未配对 start/end、声明 executionId 但缺观测文件等数据质量问题在 `dataQuality` 显式计数，不静默。
 - 按 taskId 跨技能/跨 attempt 汇总在报告 `byTask` 节（observed/arg/legacy 词干来源分开标注）。

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// check-workflow-types.mjs — 用真实平台 facade 声明对四个 zcode 产物跑 tsc strict
+// check-workflow-types.mjs — 用真实平台 facade 声明对全部 zcode 产物跑 tsc strict
 //
 // 背景（2026-09-26）：自制 stub 曾把 agent().ask 声明为 Promise<T>，而真实 facade 返回
 // Node<T>（仅 PromiseLike，无 catch/finally）——17 处 askValidated 调用点的 TS2739 被
 // 漏检，saved workflow 发起即被平台编译拦截。本脚本以 scripts/wf-facade.d.ts 快照为准。
 //
 // 编译形态对齐平台：产物是顶层 await/return 的容器脚本，平台在函数体内编译——这里同样
-// 包进 async 函数体；四个产物互为全局脚本（无 import/export），同程序会撞全局名，
+// 包进 async 函数体；全部产物互为全局脚本（无 import/export），同程序会撞全局名，
 // 须逐产物独立编译。
 //
 // 用法：node scripts/check-workflow-types.mjs（退出码非 0 = 有类型错误）
@@ -19,7 +19,16 @@ import { tmpdir } from "node:os";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WF = join(ROOT, "skills/self/dev-workflow/workflows");
-const NAMES = ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop", "design-code-sync-v2"];
+const NAMES = [
+  "tech-review-loop",
+  "wave-executor",
+  "dev-consistency-loop",
+  "design-code-sync-loop",
+  "design-code-sync-v2",
+  "contract-design",
+  "candidate-build",
+  "independent-assurance",
+];
 
 const ts = createRequire(import.meta.url)("typescript");
 

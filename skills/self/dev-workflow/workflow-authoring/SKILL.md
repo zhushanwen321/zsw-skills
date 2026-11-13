@@ -135,7 +135,7 @@ run 因脚本 bug 崩溃后改脚本续跑：新 run 导入原 run 已完成节�
    `(skill: string, stage: string, attempt: number | null): ObsCtx | null`。
    `args.taskId` 与 `args.executionId` 同时提供才启用观测（都不传 = 关闭、业务照常；
    只传其一 = 告警并关闭）。`skill` 写所属技能的 canonical 名（`OBS_SKILLS` 词表：
-   `tech-design-wf` / `dev-flow-wf`），不是 workflow 脚本名——统计入口按技能名过滤，
+   `tech-design-wf` / `dev-flow-wf` / `delivery-wf`），不是 workflow 脚本名——统计入口按技能名过滤，
    写成 workflow 名会归不上类。`stage` 是流程阶段编号（`OBS_STAGES` 词表，允许字面量
    三元，如 wave-executor 按 exec-plan 的 mode 分叉 `"D1" / "D3"`）。`attempt` 未知时传
    `null`，检测确定后回填 `obsCtx.attempt`。调用点放在业务参数窄化之前——参数校验失败
@@ -173,7 +173,7 @@ run 因脚本 bug 崩溃后改脚本续跑：新 run 导入原 run 已完成节�
   点、连字符、下划线，≤128 字符，禁「..」）。
 
 **步 3：参数白名单补三参**。shared 的 `VALID_ARG_KEYS`（未知参数 fail-fast 校验，`_` 前缀宿主私有键除外）必须加入 `taskId / executionId / sampleType`，否则发起方传
-观测参数会被「未知参数」检查直接拒绝。现有四个 workflow 的白名单里都有同一行注释（按这行注释定位要补三参的位置）：`// 观测（O 区，可选）：taskId+executionId 同时提供才启用（sampleType 默认 production）`。
+观测参数会被「未知参数」检查直接拒绝。现有 workflow 的白名单里都有同一行注释（按这行注释定位要补三参的位置）：`// 观测（O 区，可选）：taskId+executionId 同时提供才启用（sampleType 默认 production）`。
 
 **步 4：构建器与统计侧登记**。新 workflow 名、新 stage、新 step、新 skill 都要登记词表：
 
@@ -236,15 +236,15 @@ node --test scripts/tests/workflow-observability.test.mjs   # 观测机制测试
 - **平台 token 用量**：zcode 存 workflow 运行库、pi 存会话记录，两处存储经
   `agent-session-reader usage` CLI 统一读取（zcode `--zcode`、pi `--pi=<目录>`，
   用法见 `~/.agents/skills/agent-session-reader/SKILL.md`）。
-- **聚合报告**：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs` 汇总四技能
-  （tech-design-wf / dev-flow-wf / dev-merge / pr-cr-fix）的耗时与 token——观测事件
+- **聚合报告**：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs` 汇总五技能
+  （tech-design-wf / dev-flow-wf / delivery-wf / dev-merge / pr-cr-fix）的耗时与 token——观测事件
   直读观测根 JSONL，token 用量经 agent-session-reader 采集。`sample_type=production`
   缺省计入、`selftest` 默认排除（`--include-selftest` 显式计入）；统计按事件 `skill`
   字段过滤，新 workflow 记得步 4 的 `SKILL_ALIASES` 登记。
 
 ## 8. 参照实装索引
 
-四个已接入观测的 workflow，按「想抄什么」选参照（各 shared 的 initObservation 调用点
+已接入观测的 workflow，按「想抄什么」选参照（各 shared 的 initObservation 调用点
 与 obsBegin/withStage 分布可直接搜函数名定位）：
 
 | workflow（所属技能 / stage） | step 词表 | 适合当什么参照 |
@@ -253,3 +253,6 @@ node --test scripts/tests/workflow-observability.test.mjs   # 观测机制测试
 | wave-executor（dev-flow-wf / D1 或 D3，按 exec-plan 的 mode 三元分叉） | setup / execute / finalize | DAG 节点并发调度 + 同名续聊打回；stage 按入参 mode 标注的写法 |
 | dev-consistency-loop（dev-flow-wf / D2） | review / aggregate / fix / gate-a | attempt 由参数外置的循环；gate-a 终局门；无 setup/finalize 的紧凑 stage 结构 |
 | design-code-sync-loop（dev-flow-wf / D5） | setup / review / fix / retire / finalize | 无 LLM 聚合层的矩阵环（矩阵行 = 脚本 concat）；伴生产物退役判定步 |
+| contract-design（delivery-wf / DESIGN） | setup / execute / review / finalize | 契约草稿与独立设计审查循环（execute = designer 写草稿，review = reviewer 复查）；批准事件留给主 agent |
+| candidate-build（delivery-wf / BUILD） | setup / execute / finalize | 按实施增量写码、保存原始输出、登记实现事件；每增量单次 ask（实现+报告一次完成），修复轮按未决发现/失败证据选择性重做增量 |
+| independent-assurance（delivery-wf / ASSURE） | setup / review / execute / finalize | 覆盖核对与探索性审查分工（review = 双角色并行取证，execute = 校验与事件落盘）；只产证据，不直接接受交付 |

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// skill-usage-stats.mjs — 四技能（tech-design-wf / dev-flow-wf / dev-merge / pr-cr-fix）
+// skill-usage-stats.mjs — 五技能（tech-design-wf / dev-flow-wf / delivery-wf / dev-merge / pr-cr-fix）
 // 统一耗时与 token 统计命令
 //
 // 数据来源（只读，不直连任何数据库 / 会话文件）：
@@ -43,7 +43,7 @@
 // 用法：
 //   node scripts/skill-usage-stats.mjs [选项]
 // 选项：
-//   --skill <名>            tech-design-wf | dev-flow-wf | dev-merge | pr-cr-fix | all，
+//   --skill <名>            tech-design-wf | dev-flow-wf | delivery-wf | dev-merge | pr-cr-fix | all，
 //                           可重复；缺省 = all
 //   --since <时间>          透传给 usage CLI（run 起始时间下界）
 //   --until <时间>          透传给 usage CLI（run 起始时间上界）
@@ -63,14 +63,17 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSyn
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SKILLS = ["tech-design-wf", "dev-flow-wf", "dev-merge", "pr-cr-fix"];
-// 观测事件 skill 字段历史上写过 workflow 引擎名（与 opts.skills 的四技能名不同源）——
-// 统计侧归一到四技能名；生产事件源已改 canonical，此处兼容存量事件
+const SKILLS = ["tech-design-wf", "dev-flow-wf", "delivery-wf", "dev-merge", "pr-cr-fix"];
+// 观测事件 skill 字段历史上写过 workflow 引擎名（与 opts.skills 的五技能名不同源）——
+// 统计侧归一到五技能名；生产事件源已改 canonical，此处兼容存量事件
 const SKILL_ALIASES = {
   "tech-review-loop": "tech-design-wf",
   "wave-executor": "dev-flow-wf",
   "dev-consistency-loop": "dev-flow-wf",
   "design-code-sync-loop": "dev-flow-wf",
+  "contract-design": "delivery-wf",
+  "candidate-build": "delivery-wf",
+  "independent-assurance": "delivery-wf",
   "dev-merge-gates": "dev-merge",
   "pr-lifecycle": "pr-cr-fix",
 };
@@ -103,13 +106,13 @@ function parseArgs(argv) {
     if (arg === "--help" || arg === "-h") {
       console.log(
         [
-          "四技能统一统计：tech-design-wf / dev-flow-wf / dev-merge / pr-cr-fix 的耗时与 token 汇总",
+          "五技能统一统计：tech-design-wf / dev-flow-wf / delivery-wf / dev-merge / pr-cr-fix 的耗时与 token 汇总",
           "",
           "用法：",
           `  ${USAGE_LINE}`,
           "",
           "选项：",
-          "  --skill <名>           tech-design-wf | dev-flow-wf | dev-merge | pr-cr-fix | all，可重复；缺省 all",
+          "  --skill <名>           tech-design-wf | dev-flow-wf | delivery-wf | dev-merge | pr-cr-fix | all，可重复；缺省 all",
           "  --since <时间>         透传 usage CLI（run 起始时间下界；YYYY-MM-DD 或 ISO 串）",
           "  --until <时间>         透传 usage CLI（run 起始时间上界）",
           "  --format table|json    输出形态（缺省 table；json 打印完整报告对象）",
@@ -431,7 +434,12 @@ function classifyLegacy(name, args) {
   const reviewersStr = Array.isArray(a.reviewers) ? a.reviewers.join(" ") : "";
   const hasV = (k) => a[k] !== null && a[k] !== undefined && a[k] !== "";
 
-  // 1. dev-flow-wf：execPlan 是 D1/D2/D3 的硬特征（W2/W3 args）；designDoc+implPlan 是 D5
+  // 1. delivery-wf：taskDir 是三个 workflow 的共同硬特征；阶段按 workflow 名判定
+  if (hasV("taskDir") && /^(contract-design|candidate-build|independent-assurance)$/.test(name)) {
+    const stage = name === "contract-design" ? "DESIGN" : name === "candidate-build" ? "BUILD" : "ASSURE";
+    return { skill: "delivery-wf", stage, reason: `args.taskDir + workflow 名(${name})` };
+  }
+  // 2. dev-flow-wf：execPlan 是 D1/D2/D3 的硬特征（W2/W3 args）；designDoc+implPlan 是 D5
   if (hasV("execPlan")) {
     const stage =
       matchDevFlowStage(name) ?? (/wave/i.test(name) ? "D1" : /consistency/i.test(name) ? "D2" : null);
@@ -441,33 +449,33 @@ function classifyLegacy(name, args) {
   if (hasV("designDoc") && hasV("implPlan")) {
     return { skill: "dev-flow-wf", stage: "D5", reason: "args.designDoc + args.implPlan（design-code-sync-loop）" };
   }
-  // 2. tech-design-wf T2：designDoc 无 implPlan（tech-review-loop），或名称明确设计审查/方向审（T2 四席词表）
+  // 3. tech-design-wf T2：designDoc 无 implPlan（tech-review-loop），或名称明确设计审查/方向审（T2 四席词表）
   if (hasV("designDoc")) {
     return { skill: "tech-design-wf", stage: "T2", reason: "args.designDoc 无 implPlan（tech-review-loop）" };
   }
   if (/T2|设计审查|tech-review|方向审/i.test(name) || (/审查/.test(name) && /设计/.test(name) && !/修复|评审/.test(name))) {
     return { skill: "tech-design-wf", stage: "T2", reason: "名称含 T2/设计审查/方向审特征" };
   }
-  // 3. dev-flow-wf 无 args 兜底：名称阶段编号/引擎名（历史起名惯例）
+  // 4. dev-flow-wf 无 args 兜底：名称阶段编号/引擎名（历史起名惯例）
   const stageByName = matchDevFlowStage(name);
   if (stageByName) {
     return { skill: "dev-flow-wf", stage: stageByName, reason: `名称阶段特征(${stageByName})，无 args` };
   }
-  // 4. pr-cr-fix：PR 编号 + 审查；reviewers 指向 pr-cr-fix 技能
+  // 5. pr-cr-fix：PR 编号 + 审查；reviewers 指向 pr-cr-fix 技能
   if (/PR\s*#?\s*\d+/i.test(name) && /审查|review/i.test(name)) {
     return { skill: "pr-cr-fix", stage: null, reason: "名称含 PR 编号 + 审查特征" };
   }
   if (reviewersStr.includes("pr-cr-fix")) {
     return { skill: "pr-cr-fix", stage: null, reason: "args.reviewers 指向 pr-cr-fix 技能" };
   }
-  // 5. dev-merge：gates / branch-review
+  // 6. dev-merge：gates / branch-review
   if (/dev-merge/i.test(name)) {
     const isGates = /gates|门禁|质量门|前置检查/i.test(name);
     const isReview = /branch-review|横切审查|复验|审查/i.test(name);
     const stage = isGates && isReview ? "gates+branch-review" : isGates ? "gates" : isReview ? "branch-review" : null;
     return { skill: "dev-merge", stage, reason: "名称含 dev-merge" };
   }
-  // 6. pr-cr-fix：PR 生命周期（九步）；base + reportDir/reviewers 组合特征
+  // 7. pr-cr-fix：PR 生命周期（九步）；base + reportDir/reviewers 组合特征
   if (/PR\s*生命周期|pr-lifecycle/i.test(name) || (hasV("base") && /lifecycle/i.test(name))) {
     return { skill: "pr-cr-fix", stage: "pr-lifecycle", reason: "名称 PR 生命周期（九步）+ args.base" };
   }
@@ -496,7 +504,7 @@ function legacyTaskStem(name) {
   return s === "" ? null : s;
 }
 
-// ── actor 角色（沿用既有统计口径的 D1/D2/D3/D5 角色词表，四技能各自扩展）──
+// ── actor 角色（沿用既有统计口径的 D1/D2/D3/D5 角色词表，五技能各自扩展）──
 function roleFor(skill, stage, name) {
   const n = name || "";
   if (skill === "dev-flow-wf") {
@@ -924,7 +932,7 @@ function processRun(run, backend, opts, executions, aggregator, runSummaries, un
     const legacy = classifyLegacy(name, args);
     if (!legacy) {
       quality.unclassifiedRuns++;
-      unclassified.push({ backend: backend.label, id: run.id, name, reason: "名称与 args 均无四技能特征" });
+      unclassified.push({ backend: backend.label, id: run.id, name, reason: "名称与 args 均无五技能特征" });
       return;
     }
     attribution = "estimated";
@@ -1407,7 +1415,7 @@ function serializeSkillTree(bySkillRaw) {
 function renderTable(report, opts) {
   const lines = [];
   const { scope, totals, pivot } = report;
-  lines.push(`四技能统一统计（${scope.includeSelftest ? "production+selftest" : "production"} 样本）`);
+  lines.push(`五技能统一统计（${scope.includeSelftest ? "production+selftest" : "production"} 样本）`);
   lines.push(
     `范围：${scope.backends.join(" + ")}；技能：${scope.skills.join("/")}；观测根：${scope.observabilityRoot}` +
       (scope.since ? `；since ${scope.since}` : "") +
