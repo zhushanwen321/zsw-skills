@@ -100,7 +100,7 @@ const HELP = `delivery-gate：delivery-wf 的确定性交付裁决器
 
 init 重复语义：任务目录按 projectRoot 分组（~/.agents/skill-data/delivery/<分组 slug>/<taskId>/）。
   同 taskId 已存在时默认拒绝——继续既有任务用 --resume-existing；同项目新一轮交付用 --new-round
-  （任务目录按 <taskId>-r2/-r3 递增分开，不共用）。init 输出 projectRoot/worktree/siblingTasks，
+  （任务目录按 <taskId>-r2/-r3 递增分开，不共用）。init 输出 projectRoot/worktree/siblingTasks/evalIdentity，
   主会话据此确认 --project-root 是本会话自己的 worktree；评测等多会话同题环境必须每会话独立 worktree。
 `;
 
@@ -1519,6 +1519,20 @@ function nextRoundTaskId(groupDir, baseTaskId) {
   return `${baseTaskId}-r${round}`;
 }
 
+function readEvalIdentity(projectRoot) {
+  const evalPath = join(projectRoot, "eval-session.json");
+  if (!existsSync(evalPath)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(evalPath, "utf8"));
+    if (parsed && typeof parsed === "object" && typeof parsed.eval === "string") {
+      return { eval: parsed.eval };
+    }
+  } catch {
+    // 损坏的标识文件不阻塞 init，仅作归属提示
+  }
+  return null;
+}
+
 function commandInit(args) {
   const options = parseOptions(args, {
     required: ["project-root", "task-id"],
@@ -1533,6 +1547,14 @@ function commandInit(args) {
   const projectRoot = realpathSync(options["project-root"]);
   const groupDir = join(homedir(), ".agents", "skill-data", "delivery", projectSlug(projectRoot));
   const worktree = isGitWorktree(projectRoot);
+  const evalIdentity = readEvalIdentity(projectRoot);
+  const identityNote = evalIdentity
+    ? {
+        evalIdentity,
+        evalIdentityNotice:
+          "该 projectRoot 挂有评测身份标识（eval-session.json）——确认它是本会话经评测入口创建的评测后再继续；不是则停止并核查 worktree 归属。",
+      }
+    : {};
   const exactDir = join(groupDir, options["task-id"]);
   const exactExists = existsSync(join(exactDir, "task.json"));
 
@@ -1552,6 +1574,7 @@ function commandInit(args) {
       reused: true,
       projectRoot,
       worktree,
+      ...identityNote,
       siblingTasks: listGroupTasks(groupDir).filter((task) => task.taskId !== options["task-id"]),
       builderPublicKey: existing.builderPublicKey,
       assurancePublicKey: existing.assurancePublicKey,
@@ -1585,6 +1608,7 @@ function commandInit(args) {
       reused: true,
       projectRoot,
       worktree,
+      ...identityNote,
       siblingTasks: listGroupTasks(groupDir).filter((task) => task.taskId !== taskId),
       builderPublicKey: existing.builderPublicKey,
       assurancePublicKey: existing.assurancePublicKey,
@@ -1613,6 +1637,7 @@ function commandInit(args) {
     taskDir: realpathSync(taskDir),
     projectRoot,
     worktree,
+    ...identityNote,
     siblingTasks,
     ...(siblingTasks.length > 0
       ? {

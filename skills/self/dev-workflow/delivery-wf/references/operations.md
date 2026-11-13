@@ -4,12 +4,16 @@
 
 ## 1. 初始化
 
+init 前先确认 `--project-root` 归属：该目录必须是本会话自己的项目/worktree 目录。stdout 里的 `projectRoot`、`worktree`、`siblingTasks`（同分组既有任务清单）与 `evalIdentity`（projectRoot 挂有评测身份标识时出现）用于这次确认——`siblingTasks` 非空或出现 `evalIdentity` 时，先核实这些任务/标识是否本会话所建；评测等多会话同题环境下发现不是自己的，立即停止并改用自己的 worktree。
+
 ```bash
 node ~/.agents/skills/delivery-wf/scripts/delivery-gate.mjs init \
   --project-root <项目根> --task-id <任务id>
 ```
 
-stdout 是 JSON：`taskDir` 与三把 Ed25519 角色私钥（`builderKey`／`assuranceKey`／`userKey`）及对应公钥。私钥只在 init 时输出一次，task.json 只落公钥——丢失后无法补发，只能开新任务 id 重新发起。初始化幂等；已有目录时先检查 contract/events，禁止清空历史。
+stdout 是 JSON：`taskDir` 与三把 Ed25519 角色私钥（`builderKey`／`assuranceKey`／`userKey`）及对应公钥。私钥只在 init 时输出一次，task.json 只落公钥——丢失后无法补发，只能开新任务 id 重新发起。
+
+任务目录按 projectRoot 分组落在 `~/.agents/skill-data/delivery/<分组 slug>/<taskId>/`，`taskDir` 以 init 输出为准。同 taskId 重复 init 默认拒绝（防止两个会话共用一个任务目录）：继续既有任务加 `--resume-existing`（校验一致后复用原任务，只输出公钥不重发私钥）；同项目新一轮交付加 `--new-round`（任务目录按 `<taskId>-r2/-r3` 递增分开）。已有目录时先检查 contract/events，禁止清空历史。角色私钥只保存在主会话内存或私有位置，禁止写入 /tmp 等跨会话可读目录。
 
 密钥持有与传递：
 
