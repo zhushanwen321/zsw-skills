@@ -1,7 +1,7 @@
 ---
 name: delivery-wf
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 0.2.0
+version: 0.3.0
 description: >-
   Use when 用户说「设计并实现」「按契约开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的设计、候选实现、独立保证。
@@ -47,6 +47,12 @@ delivery-wf 是契约驱动的完整交付通道：契约设计 → 候选实现
 5. 发起 `independent-assurance`。前置门禁：state 不是 `draft`/`contract-approved` 且 `missing.incrementIds` 为空。setup 与 finalize 比对 revision，漂移即显式失败。覆盖核对与探索性审查是两种活动，不能互相替代。
 6. 跑 `delivery-gate evaluate`，按返回的 `state/missing/nextAction` 决定继续实现、补验证、修改契约、请求用户接受风险或停止。
 7. 只有 `accepted` 或 `accepted_with_risk` 才能按对应口径交付；后者必须逐项披露用户接受的风险。
+
+## 任务目录与 worktree 归属
+
+- init 任务目录按 projectRoot 分组：`~/.agents/skill-data/delivery/<分组 slug>/<taskId>/`（分组 slug = 项目目录名 + 路径短哈希，与 tech-design-wf 的 skill-data 组织同构）。init 输出 `projectRoot`、`worktree`、`siblingTasks`（同分组既有任务清单）——主会话必须在 init 前确认 `--project-root` 是本会话自己的 worktree/项目目录；评测、竞对等多会话同题环境必须每会话独立 worktree，禁止对他人 worktree init、禁止读写他人任务目录。
+- 同 taskId 重复 init 默认拒绝（防止两个会话静默共用一个任务目录）：继续既有任务（断点恢复）用 `--resume-existing`；同项目新一轮交付用 `--new-round`，任务目录按 `<taskId>-r2/-r3` 递增分开，不共用。
+- 角色私钥只保存在主会话内存或任务发起方私有位置，禁止写入 `/tmp` 等跨会话可读目录——密钥落共享目录等于放弃角色隔离。
 
 ## Workflow 契约
 

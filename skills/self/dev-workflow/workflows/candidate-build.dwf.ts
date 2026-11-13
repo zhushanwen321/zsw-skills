@@ -411,7 +411,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "0.2.0"; // 构建注入自 delivery-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.3.0"; // 构建注入自 delivery-wf/SKILL.md frontmatter version（唯一权威）
 // candidate-build — delivery-wf 候选实现引擎。
 // builder 只改产品代码与测试；每增量 builder 只 ask 一次（实现并写实现报告），
 // 随后脚本以 program/args 执行 testCommand 并把测试摘要追加进报告——不再二次

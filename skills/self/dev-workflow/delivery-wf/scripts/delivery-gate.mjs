@@ -87,7 +87,7 @@ const HELP = `delivery-gate：delivery-wf 的确定性交付裁决器
   任何跨角色密钥一律拒绝。
 
 用法：
-  delivery-gate init --project-root P --task-id T
+  delivery-gate init --project-root P --task-id T [--new-round] [--resume-existing]
   delivery-gate validate-contract --task-dir D
   delivery-gate approve-contract --task-dir D --confirmation user-explicit|standing-authorization --summary S --user-key <userKey PEM> [--revision R]
   delivery-gate append --task-dir D --event '<JSON>' --key <builderKey|assuranceKey|userKey PEM>
@@ -97,6 +97,11 @@ const HELP = `delivery-gate：delivery-wf 的确定性交付裁决器
 
 退出码：成功 0；业务校验失败 1；命令行用法错误 2。
 完整入口：${GATE_COMMAND} <command> ...
+
+init 重复语义：任务目录按 projectRoot 分组（~/.agents/skill-data/delivery/<分组 slug>/<taskId>/）。
+  同 taskId 已存在时默认拒绝——继续既有任务用 --resume-existing；同项目新一轮交付用 --new-round
+  （任务目录按 <taskId>-r2/-r3 递增分开，不共用）。init 输出 projectRoot/worktree/siblingTasks，
+  主会话据此确认 --project-root 是本会话自己的 worktree；评测等多会话同题环境必须每会话独立 worktree。
 `;
 
 class GateError extends Error {
@@ -1462,7 +1467,8 @@ function buildNextAction({
 }
 
 function parseOptions(args, specification) {
-  const allowed = new Set([...specification.required, ...specification.optional]);
+  const flags = new Set(specification.flags ?? []);
+  const allowed = new Set([...specification.required, ...specification.optional, ...flags]);
   const values = {};
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -1470,6 +1476,10 @@ function parseOptions(args, specification) {
     const name = argument.slice(2);
     if (!allowed.has(name)) usageFail(`命令含未知参数 --${name}。`);
     if (Object.hasOwn(values, name)) usageFail(`参数 --${name} 重复出现。`);
+    if (flags.has(name)) {
+      values[name] = true;
+      continue;
+    }
     if (index + 1 >= args.length) {
       usageFail(`参数 --${name} 缺少值。`);
     }
@@ -1494,18 +1504,78 @@ function printJson(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+function listGroupTasks(groupDir) {
+  if (!existsSync(groupDir)) return [];
+  return readdirSync(groupDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(groupDir, entry.name, "task.json")))
+    .map((entry) => ({ taskId: entry.name, taskDir: join(groupDir, entry.name) }))
+    .sort((left, right) => left.taskId.localeCompare(right.taskId));
+}
+
+function nextRoundTaskId(groupDir, baseTaskId) {
+  if (!existsSync(join(groupDir, baseTaskId, "task.json"))) return baseTaskId;
+  let round = 2;
+  while (existsSync(join(groupDir, `${baseTaskId}-r${round}`, "task.json"))) round += 1;
+  return `${baseTaskId}-r${round}`;
+}
+
 function commandInit(args) {
-  const options = parseOptions(args, { required: ["project-root", "task-id"], optional: [] });
+  const options = parseOptions(args, {
+    required: ["project-root", "task-id"],
+    optional: [],
+    flags: ["new-round", "resume-existing"],
+  });
+  if (options["new-round"] && options["resume-existing"]) {
+    fail("--new-round 与 --resume-existing 互斥：继续既有任务用 --resume-existing，开新一轮目录用 --new-round。", "按目标二选一后重试 init。");
+  }
   validateTaskId(options["task-id"]);
   requireExistingDirectory(options["project-root"], "--project-root");
   const projectRoot = realpathSync(options["project-root"]);
-  const taskDir = join(homedir(), ".agents", "skill-data", "delivery", projectSlug(projectRoot), options["task-id"]);
+  const groupDir = join(homedir(), ".agents", "skill-data", "delivery", projectSlug(projectRoot));
+  const worktree = isGitWorktree(projectRoot);
+  const exactDir = join(groupDir, options["task-id"]);
+  const exactExists = existsSync(join(exactDir, "task.json"));
+
+  if (options["resume-existing"]) {
+    if (!exactExists) {
+      fail(`--resume-existing 指向的任务不存在：${exactDir}。`, `去掉 --resume-existing 直接 init 新任务；或核对 --task-id 与 --project-root 是否与既有任务一致。`);
+    }
+    const existing = readJson(join(exactDir, "task.json"), "task.json");
+    validateTaskRecord(existing, exactDir);
+    if (existing.taskId !== options["task-id"] || existing.projectRoot !== projectRoot) {
+      fail(`任务目录已存在且 task.json 与本次 init 参数不一致：${exactDir}。`, "复用原 taskId 与原 projectRoot，或选择新的 taskId；不要清空既有任务目录。 ");
+    }
+    const eventsPath = join(exactDir, "events.jsonl");
+    if (!existsSync(eventsPath)) atomicWrite(eventsPath, "");
+    printJson({
+      taskDir: realpathSync(exactDir),
+      reused: true,
+      projectRoot,
+      worktree,
+      siblingTasks: listGroupTasks(groupDir).filter((task) => task.taskId !== options["task-id"]),
+      builderPublicKey: existing.builderPublicKey,
+      assurancePublicKey: existing.assurancePublicKey,
+      userPublicKey: existing.userPublicKey,
+    });
+    return;
+  }
+
+  if (exactExists && !options["new-round"]) {
+    const siblings = listGroupTasks(groupDir).filter((task) => task.taskId !== options["task-id"]);
+    fail(
+      `任务目录已存在，拒绝静默复用：${exactDir}${siblings.length > 0 ? `（同 worktree 分组下还有 ${siblings.length} 个任务：${siblings.map((task) => task.taskId).join("、")}）` : ""}。`,
+      `继续该任务加 --resume-existing；同项目新一轮交付加 --new-round（目录按 ${options["task-id"]}-r2/-r3 递增分开）；若该目录不是本会话创建的，立即停止——先确认 --project-root 是你自己的 worktree（当前 projectRoot=${projectRoot}, worktree=${worktree}），评测等多会话同题环境必须每会话独立 worktree。`,
+    );
+  }
+
+  const taskId = options["new-round"] ? nextRoundTaskId(groupDir, options["task-id"]) : options["task-id"];
+  const taskDir = join(groupDir, taskId);
   mkdirSync(join(taskDir, "evidence"), { recursive: true });
   const taskPath = join(taskDir, "task.json");
   if (existsSync(taskPath)) {
     const existing = readJson(taskPath, "task.json");
     validateTaskRecord(existing, taskDir);
-    if (existing.taskId !== options["task-id"] || existing.projectRoot !== projectRoot) {
+    if (existing.taskId !== taskId || existing.projectRoot !== projectRoot) {
       fail(`任务目录已存在且 task.json 与本次 init 参数不一致：${taskDir}。`, "复用原 taskId 与原 projectRoot，或选择新的 taskId；不要清空既有任务目录。 ");
     }
     const eventsPath = join(taskDir, "events.jsonl");
@@ -1513,6 +1583,9 @@ function commandInit(args) {
     printJson({
       taskDir: realpathSync(taskDir),
       reused: true,
+      projectRoot,
+      worktree,
+      siblingTasks: listGroupTasks(groupDir).filter((task) => task.taskId !== taskId),
       builderPublicKey: existing.builderPublicKey,
       assurancePublicKey: existing.assurancePublicKey,
       userPublicKey: existing.userPublicKey,
@@ -1527,7 +1600,7 @@ function commandInit(args) {
   );
   atomicWrite(taskPath, `${JSON.stringify({
     schemaVersion: 1,
-    taskId: options["task-id"],
+    taskId,
     projectRoot,
     builderPublicKey: pairs.builder.publicKey,
     assurancePublicKey: pairs.assurance.publicKey,
@@ -1535,8 +1608,19 @@ function commandInit(args) {
   }, null, 2)}\n`);
   const eventsPath = join(taskDir, "events.jsonl");
   if (!existsSync(eventsPath)) atomicWrite(eventsPath, "");
+  const siblingTasks = listGroupTasks(groupDir).filter((task) => task.taskId !== taskId);
   printJson({
     taskDir: realpathSync(taskDir),
+    projectRoot,
+    worktree,
+    siblingTasks,
+    ...(siblingTasks.length > 0
+      ? {
+          notice:
+            `该 worktree 分组下已有其他交付任务（${siblingTasks.map((task) => task.taskId).join("、")}）。` +
+            "init 前必须确认本会话对该 worktree 的归属：任务目录不是本会话创建时立即停止并核实；评测等多会话同题环境，每场评测必须基于干净基线新建自己的 worktree，禁止读写他人任务目录。",
+        }
+      : {}),
     builderKey: pairs.builder.privateKey,
     assuranceKey: pairs.assurance.privateKey,
     userKey: pairs.user.privateKey,
