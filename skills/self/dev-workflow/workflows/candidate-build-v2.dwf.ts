@@ -42,7 +42,7 @@ args:
   sampleType:
     type: string
     description: 观测样本类型（可选）——production = 真实执行（缺省）／selftest = 测试执行
-
+*/
 
 // ── O 区观测平台钩子：写通道 = world.run journal 语义（resume 重放回放首次记录值，
 // 时间戳与事件序列跨 resume 稳定）。shared 观测层调用 obsNow/obsAppend；换平台只换
@@ -411,7 +411,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.5.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.5.1"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 // candidate-build-v2 — delivery-v2 候选实现引擎。
 // builder 只改产品代码与测试；每增量 builder 只 ask 一次（实现并写实现报告），
 // 随后脚本以 program/args 执行 testCommand 并把测试摘要追加进报告——不再二次

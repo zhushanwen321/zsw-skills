@@ -49,7 +49,7 @@ args:
   sampleType:
     type: string
     description: 观测样本类型（可选）——production = 真实执行（缺省）／selftest = 测试执行
-
+*/
 
 // ── O 区观测平台钩子：写通道 = world.run journal 语义（resume 重放回放首次记录值，
 // 时间戳与事件序列跨 resume 稳定）。shared 观测层调用 obsNow/obsAppend；换平台只换

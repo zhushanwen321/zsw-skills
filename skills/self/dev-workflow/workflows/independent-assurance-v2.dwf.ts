@@ -44,7 +44,7 @@ args:
   sampleType:
     type: string
     description: 观测样本类型（可选）——production = 真实执行（缺省）／selftest = 测试执行
-
+*/
 
 // ── O 区观测平台钩子：写通道 = world.run journal 语义（resume 重放回放首次记录值，
 // 时间戳与事件序列跨 resume 稳定）。shared 观测层调用 obsNow/obsAppend；换平台只换
@@ -413,7 +413,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.5.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.5.1"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 // independent-assurance-v2 — delivery-v2 独立覆盖核对与探索性审查。
 // assurance 角色不得修改产品代码、验收、事件或 verdict；脚本只经 delivery-gate
 // append --credential assuranceCredentialId 追加事实（assurance 角色凭据 id；
