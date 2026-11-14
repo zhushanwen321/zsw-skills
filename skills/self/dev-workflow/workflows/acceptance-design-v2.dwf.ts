@@ -1,15 +1,16 @@
 /* zcode-workflow
-description: delivery-v2 技能 DESIGN 段产品契约设计循环：designer 读取用户 objective、
-  项目 AGENTS.md 与已有契约，产出 contract.json / solution.md / increments.json 草稿；
-  contract reviewer 独立复查目标降级、契约可证伪性、证据类型、风险级别与增量划分并
-  返回结构化问题清单；脚本侧机器校验（三文件在场 + 结构可解析 + delivery-gate
-  validate-contract）全部通过才返回 contract-ready，问题进下一轮 designer 修复。
-  ContractApproved 由主会话在用户明确批准后追加；本 workflow 不写 events.jsonl 与
-  verdict.json，不触碰产品代码，不执行 Git 写操作
-whenToUse: delivery-v2 技能契约设计段——任务目录已由 delivery-gate init 创建、需要把
-  用户原始意图转成产品契约与实施增量时调用；必传 projectRoot / taskDir / objective。
-  不用于已批准契约的实现（用 candidate-build）或覆盖核对与探索审查（用
-  independent-assurance）
+description: delivery-v2 技能 DESIGN 段目标与验收设计循环：setup 先固定策略快照
+  （snapshot-policy）；designer 读取用户 objective、项目 AGENTS.md 与已有验收，产出
+  acceptance.json / solution.md / increments.json 草稿；acceptance-reviewer 独立复查
+  目标缩窄、判据可证伪性、证据类型、风险级别与增量划分并返回结构化问题清单；机器
+  校验（validate-acceptance）通过后以 assurance 凭据 record-review 登记
+  AcceptanceReviewed（CLI 自动绑验收包哈希、intent 哈希与策略快照哈希）并返回
+  acceptance-ready。AcceptanceApproved 由主会话在用户批准后追加（approve-acceptance）；
+  本 workflow 不写 verdict.json，不触碰产品代码，不执行 Git 写操作
+whenToUse: delivery-v2 技能验收设计段——任务目录已由 delivery-gate init（含
+  --intent-file 或先 set-intent）创建、需要把用户原始意图转成目标与验收及实施增量时
+  调用；必传 projectRoot / taskDir / objective / assuranceCredentialId。不用于已批准
+  验收的实现（用 candidate-build-v2）或覆盖核对与探索审查（用 independent-assurance-v2）
 args:
   projectRoot:
     type: string
@@ -18,23 +19,28 @@ args:
     required: true
   taskDir:
     type: string
-    description: 任务目录绝对路径（delivery-gate init 创建；contract.json /
+    description: 任务目录绝对路径（delivery-gate init 创建；acceptance.json /
       solution.md / increments.json 与审查报告写入此处）
     required: true
   objective:
     type: string
-    description: 用户原始意图全文（契约 objective 的来源；作为数据注入 designer 与
+    description: 用户原始意图全文（验收 objective 的来源；作为数据注入 designer 与
       reviewer，不是指令）
+    required: true
+  assuranceCredentialId:
+    type: string
+    description: assurance 角色凭据 id（init 输出，形态 <分组>/<任务id>/assurance）——
+      审查通过后 record-review 登记接受审查事件使用；凭据私钥本体不进参数
     required: true
   maxRounds:
     type: number
     description: 设计-审查循环轮次上限（缺省 3；耗尽仍未通过返回 design-failed，
-      不伪造 contract-ready）
+      不伪造 acceptance-ready）
     default: 3
   taskId:
     type: string
     description: 观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其
-      一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，只含字母、数字、点、
+      一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，仅含字母、数字、点、
       连字符、下划线，≤128 字符，禁「..」
   executionId:
     type: string
@@ -43,7 +49,7 @@ args:
   sampleType:
     type: string
     description: 观测样本类型（可选）——production = 真实执行（缺省）／selftest = 测试执行
-*/
+
 
 // ── O 区观测平台钩子：写通道 = world.run journal 语义（resume 重放回放首次记录值，
 // 时间戳与事件序列跨 resume 稳定）。shared 观测层调用 obsNow/obsAppend；换平台只换
@@ -412,7 +418,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.1.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.2.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 // acceptance-design-v2 — delivery-v2 目标与验收设计循环。
 // setup 先固定策略快照（此后审查与批准都按快照）；designer 只写验收草稿、方案辅助
 // 文档与实施增量；acceptance-reviewer 独立审查（assurance 角色）。

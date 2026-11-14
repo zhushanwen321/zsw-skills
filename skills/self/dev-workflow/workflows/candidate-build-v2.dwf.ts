@@ -1,18 +1,18 @@
 /* zcode-workflow
 description: delivery-v2 技能 BUILD 段候选实现引擎：前置 evaluate 拒绝 state=draft；
-  读取契约、增量清单、当前 verdict 与未决发现，逐增量派 builder。已实现增量按
-  contractVersion 判定（不因 revision 变化全量重做），仅命中未决发现或当前失败
-  证据的增量进入修复轮（无关联需求的 blocker 发现触发全部增量修复）。每增量
-  builder 只 ask 一次（实现并写实现报告），脚本随后执行 testCommand、把测试摘要
-  追加进报告，并以 append --key builderKey 追加 ImplementationRecorded 与
-  FindingRaised（builder 不分配 findingId）。基础设施失败不登记 FindingRaised，
-  返回 build-failed 前重新 evaluate。全部增量完成后 evaluate 并返回 implemented。
-  builder 不改 contract/increments/events/verdict，不做 Git 写操作；builder 的测试
-  输出不是 verified 证据，本 workflow 不手编 accepted
-whenToUse: delivery-v2 技能候选实现段——契约已获用户批准（evaluate state 非
-  draft）、需要形成候选实现或按未决发现/失败证据修复增量时调用；必传
-  projectRoot / taskDir / builderKey。不用于契约设计（用 acceptance-design-v2）或
-  证据核对与探索审查（用 independent-assurance-v2）
+  读取验收、增量清单、当前 verdict 与未决发现，逐增量派 builder。已实现增量按
+  acceptanceVersion 判定（不因 revision 变化全量重做），仅命中未决发现或当前失败证据的
+  增量进入修复轮（无关联需求的 blocker 发现触发全部增量修复）。每增量 builder 只 ask
+  一次（实现并写实现报告），脚本随后执行 testCommand、把测试摘要追加进报告，并以
+  append --credential 追加带合并回执（起始/合并后指纹 + 补丁哈希）的
+  ImplementationRecorded 与带 defect|boundary 分类的 FindingRaised。基础设施失败不登记
+  FindingRaised，返回 build-failed 前重新 evaluate。全部增量完成后 evaluate 并返回
+  implemented（候选，不是交付）。builder 不改 acceptance/increments/events/verdict，
+  不做 Git 写操作；builder 的测试输出不是 verified 证据，本 workflow 不手编 accepted
+whenToUse: delivery-v2 技能候选实现段——验收已获用户批准（evaluate state 非 draft）、
+  需要形成候选实现或按未决发现/失败证据修复增量时调用；必传 projectRoot / taskDir /
+  builderCredentialId。不用于验收设计（用 acceptance-design-v2）或证据核对与探索审查
+  （用 independent-assurance-v2）
 args:
   projectRoot:
     type: string
@@ -21,19 +21,19 @@ args:
     required: true
   taskDir:
     type: string
-    description: 任务目录绝对路径（delivery-gate init 创建；读取 contract.json /
+    description: 任务目录绝对路径（delivery-gate init 创建；读取 acceptance.json /
       increments.json / events.jsonl / verdict.json，写入实现报告与测试日志）
     required: true
-  builderKey:
+  builderCredentialId:
     type: string
-    description: builderKey 私钥（delivery-gate init 输出的 builder 角色事件写入凭据；
-      仅用于 append --key 以 builder 身份签名追加事件。只接收本角色 key——
-      userKey/assuranceKey 等不得注入，密钥也不得写入任何 agent prompt）
+    description: builder 角色凭据 id（init 输出，形态 <分组>/<任务id>/builder）——
+      append --credential 以 builder 身份签名追加实现与发现事件。只接收本角色凭据
+      id——user/assurance 凭据不得注入；凭据私钥本体不进参数与 prompt
     required: true
   taskId:
     type: string
     description: 观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其
-      一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，只含字母、数字、点、
+      一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，仅含字母、数字、点、
       连字符、下划线，≤128 字符，禁「..」
   executionId:
     type: string
@@ -42,7 +42,7 @@ args:
   sampleType:
     type: string
     description: 观测样本类型（可选）——production = 真实执行（缺省）／selftest = 测试执行
-*/
+
 
 // ── O 区观测平台钩子：写通道 = world.run journal 语义（resume 重放回放首次记录值，
 // 时间戳与事件序列跨 resume 稳定）。shared 观测层调用 obsNow/obsAppend；换平台只换
@@ -411,7 +411,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.1.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.2.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 // candidate-build-v2 — delivery-v2 候选实现引擎。
 // builder 只改产品代码与测试；每增量 builder 只 ask 一次（实现并写实现报告），
 // 随后脚本以 program/args 执行 testCommand 并把测试摘要追加进报告——不再二次

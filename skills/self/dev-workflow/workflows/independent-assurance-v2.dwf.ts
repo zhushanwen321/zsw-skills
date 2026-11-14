@@ -1,41 +1,41 @@
 /* zcode-workflow
-description: delivery-v2 技能 ASSURE 段独立保证引擎：前置门禁要求 state 非
-  draft/contract-approved 且 missing.incrementIds 为空；coverage reviewer 逐项对照
-  契约、候选代码与原始证据，对每 requirement×evidenceKind 亲自复核并产出
-  verified/partial/failed 结论（脚本以 append --key assuranceKey 追加 EvidenceRecorded）；
-  契约 exploratoryReview=required 时 explorer 并行执行，从原始 objective、契约与
-  真实实现主动找契约外反例并申报覆盖维度（脚本追加 ExplorationCompleted）。脚本为
-  新发现统一分配 findingId（FindingRaised）并在复核确认后追加 FindingResolved（仅
-  当前 revision 关闭）；两位角色完成后写总结、追加 AssuranceCompleted 并 evaluate。
-  setup 与 finalize 比对 revision，不一致显式 assurance-failed（期间项目内容变化，
-  本轮证据失效）；任何失败出口返回前重新 evaluate 取当前裁决（evaluate 失败则
-  verdict 为空）。返回 assurance-completed 与 delivery-gate 生成的 verdict，不直接
-  宣告 accepted；assurance 角色不改产品代码、契约、事件或 verdict
-whenToUse: delivery-v2 技能独立保证段——候选实现已形成（全部增量有当前契约版本的
-  实现记录）、需要独立覆盖核对（及高风险契约的探索性审查）时调用；必传
-  projectRoot / taskDir / assuranceKey。不用于契约设计（用 acceptance-design-v2）、实现
-  （用 candidate-build-v2）或用户风险接受（主会话 accept-risk）
+description: delivery-v2 技能 ASSURE 段独立覆盖核对与探索性审查：coverage-reviewer 逐
+  requirement × evidenceKind 独立取证（证据事件绑 artifactSha256），explorer 按维度构造
+  验收外反例（exploratoryReview=required 时）；证据/发现/解决事件逐条以 assurance 凭据
+  追加。收尾由引擎在当前 revision 重跑全部增量测试命令并登记带完整绑定的
+  AssuranceCompleted（本轮证据事件 id 集 + 冻结覆盖清单哈希 + 探索事件 id +
+  逐增量测试回执）；finalize 比对 revision，漂移登记 AssuranceRevisionDrift（连续漂移
+  链超上限由裁决器判 revision-unstable）。本 workflow 只产证据与发现，不改产品代码、
+  验收、风险接受或 verdict，不宣告 accepted
+whenToUse: delivery-v2 技能独立保证段——验收已批准、增量已齐（evaluate 的
+  missing.incrementIds 为空）时调用；必传 projectRoot / taskDir /
+  assuranceCredentialId。不用于验收设计（用 acceptance-design-v2）或候选实现
+  （用 candidate-build-v2）
 args:
   projectRoot:
     type: string
-    description: 项目根绝对路径（coverage/explorer 读代码与运行验证命令的工作目录；
-      与 task.json 的 projectRoot 一致性核对输入）
+    description: 项目根绝对路径（assurance 角色运行验证命令的工作目录；与 task.json 的
+      projectRoot 一致性核对输入）
     required: true
   taskDir:
     type: string
-    description: 任务目录绝对路径（delivery-gate init 创建；读取 contract.json /
-      events.jsonl / verdict.json，写入覆盖报告、探索报告、证据与保证总结）
+    description: 任务目录绝对路径（delivery-gate init 创建；读取 acceptance.json /
+      increments.json / events.jsonl / verdict.json，证据与报告写入 evidence/）
     required: true
-  assuranceKey:
+  assuranceCredentialId:
     type: string
-    description: assuranceKey 私钥（delivery-gate init 输出的 assurance 角色事件写入
-      凭据；仅用于 append --key 以 assurance 身份签名追加事件。只接收本角色 key——
-      userKey/builderKey 等不得注入，密钥也不得写入任何 agent prompt）
+    description: assurance 角色凭据 id（init 输出，形态 <分组>/<任务id>/assurance）——
+      append --credential 以 assurance 身份签名追加证据/发现/保证事件。只接收本角色凭据
+      id——user/builder 凭据不得注入；凭据私钥本体不进参数与 prompt
     required: true
+  runId:
+    type: string
+    description: 写事务租约运行标识（可选；传入时 setup 执行 lease-acquire、finalize
+      执行 lease-release，append 带 --run-id 做代次复核——projectRoot 级写入互斥）
   taskId:
     type: string
     description: 观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其
-      一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，只含字母、数字、点、
+      一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，仅含字母、数字、点、
       连字符、下划线，≤128 字符，禁「..」
   executionId:
     type: string
@@ -44,7 +44,7 @@ args:
   sampleType:
     type: string
     description: 观测样本类型（可选）——production = 真实执行（缺省）／selftest = 测试执行
-*/
+
 
 // ── O 区观测平台钩子：写通道 = world.run journal 语义（resume 重放回放首次记录值，
 // 时间戳与事件序列跨 resume 稳定）。shared 观测层调用 obsNow/obsAppend；换平台只换
@@ -413,7 +413,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.1.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.2.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 // independent-assurance-v2 — delivery-v2 独立覆盖核对与探索性审查。
 // assurance 角色不得修改产品代码、验收、事件或 verdict；脚本只经 delivery-gate
 // append --credential assuranceCredentialId 追加事实（assurance 角色凭据 id；
@@ -486,6 +486,7 @@ const VALID_ARG_KEYS = new Set([
   // 事件写入凭据：delivery-gate init 输出的 assuranceKey 私钥（assurance 角色专用，
   // userKey/builderKey 等其他角色 key 不得注入本 workflow）
   "assuranceCredentialId",
+  "runId",
   // 观测（O 区，可选）：taskId+executionId 同时提供才启用（sampleType 默认 production）
   "projectRoot",
   "taskDir",
@@ -565,6 +566,7 @@ for (const key of Object.keys(args)) {
 const projectRoot = absolutePath(args.projectRoot);
 const taskDir = absolutePath(args.taskDir);
 const assuranceCredentialId = typeof args.assuranceCredentialId === "string" ? args.assuranceCredentialId.trim() : "";
+const leaseRunId = typeof args.runId === "string" ? args.runId.trim() : "";
 if (projectRoot === "") inputProblems.push("projectRoot 须为项目根绝对路径");
 if (taskDir === "") inputProblems.push("taskDir 须为 delivery-gate init 创建的任务目录绝对路径");
 if (assuranceCredentialId === "") inputProblems.push("assuranceCredentialId 须为 init 输出的 assurance 凭据 id（形态 <分组>/<任务id>/assurance）");
@@ -664,6 +666,27 @@ if (explorationRequired) {
   }
   explorerPersona = explorerRoleRes.stdout;
 }
+// 写事务租约（可选）：传入 runId 时 setup 获取 projectRoot 级租约，append 全程带 --runId
+// 做代次复核，任何出口 release（含失败出口）——保证期写入互斥
+let leaseHeld = false;
+async function releaseLease(): Promise<void> {
+  if (leaseHeld && leaseRunId !== "") {
+    leaseHeld = false;
+    await runGate(gatePath, ["lease-release", "--project-root", projectRoot, "--run-id", leaseRunId]).catch(() => undefined);
+  }
+}
+if (leaseRunId !== "") {
+  const leaseRes = await runGate(gatePath, ["lease-acquire", "--project-root", projectRoot, "--run-id", leaseRunId]);
+  if (leaseRes.exitCode !== 0) {
+    await obsCloseExecution("setup-failure");
+    const result: AssuranceResult = {
+      terminated: "setup-failure", taskDir, revision: "", findingIds: [], verdict: null,
+      message: `写事务租约获取失败：${(leaseRes.stderr || leaseRes.stdout).trim()}。恢复动作：按输出处理占用租约的运行（等待或由主会话接管）后重新发起`,
+    };
+    return result;
+  }
+  leaseHeld = true;
+}
 const eventsRes = await runNode([NODE_READ_FILE, eventsPath]);
 const events: DeliveryEvent[] = [];
 let eventsError = "";
@@ -752,7 +775,9 @@ function validateExploration(value: ExplorationOutcome): string {
 }
 
 async function appendEvent(event: DeliveryEvent): Promise<string> {
-  const appended = await runGate(gatePath, ["append", "--task-dir", taskDir, "--event", JSON.stringify(event), "--credential", assuranceCredentialId]);
+  const appendArgs = ["append", "--task-dir", taskDir, "--event", JSON.stringify(event), "--credential", assuranceCredentialId];
+  if (leaseRunId !== "") appendArgs.push("--run-id", leaseRunId);
+  const appended = await runGate(gatePath, appendArgs);
   if (appended.exitCode !== 0) {
     throw new Error(`${event.type} 追加失败：${appended.stderr.trim() || appended.stdout.trim() || appended.exitCode}。恢复动作：按 delivery-gate 输出修复后重跑`);
   }
@@ -802,6 +827,7 @@ async function appendFinding(draft: FindingDraft, artifact: string): Promise<str
 async function failAssurance(message: string): Promise<AssuranceResult> {
   // 失败出口同样返回当前裁决：重新 evaluate 反映本轮已追加的事件；evaluate 失败则
   // verdict=null（不得回退到 setup 时的 initialVerdict——它可能早于本轮事件与 revision）
+  await releaseLease();
   let fullMessage = message;
   const reEvaluation = await runGate(gatePath, ["evaluate", "--task-dir", taskDir]);
   const reVerdict = parseObject(reEvaluation.stdout);
@@ -1006,6 +1032,7 @@ if (typeof finalVerdict.revision !== "string" || finalVerdict.revision !== revis
   } catch {
     // 漂移事件登记失败不掩盖原失败——事件流可在恢复时补记
   }
+  await releaseLease();
   await obsCloseExecution("assurance-failed");
   const result: AssuranceResult = {
     terminated: "assurance-failed",
@@ -1017,6 +1044,7 @@ if (typeof finalVerdict.revision !== "string" || finalVerdict.revision !== revis
   };
   return result;
 }
+await releaseLease();
 await obsEnd("finalize", null);
 await obsCloseExecution("assurance-completed");
 const result: AssuranceResult = {

@@ -473,11 +473,12 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "2.1.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.2.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 const VALID_ARG_KEYS = new Set([
     // 事件写入凭据：delivery-gate init 输出的 assuranceKey 私钥（assurance 角色专用，
     // userKey/builderKey 等其他角色 key 不得注入本 workflow）
     "assuranceCredentialId",
+    "runId",
     // 观测（O 区，可选）：taskId+executionId 同时提供才启用（sampleType 默认 production）
     "projectRoot",
     "taskDir",
@@ -552,6 +553,7 @@ for (const key of Object.keys(args)) {
 const projectRoot = absolutePath(args.projectRoot);
 const taskDir = absolutePath(args.taskDir);
 const assuranceCredentialId = typeof args.assuranceCredentialId === "string" ? args.assuranceCredentialId.trim() : "";
+const leaseRunId = typeof args.runId === "string" ? args.runId.trim() : "";
 if (projectRoot === "")
     inputProblems.push("projectRoot 须为项目根绝对路径");
 if (taskDir === "")
@@ -647,6 +649,27 @@ if (explorationRequired) {
         return result;
     }
     explorerPersona = explorerRoleRes.stdout;
+}
+// 写事务租约（可选）：传入 runId 时 setup 获取 projectRoot 级租约，append 全程带 --runId
+// 做代次复核，任何出口 release（含失败出口）——保证期写入互斥
+let leaseHeld = false;
+async function releaseLease() {
+    if (leaseHeld && leaseRunId !== "") {
+        leaseHeld = false;
+        await runGate(gatePath, ["lease-release", "--project-root", projectRoot, "--run-id", leaseRunId]).catch(() => undefined);
+    }
+}
+if (leaseRunId !== "") {
+    const leaseRes = await runGate(gatePath, ["lease-acquire", "--project-root", projectRoot, "--run-id", leaseRunId]);
+    if (leaseRes.exitCode !== 0) {
+        await obsCloseExecution("setup-failure");
+        const result = {
+            terminated: "setup-failure", taskDir, revision: "", findingIds: [], verdict: null,
+            message: `写事务租约获取失败：${(leaseRes.stderr || leaseRes.stdout).trim()}。恢复动作：按输出处理占用租约的运行（等待或由主会话接管）后重新发起`,
+        };
+        return result;
+    }
+    leaseHeld = true;
 }
 const eventsRes = await runNode([NODE_READ_FILE, eventsPath]);
 const events = [];
@@ -751,7 +774,10 @@ function validateExploration(value) {
     return validateFindings(value.findings);
 }
 async function appendEvent(event) {
-    const appended = await runGate(gatePath, ["append", "--task-dir", taskDir, "--event", JSON.stringify(event), "--credential", assuranceCredentialId]);
+    const appendArgs = ["append", "--task-dir", taskDir, "--event", JSON.stringify(event), "--credential", assuranceCredentialId];
+    if (leaseRunId !== "")
+        appendArgs.push("--run-id", leaseRunId);
+    const appended = await runGate(gatePath, appendArgs);
     if (appended.exitCode !== 0) {
         throw new Error(`${event.type} 追加失败：${appended.stderr.trim() || appended.stdout.trim() || appended.exitCode}。恢复动作：按 delivery-gate 输出修复后重跑`);
     }
@@ -800,6 +826,7 @@ async function appendFinding(draft, artifact) {
 async function failAssurance(message) {
     // 失败出口同样返回当前裁决：重新 evaluate 反映本轮已追加的事件；evaluate 失败则
     // verdict=null（不得回退到 setup 时的 initialVerdict——它可能早于本轮事件与 revision）
+    await releaseLease();
     let fullMessage = message;
     const reEvaluation = await runGate(gatePath, ["evaluate", "--task-dir", taskDir]);
     const reVerdict = parseObject(reEvaluation.stdout);
@@ -1011,6 +1038,7 @@ if (typeof finalVerdict.revision !== "string" || finalVerdict.revision !== revis
     catch {
         // 漂移事件登记失败不掩盖原失败——事件流可在恢复时补记
     }
+    await releaseLease();
     await obsCloseExecution("assurance-failed");
     const result = {
         terminated: "assurance-failed",
@@ -1022,6 +1050,7 @@ if (typeof finalVerdict.revision !== "string" || finalVerdict.revision !== revis
     };
     return result;
 }
+await releaseLease();
 await obsEnd("finalize", null);
 await obsCloseExecution("assurance-completed");
 const result = {
