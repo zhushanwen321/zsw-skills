@@ -433,7 +433,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "2.4.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.5.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 const VALID_ARG_KEYS = new Set([
     "projectRoot",
     "taskDir",

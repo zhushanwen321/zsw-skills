@@ -418,7 +418,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.4.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.5.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 // acceptance-design-v2 — delivery-v2 目标与验收设计循环。
 // setup 先固定策略快照（此后审查与批准都按快照）；designer 只写验收草稿、方案辅助
 // 文档与实施增量；acceptance-reviewer 独立审查（assurance 角色，对照 intent.md 原文

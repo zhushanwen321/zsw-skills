@@ -18,7 +18,7 @@
 
 ```
 CreateWorkflow saved: tech-review-loop-v2
-args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workflow 内部归一为设计目录）>, projectRoot: <项目根绝对路径>, maxRounds?: 10, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件>, taskId?: <设计包任务标识，建议 = 设计包 <name>>, executionId?: "T2-<发起时点短时间戳>" }
+args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workflow 内部归一为设计目录）>, projectRoot: <项目根绝对路径>, maxRounds?: 10, reviewers?: <自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件>, taskId?: <设计包任务标识，建议 = 设计包 <name>>, executionId?: "T2-<发起时点短时间戳>", attempt?: <重发起序号——环境失败族重发时递增，防轮次产物覆盖；缺省时自动检测已有产物并递增> }
 终态: converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族）
 ```
 

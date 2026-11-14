@@ -411,7 +411,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.4.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.5.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 // candidate-build-v2 — delivery-v2 候选实现引擎。
 // builder 只改产品代码与测试；每增量 builder 只 ask 一次（实现并写实现报告），
 // 随后脚本以 program/args 执行 testCommand 并把测试摘要追加进报告——不再二次
@@ -502,13 +502,18 @@ const NODE_READ_FILE = "process.stdout.write(require('fs').readFileSync(process.
 const NODE_WRITE_FILE =
   "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2])";
 const NODE_APPEND_FILE = "require('fs').appendFileSync(process.argv[1],process.argv[2])";
+// 超时入参（第 5 参）来自 increments 契约的 testCommand.timeoutMs（CLI validate-acceptance
+// 已校验 1000..3600000 整数）；非法或缺省回退 300000，与 CLI 缺省值一致——防长测试任务
+// 在 300s 被截断后回执 exitCode=-1、被登记为 blocker 伪发现而永停 build-failed
 const NODE_RUN_TEST =
   "const fs=require('fs'),cp=require('child_process'),pt=require('path');" +
   "const cwd=process.argv[1],logPath=process.argv[2],program=process.argv[3],args=JSON.parse(process.argv[4]);" +
+  "const rawTimeout=parseInt(process.argv[5],10);" +
+  "const timeoutMs=Number.isInteger(rawTimeout)&&rawTimeout>=1000&&rawTimeout<=3600000?rawTimeout:300000;" +
   "fs.mkdirSync(pt.dirname(logPath),{recursive:true});" +
-  "const r=cp.spawnSync(program,args,{cwd,encoding:'utf8',maxBuffer:64*1024*1024,timeout:300000});" +
+  "const r=cp.spawnSync(program,args,{cwd,encoding:'utf8',maxBuffer:64*1024*1024,timeout:timeoutMs});" +
   "const code=r.error?127:(r.status===null?-1:r.status);" +
-  "fs.writeFileSync(logPath,'command: '+JSON.stringify({program,args,cwd})+'\\nexitCode: '+code+'\\n--- stdout ---\\n'+(r.stdout||'')+'\\n--- stderr ---\\n'+(r.stderr||'')+'\\n--- spawn error ---\\n'+String(r.error&&r.error.message||''));" +
+  "fs.writeFileSync(logPath,'command: '+JSON.stringify({program,args,cwd,timeoutMs})+'\\nexitCode: '+code+'\\n--- stdout ---\\n'+(r.stdout||'')+'\\n--- stderr ---\\n'+(r.stderr||'')+'\\n--- spawn error ---\\n'+String(r.error&&r.error.message||''));" +
   "process.stdout.write(JSON.stringify({exitCode:code,spawnError:r.error?String(r.error.code||r.error.message):null,artifact:logPath}))";
 
 async function runNode(argv: string[], timeoutMs = 330000): Promise<CommandResult> {
@@ -661,7 +666,7 @@ const increments = Array.isArray(incrementsDoc?.items) ? incrementsDoc.items as 
   id: string;
   title: string;
   requirementIds: string[];
-  testCommand?: { program: string; args: string[] };
+  testCommand?: { program: string; args: string[]; timeoutMs?: number };
 }[] : [];
 const events: DeliveryEvent[] = [];
 let eventsError = "";
@@ -907,13 +912,24 @@ for (let index = 0; index < increments.length; index += 1) {
   let testExitCode = 0;
   let testSummary = "当前增量未声明 testCommand";
   if (item.testCommand !== undefined) {
-    const testRes = await runNode([
-      NODE_RUN_TEST,
-      projectRoot,
-      testLogPath,
-      item.testCommand.program,
-      JSON.stringify(item.testCommand.args),
-    ]);
+    // 外层 wrapper 超时 = clamp 后生效值 +30s 缓冲（缺省 300000 时恰为原默认 330000），
+    // 防 world.run 先于内层 spawnSync 截断长测试；第 5 参原样传声明值，clamp 在脚本内做
+    const declaredTimeout = item.testCommand.timeoutMs;
+    const effectiveTimeout =
+      typeof declaredTimeout === "number" && Number.isInteger(declaredTimeout) && declaredTimeout >= 1000 && declaredTimeout <= 3600000
+        ? declaredTimeout
+        : 300000;
+    const testRes = await runNode(
+      [
+        NODE_RUN_TEST,
+        projectRoot,
+        testLogPath,
+        item.testCommand.program,
+        JSON.stringify(item.testCommand.args),
+        String(item.testCommand.timeoutMs ?? 300000),
+      ],
+      effectiveTimeout + 30000,
+    );
     const testMeta = parseObject(testRes.stdout);
     if (
       testRes.exitCode !== 0 || testMeta === null || typeof testMeta.exitCode !== "number" ||

@@ -3,7 +3,7 @@ name: tech-design-v2
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 2.3.0
+version: 2.4.0
 description: >-
   Use when 在已批准目标与验收（delivery-v2 产出）的约束下三阶段推敲方案并产出完整设计包：
   写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan 双格式），用户确认后登记方案包
@@ -24,7 +24,7 @@ description: >-
 
 **入口门 [MANDATORY]**：T1 开始前，交付任务目录必须存在已批准的 acceptance.json——用
 `node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs evaluate --task-dir <taskDir>` 检查，
-state 须为 `design`（已批准、待方案——验收版本递增重批后 DesignApproved 失效、state 亦回到该态，重入设计走同一判据）。缺任务目录或未批准 → 停止并回 delivery-v2 走验收设计
+state 须为 `design`（已批准、待方案——验收版本递增重批后 DesignApproved 失效、state 亦回到该态，重入设计走同一判据；该判据仅对应 verdict-rules `requireDesignApproved` 默认 true 的任务）。verdict-rules `requireDesignApproved=false` 的任务 state 不落 design（delivery-gate 状态路由跳过 design 分支，直接落到 acceptance-approved）：该策略下设计阶段非裁决前置，不得按「未批准」误判回 delivery-v2；仍需推敲方案时按用户明确要求进入（照常走三阶段并 record-design-approved）。缺任务目录或未批准 → 停止并回 delivery-v2 走验收设计
 （用户明确不走交付体系的独立设计任务用 tech-design-v1，不经本门）。设计包全程绑定该任务的
 acceptanceVersion 与 acceptancePackageSha256。
 
@@ -106,7 +106,7 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 | zcode | 会话可见 CreateWorkflow 工具 / saved workflows | saved workflow `tech-review-loop-v2`（`CreateWorkflow saved` 发起） |
 | pi（subagent-workflow extension） | 宿主为 pi coding agent、workflow 工具可用 | 本 skill 安装位置上级的 `../workflows/pi/tech-review-loop-v2.js`——复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run tech-review-loop-v2 --args designDoc=<路径> projectRoot=<路径> maxRounds=<N>`（数组型参数 reviewers 不支持——--args 值全字符串，用缺省四件模板） |
 
-**两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers?, taskId?, executionId?, sampleType? }`——designDoc = 设计目录绝对路径（或其渲染 md 路径，workflow 内部归一为设计目录；reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件 = 方向审 `tech-design-direction-review` + 三审 `tech-design-review` / `tech-design-impact-review` / `tech-design-simplicity-review`）；终态：converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 终态处置表）。
+**两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers?, taskId?, executionId?, sampleType?, attempt? }`——designDoc = 设计目录绝对路径（或其渲染 md 路径，workflow 内部归一为设计目录；reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件 = 方向审 `tech-design-direction-review` + 三审 `tech-design-review` / `tech-design-impact-review` / `tech-design-simplicity-review`；attempt = 重发起序号——环境失败族重发时递增，防轮次产物覆盖；缺省时自动检测已有产物并递增）；终态：converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 终态处置表）。
 
 **阶段事件观测（可选）**：`taskId` 与 `executionId` 同时传入即启用——每次执行的阶段边界（setup / review / aggregate / fix / finalize）逐行记录到 `~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl`，skill 恒 `tech-design-v2`（canonical 技能名，非 workflow 脚本名）、stage 恒 `T2`。task_id = 本次设计包任务标识（建议 = 设计包 `<name>`，进 dev-flow-v2 执行时同一 task_id 延续共用）；execution_id = 本次审查发起标识（建议 `T2-<发起时点短时间戳>`）。两参都不传 = 观测关闭、业务照常；只传其一 = 告警并关闭；观测写失败只告警不改终态。事件契约与 D0/D4/D6 外部步骤的记录命令见 dev-flow-v2 SKILL 的「阶段事件观测」节（`~/.agents/skills/dev-flow-v2/SKILL.md`）。
 

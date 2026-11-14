@@ -68,7 +68,7 @@ zcode：`CreateWorkflow saved: independent-assurance-v2`，args `{ projectRoot, 
 
 回执与 setup/finalize 使用的产物状态指纹口径与 `delivery-gate` 的 revision 计算一致，按任务策略快照 revision.json 的 mode 分两档：`auto-git`（普通模式）= git HEAD + tracked 修改（`git diff`）+ untracked 非 ignored 文件逐文件内容——builder 新增的未跟踪文件替换内容后指纹必变；`content-manifest` = 按项目根 `delivery-manifest.txt` 清单逐文件内容计算（输出 `manifest-` 前缀指纹），非 git 项目走该模式（`auto-git` 下非 git 目录无法计算 revision，链路走不通）。
 
-策略快照 `runsFromIgnoredArtifacts=true`（policies/revision.json 随任务固定）时的执行语义：workflow 取证前生成干净构建（HEAD 导出 + 工作树补丁 + 非 ignored 新文件复制，不含 ignored 本地产物），逐增量测试在干净目录执行并统一绑 buildId，AssuranceCompleted 附 cleanBuild 记录——证明证据不依赖本机 ignored 产物；干净目录内测试失败（如需本机 ignored 依赖）会如实记入回执，裁决器按退出码判定保证无效。
+策略快照 `runsFromIgnoredArtifacts=true`（policies/revision.json 随任务固定）时的执行语义：workflow 取证前生成干净构建（HEAD 导出 + 工作树补丁 + 非 ignored 新文件复制，不含 ignored 本地产物），逐增量测试在干净目录执行并统一绑 buildId，AssuranceCompleted 附 cleanBuild 记录——证明证据不依赖本机 ignored 产物；干净目录内测试失败（如需本机 ignored 依赖）会如实记入回执，裁决器按退出码判定保证无效。`mode=content-manifest` 时豁免干净构建：产物已纳入内容清单、变化即改变 revision 使旧证据失效，裁决器与 workflow 同判定。
 
 ## 6. 统一判定与风险接受
 

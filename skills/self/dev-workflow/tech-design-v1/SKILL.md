@@ -3,7 +3,7 @@ name: tech-design-v1
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 0.7.9
+version: 0.7.10
 description: >-
   Use when 三阶段产出完整设计包（设计文档 + 实施计划）：写技术设计文档 → 对抗式审查循环 →
   实施计划（impl-plan 双格式）。tech-design 的 workflow 形态版本（老 tech-design 保留作对照，可随时切回）。
@@ -14,7 +14,7 @@ description: >-
   只写设计文档不走三阶段（用老 tech-design）。
 ---
 
-# tech-design-wf（tech-design 三阶段版）
+# tech-design-v1（tech-design 三阶段版）
 
 **三阶段产出完整设计包**，每阶段结束默认停下向用户确认产出是否合理，确认后进下一阶段：
 
@@ -28,7 +28,7 @@ T2 审查循环（四席并行审查 → 聚合裁决独立 phase → 修复循�
 T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
    │ 确认
    ▼
-设计包交付 → dev-flow-wf 执行
+设计包交付 → dev-flow-v1 执行
 ```
 
 - **跳过确认的唯一通道 = 前期授权**：用户宣布全托管/夜间托管，或显式说「一路执行」时三阶段连续推进，阶段产出仍完整呈现（陈述性展示，不构成等待点）
@@ -37,7 +37,7 @@ T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
 - 确认的裁决维度：T1 = 问题定义、方案方向与用例走查缺口处置；T2 = 审查是否真收敛（含方向审一句话判定的转述）；T3 = 拆分粒度与验收计划。打回 = 回该阶段或上一阶段修订。**T1/T3 确认点以「人工审核导航」为入口**：每条关键决策写作期已定审核级别（A = 必须逐条裁决 / B = 无异议即过 / C = 局部实现细节不入决策节），用户只逐条裁决 A 级、扫 B 级清单，无需通读全文；分级判据与六维影响评估（架构/功能/复杂度/性能/资源/红线触碰）见 `references/review-guide-rubric.md`
 - **与老 tech-design 的关系**：两技能独立维护。本技能自带原则层（references/principles.md）、Step D 诊断期、方向审与三态修复循环，impl-plan 创建在 T3，审查循环为 workflow 形态；老 tech-design 保留作对照，任一时点可切回，退役时点由用户裁决
 
-## 设计包（dev-flow-wf 的唯一入口输入）
+## 设计包（dev-flow-v1 的唯一入口输入）
 
 设计包整体落 tech-design 段，目录按寻址双形态（算法与约定见 `skill-data-addressing.md`——`<zsw-skills 检出根>/skills/self/dev-workflow/references/skill-data-addressing.md`，本节不内联）：workspace 形态（同仓多个 worktree 同父目录）= `~/.agents/skill-data/tech-design/<ws-slug>/`——工作区级共享、无 worktree 段，任何 worktree 的入口门都发现同一设计包；单仓形态 = `~/.agents/skill-data/tech-design/<project-slug>/`（现行平铺，路径不变）。两级化只换父目录，`<ws-slug>/` 内部排布与现行目录完全一致；两种 slug 由 workflow 脚本按 projectRoot 检测后自动拼接。用户传参（designDoc / projectRoot 等）一律传绝对路径，不手拼 slug。下表路径均相对该目录：
 
@@ -74,9 +74,9 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 | zcode | 会话可见 CreateWorkflow 工具 / saved workflows | saved workflow `tech-review-loop`（`CreateWorkflow saved` 发起） |
 | pi（subagent-workflow extension） | 宿主为 pi coding agent、workflow 工具可用 | 本 skill 安装位置上级的 `../workflows/pi/tech-review-loop.js`——复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run tech-review-loop --args designDoc=<路径> projectRoot=<路径> maxRounds=<N>`（数组型参数 reviewers 不支持——--args 值全字符串，用缺省四件模板） |
 
-**两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers?, taskId?, executionId?, sampleType? }`——designDoc = 设计目录绝对路径（或其渲染 md 路径，workflow 内部归一为设计目录；reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件 = 方向审 `tech-design-direction-review` + 三审 `tech-design-review` / `tech-design-impact-review` / `tech-design-simplicity-review`）；终态：converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 终态处置表）。
+**两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers?, taskId?, executionId?, sampleType?, attempt? }`——designDoc = 设计目录绝对路径（或其渲染 md 路径，workflow 内部归一为设计目录；reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件 = 方向审 `tech-design-direction-review` + 三审 `tech-design-review` / `tech-design-impact-review` / `tech-design-simplicity-review`）；attempt = 重发起序号（防重发起覆盖历史轮次产物），缺省自动检测产物目录已有 attempt 序号取 max+1；终态：converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 终态处置表）。
 
-**阶段事件观测（可选）**：`taskId` 与 `executionId` 同时传入即启用——每次执行的阶段边界（setup / review / aggregate / fix / finalize）逐行记录到 `~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl`，skill 恒 `tech-design-wf`（canonical 技能名，非 workflow 脚本名）、stage 恒 `T2`。task_id = 本次设计包任务标识（建议 = 设计包 `<name>`，进 dev-flow-wf 执行时同一 task_id 延续共用）；execution_id = 本次审查发起标识（建议 `T2-<发起时点短时间戳>`）。两参都不传 = 观测关闭、业务照常；只传其一 = 告警并关闭；观测写失败只告警不改终态。事件契约与 D0/D4/D6 外部步骤的记录命令见 dev-flow-wf SKILL 的「阶段事件观测」节（`~/.agents/skills/dev-flow-v1/SKILL.md`）。
+**阶段事件观测（可选）**：`taskId` 与 `executionId` 同时传入即启用——每次执行的阶段边界（setup / review / aggregate / fix / finalize）逐行记录到 `~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl`，skill 恒 `tech-design-v1`（canonical 技能名，非 workflow 脚本名）、stage 恒 `T2`。task_id = 本次设计包任务标识（建议 = 设计包 `<name>`，进 dev-flow-v1 执行时同一 task_id 延续共用）；execution_id = 本次审查发起标识（建议 `T2-<发起时点短时间戳>`）。两参都不传 = 观测关闭、业务照常；只传其一 = 告警并关闭；观测写失败只告警不改终态。事件契约与 D0/D4/D6 外部步骤的记录命令见 dev-flow-v1 SKILL 的「阶段事件观测」节（`~/.agents/skills/dev-flow-v1/SKILL.md`）。
 
 ## 核心红线（14 条，详解见 references/design-principles.md 与 references/principles.md）
 
