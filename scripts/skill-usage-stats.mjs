@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// skill-usage-stats.mjs — 五技能（tech-design-wf / dev-flow-wf / delivery-wf / dev-merge / pr-cr-fix）
+// skill-usage-stats.mjs — 九技能（tech-design/dev-flow/delivery 各 v1/v2/dev 三代 + dev-merge / pr-cr-fix）
 // 统一耗时与 token 统计命令
 //
 // 数据来源（只读，不直连任何数据库 / 会话文件）：
@@ -63,9 +63,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSyn
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SKILLS = ["tech-design-v1", "dev-flow-v1", "delivery-v1", "tech-design-v2", "dev-flow-v2", "delivery-v2", "dev-merge", "pr-cr-fix"];
-// 观测事件 skill 字段历史上写过 workflow 引擎名（与 opts.skills 的五技能名不同源）——
-// 统计侧归一到五技能名；生产事件源已改 canonical，此处兼容存量事件
+const SKILLS = ["tech-design-v1", "dev-flow-v1", "delivery-v1", "tech-design-v2", "dev-flow-v2", "delivery-v2", "tech-design-dev", "dev-flow-dev", "delivery-dev", "dev-merge", "pr-cr-fix"];
+// 观测事件 skill 字段历史上写过 workflow 引擎名（与 opts.skills 的技能名不同源）——
+// 统计侧归一到 canonical 技能名；生产事件源已改 canonical，此处兼容存量事件
 const SKILL_ALIASES = {
   // v1 代 workflow 名 → v1 技能（存量事件兼容）
   "tech-review-loop": "tech-design-v1",
@@ -82,6 +82,13 @@ const SKILL_ALIASES = {
   "acceptance-design-v2": "delivery-v2",
   "candidate-build-v2": "delivery-v2",
   "independent-assurance-v2": "delivery-v2",
+  // DEV 加固线 workflow 名 → dev 技能
+  "tech-review-loop-dev": "tech-design-dev",
+  "wave-executor-dev": "dev-flow-dev",
+  "dev-consistency-loop-dev": "dev-flow-dev",
+  "acceptance-design-dev": "delivery-dev",
+  "candidate-build-dev": "delivery-dev",
+  "independent-assurance-dev": "delivery-dev",
   "dev-merge-gates": "dev-merge",
   "pr-lifecycle": "pr-cr-fix",
 };
@@ -114,13 +121,13 @@ function parseArgs(argv) {
     if (arg === "--help" || arg === "-h") {
       console.log(
         [
-          "五技能统一统计：tech-design-wf / dev-flow-wf / delivery-wf / dev-merge / pr-cr-fix 的耗时与 token 汇总",
+          "统一统计：tech-design / dev-flow / delivery 三代（v1 / v2 / dev）+ dev-merge + pr-cr-fix 的耗时与 token 汇总",
           "",
           "用法：",
           `  ${USAGE_LINE}`,
           "",
           "选项：",
-          "  --skill <名>           tech-design-wf | dev-flow-wf | delivery-wf | dev-merge | pr-cr-fix | all，可重复；缺省 all",
+          "  --skill <名>           tech-design-v1|v2|dev | dev-flow-v1|v2|dev | delivery-v1|v2|dev | dev-merge | pr-cr-fix | all，可重复；缺省 all",
           "  --since <时间>         透传 usage CLI（run 起始时间下界；YYYY-MM-DD 或 ISO 串）",
           "  --until <时间>         透传 usage CLI（run 起始时间上界）",
           "  --format table|json    输出形态（缺省 table；json 打印完整报告对象）",
@@ -442,6 +449,21 @@ function classifyLegacy(name, args) {
   const reviewersStr = Array.isArray(a.reviewers) ? a.reviewers.join(" ") : "";
   const hasV = (k) => a[k] !== null && a[k] !== undefined && a[k] !== "";
 
+  // 0. DEV 加固线 workflow 名 → dev 技能（estimated 兜底归类；带 executionId 的 run 走
+  // observed 前分支，不经此处）。design-code-sync 两引擎跨代共用，不属 dev 技能
+  if (/^(tech-review-loop-dev|wave-executor-dev|dev-consistency-loop-dev|acceptance-design-dev|candidate-build-dev|independent-assurance-dev)$/.test(name)) {
+    const stage =
+      /^acceptance-design-dev$/.test(name) ? "DESIGN" :
+      /^candidate-build-dev$/.test(name) ? "BUILD" :
+      /^independent-assurance-dev$/.test(name) ? "ASSURE" :
+      /^tech-review-loop-dev$/.test(name) ? "T2" :
+      matchDevFlowStage(name) ?? (/wave/i.test(name) ? "D1" : "D2");
+    return {
+      skill: /^(acceptance|candidate|independent)-/.test(name) ? "delivery-dev" : /^tech-review/.test(name) ? "tech-design-dev" : "dev-flow-dev",
+      stage,
+      reason: `DEV workflow 名(${name})`,
+    };
+  }
   // 1. delivery-wf：taskDir 是三个 workflow 的共同硬特征；阶段按 workflow 名判定
   if (hasV("taskDir") && /^(contract-design|candidate-build|independent-assurance)$/.test(name)) {
     const stage = name === "contract-design" ? "DESIGN" : name === "candidate-build" ? "BUILD" : "ASSURE";
@@ -940,7 +962,7 @@ function processRun(run, backend, opts, executions, aggregator, runSummaries, un
     const legacy = classifyLegacy(name, args);
     if (!legacy) {
       quality.unclassifiedRuns++;
-      unclassified.push({ backend: backend.label, id: run.id, name, reason: "名称与 args 均无五技能特征" });
+      unclassified.push({ backend: backend.label, id: run.id, name, reason: "名称与 args 均无技能特征" });
       return;
     }
     attribution = "estimated";
@@ -1423,7 +1445,7 @@ function serializeSkillTree(bySkillRaw) {
 function renderTable(report, opts) {
   const lines = [];
   const { scope, totals, pivot } = report;
-  lines.push(`五技能统一统计（${scope.includeSelftest ? "production+selftest" : "production"} 样本）`);
+  lines.push(`技能统一统计（${scope.includeSelftest ? "production+selftest" : "production"} 样本）`);
   lines.push(
     `范围：${scope.backends.join(" + ")}；技能：${scope.skills.join("/")}；观测根：${scope.observabilityRoot}` +
       (scope.since ? `；since ${scope.since}` : "") +

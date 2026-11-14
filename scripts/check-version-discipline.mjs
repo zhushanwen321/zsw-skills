@@ -91,6 +91,9 @@ const SKILLS = [
   { name: "tech-design-v2", dir: "skills/self/dev-workflow/tech-design-v2" },
   { name: "dev-flow-v2", dir: "skills/self/dev-workflow/dev-flow-v2" },
   { name: "delivery-v2", dir: "skills/self/dev-workflow/delivery-v2" },
+  { name: "tech-design-dev", dir: "skills/self/dev-workflow/tech-design-dev" },
+  { name: "dev-flow-dev", dir: "skills/self/dev-workflow/dev-flow-dev" },
+  { name: "delivery-dev", dir: "skills/self/dev-workflow/delivery-dev" },
 ];
 const WORKFLOWS = "skills/self/dev-workflow/workflows";
 const SHARED_SRC_PREFIX = `${WORKFLOWS}/src/`;
@@ -125,6 +128,18 @@ const PRODUCT_SKILL = {
   "pi/candidate-build-v2.js": "delivery-v2",
   "independent-assurance-v2.dwf.ts": "delivery-v2",
   "pi/independent-assurance-v2.js": "delivery-v2",
+  "tech-review-loop-dev.dwf.ts": "tech-design-dev",
+  "pi/tech-review-loop-dev.js": "tech-design-dev",
+  "wave-executor-dev.dwf.ts": "dev-flow-dev",
+  "pi/wave-executor-dev.js": "dev-flow-dev",
+  "dev-consistency-loop-dev.dwf.ts": "dev-flow-dev",
+  "pi/dev-consistency-loop-dev.js": "dev-flow-dev",
+  "acceptance-design-dev.dwf.ts": "delivery-dev",
+  "pi/acceptance-design-dev.js": "delivery-dev",
+  "candidate-build-dev.dwf.ts": "delivery-dev",
+  "pi/candidate-build-dev.js": "delivery-dev",
+  "independent-assurance-dev.dwf.ts": "delivery-dev",
+  "pi/independent-assurance-dev.js": "delivery-dev",
 };
 const STAMP_RE = /const SKILL_VERSION = "([^"]*)";/;
 const VERSION_RE = /^version:\s*(\d+\.\d+\.\d+)\s*$/m;

@@ -1,0 +1,16 @@
+{
+  "categories": [
+    {
+      "id": "defect",
+      "blocksAccepted": true,
+      "exits": ["fix-then-resolve", "user-risk-accept-if-allowed"],
+      "riskAcceptAllowed": true
+    },
+    {
+      "id": "boundary",
+      "blocksAccepted": "until-confirmed",
+      "exits": ["assurance-confirm-declared"],
+      "riskAcceptAllowed": false
+    }
+  ]
+}

@@ -33,6 +33,9 @@ scripts/           workflow 双平台构建与校验脚本
 | tech-design-v2 | 在已批准目标与验收（delivery-v2 产出）约束下推敲方案：设计文档 → 对抗式审查循环 → 完整方案包（绑定验收包哈希，产出后登记 DesignApproved） |
 | dev-flow-v2 | 按目标与验收 + 方案包执行候选实现：入口门校验验收包哈希与 DesignApproved，收尾产出候选（candidate）交 delivery-v2 裁决，不自行宣告交付 |
 | delivery-v2 | 目标与验收（裁判）技能：目标与验收设计 → 独立保证 → 机器裁决器唯一宣告交付；三角色签名事件流 + 策略包 + 原始意图防缩窄 |
+| tech-design-dev | delivery-v2 体系的 DEV 加固线（v2 分叉）：设计语义与 tech-design-v2 一致，workflow 执行韧性增强（agent 调用结构校验与修正重问、CLI 失败修正提示、自修复记录与终态上报） |
+| dev-flow-dev | delivery-v2 体系的 DEV 加固线（v2 分叉）：执行语义与 dev-flow-v2 一致，W2/W3 workflow 执行韧性增强（同上）；W4 对账引擎与 v2 跨代共用 |
+| delivery-dev | delivery-v2 体系的 DEV 加固线（v2 分叉）：裁决语义与 delivery-v2 完全一致（事件与 verdict 双向兼容），三个 workflow 执行韧性增强 + 自修复记录（self-repairs.jsonl）终态上报 |
 | symbol-watchlist | 符号词表生成与自验工具（extract-backticks.mjs）：tech-design-v2 T3 产词表、dev-flow-v2 D5 发起前自验的共享契约载体 |
 | design-code-sync | 校准代码实现与设计文档的一致性 |
 | architecture-clean-domain-design | 以 DDD 与六边形架构为分析视角的领域建模与架构分析：统一语言、限界上下文、聚合不变量、圈层性质判定；只做映射与登记，不输出结构改造设计 |

@@ -57,6 +57,13 @@ const NAMES = [
   "acceptance-design-v2",
   "candidate-build-v2",
   "independent-assurance-v2",
+  // DEV 加固线（v2 分叉；design-code-sync 两引擎跨代共用不复制）
+  "tech-review-loop-dev",
+  "wave-executor-dev",
+  "dev-consistency-loop-dev",
+  "acceptance-design-dev",
+  "candidate-build-dev",
+  "independent-assurance-dev",
 ];
 // 观测门禁豁免名单：shared 源无 initObservation 调用点且登记在此的 workflow 跳过观测
 // 契约检查（跳过时打一行说明，不静默）。豁免是显式决定不是默认沉默——登记格式 = 双引号
@@ -95,6 +102,13 @@ const SKILL_VERSION_SOURCES = {
   "acceptance-design-v2": join(ROOT, "skills/self/dev-workflow/delivery-v2/SKILL.md"),
   "candidate-build-v2": join(ROOT, "skills/self/dev-workflow/delivery-v2/SKILL.md"),
   "independent-assurance-v2": join(ROOT, "skills/self/dev-workflow/delivery-v2/SKILL.md"),
+  // DEV 加固线
+  "tech-review-loop-dev": join(ROOT, "skills/self/dev-workflow/tech-design-dev/SKILL.md"),
+  "wave-executor-dev": join(ROOT, "skills/self/dev-workflow/dev-flow-dev/SKILL.md"),
+  "dev-consistency-loop-dev": join(ROOT, "skills/self/dev-workflow/dev-flow-dev/SKILL.md"),
+  "acceptance-design-dev": join(ROOT, "skills/self/dev-workflow/delivery-dev/SKILL.md"),
+  "candidate-build-dev": join(ROOT, "skills/self/dev-workflow/delivery-dev/SKILL.md"),
+  "independent-assurance-dev": join(ROOT, "skills/self/dev-workflow/delivery-dev/SKILL.md"),
 };
 
 function readSkillVersion(skillMdPath, wfName) {
@@ -134,6 +148,7 @@ const OBS_STEPS = new Set(["execution", "setup", "review", "aggregate", "fix", "
 const OBS_SKILLS = new Set([
   "tech-design-v1", "dev-flow-v1", "delivery-v1",
   "tech-design-v2", "dev-flow-v2", "delivery-v2",
+  "tech-design-dev", "dev-flow-dev", "delivery-dev",
 ]);
 
 /** 观测契约核对：shared 已接入观测（initObservation 在场）时校验——stage/step 词表、
