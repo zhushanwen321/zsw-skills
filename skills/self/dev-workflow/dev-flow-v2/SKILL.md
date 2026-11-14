@@ -3,11 +3,12 @@ name: dev-flow-v2
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 2.0.0
+version: 2.1.0
 description: >-
   Use when 一份完整设计包（tech-design-v2 产出：设计文档 + 双格式 impl-plan + 审查终态）
   需要落地为已验收代码。dev-flow 的 workflow 版（灰度并行，老版保留可随时切回）：
   纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 → 终态同步 → 交付后守护。
+  三技能交付体系的技能③（裁判 = delivery-v2）：产出候选实现，交付结论只由裁决器给出。
   触发词：「wf 实施」「按设计包开发」「workflow 版实施」「设计包执行」。
   含 W2 wave-executor-v2 / W3 dev-consistency-loop-v2 / W4 design-code-sync-v2（conformance
   绑定包的对账引擎）与 design-code-sync-loop（未绑定 legacy 包只读期收尾）四个
@@ -25,6 +26,16 @@ description: >-
 
 入口逐行核对（任一缺失 → 拒绝并指明缺什么、回 tech-design-v2 哪个阶段补）。设计包目录按寻址双形态（算法与约定见 `skill-data-addressing.md`——`<zsw-skills 检出根>/skills/self/dev-workflow/references/skill-data-addressing.md`，本节不内联）：workspace 形态（同仓多个 worktree 同父目录）= `~/.agents/skill-data/tech-design/<ws-slug>/`——工作区级共享、无 worktree 段，任何 worktree 的入口门都发现同一设计包；单仓形态 = `~/.agents/skill-data/tech-design/<project-slug>/`（现行平铺，路径不变）。两种 slug 均由脚本按 projectRoot 检测后自动拼接，不手拼。下表 `<slug>` = 单仓形态的 project-slug 或工作区形态的 ws-slug：
 
+交付体系任务（本技能的正常形态）还须先过**验收任务门**：
+
+| 判据 | 缺失时 |
+|------|--------|
+| 交付任务目录存在已批准 acceptance.json（`delivery-gate evaluate` 的 state ∈ {design 之后各态，非 draft}；meta.json acceptanceBinding 与当前批准一致） | 回 delivery-v2 走验收设计与批准 |
+| DesignApproved 存在且绑定的方案包哈希清单覆盖当前设计包（`verdict.designApproved == true`） | 回 tech-design-v2 重新确认方案包并 record-design-approved |
+| increments.json 的增量契约未被 impl-plan 变更（D0 编译时逐增量核对 exec-plan 单元归属与测试命令一致；不一致 → fail-fast 回 T3） | 回 tech-design-v2 修 T3（increments 的增删改属技能①，走验收版本递增重批） |
+
+设计包判据表（交付体系任务同样适用）：
+
 | 文件 | 判据 |
 |------|------|
 | `~/.agents/skill-data/tech-design/<slug>/<name>.md` | 存在 |
@@ -33,6 +44,7 @@ description: >-
 | `<name>.plan-review.md`（与设计文档同目录） | 触发门槛（关键路径深度 ≥3 或单元 ≥4）时必须存在 |
 
 **外部设计文档直投** → 拒绝，转 tech-design-v2（先补 T2 审查再 T3 拆计划）。
+**交付体系外的独立执行**（用户明确不走交付体系）→ 用 dev-flow-v1 通道。
 
 ## 执行七段
 
@@ -42,7 +54,7 @@ description: >-
 | D1 开发循环 | 单元 DAG 流式并行（写码→核验→commit→解锁；开发期 e2e verify 失败与 commit 门禁被拒同入统一失败处理中心轮内修） | W2 wave-executor-v2（手工路径 `flow/execute.md`） | 全节点 done 或 blocked |
 | D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组流式槽位池并行（在途 ≤5；文档修复组按文件门控进同一派发池——不相交同池并行、相交回退串行段）+ Gate A 全量测试（红后归因分诊独立 phase：本批回归条目回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态，≤2 轮） | W3 dev-consistency-loop-v2（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
 | D3 端到端验收 | 验收计划表 L3/L4 编译成 verify/inspect 节点（核心先行 + 短路）+ 验收失败修复循环（failed 入失败池 → 聚合裁决独立 phase（跨节点同根因合并/disputed 反证/文件不相交分组）→ 修复组独立 phase（fixer 修产品代码与验收资产，引擎按组 commit）→ 节点重置机器重验回调度循环，≤3 轮不收敛才熔断） | W2 第二实例化（手工路径 `flow/acceptance.md`） | 验收全绿 |
-| D4 收尾交付 | 交付汇总 + 功能分级登记 + 文档资产同步 + ADR 复审 + 最终 commit | 主 agent | `flow/acceptance.md` 收尾节 |
+| D4 收尾（候选完成） | 交付汇总 + 功能分级登记 + 文档资产同步 + ADR 复审 + 最终 commit——收尾产出的是**候选实现**，不是交付结论 | 主 agent | `flow/acceptance.md` 收尾节 |
 | D5 终态同步 | 代码与设计差距收敛为固定义务覆盖率的一致性对账（义务表 → checker 派发（机械优先/语义缓存）→ 差距地址聚合 → 隔离变更集 → 集成器唯一写入门径 → 四层结论；状态唯一权威 = conformance-state 事件流，agent 无状态；未绑定 legacy 包由旧引擎只读期收尾，带 cutover 标记的包旧引擎入口拒启） | W4 v2 design-code-sync-v2（绑定包；手工路径 `flow/sync.md`）/ W4 legacy design-code-sync-loop（未绑定包收尾） | 引擎 completed + 覆盖率分母全 verified/waived |
 | D6 交付后守护 | 交付后修复回写纪律 + 按需定向对抗审查 | 主 agent | `flow/post-delivery.md`（[HISTORICAL] 原样） |
 
@@ -154,16 +166,17 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 - [MANDATORY] 数字阈值：单元 dev→fix 超 2 轮 = blocked 升级用户；一致性审查累计 ≥3 轮不收敛或活跃数不减反增 = stuck 呈报（顽固条目 ≥2 轮修复未清随 escalated 清单标注，优先人工裁决）；终态同步 must-fix 连续 4 轮不降或单条 must-fix 存活超 2 轮 = 呈报
 - [MANDATORY] e2e 只在开发阶段按改动范围跑（清单继承 T3 验收计划表），空载串行；PR/merge/CI 门禁只跑单测（SSOT = 项目 AGENTS.md 测试节）；自动化回归的长期方向 = e2e 逐步单测化——能以 mock/fixture 重放等价覆盖的圈定项，随所属单元转化为 L1/L2 单测
 - [MANDATORY] 偏差三分类：合理 → 登记表固化；不合理 → 打回修；doc_errors → 引擎文档修复组在审出它的轮次当场修（方向 = 改文档对齐实现；fixer 核实方向两可或实现侧错误的条目回流主 agent 裁决）——哪个阶段审出来就在哪个阶段修，禁止把方向已明确的发现转手下一阶段（2026-10-06 裁决）
-- [MANDATORY] D3 全绿 + D4 最终 commit 后自动进 D5（仅用户明示跳过可免，跳过须记录）；D5 收敛 = 整体交付
+- [MANDATORY] D3 全绿 + D4 最终 commit 后自动进 D5（仅用户明示跳过可免，跳过须记录）；D5 收敛后回 delivery-v2 发起 independent-assurance-v2 独立取证并 `evaluate`——**本技能任何阶段都不宣告交付**，accepted/accepted_with_risk 只由裁决器给出
+- [MANDATORY] 发现桥接：D2/D3 的终态未决项（不合理遗留、escalated 顽固条目）由主会话经 `delivery-gate append`（builder 凭据）登记 FindingRaised（category=defect；实现有意的边界申报用 boundary 并附对照论证）后随候选交付——裁决器据此判定，不在本技能内部静默吞掉；D5 的 conformance 未覆盖项按其状态分流登记
 - [OPTIONAL] 高风险大单元可开 worktree 隔离（判据见 references/dag-authoring.md；exec-plan 节点 cwd 字段承载）
 
 ## 状态恢复
 
 进度唯一事实源 = `<name>.status.json`（D0 生成于 dev-flow 段产物根——workspace 形态为 `<ws-slug>/<worktreeName>/` 两级，单仓形态为现行 `<project-slug>/` 平铺；实际落点以 exec-plan 内 statusPath 声明为准；workflow/手工路径每次节点终态后回写）。恢复程序：以 git log 与工作区实物校准 status（**冲突以 git 为准**：标 done 无 commit → 回 pending；有 commit 未写 → 补写 done）→ 按所处段选 flow 落点续跑。
 
-## 与老 dev-flow 的关系（灰度并行）
+## 与 dev-flow-v1 的关系（灰度并行）
 
-本技能是纯执行重构版（impl-plan 上移 tech-design-v2 T3；编排收归 workflow；状态载体 JSON 化；design-code-sync 升级内嵌 D5）。老 dev-flow / design-code-sync 原样保留可随时切回；判据面（dag-authoring / parallelism-reviewer / post-delivery）同源继承。
+本技能是纯执行重构版（impl-plan 上移 tech-design-v2 T3；编排收归 workflow；状态载体 JSON 化；design-code-sync 升级内嵌 D5）。dev-flow-v1 冻结维护（交付体系外独立执行的旧通道）；v2 是三技能体系的执行技能——入口多一道验收任务门，收尾候选化（交付判定权移交 delivery-v2），发现经事件桥接进裁决。执行引擎层（wave-executor / dev-consistency-loop / 终态同步）与判据面（dag-authoring / parallelism-reviewer / post-delivery）同源继承，继续演进。
 
 ## 标记说明
 
