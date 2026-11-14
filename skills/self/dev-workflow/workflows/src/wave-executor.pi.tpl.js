@@ -1,9 +1,9 @@
 /* @pi-meta
 name: wave-executor
 description: >-
-  dev-flow-wf W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验范围声明、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），verify/inspect 节点 failed 与 commit 门禁被拒入统一失败处理中心（失败池 → 聚合裁决 → 修复组 → 机器重验，≤3 轮不收敛按依赖可达性熔断），终态 completed、blocked 或 core-failed
+  dev-flow-v1 W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验范围声明、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），verify/inspect 节点 failed 与 commit 门禁被拒入统一失败处理中心（失败池 → 聚合裁决 → 修复组 → 机器重验，≤3 轮不收敛按依赖可达性熔断），终态 completed、blocked 或 core-failed
 when: >-
-  dev-flow-wf 的 D1 开发循环与 D3 端到端验收发起本 workflow，传入 exec-plan.json 绝对路径（D0 编译产出），断点恢复按 status.json 人读恢复（git 为准）
+  dev-flow-v1 的 D1 开发循环与 D3 端到端验收发起本 workflow，传入 exec-plan.json 绝对路径（D0 编译产出），断点恢复按 status.json 人读恢复（git 为准）
 phases: ['校验执行计划', '并行执行开发节点', '并行执行验收节点', '失败聚合裁决', '失败修复组并行', '收尾汇总']
 parameters:
   type: object

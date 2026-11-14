@@ -63,17 +63,25 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSyn
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SKILLS = ["tech-design-wf", "dev-flow-wf", "delivery-wf", "dev-merge", "pr-cr-fix"];
+const SKILLS = ["tech-design-v1", "dev-flow-v1", "delivery-v1", "tech-design-v2", "dev-flow-v2", "delivery-v2", "dev-merge", "pr-cr-fix"];
 // 观测事件 skill 字段历史上写过 workflow 引擎名（与 opts.skills 的五技能名不同源）——
 // 统计侧归一到五技能名；生产事件源已改 canonical，此处兼容存量事件
 const SKILL_ALIASES = {
-  "tech-review-loop": "tech-design-wf",
-  "wave-executor": "dev-flow-wf",
-  "dev-consistency-loop": "dev-flow-wf",
-  "design-code-sync-loop": "dev-flow-wf",
-  "contract-design": "delivery-wf",
-  "candidate-build": "delivery-wf",
-  "independent-assurance": "delivery-wf",
+  // v1 代 workflow 名 → v1 技能（存量事件兼容）
+  "tech-review-loop": "tech-design-v1",
+  "wave-executor": "dev-flow-v1",
+  "dev-consistency-loop": "dev-flow-v1",
+  "design-code-sync-loop": "dev-flow-v1",
+  "contract-design": "delivery-v1",
+  "candidate-build": "delivery-v1",
+  "independent-assurance": "delivery-v1",
+  // v2 代 workflow 名 → v2 技能
+  "tech-review-loop-v2": "tech-design-v2",
+  "wave-executor-v2": "dev-flow-v2",
+  "dev-consistency-loop-v2": "dev-flow-v2",
+  "acceptance-design-v2": "delivery-v2",
+  "candidate-build-v2": "delivery-v2",
+  "independent-assurance-v2": "delivery-v2",
   "dev-merge-gates": "dev-merge",
   "pr-lifecycle": "pr-cr-fix",
 };
@@ -437,29 +445,29 @@ function classifyLegacy(name, args) {
   // 1. delivery-wf：taskDir 是三个 workflow 的共同硬特征；阶段按 workflow 名判定
   if (hasV("taskDir") && /^(contract-design|candidate-build|independent-assurance)$/.test(name)) {
     const stage = name === "contract-design" ? "DESIGN" : name === "candidate-build" ? "BUILD" : "ASSURE";
-    return { skill: "delivery-wf", stage, reason: `args.taskDir + workflow 名(${name})` };
+    return { skill: "delivery-v1", stage, reason: `args.taskDir + workflow 名(${name})` };
   }
   // 2. dev-flow-wf：execPlan 是 D1/D2/D3 的硬特征（W2/W3 args）；designDoc+implPlan 是 D5
   if (hasV("execPlan")) {
     const stage =
       matchDevFlowStage(name) ?? (/wave/i.test(name) ? "D1" : /consistency/i.test(name) ? "D2" : null);
-    if (stage) return { skill: "dev-flow-wf", stage, reason: `args.execPlan + 名称特征(${stage})` };
-    return { skill: "dev-flow-wf", stage: null, reason: "args.execPlan 但名称无阶段特征" };
+    if (stage) return { skill: "dev-flow-v1", stage, reason: `args.execPlan + 名称特征(${stage})` };
+    return { skill: "dev-flow-v1", stage: null, reason: "args.execPlan 但名称无阶段特征" };
   }
   if (hasV("designDoc") && hasV("implPlan")) {
-    return { skill: "dev-flow-wf", stage: "D5", reason: "args.designDoc + args.implPlan（design-code-sync-loop）" };
+    return { skill: "dev-flow-v1", stage: "D5", reason: "args.designDoc + args.implPlan（design-code-sync-loop）" };
   }
   // 3. tech-design-wf T2：designDoc 无 implPlan（tech-review-loop），或名称明确设计审查/方向审（T2 四席词表）
   if (hasV("designDoc")) {
-    return { skill: "tech-design-wf", stage: "T2", reason: "args.designDoc 无 implPlan（tech-review-loop）" };
+    return { skill: "tech-design-v1", stage: "T2", reason: "args.designDoc 无 implPlan（tech-review-loop）" };
   }
   if (/T2|设计审查|tech-review|方向审/i.test(name) || (/审查/.test(name) && /设计/.test(name) && !/修复|评审/.test(name))) {
-    return { skill: "tech-design-wf", stage: "T2", reason: "名称含 T2/设计审查/方向审特征" };
+    return { skill: "tech-design-v1", stage: "T2", reason: "名称含 T2/设计审查/方向审特征" };
   }
   // 4. dev-flow-wf 无 args 兜底：名称阶段编号/引擎名（历史起名惯例）
   const stageByName = matchDevFlowStage(name);
   if (stageByName) {
-    return { skill: "dev-flow-wf", stage: stageByName, reason: `名称阶段特征(${stageByName})，无 args` };
+    return { skill: "dev-flow-v1", stage: stageByName, reason: `名称阶段特征(${stageByName})，无 args` };
   }
   // 5. pr-cr-fix：PR 编号 + 审查；reviewers 指向 pr-cr-fix 技能
   if (/PR\s*#?\s*\d+/i.test(name) && /审查|review/i.test(name)) {
@@ -507,7 +515,7 @@ function legacyTaskStem(name) {
 // ── actor 角色（沿用既有统计口径的 D1/D2/D3/D5 角色词表，五技能各自扩展）──
 function roleFor(skill, stage, name) {
   const n = name || "";
-  if (skill === "dev-flow-wf") {
+  if (skill === "dev-flow-v1") {
     if (stage === "D1") {
       if (/fix|修复|返工/i.test(n)) return "开发修复";
       if (/verify|核验/i.test(n)) return "开发核验";
@@ -534,7 +542,7 @@ function roleFor(skill, stage, name) {
     }
     return "其他";
   }
-  if (skill === "tech-design-wf") {
+  if (skill === "tech-design-v1") {
     if (/方向审/.test(n)) return "方向审";
     if (/主审/.test(n)) return "主审";
     if (/影响面/.test(n)) return "影响面审";
@@ -926,7 +934,7 @@ function processRun(run, backend, opts, executions, aggregator, runSummaries, un
   if (linked) {
     attribution = "observed";
     reason = "executionId 精确关联观测文件";
-    skill = majorityOf(linked.skills) ?? "dev-flow-wf"; // 事件 skill 字段多数派
+    skill = majorityOf(linked.skills) ?? "dev-flow-v1"; // 事件 skill 字段多数派
     stage = linked.stages.length === 1 ? linked.stages[0] : majorityStage(linked.windows, runWindowOk ? [runWindow] : []);
   } else {
     const legacy = classifyLegacy(name, args);

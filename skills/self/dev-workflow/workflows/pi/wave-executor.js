@@ -1,9 +1,9 @@
 /* @pi-meta
 name: wave-executor
 description: >-
-  dev-flow-wf W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验范围声明、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），verify/inspect 节点 failed 与 commit 门禁被拒入统一失败处理中心（失败池 → 聚合裁决 → 修复组 → 机器重验，≤3 轮不收敛按依赖可达性熔断），终态 completed、blocked 或 core-failed
+  dev-flow-v1 W2 通用 DAG 调度引擎：读 exec-plan.json 启动校验后按依赖流式派发节点（≤5 并发），每节点确定性核验范围声明、工作区与测试后 commit 解锁后继，核验不过打回定向修（≤2 轮），verify/inspect 节点 failed 与 commit 门禁被拒入统一失败处理中心（失败池 → 聚合裁决 → 修复组 → 机器重验，≤3 轮不收敛按依赖可达性熔断），终态 completed、blocked 或 core-failed
 when: >-
-  dev-flow-wf 的 D1 开发循环与 D3 端到端验收发起本 workflow，传入 exec-plan.json 绝对路径（D0 编译产出），断点恢复按 status.json 人读恢复（git 为准）
+  dev-flow-v1 的 D1 开发循环与 D3 端到端验收发起本 workflow，传入 exec-plan.json 绝对路径（D0 编译产出），断点恢复按 status.json 人读恢复（git 为准）
 phases: ['校验执行计划', '并行执行开发节点', '并行执行验收节点', '失败聚合裁决', '失败修复组并行', '收尾汇总']
 parameters:
   type: object
@@ -513,7 +513,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "1.1.5"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.6"; // 构建注入自 dev-flow-v1/SKILL.md frontmatter version（唯一权威）
 // ── W2 wave-executor ──
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
@@ -2435,7 +2435,7 @@ const skillDataDir = devFlowRoot(homeRes.stdout.trim(), address);
 // mode=acceptance 即 D3 端到端验收。attempt 无独立参数（run 级恒 1）。execution start
 // 从 plan 校验通过后起记；此前失败的启动校验（文件/schema/依赖环）无观测覆盖，属已
 // 声明边界。此后启动失败经 invalidObs 离开（先补记观测执行结束事件）──
-obsCtx = initObservation("dev-flow-wf", plan.mode === "dev" ? "D1" : "D3", 1);
+obsCtx = initObservation("dev-flow-v1", plan.mode === "dev" ? "D1" : "D3", 1);
 if (obsCtx !== null) {
     obsAttachHome(homeRes.stdout.trim());
     await obsEmit("execution", null, "start", null);
@@ -2533,7 +2533,7 @@ if (existingStatus === null) {
     try {
         await writeTextViaNode(plan.statusPath, 
         // skillVersion 盖初建（产物溯源字段 = SKILL_VERSION 构建注入常量，本引擎 =
-        // dev-flow-wf 版本）：此后回写链构造性保留——readStatusFile 把 schema 外顶层字段
+        // dev-flow-v1 版本）：此后回写链构造性保留——readStatusFile 把 schema 外顶层字段
         // 收进 extra 原样回写、RECONCILE 探针保留全部 schema 外顶层字段，后续覆盖不丢
         JSON.stringify({ skillVersion: SKILL_VERSION, baseline: baselineVal, runId: activeRunId, nodes: initialNodes, events: [] }, null, 2));
     }

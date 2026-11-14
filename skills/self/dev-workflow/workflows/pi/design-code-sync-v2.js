@@ -1,11 +1,11 @@
 /* @pi-meta
 name: design-code-sync-v2
 description: >-
-  dev-flow-wf 技能 W4 v2 一致性对账引擎：设计义务表 → checker 派发（机械优先/语义缓存）→
+  dev-flow-v1 技能 W4 v2 一致性对账引擎：设计义务表 → checker 派发（机械优先/语义缓存）→
   差距地址聚合 → sandbox 隔离变更集 → 集成器唯一写入门径 → 四层结论；状态唯一权威 =
   conformance-state 事件流，agent 无状态。带 cutover 标记的包旧引擎拒启、由本引擎管辖
 when: >-
-  dev-flow-wf 技能 D5 终态同步段——设计包已具备 conformance 绑定（章节 JSON §9b）时的义务对账，
+  dev-flow-v1 技能 D5 终态同步段——设计包已具备 conformance 绑定（章节 JSON §9b）时的义务对账，
   必传 designPkg / projectRoot / declaredRepos
 notFor: >-
   未做 conformance 绑定的 legacy 包收尾（用 design-code-sync-loop 旧引擎只读期形态）
@@ -36,10 +36,10 @@ parameters:
       description: "conformance-plane 模块根绝对路径（缺省 <projectRoot>/skills/self/dev-workflow/conformance-plane——仓库内模块直读）"
     reviewerTemplate:
       type: string
-      description: "语义检查 agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/conformance-reviewer.md）"
+      description: "语义检查 agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/conformance-reviewer.md）"
     fixerTemplate:
       type: string
-      description: "补丁生成 agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/changeset-fixer.md）"
+      description: "补丁生成 agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/changeset-fixer.md）"
     maxRounds:
       type: number
       description: "对账轮次上限（缺省 8；耗尽仍有 open = engineOutcome stopped）"
@@ -478,7 +478,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "1.1.5"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.6"; // 构建注入自 dev-flow-v1/SKILL.md frontmatter version（唯一权威）
 // ── 常量 ──
 const DEFAULT_MAX_ROUNDS = 8;
 /** semantic 非法输出回喂上限（权威 = conformance-plane/checkers/registry.mjs MAX_SEMANTIC_REFEEDS，
@@ -493,8 +493,8 @@ const BUILTIN_DET_CHECKER_VERSION = "1.0.0";
 const SEMANTIC_CHECKER_ID = "conformance-review";
 const SEMANTIC_CHECKER_VERSION = "1.0.0";
 // confRoot 缺省 = <projectRoot>/skills/self/dev-workflow/conformance-plane（仓库内模块直读；~/.agents/skills/dev-workflow 不是独立安装软链，旧缺省不可达）
-const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/conformance-reviewer.md";
-const TILDE_FIXER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/changeset-fixer.md";
+const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-v1/agents/conformance-reviewer.md";
+const TILDE_FIXER_TEMPLATE = "~/.agents/skills/dev-flow-v1/agents/changeset-fixer.md";
 /** 四层结论词表（段七，GA9）：引擎产 scriptStatus/engineOutcome/integrationOutcome；
  *  deliveryOutcome 恒 pending/blocked（resolved 系列由主 agent 交付宣告/人工接管追加——引擎不越权） */
 const ENGINE_OUTCOMES = ["completed", "awaiting-ruling", "stopped", "failed"];
@@ -753,7 +753,7 @@ function derivedConclusion(st) {
 // ============================================================================
 // ── 观测启用（O 区形态层）：先于参数窄化——已传合法观测 ID 的执行（含参数校验失败
 // 早退）都有 execution 边界。落盘路径依赖 home，探针通过后装配 ──
-obsCtx = initObservation("dev-flow-wf", "D5", null);
+obsCtx = initObservation("dev-flow-v1", "D5", null);
 // ── home 探针（观测层与 skill-data 寻址的前缀来源） ──
 const homeRes = await world.run("node", ["-e", NODE_PROBE_HOME]);
 if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {

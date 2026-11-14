@@ -1,12 +1,12 @@
 /* zcode-workflow
-description: delivery-wf 技能 DESIGN 段产品契约设计循环：designer 读取用户 objective、
+description: delivery-v1 技能 DESIGN 段产品契约设计循环：designer 读取用户 objective、
   项目 AGENTS.md 与已有契约，产出 contract.json / solution.md / increments.json 草稿；
   contract reviewer 独立复查目标降级、契约可证伪性、证据类型、风险级别与增量划分并
   返回结构化问题清单；脚本侧机器校验（三文件在场 + 结构可解析 + delivery-gate
   validate-contract）全部通过才返回 contract-ready，问题进下一轮 designer 修复。
   ContractApproved 由主会话在用户明确批准后追加；本 workflow 不写 events.jsonl 与
   verdict.json，不触碰产品代码，不执行 Git 写操作
-whenToUse: delivery-wf 技能契约设计段——任务目录已由 delivery-gate init 创建、需要把
+whenToUse: delivery-v1 技能契约设计段——任务目录已由 delivery-gate init 创建、需要把
   用户原始意图转成产品契约与实施增量时调用；必传 projectRoot / taskDir / objective。
   不用于已批准契约的实现（用 candidate-build）或覆盖核对与探索审查（用
   independent-assurance）
@@ -412,8 +412,8 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "0.3.1"; // 构建注入自 delivery-wf/SKILL.md frontmatter version（唯一权威）
-// contract-design — delivery-wf 产品契约设计循环。
+const SKILL_VERSION = "0.3.2"; // 构建注入自 delivery-v1/SKILL.md frontmatter version（唯一权威）
+// contract-design — delivery-v1 产品契约设计循环。
 // designer 只写契约草稿、解决方案辅助文档与实施增量；reviewer 独立审查。
 // events.jsonl 只作为事实文件读取：已批准契约的最大 contractVersion 是修订下界，
 // 草稿版本未严格高于它即打回 designer 递增，禁止静默 contract-ready。
@@ -494,7 +494,7 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-obsCtx = initObservation("delivery-wf", "DESIGN", null);
+obsCtx = initObservation("delivery-v1", "DESIGN", null);
 const homeRes = await runNode([NODE_PROBE_HOME]);
 if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
   await obsCloseExecution("setup-failure");
@@ -538,9 +538,9 @@ if (inputProblems.length > 0) {
   return result;
 }
 
-const gatePath = `${homeDir}/.agents/skills/delivery-wf/scripts/delivery-gate.mjs`;
-const designerRolePath = `${homeDir}/.agents/skills/delivery-wf/references/roles/designer.md`;
-const reviewerRolePath = `${homeDir}/.agents/skills/delivery-wf/references/roles/contract-reviewer.md`;
+const gatePath = `${homeDir}/.agents/skills/delivery-v1/scripts/delivery-gate.mjs`;
+const designerRolePath = `${homeDir}/.agents/skills/delivery-v1/references/roles/designer.md`;
+const reviewerRolePath = `${homeDir}/.agents/skills/delivery-v1/references/roles/contract-reviewer.md`;
 const taskJsonPath = `${taskDir}/task.json`;
 const eventsPath = `${taskDir}/events.jsonl`;
 const requiredPaths = [projectRoot, taskDir, taskJsonPath, eventsPath, gatePath, designerRolePath, reviewerRolePath];
@@ -551,7 +551,7 @@ if (requiredRes.exitCode !== 0) {
     terminated: "setup-failure",
     rounds: 0,
     taskDir,
-    message: `设计环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：确认 delivery-wf 已安装，并用 node ~/.agents/skills/delivery-wf/scripts/delivery-gate.mjs init --project-root <项目根> --task-id <id> 初始化任务目录`,
+    message: `设计环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：确认 delivery-v1 已安装，并用 node ~/.agents/skills/delivery-v1/scripts/delivery-gate.mjs init --project-root <项目根> --task-id <id> 初始化任务目录`,
   };
   return result;
 }

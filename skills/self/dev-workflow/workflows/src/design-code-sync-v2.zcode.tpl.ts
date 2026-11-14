@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: dev-flow-wf 技能 W4 v2 一致性对账引擎（sync-conformance-plane M4）：设计义务
+description: dev-flow-v1 技能 W4 v2 一致性对账引擎（sync-conformance-plane M4）：设计义务
   表（章节 JSON conformance 绑定）→ checker 派发（deterministic 内建优先 / semantic agent
   按义务摘要+输入哈希+版本缓存）→ 差距地址聚合（AX2 派生地址，重复报告只追加证据）→
   worktree sandbox 隔离变更集（禁产对象命令）→ 集成器唯一写入门径 → 四层结论
@@ -7,7 +7,7 @@ description: dev-flow-wf 技能 W4 v2 一致性对账引擎（sync-conformance-p
   conformance-state 状态仓事件流（agent 无状态、禁自报身份与终态）；文档侧差距走
   doc-proposals 提案 + RulingRequested/RulingRecorded 裁决停回。旧引擎（design-code-sync-loop）
   只读期并存：已 cutover 的设计包由本引擎管辖
-whenToUse: dev-flow-wf 技能 D5 终态同步段——设计包已具备 conformance 绑定（章节 JSON §9b）
+whenToUse: dev-flow-v1 技能 D5 终态同步段——设计包已具备 conformance 绑定（章节 JSON §9b）
   时的义务对账。必传 designPkg / projectRoot / declaredRepos。旧 issue 循环引擎
   （design-code-sync-loop）用于未绑定 legacy 包只读期收尾；带 cutover 标记的包旧引擎拒启
 args:
@@ -42,10 +42,10 @@ args:
       按路径直读消费（引擎经 node 子进程动态 import 其 kernel/extractors/checkers/changeset/integration 模块）"
   reviewerTemplate:
     type: string
-    description: 语义检查 agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/conformance-reviewer.md）
+    description: 语义检查 agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/conformance-reviewer.md）
   fixerTemplate:
     type: string
-    description: 补丁生成 agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/changeset-fixer.md）
+    description: 补丁生成 agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/changeset-fixer.md）
   maxRounds:
     type: number
     description: 对账轮次上限（缺省 8；耗尽仍有 open = engineOutcome stopped）

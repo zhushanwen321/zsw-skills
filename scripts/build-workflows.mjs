@@ -51,6 +51,12 @@ const NAMES = [
   "contract-design",
   "candidate-build",
   "independent-assurance",
+  "tech-review-loop-v2",
+  "wave-executor-v2",
+  "dev-consistency-loop-v2",
+  "acceptance-design-v2",
+  "candidate-build-v2",
+  "independent-assurance-v2",
 ];
 // 观测门禁豁免名单：shared 源无 initObservation 调用点且登记在此的 workflow 跳过观测
 // 契约检查（跳过时打一行说明，不静默）。豁免是显式决定不是默认沉默——登记格式 = 双引号
@@ -73,14 +79,22 @@ const SKILL_DATA_LAYER_PATH = join(SRC, "skill-data.shared.ts");
 // 业务源直接引用 SKILL_VERSION 盖产物载体（run.json / status.json / final.json / ledger）。
 // 版本戳比对（--check）：产物内嵌值 ≠ frontmatter 当前值 → 红灯（拦 bump 后忘重建）
 const SKILL_VERSION_SOURCES = {
-  "tech-review-loop": join(ROOT, "skills/self/dev-workflow/tech-design-wf/SKILL.md"),
-  "wave-executor": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
-  "dev-consistency-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
-  "design-code-sync-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
-  "design-code-sync-v2": join(ROOT, "skills/self/dev-workflow/dev-flow-wf/SKILL.md"),
-  "contract-design": join(ROOT, "skills/self/dev-workflow/delivery-wf/SKILL.md"),
-  "candidate-build": join(ROOT, "skills/self/dev-workflow/delivery-wf/SKILL.md"),
-  "independent-assurance": join(ROOT, "skills/self/dev-workflow/delivery-wf/SKILL.md"),
+  // v1 代（旧名 workflow → v1 技能目录）
+  "tech-review-loop": join(ROOT, "skills/self/dev-workflow/tech-design-v1/SKILL.md"),
+  "wave-executor": join(ROOT, "skills/self/dev-workflow/dev-flow-v1/SKILL.md"),
+  "dev-consistency-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-v1/SKILL.md"),
+  "design-code-sync-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-v1/SKILL.md"),
+  "design-code-sync-v2": join(ROOT, "skills/self/dev-workflow/dev-flow-v1/SKILL.md"),
+  "contract-design": join(ROOT, "skills/self/dev-workflow/delivery-v1/SKILL.md"),
+  "candidate-build": join(ROOT, "skills/self/dev-workflow/delivery-v1/SKILL.md"),
+  "independent-assurance": join(ROOT, "skills/self/dev-workflow/delivery-v1/SKILL.md"),
+  // v2 代（-v2 workflow → v2 技能目录）
+  "tech-review-loop-v2": join(ROOT, "skills/self/dev-workflow/tech-design-v2/SKILL.md"),
+  "wave-executor-v2": join(ROOT, "skills/self/dev-workflow/dev-flow-v2/SKILL.md"),
+  "dev-consistency-loop-v2": join(ROOT, "skills/self/dev-workflow/dev-flow-v2/SKILL.md"),
+  "acceptance-design-v2": join(ROOT, "skills/self/dev-workflow/delivery-v2/SKILL.md"),
+  "candidate-build-v2": join(ROOT, "skills/self/dev-workflow/delivery-v2/SKILL.md"),
+  "independent-assurance-v2": join(ROOT, "skills/self/dev-workflow/delivery-v2/SKILL.md"),
 };
 
 function readSkillVersion(skillMdPath, wfName) {
@@ -117,7 +131,10 @@ const OBS_STAGE_LITERALS_IGNORE = new Set(["dev", "acceptance"]);
 const OBS_STEPS = new Set(["execution", "setup", "review", "aggregate", "fix", "execute", "finalize", "gate-a", "retire"]);
 // canonical skill 词表 = 事件 skill 字段的合法值（所属技能名，不是 workflow 脚本名——
 // 统计入口按技能过滤，曾因写成 workflow 名被过滤掉，2026-11-01 实测）
-const OBS_SKILLS = new Set(["tech-design-wf", "dev-flow-wf", "delivery-wf"]);
+const OBS_SKILLS = new Set([
+  "tech-design-v1", "dev-flow-v1", "delivery-v1",
+  "tech-design-v2", "dev-flow-v2", "delivery-v2",
+]);
 
 /** 观测契约核对：shared 已接入观测（initObservation 在场）时校验——stage/step 词表、
  *  十字段在场（对照单一观测层 observability.shared.ts）、终态统一补记出口在场、两侧产物

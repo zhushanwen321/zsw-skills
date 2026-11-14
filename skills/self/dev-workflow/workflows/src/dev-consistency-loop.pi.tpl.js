@@ -1,9 +1,9 @@
 /* @pi-meta
 name: dev-consistency-loop
 description: >-
-  dev-flow-wf W3 一致性审查循环：R1 分区全面审后修复组并行修复并定向复审（每轮前聚合定性独立 phase），Gate A 全量测试零容忍绕过——红后归因分诊（≤2 轮）：本批回归条目回注修复轮再修、瞬态重跑、存量红与测试基建缺陷带分诊报告终态，循环至 converged 或 stuck，终态判定与顽固条目追踪全由脚本完成，不信任 agent 自报收敛
+  dev-flow-v1 W3 一致性审查循环：R1 分区全面审后修复组并行修复并定向复审（每轮前聚合定性独立 phase），Gate A 全量测试零容忍绕过——红后归因分诊（≤2 轮）：本批回归条目回注修复轮再修、瞬态重跑、存量红与测试基建缺陷带分诊报告终态，循环至 converged 或 stuck，终态判定与顽固条目追踪全由脚本完成，不信任 agent 自报收敛
 when: >-
-  dev-flow-wf 主流程 D2 阶段——W2 开发循环终态后由主 agent 发起，输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/环节失败由主 agent 接力处理
+  dev-flow-v1 主流程 D2 阶段——W2 开发循环终态后由主 agent 发起，输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/环节失败由主 agent 接力处理
 phases: ['生成分区并全面审查', '聚合定性', '并行修复与定向复审', '产物类并行预备', '跑全量测试 Gate A', 'Gate A 归因分诊']
 parameters:
   type: object
@@ -17,8 +17,8 @@ parameters:
       description: "修复→定向复审循环轮次上限（R1 全面审不计入）"
     reviewerTemplate:
       type: string
-      default: "~/.agents/skills/dev-flow-wf/agents/consistency-reviewer.md"
-      description: "一致性审查 agent 模板路径（缺省用 dev-flow-wf skill 内置模板）"
+      default: "~/.agents/skills/dev-flow-v1/agents/consistency-reviewer.md"
+      description: "一致性审查 agent 模板路径（缺省用 dev-flow-v1 skill 内置模板）"
     attempt:
       type: number
       description: "重发起序号（status.json events 追加保留历史不覆盖；attempt > 1 时 Gate A 日志命名带 .attemptM 后缀防覆盖上轮日志）。不得设 default——引擎会把 default 物化成显式值、吞掉「未传」形态（本参数未传时 shared 自带归 1 兜底）"

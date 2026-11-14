@@ -1,5 +1,5 @@
 // ============================================================================
-// design-code-sync-v2 — dev-flow-wf 技能 W4 v2 一致性对账引擎（sync-conformance-plane
+// design-code-sync-v2 — dev-flow-v1 技能 W4 v2 一致性对账引擎（sync-conformance-plane
 // U4/M4：D5 从 issue 循环升级为「设计义务 + 证据 + 隔离变更集」对账）
 //
 // 语义权威源 = sync-conformance-plane.rendered.md §3 终态（AX1-AX10 / 段五检查层 /
@@ -86,8 +86,8 @@ const BUILTIN_DET_CHECKER_VERSION = "1.0.0";
 const SEMANTIC_CHECKER_ID = "conformance-review";
 const SEMANTIC_CHECKER_VERSION = "1.0.0";
 // confRoot 缺省 = <projectRoot>/skills/self/dev-workflow/conformance-plane（仓库内模块直读；~/.agents/skills/dev-workflow 不是独立安装软链，旧缺省不可达）
-const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/conformance-reviewer.md";
-const TILDE_FIXER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/changeset-fixer.md";
+const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-v1/agents/conformance-reviewer.md";
+const TILDE_FIXER_TEMPLATE = "~/.agents/skills/dev-flow-v1/agents/changeset-fixer.md";
 /** 四层结论词表（段七，GA9）：引擎产 scriptStatus/engineOutcome/integrationOutcome；
  *  deliveryOutcome 恒 pending/blocked（resolved 系列由主 agent 交付宣告/人工接管追加——引擎不越权） */
 const ENGINE_OUTCOMES = ["completed", "awaiting-ruling", "stopped", "failed"] as const;
@@ -482,7 +482,7 @@ interface SyncV2Result {
 
 // ── 观测启用（O 区形态层）：先于参数窄化——已传合法观测 ID 的执行（含参数校验失败
 // 早退）都有 execution 边界。落盘路径依赖 home，探针通过后装配 ──
-obsCtx = initObservation("dev-flow-wf", "D5", null);
+obsCtx = initObservation("dev-flow-v1", "D5", null);
 
 // ── home 探针（观测层与 skill-data 寻址的前缀来源） ──
 const homeRes = await world.run("node", ["-e", NODE_PROBE_HOME]);

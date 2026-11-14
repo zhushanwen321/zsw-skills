@@ -5,7 +5,7 @@
 //   AX2  差距地址 = (bindingId, repoId, violationKind)，bindingId 指向章节 JSON 内带
 //        conformance 绑定的稳定条目（= 条目 id，或条目 id + "-" + 后缀——同条目多绑定）
 //   AX8  覆盖率分母只包含带 conformance 绑定的义务；无绑定叙述不进分母，只列未绑定清单
-//   段一 conformance 字段规格 = tech-design-wf/references/design-doc-schema.md §9b
+//   段一 conformance 字段规格 = tech-design-v2/references/design-doc-schema.md §9b
 //        （conformance schemaVersion 2；扩词表必须升 schema 版本）
 //   段三 义务摘要 = 规范化绑定 JSON 的内容哈希（facts.obligationSummaryHash）
 //

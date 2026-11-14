@@ -1,6 +1,6 @@
 // check-design-doc.test.mjs — 设计包机器自检 check-design-doc.mjs 的独立测试
 //
-// 对应实现：skills/self/dev-workflow/tech-design-wf/scripts/check-design-doc.mjs（十条规则）。
+// 对应实现：skills/self/dev-workflow/tech-design-v1/scripts/check-design-doc.mjs（十条规则）。
 // 本测试聚焦守护全文单一登记契约（decisions[].guards 登记 + {{<id>}} 引用）三组校验：
 //   - 规则 2 扩展：guards[].id 进全局唯一并集（重复定义 fail；元素 id/text 形态畸形 fail；
 //     text 内嵌 {{...}} 叶子禁令 fail）
@@ -28,8 +28,8 @@ import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-wf", "scripts", "check-design-doc.mjs");
-const RENDER_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-wf", "scripts", "render-design-doc.mjs");
+const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v1", "scripts", "check-design-doc.mjs");
+const RENDER_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v1", "scripts", "render-design-doc.mjs");
 const CHAPTER_FILES = ["meta.json", "s1-context.json", "s2-status.json", "s3-solution.json", "s4-accept.json", "s5-breakdown.json"];
 
 // 特征子串用 token：单 token 无空白 35 字符，含正则元字符聚集（[[ 与 ]]）与 ASCII 左括号，

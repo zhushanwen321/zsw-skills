@@ -1,4 +1,4 @@
-// independent-assurance — delivery-wf 独立覆盖核对与探索性审查。
+// independent-assurance — delivery-v1 独立覆盖核对与探索性审查。
 // assurance 角色不得修改产品代码、契约、事件或 verdict；脚本只经 delivery-gate
 // append --key assuranceKey 追加事实（assurance 角色凭据；不接收 userKey/
 // builderKey 等其他角色 key，密钥也不写入任何 agent prompt）。前置门禁：state
@@ -124,7 +124,7 @@ function parseObject(raw: string): Record<string, unknown> | null {
   }
 }
 
-obsCtx = initObservation("delivery-wf", "ASSURE", null);
+obsCtx = initObservation("delivery-v1", "ASSURE", null);
 const homeRes = await runNode([NODE_PROBE_HOME]);
 if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
   await obsCloseExecution("setup-failure");
@@ -163,9 +163,9 @@ if (inputProblems.length > 0) {
   return result;
 }
 
-const gatePath = `${homeDir}/.agents/skills/delivery-wf/scripts/delivery-gate.mjs`;
-const coverageRolePath = `${homeDir}/.agents/skills/delivery-wf/references/roles/coverage-reviewer.md`;
-const explorerRolePath = `${homeDir}/.agents/skills/delivery-wf/references/roles/explorer.md`;
+const gatePath = `${homeDir}/.agents/skills/delivery-v1/scripts/delivery-gate.mjs`;
+const coverageRolePath = `${homeDir}/.agents/skills/delivery-v1/references/roles/coverage-reviewer.md`;
+const explorerRolePath = `${homeDir}/.agents/skills/delivery-v1/references/roles/explorer.md`;
 const taskJsonPath = `${taskDir}/task.json`;
 const contractPath = `${taskDir}/contract.json`;
 const eventsPath = `${taskDir}/events.jsonl`;
@@ -174,7 +174,7 @@ if (requiredRes.exitCode !== 0) {
   await obsCloseExecution("setup-failure");
   const result: AssuranceResult = {
     terminated: "setup-failure", taskDir, revision: "", findingIds: [], verdict: null,
-    message: `独立保证环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：先完成候选实现，并确认 delivery-wf 安装与任务目录后重新发起`,
+    message: `独立保证环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：先完成候选实现，并确认 delivery-v1 安装与任务目录后重新发起`,
   };
   return result;
 }
@@ -239,7 +239,7 @@ if (explorationRequired) {
     await obsCloseExecution("setup-failure");
     const result: AssuranceResult = {
       terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
-      message: `探索性审查为 required，但角色提示词不可读：${explorerRolePath}。恢复动作：安装 delivery-wf 的 explorer.md 后重新发起`,
+      message: `探索性审查为 required，但角色提示词不可读：${explorerRolePath}。恢复动作：安装 delivery-v1 的 explorer.md 后重新发起`,
     };
     return result;
   }

@@ -1,9 +1,9 @@
 /* @pi-meta
 name: tech-review-loop
 description: >-
-  tech-design-wf 技能 W1 设计文档审查循环：方向审席与主审/影响面审/简洁审四席同轮并行（方向审 patch 档发现随当轮问题清单进入聚合；rewrite 档整循环终止回 T1），聚合裁决独立 phase 把四席发现按同根因合并为去重权威清单 aggregated.md（refs 精确划分脚本 fail-closed 校验），文档修复者据聚合清单修复并产出处置表，循环至 converged、escalated、stuck 或 max-rounds，终态判定与覆盖校验全由脚本完成，不信任 agent 自报收敛
+  tech-design-v1 技能 W1 设计文档审查循环：方向审席与主审/影响面审/简洁审四席同轮并行（方向审 patch 档发现随当轮问题清单进入聚合；rewrite 档整循环终止回 T1），聚合裁决独立 phase 把四席发现按同根因合并为去重权威清单 aggregated.md（refs 精确划分脚本 fail-closed 校验），文档修复者据聚合清单修复并产出处置表，循环至 converged、escalated、stuck 或 max-rounds，终态判定与覆盖校验全由脚本完成，不信任 agent 自报收敛
 when: >-
-  tech-design-wf 技能 W1 阶段——技术设计文档（tech-design 产物）需要对抗式审查修复循环时调用，必传设计文档与项目根绝对路径
+  tech-design-v1 技能 W1 阶段——技术设计文档（tech-design 产物）需要对抗式审查修复循环时调用，必传设计文档与项目根绝对路径
 notFor: 代码 review-fix 循环（用内置 review-fix-loop workflow）
 phases: ['校验审查环境并做方向审', '四席并行聚焦复审', '聚合裁决', '修复设计文档并产出处置表', '落盘终态档案']
 parameters:

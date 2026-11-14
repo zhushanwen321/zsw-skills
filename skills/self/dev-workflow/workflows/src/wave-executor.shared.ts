@@ -193,7 +193,7 @@ interface RunManifest {
   workflow: string;
   segment: "tech-design" | "dev-flow";
   /** 产物溯源字段：构建注入常量（所属技能 SKILL.md frontmatter version，唯一权威——
-   *  本循环 = dev-flow-wf）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
+   *  本循环 = dev-flow-v1）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
   skillVersion: string;
   host: string;
   projectRoot: string;
@@ -2156,7 +2156,7 @@ const skillDataDir = devFlowRoot(homeRes.stdout.trim(), address);
 // mode=acceptance 即 D3 端到端验收。attempt 无独立参数（run 级恒 1）。execution start
 // 从 plan 校验通过后起记；此前失败的启动校验（文件/schema/依赖环）无观测覆盖，属已
 // 声明边界。此后启动失败经 invalidObs 离开（先补记观测执行结束事件）──
-obsCtx = initObservation("dev-flow-wf", plan.mode === "dev" ? "D1" : "D3", 1);
+obsCtx = initObservation("dev-flow-v1", plan.mode === "dev" ? "D1" : "D3", 1);
 if (obsCtx !== null) {
   obsAttachHome(homeRes.stdout.trim());
   await obsEmit("execution", null, "start", null);
@@ -2262,7 +2262,7 @@ if (existingStatus === null) {
     await writeTextViaNode(
       plan.statusPath,
       // skillVersion 盖初建（产物溯源字段 = SKILL_VERSION 构建注入常量，本引擎 =
-      // dev-flow-wf 版本）：此后回写链构造性保留——readStatusFile 把 schema 外顶层字段
+      // dev-flow-v1 版本）：此后回写链构造性保留——readStatusFile 把 schema 外顶层字段
       // 收进 extra 原样回写、RECONCILE 探针保留全部 schema 外顶层字段，后续覆盖不丢
       JSON.stringify({ skillVersion: SKILL_VERSION, baseline: baselineVal, runId: activeRunId, nodes: initialNodes, events: [] }, null, 2),
     );

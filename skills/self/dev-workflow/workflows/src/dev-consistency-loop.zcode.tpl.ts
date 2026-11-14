@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: dev-flow-wf W3 一致性审查循环（D2）：R1 分区全面审（分区互斥契约，
+description: dev-flow-v1 W3 一致性审查循环（D2）：R1 分区全面审（分区互斥契约，
   git diff 基线..HEAD 文件清单按顶层段不相交划分）→ 每轮修复前聚合定性独立 phase
   （跨区同根因去重 / 定性复核改判 doc_errors / expectedFiles 无交集分组 / 跨职责路由）→
   修复组并行（组级一笔 commit）→
@@ -11,7 +11,7 @@ description: dev-flow-wf W3 一致性审查循环（D2）：R1 分区全面审�
   停止线（合并语义）：审查轮累计 3 轮不收敛（或 unreasonable 活跃数不减反增）→
   stuck；顽固条目（连续 ≥2 轮修复未清，按 reconciliation not-fixed 申报追踪）随 stuck
   终态 escalated 清单呈报——单条独立停机线与时序互斥（到点必晚于计数线），已并入
-whenToUse: dev-flow-wf 主流程 D2 阶段——W2 开发循环终态（blocked 已升级处理）后由
+whenToUse: dev-flow-v1 主流程 D2 阶段——W2 开发循环终态（blocked 已升级处理）后由
   主 agent 发起；输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/
   环节失败由主 agent 接力（gate-a-failed 终态自带分诊报告——存量红/基建缺陷按报告
   裁决，分诊轮耗尽才需主 agent 从日志归因）
@@ -27,8 +27,8 @@ args:
     default: 10
   reviewerTemplate:
     type: string
-    description: 一致性审查 agent 模板路径（缺省用 dev-flow-wf skill 内置模板）
-    default: ~/.agents/skills/dev-flow-wf/agents/consistency-reviewer.md
+    description: 一致性审查 agent 模板路径（缺省用 dev-flow-v1 skill 内置模板）
+    default: ~/.agents/skills/dev-flow-v1/agents/consistency-reviewer.md
   attempt:
     type: number
     description: 重发起序号（status.json events 追加保留历史不覆盖；attempt > 1 时

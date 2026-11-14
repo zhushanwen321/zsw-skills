@@ -1,4 +1,4 @@
-// delivery-gate.test.mjs — delivery-wf 统一交付裁决器 CLI 与状态派生测试
+// delivery-gate.test.mjs — delivery-v1 统一交付裁决器 CLI 与状态派生测试
 // 运行：node --test scripts/tests/delivery-gate.test.mjs
 
 import test from "node:test";
@@ -21,7 +21,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const GATE = join(ROOT, "skills", "self", "dev-workflow", "delivery-wf", "scripts", "delivery-gate.mjs");
+const GATE = join(ROOT, "skills", "self", "dev-workflow", "delivery-v1", "scripts", "delivery-gate.mjs");
 const ACTOR_BY_TYPE = {
   ContractApproved: "user",
   ImplementationRecorded: "builder",
@@ -351,7 +351,7 @@ test("init 输出任务目录与一次性密钥，幂等复用不重发私钥，
   writeFileSync(join(taskDir, "evidence", "keep.txt"), "保留我");
   writeFileSync(join(taskDir, "events.jsonl"), "不可清空\n");
   writeFileSync(join(taskDir, "verdict.json"), "不可更新\n");
-  const second = runGate(args, home);
+  const second = runGate([...args, "--resume-existing"], home);
   assertOk(second);
   const reusedOutput = JSON.parse(second.stdout);
   assert.equal(reusedOutput.taskDir, taskDir);
@@ -565,7 +565,7 @@ test("draft → contract-approved → candidate → accepted；缺证据不得�
   assert.equal(accepted.integrity.eventCount, context.events().length);
   assert.equal(accepted.generatedBy, "delivery-gate");
   assert.ok(accepted.generatedAt);
-  assert.match(accepted.nextAction, /delivery-wf\/independent-assurance|delivery-gate\.mjs evaluate/);
+  assert.match(accepted.nextAction, /delivery-v1\/independent-assurance|delivery-gate\.mjs evaluate/);
 });
 
 test("无实现记录但存在未接受 blocker 时状态不得仍是 contract-approved", (t) => {

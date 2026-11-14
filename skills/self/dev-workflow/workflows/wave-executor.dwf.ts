@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: dev-flow-wf W2 通用 DAG 调度引擎（wave-executor）：读 exec-plan.json 做启动校验
+description: dev-flow-v1 W2 通用 DAG 调度引擎（wave-executor）：读 exec-plan.json 做启动校验
   （schema/依赖环/文件存在性/工作区干净基线），依赖就绪节点流式派发（≤5 并发，wave 字段
   仅展示不参与调度），每节点确定性核验（files_changed ⊆ 声明范围 + 全量 status 粗粒度复核 +
   节点测试命令重跑）→ commit → 解锁后继；核验不过打回同名 agent 定向修（≤2 轮，超限
@@ -10,7 +10,7 @@ description: dev-flow-wf W2 通用 DAG 调度引擎（wave-executor）：读 exe
   节点重置机器重验回调度循环，≤3 轮不收敛按依赖可达性熔断；dev 与 acceptance 模式的
   verify/inspect 一律适用；blocked 仍立即熔断）；终态
   completed / blocked / core-failed，全程 failed-as-return 不 throw。
-whenToUse: dev-flow-wf 的 D1 开发循环与 D3 端到端验收发起本 workflow（CreateWorkflow path
+whenToUse: dev-flow-v1 的 D1 开发循环与 D3 端到端验收发起本 workflow（CreateWorkflow path
   指向本文件 + args.execPlan）。exec-plan.json 由 D0 从设计包编译产出；断点恢复走
   ResumeWorkflowRun（node-<unitId> 命名保缓存）或按 status.json 人读恢复（git 为准）。
 args:
@@ -588,7 +588,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "1.1.5"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.6"; // 构建注入自 dev-flow-v1/SKILL.md frontmatter version（唯一权威）
 // ── W2 wave-executor ──
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
@@ -784,7 +784,7 @@ interface RunManifest {
   workflow: string;
   segment: "tech-design" | "dev-flow";
   /** 产物溯源字段：构建注入常量（所属技能 SKILL.md frontmatter version，唯一权威——
-   *  本循环 = dev-flow-wf）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
+   *  本循环 = dev-flow-v1）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
   skillVersion: string;
   host: string;
   projectRoot: string;
@@ -2747,7 +2747,7 @@ const skillDataDir = devFlowRoot(homeRes.stdout.trim(), address);
 // mode=acceptance 即 D3 端到端验收。attempt 无独立参数（run 级恒 1）。execution start
 // 从 plan 校验通过后起记；此前失败的启动校验（文件/schema/依赖环）无观测覆盖，属已
 // 声明边界。此后启动失败经 invalidObs 离开（先补记观测执行结束事件）──
-obsCtx = initObservation("dev-flow-wf", plan.mode === "dev" ? "D1" : "D3", 1);
+obsCtx = initObservation("dev-flow-v1", plan.mode === "dev" ? "D1" : "D3", 1);
 if (obsCtx !== null) {
   obsAttachHome(homeRes.stdout.trim());
   await obsEmit("execution", null, "start", null);
@@ -2853,7 +2853,7 @@ if (existingStatus === null) {
     await writeTextViaNode(
       plan.statusPath,
       // skillVersion 盖初建（产物溯源字段 = SKILL_VERSION 构建注入常量，本引擎 =
-      // dev-flow-wf 版本）：此后回写链构造性保留——readStatusFile 把 schema 外顶层字段
+      // dev-flow-v1 版本）：此后回写链构造性保留——readStatusFile 把 schema 外顶层字段
       // 收进 extra 原样回写、RECONCILE 探针保留全部 schema 外顶层字段，后续覆盖不丢
       JSON.stringify({ skillVersion: SKILL_VERSION, baseline: baselineVal, runId: activeRunId, nodes: initialNodes, events: [] }, null, 2),
     );

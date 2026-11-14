@@ -1,12 +1,12 @@
 /* zcode-workflow
-description: delivery-wf 技能 DESIGN 段产品契约设计循环：designer 读取用户 objective、
+description: delivery-v1 技能 DESIGN 段产品契约设计循环：designer 读取用户 objective、
   项目 AGENTS.md 与已有契约，产出 contract.json / solution.md / increments.json 草稿；
   contract reviewer 独立复查目标降级、契约可证伪性、证据类型、风险级别与增量划分并
   返回结构化问题清单；脚本侧机器校验（三文件在场 + 结构可解析 + delivery-gate
   validate-contract）全部通过才返回 contract-ready，问题进下一轮 designer 修复。
   ContractApproved 由主会话在用户明确批准后追加；本 workflow 不写 events.jsonl 与
   verdict.json，不触碰产品代码，不执行 Git 写操作
-whenToUse: delivery-wf 技能契约设计段——任务目录已由 delivery-gate init 创建、需要把
+whenToUse: delivery-v1 技能契约设计段——任务目录已由 delivery-gate init 创建、需要把
   用户原始意图转成产品契约与实施增量时调用；必传 projectRoot / taskDir / objective。
   不用于已批准契约的实现（用 candidate-build）或覆盖核对与探索审查（用
   independent-assurance）

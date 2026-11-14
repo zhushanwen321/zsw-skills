@@ -1,17 +1,17 @@
 # design-code-sync-loop 六章节设计包适配规格（已立项 · 待实现）
 
-> 2026-11-07 用户裁决立项；实现排专门会话。现状 interim = 六章节设计包的 D5 走 dev-flow-wf SKILL 手工路径（实测形态：anchor-production-layer / advice-quality-loop 两包，2026-11-07）。
+> 2026-11-07 用户裁决立项；实现排专门会话。现状 interim = 六章节设计包的 D5 走 dev-flow-v2 SKILL 手工路径（实测形态：anchor-production-layer / advice-quality-loop 两包，2026-11-07）。
 
 ## 问题
 
-`design-code-sync-loop` 的 setup 探针把 designDoc 限定为常规文件（statSync 目录即拒收，2026-11-04 加固），而 tech-design-wf 现行权威源 = 六章节 JSON 设计目录（`<name>/` + `<name>.rendered.md` 渲染视图）。六章节设计包发起 W4 即 `setup-failure`。T3 符号词表节早已登记「下游输入适配为待办」。
+`design-code-sync-loop` 的 setup 探针把 designDoc 限定为常规文件（statSync 目录即拒收，2026-11-04 加固），而 tech-design-v2 现行权威源 = 六章节 JSON 设计目录（`<name>/` + `<name>.rendered.md` 渲染视图）。六章节设计包发起 W4 即 `setup-failure`。T3 符号词表节早已登记「下游输入适配为待办」。
 
 ## 适配方案要点（骨架）
 
 1. **入口双形态归一**：designDoc 为目录时，审查面归一为 `<dir>/<name>.rendered.md`（渲染视图，格式由渲染脚本固定生成）；为单文件 .md 时维持现行为。setup 探针改两分支：目录形态验 `check-design-doc.mjs exit 0` + 渲染视图存在，单文件形态维持 statSync 常规文件校验。
 2. **审查/修复双轨穿透**：designDoc 在源内 25+ 处消费点按语义分两轨——
    - 审查面（reviewer 引文来源、机械扫描、指纹、resumeFrom 比对）= rendered.md；
-   - 修复面（doc_errors / code-right 的文档修复组指令）= 章节 JSON（`s1-context.json` … `s5-breakdown.json` / `meta.json`）+ 修复后经 `tech-design-wf/scripts/render-design-doc.mjs <设计目录绝对路径>` 重渲染；
+   - 修复面（doc_errors / code-right 的文档修复组指令）= 章节 JSON（`s1-context.json` … `s5-breakdown.json` / `meta.json`）+ 修复后经 `tech-design-v2/scripts/render-design-doc.mjs <设计目录绝对路径>` 重渲染；
    - 引文校验（「引文只允许出自两份人读版」）对目录形态改读 rendered.md；
    - 指纹（docFingerprints / resumeFrom 前置）对目录形态 = 六章节 JSON 聚合指纹 + rendered.md 指纹（渲染产物可再生成，指纹以章节 JSON 为准、rendered 指纹仅作对账）。
 3. **修复组指令注记**：目录形态的文档修复任务书显式写「权威源 = 章节 JSON，禁止直接改 rendered.md（渲染产物，改动不回流）」，并附渲染命令。
@@ -33,7 +33,7 @@
 - 目标：必填参数收敛为 `{ projectRoot, taskName }`（designDoc 目录按布局推导：`tech-design/<slug>/<taskName>/`）；implPlan / statusPath / watchlist 全部按 skill-data-addressing 布局推导。显式传参可覆盖推导值（逃生舱）；setup 对实际生效来源（推导/显式）逐参数披露一行；推导落空时报错列出推导路径与目录实况。
 - 验收判据：六章节设计包发起 W4 必填 args ≤2；主 agent 不再手拼任何路径参数。
 
-### 扩展点 2：词表生命周期缩短（协议变更——取代下方原「不改 tech-design-wf 侧协议」边界）
+### 扩展点 2：词表生命周期缩短（协议变更——取代下方原「不改 tech-design-v2 侧协议」边界）
 
 - 现状：T3 产完整词表（含 sourceFingerprints 指纹）落盘 → D5 setup 指纹校验。词表生命周期跨越 T3 确认与 D0-D4 全程，期间任何文档改动都使指纹过期——D5 修复轮自身改文档后，续跑必挂「源文档已改而词表未重生成」（2026-11-07 实证），主 agent 需手工重产再续跑。
 - 目标形态：跨阶段只保存**语义甄别结果**（scan/skip 判定与理由，新文件形态 `<name>.symbol-scan.json`）；机械部分（提取 + 指纹）移入 W4 setup 现场重建——setup 内以相对传参调用 `~/.agents/skills/symbol-watchlist/scripts/extract-backticks.mjs`（键归一绝对）对当前文档现提词集 → 与语义甄别文件对账（词集差集沿用 wordsDrift 软监测语义）→ 覆盖完整即开审。
@@ -51,5 +51,5 @@
 
 ## 边界
 
-- 词表协议变更随本 spec 实施（扩展点 2 取代早先「词表协议现行即可用」的过渡判断）；tech-design-wf 侧其余协议不动。
-- 手工路径在适配落地前保持合法（dev-flow-wf SKILL 各 flow 文件的手工降级条款）。
+- 词表协议变更随本 spec 实施（扩展点 2 取代早先「词表协议现行即可用」的过渡判断）；tech-design-v2 侧其余协议不动。
+- 手工路径在适配落地前保持合法（dev-flow-v2 SKILL 各 flow 文件的手工降级条款）。

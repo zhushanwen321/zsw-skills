@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: delivery-wf 技能 BUILD 段候选实现引擎：前置 evaluate 拒绝 state=draft；
+description: delivery-v1 技能 BUILD 段候选实现引擎：前置 evaluate 拒绝 state=draft；
   读取契约、增量清单、当前 verdict 与未决发现，逐增量派 builder。已实现增量按
   contractVersion 判定（不因 revision 变化全量重做），仅命中未决发现或当前失败
   证据的增量进入修复轮（无关联需求的 blocker 发现触发全部增量修复）。每增量
@@ -9,7 +9,7 @@ description: delivery-wf 技能 BUILD 段候选实现引擎：前置 evaluate �
   返回 build-failed 前重新 evaluate。全部增量完成后 evaluate 并返回 implemented。
   builder 不改 contract/increments/events/verdict，不做 Git 写操作；builder 的测试
   输出不是 verified 证据，本 workflow 不手编 accepted
-whenToUse: delivery-wf 技能候选实现段——契约已获用户批准（evaluate state 非
+whenToUse: delivery-v1 技能候选实现段——契约已获用户批准（evaluate state 非
   draft）、需要形成候选实现或按未决发现/失败证据修复增量时调用；必传
   projectRoot / taskDir / builderKey。不用于契约设计（用 contract-design）或
   证据核对与探索审查（用 independent-assurance）
@@ -411,8 +411,8 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "0.3.1"; // 构建注入自 delivery-wf/SKILL.md frontmatter version（唯一权威）
-// candidate-build — delivery-wf 候选实现引擎。
+const SKILL_VERSION = "0.3.2"; // 构建注入自 delivery-v1/SKILL.md frontmatter version（唯一权威）
+// candidate-build — delivery-v1 候选实现引擎。
 // builder 只改产品代码与测试；每增量 builder 只 ask 一次（实现并写实现报告），
 // 随后脚本以 program/args 执行 testCommand 并把测试摘要追加进报告——不再二次
 // ask 补报告（pi 无续聊，二次 ask 会丢上下文）。事件只经 delivery-gate
@@ -543,7 +543,7 @@ function parseObject(raw: string): Record<string, unknown> | null {
   }
 }
 
-obsCtx = initObservation("delivery-wf", "BUILD", null);
+obsCtx = initObservation("delivery-v1", "BUILD", null);
 const homeRes = await runNode([NODE_PROBE_HOME]);
 if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
   await obsCloseExecution("setup-failure");
@@ -582,8 +582,8 @@ if (inputProblems.length > 0) {
   return result;
 }
 
-const gatePath = `${homeDir}/.agents/skills/delivery-wf/scripts/delivery-gate.mjs`;
-const builderRolePath = `${homeDir}/.agents/skills/delivery-wf/references/roles/builder.md`;
+const gatePath = `${homeDir}/.agents/skills/delivery-v1/scripts/delivery-gate.mjs`;
+const builderRolePath = `${homeDir}/.agents/skills/delivery-v1/references/roles/builder.md`;
 const contractPath = `${taskDir}/contract.json`;
 const incrementsPath = `${taskDir}/increments.json`;
 const eventsPath = `${taskDir}/events.jsonl`;
@@ -594,7 +594,7 @@ if (requiredRes.exitCode !== 0) {
   await obsCloseExecution("setup-failure");
   const result: CandidateBuildResult = {
     terminated: "setup-failure", taskDir, revision: "", implementedIncrementIds: [], findingIds: [], verdict: null,
-    message: `构建环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：先完成 contract-design 与用户批准，再确认 delivery-wf 安装和任务目录后重新发起`,
+    message: `构建环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：先完成 contract-design 与用户批准，再确认 delivery-v1 安装和任务目录后重新发起`,
   };
   return result;
 }

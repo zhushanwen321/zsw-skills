@@ -1,6 +1,6 @@
 // check-exec-plan-parity.test.mjs — check-exec-plan 与两引擎校验的差分测试（防漂移对账）
 //
-// 对应实现：skills/self/dev-workflow/dev-flow-wf/scripts/check-exec-plan.mjs（D0 编译
+// 对应实现：skills/self/dev-workflow/dev-flow-v1/scripts/check-exec-plan.mjs（D0 编译
 // 「生成即校验」门）。该脚本的 schema 主段是 W2 wave-executor validatePlan 的 JS 移植
 // （错误文案逐字一致），本测试防止两份实现漂移：
 //   - 差分侧：从构建产物 workflows/pi/wave-executor.js 零转抄提取 validatePlan 及其
@@ -22,11 +22,11 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
-import { validatePlanSchema, checkPlan } from "../../skills/self/dev-workflow/dev-flow-wf/scripts/check-exec-plan.mjs";
+import { validatePlanSchema, checkPlan } from "../../skills/self/dev-workflow/dev-flow-v1/scripts/check-exec-plan.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PI_ARTIFACT = join(ROOT, "skills", "self", "dev-workflow", "workflows", "pi", "wave-executor.js");
-const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-wf", "scripts", "check-exec-plan.mjs");
+const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v1", "scripts", "check-exec-plan.mjs");
 
 function loadReferenceValidatePlan() {
   const src = readFileSync(PI_ARTIFACT, "utf-8");

@@ -1,11 +1,11 @@
 /* @pi-meta
 name: design-code-sync-v2
 description: >-
-  dev-flow-wf 技能 W4 v2 一致性对账引擎：设计义务表 → checker 派发（机械优先/语义缓存）→
+  dev-flow-v1 技能 W4 v2 一致性对账引擎：设计义务表 → checker 派发（机械优先/语义缓存）→
   差距地址聚合 → sandbox 隔离变更集 → 集成器唯一写入门径 → 四层结论；状态唯一权威 =
   conformance-state 事件流，agent 无状态。带 cutover 标记的包旧引擎拒启、由本引擎管辖
 when: >-
-  dev-flow-wf 技能 D5 终态同步段——设计包已具备 conformance 绑定（章节 JSON §9b）时的义务对账，
+  dev-flow-v1 技能 D5 终态同步段——设计包已具备 conformance 绑定（章节 JSON §9b）时的义务对账，
   必传 designPkg / projectRoot / declaredRepos
 notFor: >-
   未做 conformance 绑定的 legacy 包收尾（用 design-code-sync-loop 旧引擎只读期形态）
@@ -36,10 +36,10 @@ parameters:
       description: "conformance-plane 模块根绝对路径（缺省 <projectRoot>/skills/self/dev-workflow/conformance-plane——仓库内模块直读）"
     reviewerTemplate:
       type: string
-      description: "语义检查 agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/conformance-reviewer.md）"
+      description: "语义检查 agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/conformance-reviewer.md）"
     fixerTemplate:
       type: string
-      description: "补丁生成 agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/changeset-fixer.md）"
+      description: "补丁生成 agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/changeset-fixer.md）"
     maxRounds:
       type: number
       description: "对账轮次上限（缺省 8；耗尽仍有 open = engineOutcome stopped）"

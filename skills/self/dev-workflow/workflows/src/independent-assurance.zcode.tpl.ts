@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: delivery-wf 技能 ASSURE 段独立保证引擎：前置门禁要求 state 非
+description: delivery-v1 技能 ASSURE 段独立保证引擎：前置门禁要求 state 非
   draft/contract-approved 且 missing.incrementIds 为空；coverage reviewer 逐项对照
   契约、候选代码与原始证据，对每 requirement×evidenceKind 亲自复核并产出
   verified/partial/failed 结论（脚本以 append --key assuranceKey 追加 EvidenceRecorded）；
@@ -11,7 +11,7 @@ description: delivery-wf 技能 ASSURE 段独立保证引擎：前置门禁要�
   本轮证据失效）；任何失败出口返回前重新 evaluate 取当前裁决（evaluate 失败则
   verdict 为空）。返回 assurance-completed 与 delivery-gate 生成的 verdict，不直接
   宣告 accepted；assurance 角色不改产品代码、契约、事件或 verdict
-whenToUse: delivery-wf 技能独立保证段——候选实现已形成（全部增量有当前契约版本的
+whenToUse: delivery-v1 技能独立保证段——候选实现已形成（全部增量有当前契约版本的
   实现记录）、需要独立覆盖核对（及高风险契约的探索性审查）时调用；必传
   projectRoot / taskDir / assuranceKey。不用于契约设计（用 contract-design）、实现
   （用 candidate-build）或用户风险接受（主会话 accept-risk）

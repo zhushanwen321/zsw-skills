@@ -1,9 +1,9 @@
 /* @pi-meta
 name: design-code-sync-loop
 description: >-
-  dev-flow-wf 技能 W4 终态同步循环：planner 规划后模块 reviewer 并行审差距，must-fix 级 contested 停回用户，分组并行双向修复收敛，伴生产物退役判定，矩阵与终态档案全由脚本落盘，不信任 agent 自报收敛
+  dev-flow-v1 技能 W4 终态同步循环：planner 规划后模块 reviewer 并行审差距，must-fix 级 contested 停回用户，分组并行双向修复收敛，伴生产物退役判定，矩阵与终态档案全由脚本落盘，不信任 agent 自报收敛
 when: >-
-  dev-flow-wf 技能 D5 终态同步段——交付后把代码实现与设计文档差距双向校准到 0 must-fix 时调用，审查对象是当前 HEAD 终态全量，必传 designDoc / implPlan / projectRoot
+  dev-flow-v1 技能 D5 终态同步段——交付后把代码实现与设计文档差距双向校准到 0 must-fix 时调用，审查对象是当前 HEAD 终态全量，必传 designDoc / implPlan / projectRoot
 notFor: >-
   diff 区间代码评审（用 review-fix-loop）或设计文档审查（用 tech-review-loop）
 phases: ['框架对照与模块规划', '机械信号扫描', '并行模块审查', '聚焦复审', '并行修复与复审', '伴生产物退役判定']
@@ -33,12 +33,12 @@ parameters:
       description: "审查→修复循环轮次上限（含 R1 首轮全量审）"
     plannerTemplate:
       type: string
-      default: "~/.agents/skills/dev-flow-wf/agents/sync-planner.md"
-      description: "framework-scan planner agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/sync-planner.md）"
+      default: "~/.agents/skills/dev-flow-v1/agents/sync-planner.md"
+      description: "framework-scan planner agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/sync-planner.md）"
     reviewerTemplate:
       type: string
-      default: "~/.agents/skills/dev-flow-wf/agents/sync-reviewer.md"
-      description: "模块 reviewer agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/sync-reviewer.md）"
+      default: "~/.agents/skills/dev-flow-v1/agents/sync-reviewer.md"
+      description: "模块 reviewer agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/sync-reviewer.md）"
     attempt:
       type: number
       description: "重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；缺省时自动检测：runDir 已有任何轮次产物（含无后缀 round-* 或 final.json）→ 取已有最大 attempt+1（首次重发起即 attempt2，防覆盖首轮产物）。不得设 default——default 数值会被引擎物化成显式值、吞掉「未传」形态，自动检测失效且防覆盖校验将把缺省值当显式值拒启（实测：runDir 已有 attempt1 产物时省略参数 → 引擎填 1 → 拒启）"
@@ -89,11 +89,11 @@ const report = () => {};
 const artifact = { chart: () => {}, board: () => {}, markdown: async () => {}, file: async () => {} };
 
 // ============================================================================
-// design-code-sync-loop — dev-flow-wf 技能 W4 终态同步循环（pi workflow）
+// design-code-sync-loop — dev-flow-v1 技能 W4 终态同步循环（pi workflow）
 // 骨架镜像自 review-fix-loop 与 tech-review-loop（多脚本循环骨架
 // = 镜像 + 头部差异登记，改动任一侧循环骨架时评估另一侧是否需要同步）。语义权威源 =
 // dev-flow 流程优化设计文档 §7（两级拓扑 / 方向语义权威表 / 三向矩阵 / 越权三问三档 /
-// 审查关系五条 / 修复纪律 / 退役判定 / 停机线），落点参照 dev-flow-wf/flow/sync.md。
+// 审查关系五条 / 修复纪律 / 退役判定 / 停机线），落点参照 dev-flow-v1/flow/sync.md。
 // 与 rfl 的结构差异：
 //  - 无 LLM 聚合层：矩阵行 = 脚本 concat（planner 框架行 + 各模块 reviewer 行结构化
 //    返回），跨模块 findings 不去重（文件锚点唯一归属）
@@ -119,7 +119,7 @@ const artifact = { chart: () => {}, board: () => {}, markdown: async () => {}, f
 // 数据传递 = 结构化返回总线（无聚合层故不落重型报告文件）：matrixRows / findings /
 // reconciliation / fixes 经 ask<T> 返回，脚本侧归一入条目清单；每轮原始返回留档
 // round-N[.attemptM]/ 下供断点恢复人读。agent 模板默认路径 = 本 skill 安装位
-// （~/.agents/skills/dev-flow-wf/agents/，args 可覆盖），~ 前缀经 node -e 通道运行时展开。
+// （~/.agents/skills/dev-flow-v1/agents/，args 可覆盖），~ 前缀经 node -e 通道运行时展开。
 // ============================================================================
 
 // ── 结果 schema 常量（ask 结构化返回契约；原 TS interface 的 JSDoc 字段描述随迁） ──

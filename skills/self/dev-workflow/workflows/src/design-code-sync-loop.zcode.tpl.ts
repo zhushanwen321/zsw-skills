@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: dev-flow-wf 技能 W4 终态同步循环（design-code-sync 的 workflow 化 + 升级语义）：
+description: dev-flow-v1 技能 W4 终态同步循环（design-code-sync 的 workflow 化 + 升级语义）：
   两级审查拓扑（R1 framework-scan planner 单 agent → 模块 fan-out 并行 reviewer；R2+ 同
   agent 聚焦复审只审上轮修复影响面）→ 矩阵脚本 concat（无 LLM 聚合层，跨模块不去重）→
   must-fix 级 contested 拦截停回用户 → reconcileGroups 机器分组并行双向修复（doc-right
@@ -7,7 +7,7 @@ description: dev-flow-wf 技能 W4 终态同步循环（design-code-sync 的 wor
   伴生产物退役判定（agent 只判定清单，引擎执行移动 + 引用验证）。矩阵 + 收敛轨迹落盘
   <projectRoot>/.tmp/dev-flow/<设计文档名>.sync/（round-N[.attemptM]/ 子目录），终态档案
   final.json。终态 converged / contested / stuck / *-failure
-whenToUse: dev-flow-wf 技能 D5 终态同步段——交付后把「代码实现 vs 设计文档」差距双向校准
+whenToUse: dev-flow-v1 技能 D5 终态同步段——交付后把「代码实现 vs 设计文档」差距双向校准
   到 0 must-fix 时调用（审查对象 = 当前 HEAD 终态全量，不是 diff 区间）；必传 designDoc /
   implPlan / projectRoot。不用于 diff 区间代码评审（用 saved review-fix-loop）或设计文档
   审查（用 saved tech-review-loop）
@@ -42,12 +42,12 @@ args:
     default: 10
   plannerTemplate:
     type: string
-    description: framework-scan planner agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/sync-planner.md）
-    default: ~/.agents/skills/dev-flow-wf/agents/sync-planner.md
+    description: framework-scan planner agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/sync-planner.md）
+    default: ~/.agents/skills/dev-flow-v1/agents/sync-planner.md
   reviewerTemplate:
     type: string
-    description: 模块 reviewer agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/sync-reviewer.md）
-    default: ~/.agents/skills/dev-flow-wf/agents/sync-reviewer.md
+    description: 模块 reviewer agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/sync-reviewer.md）
+    default: ~/.agents/skills/dev-flow-v1/agents/sync-reviewer.md
   attempt:
     type: number
     description: 重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；

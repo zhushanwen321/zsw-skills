@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: tech-design-wf 技能 W1 设计文档审查循环：四席并行审查（方向审席 +
+description: tech-design-v1 技能 W1 设计文档审查循环：四席并行审查（方向审席 +
   主审/影响面审/简洁审，R1 全面审、R2+ 聚焦复审逐条对账——方向审 patch 档发现随当轮
   问题清单进入聚合）→ 聚合裁决独立 phase（四席发现按同根因合并为去重权威清单
   aggregated.md，refs 精确划分脚本 fail-closed 校验）→ 文档修复者单 agent 据聚合
@@ -10,7 +10,7 @@ description: tech-design-wf 技能 W1 设计文档审查循环：四席并行审
   修复者直接编辑章节 JSON 并在修改后重渲染。产物落
   ~/.agents/skill-data/tech-design/<project-slug>/<设计名>/（round-N[.attemptM]/ 子目录），
   终态档案 final.json。终态判定 / 覆盖校验 / stuck 计数全部脚本侧完成，不信任 agent 自报收敛
-whenToUse: tech-design-wf 技能 W1 阶段——技术设计文档（tech-design 产物，分章节 JSON 形态）
+whenToUse: tech-design-v1 技能 W1 阶段——技术设计文档（tech-design 产物，分章节 JSON 形态）
   需要对抗式审查修复循环时调用；必传 designDoc（设计目录绝对路径，或其渲染 md 路径——内部
   归一为设计目录；修复者直接编辑章节 JSON）与 projectRoot（项目根绝对路径）。不用于代码
   review-fix 循环（用 saved review-fix-loop）

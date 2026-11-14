@@ -28,7 +28,7 @@ const require = createRequire(import.meta.url);
 const ts = require("typescript");
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SRC = join(REPO, "skills", "self", "dev-workflow", "workflows", "src", "design-code-sync-loop.shared.ts");
-const SYNC_FLOW = join(REPO, "skills", "self", "dev-workflow", "dev-flow-wf", "flow", "sync.md");
+const SYNC_FLOW = join(REPO, "skills", "self", "dev-workflow", "dev-flow-v1", "flow", "sync.md");
 
 /** 从单源提取 cutoverGuardBlock 真实源码 + 探针常量，transpile 后在 vm 里取可调用引用 */
 function loadGuard() {

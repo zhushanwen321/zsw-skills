@@ -47,10 +47,10 @@ function makeSkillScaffold(home, withFakeSkill) {
   mkdirSync(designDoc, { recursive: true });
   mkdirSync(projectRoot, { recursive: true });
   if (withFakeSkill) {
-    const agents = join(home, ".agents/skills/tech-design-wf/agents");
-    const refs = join(home, ".agents/skills/tech-design-wf/references");
-    const review = join(home, ".agents/skills/tech-design-wf/review");
-    const scripts = join(home, ".agents/skills/tech-design-wf/scripts");
+    const agents = join(home, ".agents/skills/tech-design-v1/agents");
+    const refs = join(home, ".agents/skills/tech-design-v1/references");
+    const review = join(home, ".agents/skills/tech-design-v1/review");
+    const scripts = join(home, ".agents/skills/tech-design-v1/scripts");
     for (const d of [agents, refs, review, scripts]) mkdirSync(d, { recursive: true });
     for (const f of [
       "tech-design-direction-review.md",
@@ -180,7 +180,7 @@ test("zcode 产物：setup-failure 终态的观测事件序列与字段契约", 
       if (want.outcome !== undefined) assert.equal(rec.outcome, want.outcome, `行 ${i} outcome`);
       else assert.ok(!("outcome" in rec), `行 ${i} 不应带 outcome`);
       assertContract(rec, {
-        task_id: "t-zc", execution_id: "e-sf", skill: "tech-design-wf", stage: "T2",
+        task_id: "t-zc", execution_id: "e-sf", skill: "tech-design-v1", stage: "T2",
         sample_type: "selftest",
         round: want.step === "review" ? 1 : null,
       });
@@ -414,7 +414,7 @@ test("withStage/obsBegin/obsCloseExecution：正常 end、fn 抛异常补 script
       `(async function __main__(args, world, log) {\n${code}\n
        // 观测层单独执行时无构建器注入——按拼接契约补 SKILL_VERSION 常量（业务源同位置）
        const SKILL_VERSION = "0.1.0-test";
-       obsCtx = initObservation("tech-design-wf", "T2", null);
+       obsCtx = initObservation("tech-design-v1", "T2", null);
        obsAttachHome(${JSON.stringify(home)});
        await obsEmit("execution", null, "start", null);
        // withStage 正常路径
@@ -478,7 +478,7 @@ test("obsEnd 配对检查：错名/round 错位给实际打开阶段补 abandone
     const fn = new vm.Script(
       `(async function __main__(args, world, log) {\n${code}\n
        const SKILL_VERSION = "0.1.0-test";
-       obsCtx = initObservation("tech-design-wf", "T2", null);
+       obsCtx = initObservation("tech-design-v1", "T2", null);
        obsAttachHome(${JSON.stringify(home)});
        await obsEmit("execution", null, "start", null);
        // 错名 + round 错位：实际打开 fix(2)，收到 review(1) 的 end
@@ -527,7 +527,7 @@ const runObserve = (home, args) =>
 test("workflow-observe.mjs：start/end 写同一 JSONL、契约字段与 workflow 内建一致", () => {
   const home = tmpHome();
   try {
-    const base = ["--task-id", "t-cli", "--execution-id", "e-cli", "--skill", "dev-flow-wf", "--stage", "D0", "--step", "compile"];
+    const base = ["--task-id", "t-cli", "--execution-id", "e-cli", "--skill", "dev-flow-v1", "--stage", "D0", "--step", "compile"];
     let r = runObserve(home, ["start", ...base, "--attempt", "1", "--sample-type", "selftest"]);
     assert.equal(r.status, 0, r.stderr);
     r = runObserve(home, ["end", ...base, "--attempt", "1", "--sample-type", "selftest", "--outcome", "completed"]);
@@ -541,7 +541,7 @@ test("workflow-observe.mjs：start/end 写同一 JSONL、契约字段与 workflo
         { event: "end", step: "compile", outcome: "completed" },
       ],
     );
-    lines.forEach((l) => assertContract(l, { task_id: "t-cli", execution_id: "e-cli", skill: "dev-flow-wf", stage: "D0", sample_type: "selftest", attempt: 1, round: null }));
+    lines.forEach((l) => assertContract(l, { task_id: "t-cli", execution_id: "e-cli", skill: "dev-flow-v1", stage: "D0", sample_type: "selftest", attempt: 1, round: null }));
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -575,7 +575,7 @@ test("workflow-observe.mjs：用法错误 exit 2 且不落盘（非法 ID / star
 test("workflow-observe.mjs：--skill-version 传入落字段、缺省不写；老 JSONL（无该字段）追加兼容（RL6）", () => {
   const home = tmpHome();
   try {
-    const base = ["--task-id", "t-ver", "--execution-id", "e-ver", "--skill", "dev-flow-wf", "--stage", "D0", "--step", "compile"];
+    const base = ["--task-id", "t-ver", "--execution-id", "e-ver", "--skill", "dev-flow-v1", "--stage", "D0", "--step", "compile"];
     // 缺省不写 skill_version（additive 契约：不带旗标的存量调用行为逐字节不变）
     let r = runObserve(home, ["start", ...base]);
     assert.equal(r.status, 0, r.stderr);
@@ -587,7 +587,7 @@ test("workflow-observe.mjs：--skill-version 传入落字段、缺省不写；�
     const file = join(home, ".agents/skill-data/workflow-observability", "t-ver", "e-ver.jsonl");
     writeFileSync(
       file,
-      `${readFileSync(file, "utf8")}{"execution_id":"e-ver","task_id":"t-ver","skill":"dev-flow-wf","stage":"D0","step":"compile","round":null,"attempt":null,"event":"end","timestamp":"2026-01-01T00:00:00.000Z","sample_type":"production"}\n`,
+      `${readFileSync(file, "utf8")}{"execution_id":"e-ver","task_id":"t-ver","skill":"dev-flow-v1","stage":"D0","step":"compile","round":null,"attempt":null,"event":"end","timestamp":"2026-01-01T00:00:00.000Z","sample_type":"production"}\n`,
     );
     r = runObserve(home, ["end", ...base, "--skill-version", "0.1.0", "--outcome", "completed"]);
     assert.equal(r.status, 0, r.stderr);
@@ -600,7 +600,7 @@ test("workflow-observe.mjs：--skill-version 传入落字段、缺省不写；�
 
     // 验收命令原文形态：start 带 --skill-version 0.1.0 → 落盘行含 "skill_version":"0.1.0"
     const r2 = runObserve(home, [
-      "start", "--task-id", "t-accept", "--execution-id", "e-accept", "--skill", "dev-flow-wf",
+      "start", "--task-id", "t-accept", "--execution-id", "e-accept", "--skill", "dev-flow-v1",
       "--stage", "D0", "--step", "compile", "--skill-version", "0.1.0",
     ]);
     assert.equal(r2.status, 0, r2.stderr);
@@ -750,7 +750,7 @@ test("D5 zcode：全清 converged 路径——setup/review 自然 end（无 outc
       ],
     );
     lines.forEach((l) =>
-      assertContract(l, { task_id: "t-d5", execution_id: "e-conv", skill: "dev-flow-wf", stage: "D5", sample_type: "selftest" }),
+      assertContract(l, { task_id: "t-d5", execution_id: "e-conv", skill: "dev-flow-v1", stage: "D5", sample_type: "selftest" }),
     );
   } finally {
     rmSync(home, { recursive: true, force: true });
@@ -1457,7 +1457,7 @@ test("五项寻址登记与代码常量一致（skill-data-addressing.md §2 con
   }
 });
 
-// ── 10. delivery-wf 三 workflow（DESIGN / BUILD / ASSURE）双平台真实产物 ──
+// ── 10. delivery-v1 三 workflow（DESIGN / BUILD / ASSURE）双平台真实产物 ──
 //
 // 源文件先于产物落盘是常态（workflow 实现者写 src/，主会话统一构建产物）——产物未生成
 // 或内嵌 SKILL_VERSION 落后于 SKILL.md frontmatter 时本节跳过并说明原因，构建后
@@ -1465,7 +1465,7 @@ test("五项寻址登记与代码常量一致（skill-data-addressing.md §2 con
 // 输出中逐条打印 skip 原因。
 const DELIVERY_WFS = ["contract-design", "candidate-build", "independent-assurance"];
 const DELIVERY_SKILL_VERSION =
-  readFileSync(join(ROOT, "skills/self/dev-workflow/delivery-wf/SKILL.md"), "utf8").match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m)?.[1] ?? null;
+  readFileSync(join(ROOT, "skills/self/dev-workflow/delivery-v1/SKILL.md"), "utf8").match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m)?.[1] ?? null;
 const DELIVERY_PRODUCTS_READY = DELIVERY_SKILL_VERSION !== null && DELIVERY_WFS.every((n) => {
   for (const p of [join(WF, `${n}.dwf.ts`), join(WF, "pi", `${n}.js`)]) {
     if (!existsSync(p)) return false;
@@ -1474,7 +1474,7 @@ const DELIVERY_PRODUCTS_READY = DELIVERY_SKILL_VERSION !== null && DELIVERY_WFS.
   return true;
 });
 const DELIVERY_SKIP_REASON =
-  `delivery-wf 双平台产物未生成或内嵌 SKILL_VERSION 落后于 SKILL.md frontmatter（当前 ${DELIVERY_SKILL_VERSION ?? "无版本"}）` +
+  `delivery-v1 双平台产物未生成或内嵌 SKILL_VERSION 落后于 SKILL.md frontmatter（当前 ${DELIVERY_SKILL_VERSION ?? "无版本"}）` +
   "——主会话跑 node scripts/build-workflows.mjs 后本节用例启用";
 
 /** 事件写入凭据桩（模拟 delivery-gate init 输出的角色私钥：builderKey 只进 candidate-build、assuranceKey 只进 independent-assurance） */
@@ -1517,8 +1517,8 @@ function makeDeliveryScaffold(home, { withSkill = true, verdicts = [], events = 
     items: incrementItems ?? [{ id: "I1", title: "首个增量", requirementIds: ["R1"] }],
   }));
   if (withSkill) {
-    const roles = join(home, ".agents/skills/delivery-wf/references/roles");
-    const scripts = join(home, ".agents/skills/delivery-wf/scripts");
+    const roles = join(home, ".agents/skills/delivery-v1/references/roles");
+    const scripts = join(home, ".agents/skills/delivery-v1/scripts");
     mkdirSync(roles, { recursive: true });
     mkdirSync(scripts, { recursive: true });
     for (const r of ["designer", "contract-reviewer", "builder", "coverage-reviewer", "explorer"]) {
@@ -1704,7 +1704,7 @@ async function runDeliveryZcode(home, name, executionId, extraObs = {}) {
   );
 }
 
-test("delivery-wf zcode：三 workflow setup-failure（skill 未装）4 行完整事件与 stage/skill 字段", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 zcode：三 workflow setup-failure（skill 未装）4 行完整事件与 stage/skill 字段", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   for (const name of DELIVERY_WFS) {
     const home = tmpHome();
     try {
@@ -1728,14 +1728,14 @@ test("delivery-wf zcode：三 workflow setup-failure（skill 未装）4 行完�
         ],
         `${name} setup-failure 事件序列`,
       );
-      lines.forEach((l) => assertContract(l, { task_id: "t-dwf", execution_id: "e-sf", skill: "delivery-wf", stage: DELIVERY_FIXTURES[name].stage }));
+      lines.forEach((l) => assertContract(l, { task_id: "t-dwf", execution_id: "e-sf", skill: "delivery-v1", stage: DELIVERY_FIXTURES[name].stage }));
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   }
 });
 
-test("delivery-wf pi：setup-failure 双平台对拍一致（除 timestamp）", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 pi：setup-failure 双平台对拍一致（除 timestamp）", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   const home = tmpHome();
   const prevHome = process.env.HOME;
   process.env.HOME = home; // pi 壳 world.run 走 spawnSync 继承进程 env
@@ -1774,7 +1774,7 @@ test("delivery-wf pi：setup-failure 双平台对拍一致（除 timestamp）", 
   }
 });
 
-test("delivery-wf zcode：正常路径事件序列逐行断言（contract-ready / implemented / assurance-completed）", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 zcode：正常路径事件序列逐行断言（contract-ready / implemented / assurance-completed）", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   for (const name of DELIVERY_WFS) {
     const fixture = DELIVERY_FIXTURES[name];
     const home = tmpHome();
@@ -1788,7 +1788,7 @@ test("delivery-wf zcode：正常路径事件序列逐行断言（contract-ready 
         `${name} 正常路径事件序列`,
       );
       lines.forEach((l) =>
-        assertContract(l, { task_id: "t-dwf", execution_id: "e-ok", skill: "delivery-wf", stage: fixture.stage, sample_type: "selftest" }),
+        assertContract(l, { task_id: "t-dwf", execution_id: "e-ok", skill: "delivery-v1", stage: fixture.stage, sample_type: "selftest" }),
       );
       assert.ok(lines.every((l) => l.attempt === null), "delivery workflow 不做 attempt 自动检测，应恒 null");
       assert.ok(!logs.some((l) => l.includes("WARN: 观测")), `不应有观测告警：${logs.join("|")}`);
@@ -1798,7 +1798,7 @@ test("delivery-wf zcode：正常路径事件序列逐行断言（contract-ready 
   }
 });
 
-test("delivery-wf zcode：不传观测参数业务照常、无观测文件无告警", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 zcode：不传观测参数业务照常、无观测文件无告警", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   for (const name of DELIVERY_WFS) {
     const fixture = DELIVERY_FIXTURES[name];
     const home = tmpHome();
@@ -1819,7 +1819,7 @@ test("delivery-wf zcode：不传观测参数业务照常、无观测文件无告
   }
 });
 
-test("delivery-wf pi：正常路径双平台对拍一致（除 timestamp）", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 pi：正常路径双平台对拍一致（除 timestamp）", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   const home = tmpHome();
   const prevHome = process.env.HOME;
   process.env.HOME = home;
@@ -1854,7 +1854,7 @@ test("delivery-wf pi：正常路径双平台对拍一致（除 timestamp）", { 
   }
 });
 
-test("delivery-wf zcode：independent-assurance 探索分支——explorer 与 coverage 并行派发且维度全覆盖", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 zcode：independent-assurance 探索分支——explorer 与 coverage 并行派发且维度全覆盖", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   const home = tmpHome();
   try {
     const s = makeDeliveryScaffold(home);
@@ -1909,7 +1909,7 @@ test("delivery-wf zcode：independent-assurance 探索分支——explorer 与 c
   }
 });
 
-test("delivery-wf zcode：前置状态门禁——draft/contract-approved/missing.incrementIds 拒绝且不派 agent", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 zcode：前置状态门禁——draft/contract-approved/missing.incrementIds 拒绝且不派 agent", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   const cases = [
     { name: "candidate-build", verdict: { ...DELIVERY_BASE_VERDICT, state: "draft" }, needle: "draft" },
     { name: "independent-assurance", verdict: { ...DELIVERY_BASE_VERDICT, state: "draft" }, needle: "draft" },
@@ -1942,7 +1942,7 @@ test("delivery-wf zcode：前置状态门禁——draft/contract-approved/missin
   }
 });
 
-test("delivery-wf 双平台：candidate-build 每增量单次 builder ask 且 prompt 自包含", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 双平台：candidate-build 每增量单次 builder ask 且 prompt 自包含", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   const home = tmpHome();
   const prevHome = process.env.HOME;
   process.env.HOME = home; // pi 壳 world.run 走 spawnSync 继承进程 env
@@ -1988,7 +1988,7 @@ test("delivery-wf 双平台：candidate-build 每增量单次 builder ask 且 pr
   }
 });
 
-test("delivery-wf zcode：修复轮仅 rework 命中未决发现/失败证据的增量，旧实现事件保留", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 zcode：修复轮仅 rework 命中未决发现/失败证据的增量，旧实现事件保留", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   const twoReqs = [
     { id: "R1", kind: "goal", statement: "行为一", required: true, riskAcceptable: false, evidenceKinds: ["inspection"] },
     { id: "R2", kind: "goal", statement: "行为二", required: true, riskAcceptable: false, evidenceKinds: ["inspection"] },
@@ -2069,7 +2069,7 @@ test("delivery-wf zcode：修复轮仅 rework 命中未决发现/失败证据的
   }
 });
 
-test("delivery-wf zcode：testCommand 无法执行属基础设施失败——不登记 FindingRaised，build-failed 前 re-evaluate", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 zcode：testCommand 无法执行属基础设施失败——不登记 FindingRaised，build-failed 前 re-evaluate", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   const home = tmpHome();
   try {
     const s = makeDeliveryScaffold(home, {
@@ -2093,7 +2093,7 @@ test("delivery-wf zcode：testCommand 无法执行属基础设施失败——不
   }
 });
 
-test("delivery-wf zcode：testCommand 退出非零登记关联增量需求的 blocker finding；builder 产品发现照常登记", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 zcode：testCommand 退出非零登记关联增量需求的 blocker finding；builder 产品发现照常登记", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   const home = tmpHome();
   try {
     // 产品测试失败（命令可执行、退出码 3）：登记关联该增量需求的 blocker finding
@@ -2142,7 +2142,7 @@ test("delivery-wf zcode：testCommand 退出非零登记关联增量需求的 bl
   }
 });
 
-test("delivery-wf zcode：independent-assurance revision 漂移显式 assurance-failed，本轮事件带 setup revision", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
+test("delivery-v1 zcode：independent-assurance revision 漂移显式 assurance-failed，本轮事件带 setup revision", { skip: DELIVERY_PRODUCTS_READY ? false : DELIVERY_SKIP_REASON }, async () => {
   const home = tmpHome();
   try {
     const s = makeDeliveryScaffold(home, {

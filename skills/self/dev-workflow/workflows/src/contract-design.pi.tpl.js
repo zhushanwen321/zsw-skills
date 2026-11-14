@@ -1,11 +1,11 @@
 /* @pi-meta
 name: contract-design
 description: >-
-  delivery-wf 技能 DESIGN 段产品契约设计循环：designer 产契约/解决方案/增量草稿，
+  delivery-v1 技能 DESIGN 段产品契约设计循环：designer 产契约/解决方案/增量草稿，
   contract reviewer 独立复查目标降级、可证伪性、证据类型、风险级别与增量划分，
   脚本机器校验通过才 contract-ready；ContractApproved 留给主会话在用户批准后追加
 when: >-
-  delivery-wf 技能契约设计段——任务目录已由 delivery-gate init 创建、需要把用户原始意图
+  delivery-v1 技能契约设计段——任务目录已由 delivery-gate init 创建、需要把用户原始意图
   转成产品契约与实施增量，必传 projectRoot / taskDir / objective
 notFor: >-
   已批准契约的实现（candidate-build）、覆盖核对与探索审查（independent-assurance）

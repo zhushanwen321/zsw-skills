@@ -1,4 +1,4 @@
-// W3 dev-consistency-loop — dev-flow-wf D2 一致性审查 + Gate A 的 zcode 执行体。
+// W3 dev-consistency-loop — dev-flow-v1 D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：
 //  - 聚合定性是独立 phase（每轮修复前先跑，四职责一次完成：①跨区同根因去重合并
@@ -53,7 +53,7 @@ const maxRounds = typeof args.maxRounds === "number" && args.maxRounds >= 1 ? Ma
 const attempt = typeof args.attempt === "number" && args.attempt >= 1 ? Math.floor(args.attempt) : 1;
 // reviewer 模板默认路径用 ~ 占位形态（运行时由 node 侧 os.homedir() 展开——家目录
 // 绝对路径不入脚本字面量）；args.reviewerTemplate 可覆盖。
-const DEFAULT_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/consistency-reviewer.md";
+const DEFAULT_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-v1/agents/consistency-reviewer.md";
 const reviewerTemplate =
   typeof args.reviewerTemplate === "string" && args.reviewerTemplate.trim() !== ""
     ? args.reviewerTemplate.trim()
@@ -133,7 +133,7 @@ interface RunManifest {
   workflow: string;
   segment: "tech-design" | "dev-flow";
   /** 产物溯源字段：构建注入常量（所属技能 SKILL.md frontmatter version，唯一权威——
-   *  本循环 = dev-flow-wf）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
+   *  本循环 = dev-flow-v1）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
   skillVersion: string;
   host: string;
   projectRoot: string;
@@ -252,7 +252,7 @@ const NODE_PREP = [
   "if (!fs.existsSync(designAbs)) die('设计文档不存在: ' + designAbs);",
   "if (!fs.existsSync(planAbs)) die('impl-plan 不存在: ' + planAbs);",
   "var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);",
-  "if (!fs.existsSync(tplAbs)) die('reviewer 模板不存在: ' + tplAbs + '（恢复：安装 dev-flow-wf skill 或经 args.reviewerTemplate 指定有效路径）');",
+  "if (!fs.existsSync(tplAbs)) die('reviewer 模板不存在: ' + tplAbs + '（恢复：安装 dev-flow-v1 skill 或经 args.reviewerTemplate 指定有效路径）');",
   "var git = function (a) { return cp.execFileSync('git', a, { cwd: projectRoot, encoding: 'utf8', maxBuffer: 67108864, stdio: ['pipe', 'pipe', 'pipe'] }); };",
   "var files = [], churn = 0;",
   "try {",
@@ -1007,7 +1007,7 @@ const skillDataDir = devFlowRoot(homeRes.stdout.trim(), address);
 // ── 观测启用（O 区）：stage = D2（W3 一致性审查循环在 dev-flow 流程的阶段编号）。
 // execution start 从 home/slug 探针通过后起记；此前的启动期 throw 无观测覆盖，属已
 // 声明边界。启用后的启动期 throw（PREP 失败）先补记观测执行结束事件 ──
-obsCtx = initObservation("dev-flow-wf", "D2", attempt);
+obsCtx = initObservation("dev-flow-v1", "D2", attempt);
 if (obsCtx !== null) {
   obsAttachHome(homeRes.stdout.trim());
   await obsEmit("execution", null, "start", null);
@@ -1706,7 +1706,7 @@ gateARetry: while (true) {
 
   let fixesByGroup: { name: string; fix: FixReport }[];
     // 单组修复执行体（池直接按组名派发——经任务对象中转 run 方法会让控制流分析器的
-    // 内联展开超线性膨胀，发起预检从亚秒级劣化到分钟级，写法约束见 dev-flow-wf SKILL）
+    // 内联展开超线性膨胀，发起预检从亚秒级劣化到分钟级，写法约束见 dev-flow-v1 SKILL）
     const runFixGroup = async (name: string): Promise<{ name: string; fix: FixReport | null }> => {
         const gItems = groupMap.get(name) ?? [];
         log(`[${(await probeNow()).iso}] 派发修复组 ${name}（${gItems.length} 条 unreasonable）`);
@@ -1755,7 +1755,7 @@ gateARetry: while (true) {
   // MAX_CONCURRENCY=5（RL1 断言不变）；相交分支不入队，走下方阶段 A2 池外串行段
   // （V2 对照基准）。Promise.all 保序：文档组结果仍在全部代码组之后，fixesByGroup
   // 顺序与改造前一致。条目只携纯数据（kind + name/prompt），池回调按判别字段直派
-  // 命名执行体——不经任务对象方法中转（发起预检形态约束，见 dev-flow-wf SKILL 写法约束）
+  // 命名执行体——不经任务对象方法中转（发起预检形态约束，见 dev-flow-v1 SKILL 写法约束）
   const fixPoolItems: ({ kind: "code"; name: string } | { kind: "doc"; prompt: string })[] = [
     ...groupNames.map((name) => ({ kind: "code" as const, name })),
   ];

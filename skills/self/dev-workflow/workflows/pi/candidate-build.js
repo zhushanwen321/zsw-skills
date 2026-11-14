@@ -1,13 +1,13 @@
 /* @pi-meta
 name: candidate-build
 description: >-
-  delivery-wf 技能 BUILD 段候选实现引擎：前置 evaluate 拒绝 state=draft；已实现增量
+  delivery-v1 技能 BUILD 段候选实现引擎：前置 evaluate 拒绝 state=draft；已实现增量
   按 contractVersion 判定，仅命中未决发现/失败证据的增量进入修复轮；每增量 builder
   只 ask 一次（实现并写实现报告），脚本执行 testCommand、把测试摘要追加进报告并以
   append --key builderKey 追加事件；基础设施失败不登记 FindingRaised，build-failed
   前重新 evaluate。builder 不改契约/事件/verdict、不做 Git 写操作
 when: >-
-  delivery-wf 技能候选实现段——契约已获用户批准（state 非 draft）、需要形成候选
+  delivery-v1 技能候选实现段——契约已获用户批准（state 非 draft）、需要形成候选
   实现或修复增量，必传 projectRoot / taskDir / builderKey（builder 角色专用，
   不接收其他角色 key）
 notFor: >-
@@ -423,7 +423,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "0.3.1"; // 构建注入自 delivery-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.3.2"; // 构建注入自 delivery-v1/SKILL.md frontmatter version（唯一权威）
 const VALID_ARG_KEYS = new Set([
     // 事件写入凭据：delivery-gate init 输出的 builderKey 私钥（builder 角色专用，
     // userKey/assuranceKey 等其他角色 key 不得注入本 workflow）
@@ -487,7 +487,7 @@ function parseObject(raw) {
         return null;
     }
 }
-obsCtx = initObservation("delivery-wf", "BUILD", null);
+obsCtx = initObservation("delivery-v1", "BUILD", null);
 const homeRes = await runNode([NODE_PROBE_HOME]);
 if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
     await obsCloseExecution("setup-failure");
@@ -528,8 +528,8 @@ if (inputProblems.length > 0) {
     };
     return result;
 }
-const gatePath = `${homeDir}/.agents/skills/delivery-wf/scripts/delivery-gate.mjs`;
-const builderRolePath = `${homeDir}/.agents/skills/delivery-wf/references/roles/builder.md`;
+const gatePath = `${homeDir}/.agents/skills/delivery-v1/scripts/delivery-gate.mjs`;
+const builderRolePath = `${homeDir}/.agents/skills/delivery-v1/references/roles/builder.md`;
 const contractPath = `${taskDir}/contract.json`;
 const incrementsPath = `${taskDir}/increments.json`;
 const eventsPath = `${taskDir}/events.jsonl`;
@@ -540,7 +540,7 @@ if (requiredRes.exitCode !== 0) {
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision: "", implementedIncrementIds: [], findingIds: [], verdict: null,
-        message: `构建环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：先完成 contract-design 与用户批准，再确认 delivery-wf 安装和任务目录后重新发起`,
+        message: `构建环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：先完成 contract-design 与用户批准，再确认 delivery-v1 安装和任务目录后重新发起`,
     };
     return result;
 }

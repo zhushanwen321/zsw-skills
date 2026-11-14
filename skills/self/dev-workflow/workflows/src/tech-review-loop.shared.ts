@@ -1,7 +1,7 @@
 // ============================================================================
-// tech-review-loop — tech-design-wf 技能 W1 审查循环（zcode 动态工作流）
+// tech-review-loop — tech-design-v1 技能 W1 审查循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
-// 改动任一侧循环骨架时评估另一侧是否需要同步）。语义权威源 = tech-design-wf
+// 改动任一侧循环骨架时评估另一侧是否需要同步）。语义权威源 = tech-design-v1
 // 设计文档 §5（轮次形态唯一定义 / 停机线 / 终态与停回通道）。与 rfl 的结构差异：
 //  - 维度固定四席（方向审席 + 三审同轮并行、同一对账契约——方向审 patch 档发现进
 //    当轮问题清单由文档修复者处置，审查-修改闭环收在 workflow 内），无 rfl 的批内
@@ -109,7 +109,7 @@ interface RunManifest {
   workflow: string;
   segment: "tech-design" | "dev-flow";
   /** 产物溯源字段：构建注入常量（所属技能 SKILL.md frontmatter version，唯一权威——
-   *  本循环 = tech-design-wf）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
+   *  本循环 = tech-design-v1）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
   skillVersion: string;
   host: string;
   projectRoot: string;
@@ -484,7 +484,7 @@ function renderFinalMd(r: LoopResult): string {
 // ── 观测启用（O 区形态层）：先于参数窄化——已传合法观测 ID 的执行（含参数校验失败
 // 早退）都有 execution 边界；attempt 自动检测未完成时为 null，检测确定后回填。落盘
 // 路径依赖 home，探针通过后装配 ──
-obsCtx = initObservation("tech-design-wf", "T2", null);
+obsCtx = initObservation("tech-design-v1", "T2", null);
 
 // home 探针（先于参数窄化：观测落盘路径装配与模板 ~ 展开共同依赖）
 const homeRes = await world.run("node", ["-e", "process.stdout.write(require('os').homedir())"]);
@@ -613,19 +613,19 @@ const TEMPLATE_BASENAMES: { dim: string; file: string }[] = [
   { dim: "impact", file: "tech-design-impact-review.md" },
   { dim: "simplicity", file: "tech-design-simplicity-review.md" },
 ];
-const TILDE_ROOT = "~/.agents/skills/tech-design-wf/agents";
-const RUBRIC_TILDE = "~/.agents/skills/tech-design-wf/review/rubric-design-doc.md";
+const TILDE_ROOT = "~/.agents/skills/tech-design-v1/agents";
+const RUBRIC_TILDE = "~/.agents/skills/tech-design-v1/review/rubric-design-doc.md";
 // 章节 JSON 字段规格（修复者编辑章节 JSON 的字段权威定义；渲染产物的命名 = 目录 basename
 // + .rendered.md，与渲染脚本一致）
-const SCHEMA_TILDE = "~/.agents/skills/tech-design-wf/references/design-doc-schema.md";
+const SCHEMA_TILDE = "~/.agents/skills/tech-design-v1/references/design-doc-schema.md";
 // 设计文档机器校验 CLI（T2 进场门槛——flow/review.md 手工路径同一实现；对 md 输入输出迁移指引）
-const CHECK_DESIGN_TILDE = "~/.agents/skills/tech-design-wf/scripts/check-design-doc.mjs";
+const CHECK_DESIGN_TILDE = "~/.agents/skills/tech-design-v1/scripts/check-design-doc.mjs";
 // 渲染 CLI（阅读视图刷新：setup 刷新一次保证审查者读到的视图与章节 JSON 一致；修复者每轮
 // 修改章节 JSON 后由 prompt 指令重跑）
-const RENDER_TILDE = "~/.agents/skills/tech-design-wf/scripts/render-design-doc.mjs";
+const RENDER_TILDE = "~/.agents/skills/tech-design-v1/scripts/render-design-doc.mjs";
 // 处置表业务级校验 CLI（覆盖完整性 + 条目一致性；workflow 与 flow/review.md 手工路径
 // 双轨共用同一实现——校验器单一来源，双轨语义等价由同一脚本保证）
-const CHECK_CLI_TILDE = "~/.agents/skills/tech-design-wf/scripts/check-dispositions.mjs";
+const CHECK_CLI_TILDE = "~/.agents/skills/tech-design-v1/scripts/check-dispositions.mjs";
 const overrides = new Map<string, string>();
 for (const p of inputs.reviewers) {
   const base = p.split("/").pop() ?? p;
@@ -670,7 +670,7 @@ if (probe.exitCode !== 0) {
     mustFixTrajectory: [],
     remaining: [],
     blocked: null,
-    message: `必读文件缺失：${probe.stdout.trim()}。恢复动作：确认 tech-design-wf skill 已安装（四模板位于 ~/.agents/skills/tech-design-wf/agents/，校验与渲染脚本位于 ~/.agents/skills/tech-design-wf/scripts/）或经 args.reviewers 传入自定义模板绝对路径覆盖同名维度；designDoc 应为设计目录（内含六个章节 JSON），路径笔误则修正后重新发起`,
+    message: `必读文件缺失：${probe.stdout.trim()}。恢复动作：确认 tech-design-v1 skill 已安装（四模板位于 ~/.agents/skills/tech-design-v1/agents/，校验与渲染脚本位于 ~/.agents/skills/tech-design-v1/scripts/）或经 args.reviewers 传入自定义模板绝对路径覆盖同名维度；designDoc 应为设计目录（内含六个章节 JSON），路径笔误则修正后重新发起`,
   };
 }
 
@@ -753,7 +753,7 @@ async function finish(
   const finalDoc = {
     terminated: result.terminated,
     rounds: result.rounds,
-    // 产物溯源字段：SKILL_VERSION = 构建注入常量（tech-design-wf frontmatter version，
+    // 产物溯源字段：SKILL_VERSION = 构建注入常量（tech-design-v1 frontmatter version，
     // 注入点见 build-workflows.mjs）——只读溯源，不参与执行裁决
     skillVersion: SKILL_VERSION,
     runDir,

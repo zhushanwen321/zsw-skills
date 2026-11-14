@@ -11,7 +11,7 @@ description: >-
   Not for 投机抽象/过度通用设计（用 code-overdesign-audit）；
   模块耦合/浅层模块/可测试性重构（用 architecture-improve-loop）；
   代码级清理执行（用 code-simplify）；找 bug（用 diagnosing-bugs）；
-  设计文档阶段的前置审查（用 tech-design-wf）。
+  设计文档阶段的前置审查（用 tech-design-v2）。
 ---
 
 # Architecture Decay Audit

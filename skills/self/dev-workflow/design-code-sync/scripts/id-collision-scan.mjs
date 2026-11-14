@@ -2,7 +2,7 @@
 /**
  * id-collision-scan.mjs —— 跨设计包编号撞号消歧扫描
  *
- * 归属：design-code-sync Step 0 验证矩阵（L0 直跑）；dev-flow-wf W4 sync-planner 开审前置。
+ * 归属：design-code-sync Step 0 验证矩阵（L0 直跑）；dev-flow-v2 W4 sync-planner 开审前置。
  * 解决的问题：多设计包并存（历史包未退役）时，仓库文档/注释里裸写的编号 token
  * （如 V1、RL3）可能同号不同义——上一代设计包的 V1 与本轮设计包的 V1 是两个东西。
  * 开审前用本脚本确定性找出全部裸引用，分钟级替代 LLM 审查逐条发现；

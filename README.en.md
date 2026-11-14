@@ -27,10 +27,14 @@ scripts/           Dual-platform workflow build and validation scripts
 
 | Skill | Description |
 |-------|-------------|
-| tech-design-wf | Produces a complete design package in three stages: design document writing → adversarial review loop → implementation plan (impl-plan in dual formats) |
-| dev-flow-wf | Turn the complete design package produced by tech-design-wf into accepted code |
-| delivery-wf | Generic design and delivery skill: product contracts, candidate implementation, independent assurance, and a single delivery verdict; includes dual-platform workflows and risk-scaled execution |
-| symbol-watchlist | Symbol watchlist generation and self-check tool (extract-backticks.mjs): shared contract carrier for tech-design-wf T3 watchlist production and dev-flow-wf D5 pre-launch self-check |
+| tech-design-v1 | Produces a complete design package in three stages: design document writing → adversarial review loop → implementation plan (impl-plan in dual formats); frozen v1 line, use v2 for new tasks |
+| dev-flow-v1 | Turns a design package into accepted code (D0-D5 pipeline: compile & execute / consistency review / final-state sync); frozen v1 line, use v2 for new tasks |
+| delivery-v1 | Delivery verdict skill: product contracts, candidate implementation, independent assurance, and a single delivery verdict; frozen v1 line, use v2 for new tasks |
+| tech-design-v2 | Solution design under an approved acceptance package (produced by delivery-v2): design document → adversarial review loop → full solution package (bound to the acceptance package hash, registered as DesignApproved afterwards) |
+| dev-flow-v2 | Executes the candidate implementation under the acceptance package + solution package: entry gate checks the acceptance package hash and DesignApproved; finish yields a candidate handed to delivery-v2 for verdict, never self-declares delivery |
+| delivery-v2 | Acceptance (referee) skill: acceptance design → independent assurance → machine gate as the only delivery verdict; three-role signed event stream + policy packages + raw-intent anti-narrowing |
+
+| symbol-watchlist | Symbol watchlist generation and self-check tool (extract-backticks.mjs): shared contract carrier for tech-design-v2 T3 watchlist production and dev-flow-v2 D5 pre-launch self-check |
 | design-code-sync | Keep code implementation and design documents in sync |
 | architecture-clean-domain-design | Domain modeling and architecture analysis with DDD and hexagonal architecture as analysis lenses: ubiquitous language, bounded contexts, aggregate invariants, ring-nature mapping; records and maps only — never outputs structural transformation designs |
 | workflow-authoring | Authoring and observability onboarding guide for dual-platform workflow scripts: single-source build layout, GUI lane constraints, five-step observability onboarding, check gates, and data layout |

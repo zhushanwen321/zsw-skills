@@ -71,7 +71,7 @@ const MS = (h, m, s = 0) => Date.UTC(2026, 4, 1, h, m, s);
 const ev = (overrides) => ({
   execution_id: "",
   task_id: "",
-  skill: "dev-flow-wf",
+  skill: "dev-flow-v1",
   stage: "D1",
   step: "execution",
   round: null,
@@ -494,7 +494,7 @@ function buildFixtures(artifacts) {
         }),
       ],
     }),
-    // selftest run：观测事件 skill 写引擎名（tech-review-loop）→ 归一 tech-design-wf
+    // selftest run：观测事件 skill 写引擎名（tech-review-loop）→ 归一 tech-design-v1
     baseRun({
       id: "dwfrun-13",
       name: "观测自测：引擎名事件归一",
@@ -629,8 +629,8 @@ function writeObservations(home) {
   ]);
   // 跨技能 T2（不同技能版本：同 taskId 的版本列跨 0.1.0/0.2.0）
   write("task-a", "t2-att1", [
-    ev(ver("0.1.0", { execution_id: "t2-att1", skill: "tech-design-wf", stage: "T2", step: "review", event: "start", timestamp: T(9, 0) })),
-    ev(ver("0.1.0", { execution_id: "t2-att1", skill: "tech-design-wf", stage: "T2", step: "review", event: "end", timestamp: T(9, 30), outcome: "converged" })),
+    ev(ver("0.1.0", { execution_id: "t2-att1", skill: "tech-design-v1", stage: "T2", step: "review", event: "start", timestamp: T(9, 0) })),
+    ev(ver("0.1.0", { execution_id: "t2-att1", skill: "tech-design-v1", stage: "T2", step: "review", event: "end", timestamp: T(9, 30), outcome: "converged" })),
   ]);
   // 手工段：D0 compile（无 run 匹配 → 手工执行，token unknown）
   write("task-manual", "d0-manual", [
@@ -643,7 +643,7 @@ function writeObservations(home) {
     {
       execution_id: "bad-events",
       task_id: "task-bad",
-      skill: "dev-flow-wf",
+      skill: "dev-flow-v1",
       stage: "D0",
       step: "compile",
       round: null,
@@ -739,12 +739,12 @@ test("executionId 精确关联观测文件：attribution=observed、actor/node �
   const run1 = report.runs.find((r) => r.id === "dwfrun-1");
   assert.ok(run1, "dwfrun-1 在 runs 明细");
   assert.equal(run1.attribution, "observed");
-  assert.equal(run1.skill, "dev-flow-wf");
+  assert.equal(run1.skill, "dev-flow-v1");
   assert.equal(run1.stage, "D1");
   assert.equal(run1.taskKey, "observed:task-a");
 
   // D1 桶：observed 2（att1+att2）+ estimated 1（ghost 回落）= 3 个 run
-  const d1 = report.bySkill["dev-flow-wf"].stages["D1"];
+  const d1 = report.bySkill["dev-flow-v1"].stages["D1"];
   assert.equal(d1.metrics.attribution.observed, 2);
   assert.equal(d1.metrics.attribution.estimated, 1);
 
@@ -771,7 +771,7 @@ test("executionId 精确关联观测文件：attribution=observed、actor/node �
   assert.equal(d1.steps["execution"].actorSessions, 3);
 
   // T2：observed + 主审角色桶
-  const t2 = report.bySkill["tech-design-wf"].stages["T2"];
+  const t2 = report.bySkill["tech-design-v1"].stages["T2"];
   assert.equal(t2.metrics.attribution.observed, 1);
   assert.equal(t2.roles["主审"].actorSessions, 1);
 });
@@ -788,7 +788,7 @@ test("byTask：同 taskId 跨技能 + 跨 attempt 串联；arg: 前缀与 legacy
   assert.equal(taskA.source, "observed-taskid");
   assert.equal(taskA.runs, 3, "D1×2 + T2×1");
   assert.equal(taskA.attempts, 3, "三个 executionId");
-  assert.ok(taskA.skills["dev-flow-wf"] > 0 && taskA.skills["tech-design-wf"] > 0, "跨技能串联");
+  assert.ok(taskA.skills["dev-flow-v1"] > 0 && taskA.skills["tech-design-v1"] > 0, "跨技能串联");
   assert.ok(taskA.tokens.total > 0);
 
   const taskPi = report.byTask["arg:task-pi"];
@@ -809,10 +809,10 @@ test("legacy 分类器：五技能与阶段映射 + estimated 标记 + unclassif
   const report = JSON.parse(res.stdout);
 
   const d2 = report.runs.find((r) => r.id === "dwfrun-4");
-  assert.equal(d2.skill, "dev-flow-wf");
+  assert.equal(d2.skill, "dev-flow-v1");
   assert.equal(d2.stage, "D2");
   assert.equal(d2.attribution, "estimated");
-  const d2Roles = report.bySkill["dev-flow-wf"].stages["D2"].roles;
+  const d2Roles = report.bySkill["dev-flow-v1"].stages["D2"].roles;
   assert.ok(d2Roles["全面一致性审查"] && d2Roles["一致性修复"], "D2 角色映射（审查区 + 修复）");
 
   const dm = report.runs.find((r) => r.id === "dwfrun-5");
@@ -832,10 +832,10 @@ test("legacy 分类器：五技能与阶段映射 + estimated 标记 + unclassif
   assert.equal(report.unclassified.runs[0].id, "dwfrun-6");
   assert.equal(report.dataQuality.unclassifiedRuns, 1);
 
-  // 方向审是 tech-design-wf T2 四席词表（flow/review.md）——名称修复轮归 T2
+  // 方向审是 tech-design-v1 T2 四席词表（flow/review.md）——名称修复轮归 T2
   const t2fix = report.runs.find((r) => r.id === "dwfrun-10");
   assert.ok(t2fix, "方向审修复轮在 runs 明细");
-  assert.equal(t2fix.skill, "tech-design-wf");
+  assert.equal(t2fix.skill, "tech-design-v1");
   assert.equal(t2fix.stage, "T2");
   assert.equal(t2fix.attribution, "estimated");
 
@@ -843,7 +843,7 @@ test("legacy 分类器：五技能与阶段映射 + estimated 标记 + unclassif
   assert.ok(report.totals.usageCoverage.unknown >= 1);
 });
 
-test("legacy 分类器：delivery-wf 三个 workflow 按 taskDir 与名称归阶段", (t) => {
+test("legacy 分类器：delivery-v1 三个 workflow 按 taskDir 与名称归阶段", (t) => {
   const { home, runScript } = setupEnv(t);
   const fixturePath = join(home, "fixtures.json");
   const fixtures = JSON.parse(readFileSync(fixturePath, "utf8"));
@@ -857,7 +857,7 @@ test("legacy 分类器：delivery-wf 三个 workflow 按 taskDir 与名称归阶
   const report = JSON.parse(res.stdout);
   for (const [name, stage] of [["contract-design", "DESIGN"], ["candidate-build", "BUILD"], ["independent-assurance", "ASSURE"]]) {
     const run = report.runs.find((r) => r.id === `dwfrun-${name}`);
-    assert.equal(run.skill, "delivery-wf");
+    assert.equal(run.skill, "delivery-v1");
     assert.equal(run.stage, stage);
     assert.equal(run.attribution, "estimated");
   }
@@ -889,7 +889,7 @@ test("token 对账：缺 actor 补差额、重复 session 去重不计会话、�
 
   // 重复 session：唯一 actor 110 + 差额 110 = 220 = run 级；会话数 2（s-dup 1 + 空 session 1）；
   // 时长保留相加 425s
-  const d3 = report.bySkill["dev-flow-wf"].stages["D3"];
+  const d3 = report.bySkill["dev-flow-v1"].stages["D3"];
   assert.equal(d3.metrics.tokens.total, 77 + 110 + 110);
   assert.equal(d3.metrics.tokens.input, 77 + 100 + 100);
   assert.equal(d3.metrics.actorSessions, 2, "重复 session 只计一次；空 session 行按独立执行计");
@@ -907,7 +907,7 @@ test("token 对账：缺 actor 补差额、重复 session 去重不计会话、�
   // 正负混合差额（dwfrun-14：total 差 +10 但 input 差 -20）：不合成 reconcile，保留 actor 合计
   const mixed = report.runs.find((r) => r.id === "dwfrun-14");
   assert.ok(mixed, "正负混合 run 在 runs 明细");
-  const d5 = report.bySkill["dev-flow-wf"].stages["D5"];
+  const d5 = report.bySkill["dev-flow-v1"].stages["D5"];
   assert.equal(d5.metrics.tokens.total, 130, "只计 actor 合计，混合差额不入账");
   assert.equal(report.dataQuality.tokenReconcileNegative, 1, "正负混合计入不可对账");
   assert.ok(
@@ -916,7 +916,7 @@ test("token 对账：缺 actor 补差额、重复 session 去重不计会话、�
   );
 
   // 正常相等（dwfrun-1：run 级 230 = 唯一 actor 合计）无差额——D1 token 精确断言在 test 1 覆盖
-  const d1 = report.bySkill["dev-flow-wf"].stages["D1"];
+  const d1 = report.bySkill["dev-flow-v1"].stages["D1"];
   assert.equal(d1.metrics.tokens.total, 242);
 
   // 全报告 tokens 恒满足 total=input+output（totals/bySkill/byTask/pivot/runs 全遍历）
@@ -924,25 +924,25 @@ test("token 对账：缺 actor 补差额、重复 session 去重不计会话、�
 });
 
 // ── 3c. 观测事件 skill 引擎名归一 ──
-test("事件 skill=tech-review-loop 归一 tech-design-wf：--skill 过滤下 observed run 出现", (t) => {
+test("事件 skill=tech-review-loop 归一 tech-design-v1：--skill 过滤下 observed run 出现", (t) => {
   const { runScript } = setupEnv(t);
-  const res = runScript(["--skill", "tech-design-wf", "--include-selftest", "--format", "json"]);
+  const res = runScript(["--skill", "tech-design-v1", "--include-selftest", "--format", "json"]);
   assert.equal(res.status, 0, res.stderr);
   const report = JSON.parse(res.stdout);
 
   const alias = report.runs.find((r) => r.id === "dwfrun-13");
   assert.ok(alias, "引擎名事件的 selftest run 在 runs 明细");
   assert.equal(alias.attribution, "observed", "executionId 精确关联");
-  assert.equal(alias.skill, "tech-design-wf", "tech-review-loop → tech-design-wf");
+  assert.equal(alias.skill, "tech-design-v1", "tech-review-loop → tech-design-v1");
   assert.equal(alias.stage, "T2");
 
-  const t2 = report.bySkill["tech-design-wf"].stages["T2"];
+  const t2 = report.bySkill["tech-design-v1"].stages["T2"];
   assert.equal(t2.metrics.attribution.observed, 2, "dwfrun-3 + dwfrun-13 两条 observed");
   assert.equal(t2.roles["简洁审"].actorSessions, 1, "简洁审席位角色");
   assert.ok(t2.metrics.tokens.total >= 58, "alias actor token 8 入桶");
 
   // 默认口径（排除 selftest）下同一 run 不出现
-  const res2 = runScript(["--skill", "tech-design-wf", "--format", "json"]);
+  const res2 = runScript(["--skill", "tech-design-v1", "--format", "json"]);
   assert.equal(res2.status, 0, res2.stderr);
   const report2 = JSON.parse(res2.stdout);
   assert.ok(!report2.runs.some((r) => r.id === "dwfrun-13"));
@@ -970,7 +970,7 @@ test("attempt 回填配对：setup start(null)/end(1) 正常成窗不误报，�
     "pair-exec 的 setup 回填配对无误报（execution 未闭合属合法报告）",
   );
 
-  const d4 = report.bySkill["dev-flow-wf"].stages["D4"];
+  const d4 = report.bySkill["dev-flow-v1"].stages["D4"];
   assert.ok(d4, "D4 桶存在");
   assert.equal(d4.metrics.attribution.observed, 1);
 });
@@ -982,7 +982,7 @@ test("手工 D0 段（无 run 匹配）：manualExecs 计数、tokens=null、耗
   assert.equal(res.status, 0, res.stderr);
   const report = JSON.parse(res.stdout);
 
-  const d0 = report.bySkill["dev-flow-wf"].stages["D0"];
+  const d0 = report.bySkill["dev-flow-v1"].stages["D0"];
   assert.ok(d0, "D0 桶存在");
   assert.equal(d0.metrics.manualExecs, 2, "d0-manual + bad-events 两个手工执行");
   assert.equal(d0.metrics.tokens, null, "无用量证据 → null 不是 0");
@@ -1026,7 +1026,7 @@ test("selftest 缺省排除（args/事件/legacy 名称三通道），--include-
   report = JSON.parse(res2.stdout);
   assert.equal(report.dataQuality.selftestRunsExcluded, 0);
   assert.equal(report.scope.includeSelftest, true);
-  const d0 = report.bySkill["dev-flow-wf"].stages["D0"];
+  const d0 = report.bySkill["dev-flow-v1"].stages["D0"];
   assert.equal(d0.metrics.manualExecs, 3, "selftest 手工段随开关计入");
 });
 
@@ -1055,7 +1055,7 @@ test("--pi-agent-dir realpath 去重；run 按 backend+id 去重；--since/--unt
 
   assert.equal(report.dataQuality.duplicateRunsDropped, 1, "重复 dwfrun-1 行去重");
   // 去重后 D1 token 不含重复行的 999999
-  const d1 = report.bySkill["dev-flow-wf"].stages["D1"];
+  const d1 = report.bySkill["dev-flow-v1"].stages["D1"];
   assert.equal(d1.metrics.tokens.total, 242);
 });
 
@@ -1113,10 +1113,10 @@ test("table 输出含透视表与数据质量行；--output 落盘 JSON；--skil
   const saved = JSON.parse(readFileSync(outPath, "utf8"));
   assert.ok(saved.totals && saved.bySkill && saved.pivot && saved.dataQuality);
 
-  const resSkill = runScript(["--skill", "dev-flow-wf", "--format", "json"]);
+  const resSkill = runScript(["--skill", "dev-flow-v1", "--format", "json"]);
   assert.equal(resSkill.status, 0, resSkill.stderr);
   const skillReport = JSON.parse(resSkill.stdout);
-  assert.deepEqual(Object.keys(skillReport.bySkill), ["dev-flow-wf"]);
+  assert.deepEqual(Object.keys(skillReport.bySkill), ["dev-flow-v1"]);
   // bySkill 过滤不影响 totals 之外的 unclassified 独立计数
   assert.equal(skillReport.unclassified.count, 1);
 });
@@ -1255,7 +1255,7 @@ test("seed-only run 不归 unknown 且继承量不双计；unknown run 的全零
   // seed-only：已知零新生消耗（estimated 非 unknown），继承 500 不进任何合计
   const seed = report.runs.find((r) => r.id === "dwfrun-seed");
   assert.equal(seed.usageAttribution, "estimated");
-  const d1 = report.bySkill["dev-flow-wf"].stages["D1"];
+  const d1 = report.bySkill["dev-flow-v1"].stages["D1"];
   assert.equal(d1.metrics.tokensKnown, true, "seed-only 有继承证据 → 已知零新生，tokens 写 0 而非 null");
   assert.equal(d1.metrics.tokens.total, 0, "继承量 500 不得加回（跨 run 双计防线）");
   assert.equal(d1.metrics.usageCoverage.unknown, 0);
@@ -1264,7 +1264,7 @@ test("seed-only run 不归 unknown 且继承量不双计；unknown run 的全零
   // unknown：D3 桶只有全零 actor 的 unknown run → tokensKnown=false（JSON null），不得被写成 0
   const zero = report.runs.find((r) => r.id === "dwfrun-zero");
   assert.equal(zero.usageAttribution, "unknown");
-  const d3 = report.bySkill["dev-flow-wf"].stages["D3"];
+  const d3 = report.bySkill["dev-flow-v1"].stages["D3"];
   assert.equal(d3.metrics.tokensKnown, false, "unknown run 的全零 actor 不置 tokensKnown");
   assert.equal(d3.metrics.tokens, null);
   assert.equal(d3.metrics.usageCoverage.unknown, 1);

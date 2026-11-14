@@ -85,31 +85,46 @@ if (repoCheck.status !== 0 || repoCheck.stdout.toString("utf8").trim() !== "true
 
 // ── 技能 ↔ 自有文件目录 / 产物 ↔ 技能 映射 ──
 const SKILLS = [
-  { name: "tech-design-wf", dir: "skills/self/dev-workflow/tech-design-wf" },
-  { name: "dev-flow-wf", dir: "skills/self/dev-workflow/dev-flow-wf" },
-  { name: "delivery-wf", dir: "skills/self/dev-workflow/delivery-wf" },
+  { name: "tech-design-v1", dir: "skills/self/dev-workflow/tech-design-v1" },
+  { name: "dev-flow-v1", dir: "skills/self/dev-workflow/dev-flow-v1" },
+  { name: "delivery-v1", dir: "skills/self/dev-workflow/delivery-v1" },
+  { name: "tech-design-v2", dir: "skills/self/dev-workflow/tech-design-v2" },
+  { name: "dev-flow-v2", dir: "skills/self/dev-workflow/dev-flow-v2" },
+  { name: "delivery-v2", dir: "skills/self/dev-workflow/delivery-v2" },
 ];
 const WORKFLOWS = "skills/self/dev-workflow/workflows";
 const SHARED_SRC_PREFIX = `${WORKFLOWS}/src/`;
 // 产物 → 所属技能。权威映射见 scripts/build-workflows.mjs 的 SKILL_VERSION_SOURCES；
 // 新增 workflow 产物时两处同步登记，否则规则 3 无版本戳可对账
 const PRODUCT_SKILL = {
-  "tech-review-loop.dwf.ts": "tech-design-wf",
-  "pi/tech-review-loop.js": "tech-design-wf",
-  "wave-executor.dwf.ts": "dev-flow-wf",
-  "pi/wave-executor.js": "dev-flow-wf",
-  "dev-consistency-loop.dwf.ts": "dev-flow-wf",
-  "pi/dev-consistency-loop.js": "dev-flow-wf",
-  "design-code-sync-loop.dwf.ts": "dev-flow-wf",
-  "pi/design-code-sync-loop.js": "dev-flow-wf",
-  "design-code-sync-v2.dwf.ts": "dev-flow-wf",
-  "pi/design-code-sync-v2.js": "dev-flow-wf",
-  "contract-design.dwf.ts": "delivery-wf",
-  "pi/contract-design.js": "delivery-wf",
-  "candidate-build.dwf.ts": "delivery-wf",
-  "pi/candidate-build.js": "delivery-wf",
-  "independent-assurance.dwf.ts": "delivery-wf",
-  "pi/independent-assurance.js": "delivery-wf",
+  "tech-review-loop.dwf.ts": "tech-design-v1",
+  "pi/tech-review-loop.js": "tech-design-v1",
+  "wave-executor.dwf.ts": "dev-flow-v1",
+  "pi/wave-executor.js": "dev-flow-v1",
+  "dev-consistency-loop.dwf.ts": "dev-flow-v1",
+  "pi/dev-consistency-loop.js": "dev-flow-v1",
+  "design-code-sync-loop.dwf.ts": "dev-flow-v1",
+  "pi/design-code-sync-loop.js": "dev-flow-v1",
+  "design-code-sync-v2.dwf.ts": "dev-flow-v1",
+  "pi/design-code-sync-v2.js": "dev-flow-v1",
+  "contract-design.dwf.ts": "delivery-v1",
+  "pi/contract-design.js": "delivery-v1",
+  "candidate-build.dwf.ts": "delivery-v1",
+  "pi/candidate-build.js": "delivery-v1",
+  "independent-assurance.dwf.ts": "delivery-v1",
+  "pi/independent-assurance.js": "delivery-v1",
+  "tech-review-loop-v2.dwf.ts": "tech-design-v2",
+  "pi/tech-review-loop-v2.js": "tech-design-v2",
+  "wave-executor-v2.dwf.ts": "dev-flow-v2",
+  "pi/wave-executor-v2.js": "dev-flow-v2",
+  "dev-consistency-loop-v2.dwf.ts": "dev-flow-v2",
+  "pi/dev-consistency-loop-v2.js": "dev-flow-v2",
+  "acceptance-design-v2.dwf.ts": "delivery-v2",
+  "pi/acceptance-design-v2.js": "delivery-v2",
+  "candidate-build-v2.dwf.ts": "delivery-v2",
+  "pi/candidate-build-v2.js": "delivery-v2",
+  "independent-assurance-v2.dwf.ts": "delivery-v2",
+  "pi/independent-assurance-v2.js": "delivery-v2",
 };
 const STAMP_RE = /const SKILL_VERSION = "([^"]*)";/;
 const VERSION_RE = /^version:\s*(\d+\.\d+\.\d+)\s*$/m;

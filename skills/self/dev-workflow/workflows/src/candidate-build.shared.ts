@@ -1,4 +1,4 @@
-// candidate-build — delivery-wf 候选实现引擎。
+// candidate-build — delivery-v1 候选实现引擎。
 // builder 只改产品代码与测试；每增量 builder 只 ask 一次（实现并写实现报告），
 // 随后脚本以 program/args 执行 testCommand 并把测试摘要追加进报告——不再二次
 // ask 补报告（pi 无续聊，二次 ask 会丢上下文）。事件只经 delivery-gate
@@ -129,7 +129,7 @@ function parseObject(raw: string): Record<string, unknown> | null {
   }
 }
 
-obsCtx = initObservation("delivery-wf", "BUILD", null);
+obsCtx = initObservation("delivery-v1", "BUILD", null);
 const homeRes = await runNode([NODE_PROBE_HOME]);
 if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
   await obsCloseExecution("setup-failure");
@@ -168,8 +168,8 @@ if (inputProblems.length > 0) {
   return result;
 }
 
-const gatePath = `${homeDir}/.agents/skills/delivery-wf/scripts/delivery-gate.mjs`;
-const builderRolePath = `${homeDir}/.agents/skills/delivery-wf/references/roles/builder.md`;
+const gatePath = `${homeDir}/.agents/skills/delivery-v1/scripts/delivery-gate.mjs`;
+const builderRolePath = `${homeDir}/.agents/skills/delivery-v1/references/roles/builder.md`;
 const contractPath = `${taskDir}/contract.json`;
 const incrementsPath = `${taskDir}/increments.json`;
 const eventsPath = `${taskDir}/events.jsonl`;
@@ -180,7 +180,7 @@ if (requiredRes.exitCode !== 0) {
   await obsCloseExecution("setup-failure");
   const result: CandidateBuildResult = {
     terminated: "setup-failure", taskDir, revision: "", implementedIncrementIds: [], findingIds: [], verdict: null,
-    message: `构建环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：先完成 contract-design 与用户批准，再确认 delivery-wf 安装和任务目录后重新发起`,
+    message: `构建环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：先完成 contract-design 与用户批准，再确认 delivery-v1 安装和任务目录后重新发起`,
   };
   return result;
 }

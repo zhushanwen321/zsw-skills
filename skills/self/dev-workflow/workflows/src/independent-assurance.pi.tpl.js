@@ -1,7 +1,7 @@
 /* @pi-meta
 name: independent-assurance
 description: >-
-  delivery-wf 技能 ASSURE 段独立保证引擎：前置门禁要求 state 非 draft/
+  delivery-v1 技能 ASSURE 段独立保证引擎：前置门禁要求 state 非 draft/
   contract-approved 且 missing.incrementIds 为空；coverage reviewer 逐项核对
   requirement×evidenceKind（append --key assuranceKey 追加 EvidenceRecorded），高风险
   契约并行 explorer 探索契约外反例（ExplorationCompleted）；引擎统一分配 findingId
@@ -9,7 +9,7 @@ description: >-
   setup 与 finalize 比对 revision，漂移显式 assurance-failed；失败出口返回前重新
   evaluate 取当前裁决——只产证据，不直接宣告 accepted
 when: >-
-  delivery-wf 技能独立保证段——候选实现已形成、需要独立覆盖核对（及高风险契约的
+  delivery-v1 技能独立保证段——候选实现已形成、需要独立覆盖核对（及高风险契约的
   探索性审查）时调用，必传 projectRoot / taskDir / assuranceKey（assurance 角色
   专用，不接收其他角色 key）
 notFor: >-

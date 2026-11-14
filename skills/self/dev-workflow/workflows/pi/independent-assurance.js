@@ -1,7 +1,7 @@
 /* @pi-meta
 name: independent-assurance
 description: >-
-  delivery-wf 技能 ASSURE 段独立保证引擎：前置门禁要求 state 非 draft/
+  delivery-v1 技能 ASSURE 段独立保证引擎：前置门禁要求 state 非 draft/
   contract-approved 且 missing.incrementIds 为空；coverage reviewer 逐项核对
   requirement×evidenceKind（append --key assuranceKey 追加 EvidenceRecorded），高风险
   契约并行 explorer 探索契约外反例（ExplorationCompleted）；引擎统一分配 findingId
@@ -9,7 +9,7 @@ description: >-
   setup 与 finalize 比对 revision，漂移显式 assurance-failed；失败出口返回前重新
   evaluate 取当前裁决——只产证据，不直接宣告 accepted
 when: >-
-  delivery-wf 技能独立保证段——候选实现已形成、需要独立覆盖核对（及高风险契约的
+  delivery-v1 技能独立保证段——候选实现已形成、需要独立覆盖核对（及高风险契约的
   探索性审查）时调用，必传 projectRoot / taskDir / assuranceKey（assurance 角色
   专用，不接收其他角色 key）
 notFor: >-
@@ -473,7 +473,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "0.3.1"; // 构建注入自 delivery-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.3.2"; // 构建注入自 delivery-v1/SKILL.md frontmatter version（唯一权威）
 const VALID_ARG_KEYS = new Set([
     // 事件写入凭据：delivery-gate init 输出的 assuranceKey 私钥（assurance 角色专用，
     // userKey/builderKey 等其他角色 key 不得注入本 workflow）
@@ -530,7 +530,7 @@ function parseObject(raw) {
         return null;
     }
 }
-obsCtx = initObservation("delivery-wf", "ASSURE", null);
+obsCtx = initObservation("delivery-v1", "ASSURE", null);
 const homeRes = await runNode([NODE_PROBE_HOME]);
 if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
     await obsCloseExecution("setup-failure");
@@ -571,9 +571,9 @@ if (inputProblems.length > 0) {
     };
     return result;
 }
-const gatePath = `${homeDir}/.agents/skills/delivery-wf/scripts/delivery-gate.mjs`;
-const coverageRolePath = `${homeDir}/.agents/skills/delivery-wf/references/roles/coverage-reviewer.md`;
-const explorerRolePath = `${homeDir}/.agents/skills/delivery-wf/references/roles/explorer.md`;
+const gatePath = `${homeDir}/.agents/skills/delivery-v1/scripts/delivery-gate.mjs`;
+const coverageRolePath = `${homeDir}/.agents/skills/delivery-v1/references/roles/coverage-reviewer.md`;
+const explorerRolePath = `${homeDir}/.agents/skills/delivery-v1/references/roles/explorer.md`;
 const taskJsonPath = `${taskDir}/task.json`;
 const contractPath = `${taskDir}/contract.json`;
 const eventsPath = `${taskDir}/events.jsonl`;
@@ -582,7 +582,7 @@ if (requiredRes.exitCode !== 0) {
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision: "", findingIds: [], verdict: null,
-        message: `独立保证环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：先完成候选实现，并确认 delivery-wf 安装与任务目录后重新发起`,
+        message: `独立保证环境缺少必读路径：${requiredRes.stdout.trim()}。恢复动作：先完成候选实现，并确认 delivery-v1 安装与任务目录后重新发起`,
     };
     return result;
 }
@@ -642,7 +642,7 @@ if (explorationRequired) {
         await obsCloseExecution("setup-failure");
         const result = {
             terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
-            message: `探索性审查为 required，但角色提示词不可读：${explorerRolePath}。恢复动作：安装 delivery-wf 的 explorer.md 后重新发起`,
+            message: `探索性审查为 required，但角色提示词不可读：${explorerRolePath}。恢复动作：安装 delivery-v1 的 explorer.md 后重新发起`,
         };
         return result;
     }

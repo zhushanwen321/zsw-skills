@@ -1,13 +1,13 @@
 /* @pi-meta
 name: candidate-build
 description: >-
-  delivery-wf 技能 BUILD 段候选实现引擎：前置 evaluate 拒绝 state=draft；已实现增量
+  delivery-v1 技能 BUILD 段候选实现引擎：前置 evaluate 拒绝 state=draft；已实现增量
   按 contractVersion 判定，仅命中未决发现/失败证据的增量进入修复轮；每增量 builder
   只 ask 一次（实现并写实现报告），脚本执行 testCommand、把测试摘要追加进报告并以
   append --key builderKey 追加事件；基础设施失败不登记 FindingRaised，build-failed
   前重新 evaluate。builder 不改契约/事件/verdict、不做 Git 写操作
 when: >-
-  delivery-wf 技能候选实现段——契约已获用户批准（state 非 draft）、需要形成候选
+  delivery-v1 技能候选实现段——契约已获用户批准（state 非 draft）、需要形成候选
   实现或修复增量，必传 projectRoot / taskDir / builderKey（builder 角色专用，
   不接收其他角色 key）
 notFor: >-

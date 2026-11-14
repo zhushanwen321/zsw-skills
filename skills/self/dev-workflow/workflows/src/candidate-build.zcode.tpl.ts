@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: delivery-wf 技能 BUILD 段候选实现引擎：前置 evaluate 拒绝 state=draft；
+description: delivery-v1 技能 BUILD 段候选实现引擎：前置 evaluate 拒绝 state=draft；
   读取契约、增量清单、当前 verdict 与未决发现，逐增量派 builder。已实现增量按
   contractVersion 判定（不因 revision 变化全量重做），仅命中未决发现或当前失败
   证据的增量进入修复轮（无关联需求的 blocker 发现触发全部增量修复）。每增量
@@ -9,7 +9,7 @@ description: delivery-wf 技能 BUILD 段候选实现引擎：前置 evaluate �
   返回 build-failed 前重新 evaluate。全部增量完成后 evaluate 并返回 implemented。
   builder 不改 contract/increments/events/verdict，不做 Git 写操作；builder 的测试
   输出不是 verified 证据，本 workflow 不手编 accepted
-whenToUse: delivery-wf 技能候选实现段——契约已获用户批准（evaluate state 非
+whenToUse: delivery-v1 技能候选实现段——契约已获用户批准（evaluate state 非
   draft）、需要形成候选实现或按未决发现/失败证据修复增量时调用；必传
   projectRoot / taskDir / builderKey。不用于契约设计（用 contract-design）或
   证据核对与探索审查（用 independent-assurance）

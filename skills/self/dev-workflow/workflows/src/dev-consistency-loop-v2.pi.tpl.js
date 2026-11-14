@@ -1,0 +1,284 @@
+/* @pi-meta
+name: dev-consistency-loop-v2
+description: >-
+  dev-flow-v2 W3 一致性审查循环：R1 分区全面审后修复组并行修复并定向复审（每轮前聚合定性独立 phase），Gate A 全量测试零容忍绕过——红后归因分诊（≤2 轮）：本批回归条目回注修复轮再修、瞬态重跑、存量红与测试基建缺陷带分诊报告终态，循环至 converged 或 stuck，终态判定与顽固条目追踪全由脚本完成，不信任 agent 自报收敛
+when: >-
+  dev-flow-v2 主流程 D2 阶段——W2 开发循环终态后由主 agent 发起，输入 exec-plan（D0 编译产物），终态 converged/stuck/gate-a-failed/环节失败由主 agent 接力处理
+phases: ['生成分区并全面审查', '聚合定性', '并行修复与定向复审', '产物类并行预备', '跑全量测试 Gate A', 'Gate A 归因分诊']
+parameters:
+  type: object
+  properties:
+    execPlan:
+      type: string
+      description: "exec-plan.json 路径（绝对或 workspace 相对；D0 编译产物，须含 baseline/planPath/designDocPath/statusPath/projectRoot/testPlan.fullSuite）"
+    maxRounds:
+      type: number
+      default: 10
+      description: "修复→定向复审循环轮次上限（R1 全面审不计入）"
+    reviewerTemplate:
+      type: string
+      default: "~/.agents/skills/dev-flow-v2/agents/consistency-reviewer.md"
+      description: "一致性审查 agent 模板路径（缺省用 dev-flow-v2 skill 内置模板）"
+    attempt:
+      type: number
+      description: "重发起序号（status.json events 追加保留历史不覆盖；attempt > 1 时 Gate A 日志命名带 .attemptM 后缀防覆盖上轮日志）。不得设 default——引擎会把 default 物化成显式值、吞掉「未传」形态（本参数未传时 shared 自带归 1 兜底）"
+    taskId:
+      type: string
+      description: "观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测，只传其一会告警并关闭观测）。同时是观测落盘目录名——字母/数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」"
+    executionId:
+      type: string
+      description: "本次执行标识（可选；与 taskId 同时提供才启用阶段事件观测）。同时是观测 JSONL 文件名主干（<executionId>.jsonl）——命名规则同 taskId"
+    sampleType:
+      type: string
+      description: "观测样本类型（可选）——production = 真实执行（缺省）/ selftest = 测试执行"
+  required: [execPlan]
+*/
+
+// ===== zcode→pi 兼容 shim（两版差异区之一：另含 @pi-meta 头/schema 常量/TS 剥离/agent 调用层/续聊补丁）=====
+const { spawnSync } = require("node:child_process");
+const $WS = typeof $WORKSPACE === "string" ? $WORKSPACE : process.cwd();
+// world.run：zcode facade 的命令执行（cwd=workspace、非零退出码为返回值非异常）
+const world = {
+  run: async (cmd, a, opts) => {
+    const r = spawnSync(cmd, a ?? [], {
+      cwd: $WS, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+      timeout: opts && opts.timeoutMs ? opts.timeoutMs : 300000,
+    });
+    // 执行器故障/超时 throw 对齐 zcode reject 语义（非零退出码仍是返回值不是异常）
+    if (r.error) throw r.error;
+    return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  },
+};
+// report / artifact：zcode 专有通道，pi 无对应面，降级为 no-op（结果仍经 return 交付）
+// [2026-10-04] 曾漏该垫片：R1 审查完成后第 1055 行 report() 首次执行即 ReferenceError
+//   "report is not defined"，整个 D2 run 判 failed（三份分区报告已落 runlog，仅汇总/修复段丢失）。
+const report = () => {};
+const artifact = { chart: () => {}, board: () => {}, markdown: async () => {}, file: async () => {} };
+
+// ── 结果 schema 常量（ask 结构化返回契约；原 TS interface 的 JSDoc 字段描述随迁）──
+
+const SCHEMA_ReasonableEntry = {
+  type: "object",
+  properties: {
+    location: { type: "string", description: "位置 file:line 或文件路径" },
+    summary: { type: "string", description: "一句话：为何属合理演化（实现优于设计 / 不破坏设计目标）" },
+    kind: { type: "string", enum: ["content", "process"], description: "条目类别：process = 提交完整性/流程类发现（不计停机线不派修复组）；content = 内容类（缺省）" },
+    docSyncSuggestion: { type: "string", description: "文档同步建议（终态回流主 agent，D5 终态同步消费）" },
+  },
+  required: ["location", "summary", "docSyncSuggestion"],
+};
+
+const SCHEMA_GapEntry = {
+  type: "object",
+  properties: {
+    location: { type: "string", description: "问题位置 file:line（或文件路径）" },
+    gap: { type: "string", description: "一句话差距：违背设计 / 遗漏未做 / 越权多做 / 文档自身错误" },
+    decisionAffecting: { type: "boolean", description: "影响决策（引擎分流判据）：true = 违背机制决策（不修则落空）；false = 不影响" },
+    deliveryAffecting: { type: "boolean", description: "影响交付（引擎分流判据之二）：true = 任一环节（开发/测试/验收/文档登记）会出错；false = 不影响" },
+    impactNote: { type: "string", description: "影响说明（人读）：决策违背哪条（D几/§几）/ 交付哪个环节会出错——只作展示" },
+    kind: { type: "string", enum: ["content", "process"], description: "条目类别：content = 内容类（缺省）；process = 流程类（提交完整性等，不计停机线）" },
+    severity: { type: "string", enum: ["high", "medium", "low"], description: "严重度：high 预留给破坏数据/崩溃级" },
+    fixHint: { type: "string", description: "一句可执行修复建议" },
+    prevId: { type: "string", description: "R2+ 复审专属：延续上批条目时原样填其 U 编号（引擎按它刷新条目描述，不按文字匹配）；新问题不填" },
+    returnNote: { type: "string", description: "引擎内部字段（reviewer 不产不填）：fixer 申报留回流理由" },
+  },
+  required: ["location", "gap", "decisionAffecting", "deliveryAffecting", "impactNote", "severity", "fixHint"],
+};
+
+const SCHEMA_ReconEntry = {
+  type: "object",
+  properties: {
+    prevId: { type: "string", description: "上批条目 id（原样引用注入清单中的 U 编号）" },
+    status: {
+      type: "string",
+      enum: ["fixed", "not-fixed"],
+      description: "fixed = 亲自读代码到行级核实修复成立；not-fixed = 仍存在（条目保持活跃并计数）",
+    },
+    evidence: { type: "string", description: "读了哪里、确认了什么（file:line 事实）；fixed 申报不带证据不采信" },
+  },
+  required: ["prevId", "status", "evidence"],
+};
+
+const SCHEMA_ReviewResult = {
+  type: "object",
+  properties: {
+    reasonable: {
+      type: "array",
+      description: "实现优于设计 / 合理演化且不破坏设计目标——不进修复循环，随终态回流",
+      items: SCHEMA_ReasonableEntry,
+    },
+    unreasonable: {
+      type: "array",
+      description: "违背设计 / 遗漏未做 / 越权多做——进修复循环（按 location 归属分区成组）；延续上批条目时带 prevId",
+      items: SCHEMA_GapEntry,
+    },
+    docErrors: {
+      type: "array",
+      description: "文档自身错了（实现是对的）——不进修复循环，随终态回流主 agent",
+      items: SCHEMA_GapEntry,
+    },
+    reconciliation: {
+      type: "array",
+      description: "R1 恒 []；R2+ 对上批本组逐条申报裁决（fixed+证据才清零，not-fixed/漏报保持活跃）",
+      items: SCHEMA_ReconEntry,
+    },
+  },
+  required: ["reasonable", "unreasonable", "docErrors", "reconciliation"],
+};
+
+const SCHEMA_FixRecord = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "条目 id（原样引用任务清单中的 U 编号）" },
+    description: { type: "string", description: "一句修复描述" },
+    affectedFiles: { type: "array", items: { type: "string" }, description: "改动文件 + 波及文件（相对仓库根路径）——引擎按它核验改动归属并精确 add" },
+  },
+  required: ["id", "description", "affectedFiles"],
+};
+
+const SCHEMA_FixReport = {
+  type: "object",
+  properties: {
+    fixes: { type: "array", description: "已修复条目", items: SCHEMA_FixRecord },
+    skipped: {
+      type: "array",
+      description: "未修条目如实申报（id + 具体原因）；确信设计文档自身有错的条目走这里（转 doc_errors 流回）",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["id", "reason"],
+      },
+    },
+    delegated: {
+      type: "array",
+      description: "职责外申报——条目属实但修复动作属其他职责域，转升级呈报，不算漏修（无申报可省略）",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["id", "reason"],
+      },
+    },
+    selfCheck: {
+      type: "object",
+      description: "自检硬门声明（fixes 非空时必填且 typecheck 须 \"pass\"——带红返回不入账）",
+      properties: {
+        typecheck: { type: "string", description: "所在包 typecheck 结果，全绿填 pass" },
+        tests: { type: "string", description: "改动触及测试的运行结果（命令: 结果）" },
+      },
+      required: ["typecheck"],
+    },
+  },
+  required: ["fixes", "skipped"],
+};
+
+const SCHEMA_AggregateItem = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "条目 id（原样引用清单中的 U 编号）" },
+    action: { type: "string", enum: ["keep", "merge-into", "reclassify-doc-error", "escalate"], description: "裁决动作" },
+    mergeInto: { type: "string", description: "action=merge-into 时必填：并入的主条目 id" },
+    reason: { type: "string", description: "merge/reclassify/escalate 必填：裁决理由" },
+    group: { type: "string", description: "action=keep 时必填：修复组名（语义化、可跨分区）" },
+    expectedFiles: { type: "array", items: { type: "string" }, description: "action=keep 时必填：预期改动文件（相对仓库根）" },
+  },
+  required: ["id", "action"],
+};
+
+const SCHEMA_AggregateReport = {
+  type: "object",
+  properties: {
+    items: { type: "array", description: "逐条裁决（清单中每个 id 都必须出现）", items: SCHEMA_AggregateItem },
+  },
+  required: ["items"],
+};
+const SCHEMA_GateATriageItem = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "GT-<序>" },
+    kind: {
+      type: "string",
+      enum: ["batch-regression", "legacy", "script-defect", "flaky"],
+      description: "batch-regression=本批改动引入的回归（回注修复轮）/ legacy=存量红（与本批 diff 零交集，豁免呈报）/ script-defect=测试基建自身缺陷 / flaky=瞬态失败（直接重跑 Gate A）",
+    },
+    testRef: { type: "string", description: "失败段/用例标识" },
+    evidence: { type: "string", description: "判定依据（基线对照结论或文件交集证据）" },
+    files: { type: "array", items: { type: "string" }, description: "本批侧改动文件（batch-regression 时非空）" },
+    fixHint: { type: "string", description: "修复要点（可空串）" },
+  },
+  required: ["id", "kind", "testRef", "evidence", "files", "fixHint"],
+};
+const SCHEMA_GateATriage = {
+  type: "object",
+  properties: {
+    items: { type: "array", description: "日志中每个失败段恰好一条分诊结论（禁止静默跳过）", items: SCHEMA_GateATriageItem },
+  },
+  required: ["items"],
+};
+// wfAgent：公共体的 agent(name, persona).ask<T>(prompt) 的 pi 等价。构建管线把公共体
+// 调用点改写为 wfAgent(、泛型参数转为首个字符串参数（typeKey），这里查 SCHEMA_BY_KEY。
+// persona 拼 prompt 头（pi agent() 无 system 通道）；每次调用都是新 agent（pi 无续聊）。
+const SCHEMA_BY_KEY = {
+  ReviewResult: SCHEMA_ReviewResult,
+  FixReport: SCHEMA_FixReport,
+  AggregateReport: SCHEMA_AggregateReport,
+  GateATriage: SCHEMA_GateATriage,
+};
+function wfAgent(name, persona) {
+  return {
+    ask: async (typeKey, instructions) => {
+      const schema = SCHEMA_BY_KEY[typeKey];
+      if (!schema) throw new Error(`未知 ask 类型键 ${typeKey}（SCHEMA_BY_KEY 未登记）`);
+      // desc 直取 name 原文（不做 -rN/-RN 后缀剥离）：pi 实例名须与静态第一实参一致——
+      // workflow DAG 静态派生模板按调用点第一实参提取，剥离会让带轮次后缀的名字
+      // （主审-r2 等）匹配不上实例；且 zcode 侧同名即续聊，后缀是轮次新 agent 的身份语义，
+      // 两平台显示名本就应当对齐。
+      const desc = String(name);
+      const prompt = persona ? persona + "\n\n=====\n\n" + instructions : instructions;
+      const raw = await agent({ prompt, schema, description: desc });
+      if (raw === null || raw === undefined) throw new Error("agent() 无返回");
+      if (typeof raw === "object" && raw !== null && typeof raw.error === "string" && raw.error) throw new Error(raw.error);
+      return raw;
+    },
+  };
+}
+
+// ── 平台恢复指引（G 区：机制词两侧平台化，公共体经常量引用） ──
+const HINT_MISSING_EXECPLAN = "恢复动作：重新 workflow run 发起并传 execPlan（--args execPlan=<路径>）；runs 一次性无续跑通道，修订脚本后重跑即可。";
+const HINT_R1_FAILED = "读 run 日志定位失败分区，修订脚本后重发";
+
+// ── host 标识（run manifest host 字段，skill-data-redesign §5.1：shared 不留 host
+// 硬编码，两壳各持常量）──
+const HOST_PLATFORM = "pi";
+
+// ── O 区观测平台钩子：写通道 = world.run（shim 内 spawnSync；无 journal 重放语义，每次 run 实写）。
+// shared 观测层调用 obsNow/obsAppend；换平台只换钩子实现，事件契约在 shared ──
+const OBS_PROBE_NOW = "process.stdout.write(new Date().toISOString())";
+const OBS_APPEND_LINE =
+  "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});" +
+  "require('fs').appendFileSync(process.argv[1],process.argv[2]+'\\n')";
+async function obsNow() {
+  try {
+    const r = await world.run("node", ["-e", OBS_PROBE_NOW]);
+    const t = r.exitCode === 0 ? r.stdout.trim() : "";
+    return t !== "" ? t : null;
+  } catch (e) {
+    // 执行器故障（spawn 失败/超时）：观测降级为不记录该事件，业务不受影响
+    return null;
+  }
+}
+async function obsAppend(filePath, line) {
+  try {
+    const r = await world.run("node", ["-e", OBS_APPEND_LINE, filePath, line]);
+    return r.exitCode === 0 ? null : `exit ${r.exitCode}：${r.stderr.trim() || r.stdout.trim()}`;
+  } catch (e) {
+    return (e && e.message) || String(e);
+  }
+}
+
+@@STITCH@@

@@ -1,5 +1,5 @@
 /* zcode-workflow
-description: dev-flow-wf 技能 W4 终态同步循环（design-code-sync 的 workflow 化 + 升级语义）：
+description: dev-flow-v1 技能 W4 终态同步循环（design-code-sync 的 workflow 化 + 升级语义）：
   两级审查拓扑（R1 framework-scan planner 单 agent → 模块 fan-out 并行 reviewer；R2+ 同
   agent 聚焦复审只审上轮修复影响面）→ 矩阵脚本 concat（无 LLM 聚合层，跨模块不去重）→
   must-fix 级 contested 拦截停回用户 → reconcileGroups 机器分组并行双向修复（doc-right
@@ -7,7 +7,7 @@ description: dev-flow-wf 技能 W4 终态同步循环（design-code-sync 的 wor
   伴生产物退役判定（agent 只判定清单，引擎执行移动 + 引用验证）。矩阵 + 收敛轨迹落盘
   <projectRoot>/.tmp/dev-flow/<设计文档名>.sync/（round-N[.attemptM]/ 子目录），终态档案
   final.json。终态 converged / contested / stuck / *-failure
-whenToUse: dev-flow-wf 技能 D5 终态同步段——交付后把「代码实现 vs 设计文档」差距双向校准
+whenToUse: dev-flow-v1 技能 D5 终态同步段——交付后把「代码实现 vs 设计文档」差距双向校准
   到 0 must-fix 时调用（审查对象 = 当前 HEAD 终态全量，不是 diff 区间）；必传 designDoc /
   implPlan / projectRoot。不用于 diff 区间代码评审（用 saved review-fix-loop）或设计文档
   审查（用 saved tech-review-loop）
@@ -42,12 +42,12 @@ args:
     default: 10
   plannerTemplate:
     type: string
-    description: framework-scan planner agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/sync-planner.md）
-    default: ~/.agents/skills/dev-flow-wf/agents/sync-planner.md
+    description: framework-scan planner agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/sync-planner.md）
+    default: ~/.agents/skills/dev-flow-v1/agents/sync-planner.md
   reviewerTemplate:
     type: string
-    description: 模块 reviewer agent 模板路径（默认 ~/.agents/skills/dev-flow-wf/agents/sync-reviewer.md）
-    default: ~/.agents/skills/dev-flow-wf/agents/sync-reviewer.md
+    description: 模块 reviewer agent 模板路径（默认 ~/.agents/skills/dev-flow-v1/agents/sync-reviewer.md）
+    default: ~/.agents/skills/dev-flow-v1/agents/sync-reviewer.md
   attempt:
     type: number
     description: 重发起序号（大于 1 时轮次目录命名 round-N.attemptM，不覆盖历史产物）；
@@ -785,13 +785,13 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "1.1.5"; // 构建注入自 dev-flow-wf/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.6"; // 构建注入自 dev-flow-v1/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
-// design-code-sync-loop — dev-flow-wf 技能 W4 终态同步循环（zcode 动态工作流）
+// design-code-sync-loop — dev-flow-v1 技能 W4 终态同步循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts 与 tech-review-loop.dwf.ts（多脚本循环骨架
 // = 镜像 + 头部差异登记，改动任一侧循环骨架时评估另一侧是否需要同步）。语义权威源 =
 // dev-flow 流程优化设计文档 §7（两级拓扑 / 方向语义权威表 / 三向矩阵 / 越权三问三档 /
-// 审查关系五条 / 修复纪律 / 退役判定 / 停机线），落点参照 dev-flow-wf/flow/sync.md。
+// 审查关系五条 / 修复纪律 / 退役判定 / 停机线），落点参照 dev-flow-v1/flow/sync.md。
 // 与 rfl 的结构差异：
 //  - 无 LLM 聚合层：矩阵行 = 脚本 concat（planner 框架行 + 各模块 reviewer 行结构化
 //    返回），跨模块 findings 不去重（文件锚点唯一归属）
@@ -829,7 +829,7 @@ const SKILL_VERSION = "1.1.5"; // 构建注入自 dev-flow-wf/SKILL.md frontmatt
 // 数据传递 = 结构化返回总线（无聚合层故不落重型报告文件）：matrixRows / findings /
 // reconciliation / fixes 经 ask<T> 返回，脚本侧归一入条目清单；每轮原始返回留档
 // round-N[.attemptM]/ 下供断点恢复人读。agent 模板默认路径 = 本 skill 安装位
-// （~/.agents/skills/dev-flow-wf/agents/，args 可覆盖），~ 前缀经 node -e 通道运行时展开。
+// （~/.agents/skills/dev-flow-v1/agents/，args 可覆盖），~ 前缀经 node -e 通道运行时展开。
 // ============================================================================
 
 // ── 常量（控制流专用，不内插进任何 ask 文本） ──
@@ -863,8 +863,8 @@ const VALID_ARG_KEYS = new Set([
   "executionId",
   "sampleType",
 ]);
-const TILDE_PLANNER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/sync-planner.md";
-const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-wf/agents/sync-reviewer.md";
+const TILDE_PLANNER_TEMPLATE = "~/.agents/skills/dev-flow-v1/agents/sync-planner.md";
+const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-v1/agents/sync-reviewer.md";
 const RETIREMENT_DIR = ".tmp/design-doc-retirement"; // 退役候选移动目标（projectRoot 相对，gitignore 产物）
 
 // 机械信号步（§7.1 符号词表 grep——[HISTORICAL] 悬空引用防线，机器产确定性信号）：
@@ -1119,7 +1119,7 @@ interface RunManifest {
   workflow: string;
   segment: "tech-design" | "dev-flow";
   /** 产物溯源字段：构建注入常量（所属技能 SKILL.md frontmatter version，唯一权威——
-   *  本循环 = dev-flow-wf）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
+   *  本循环 = dev-flow-v1）。只读溯源，不参与任何执行裁决（路由只看 schemaVersion） */
   skillVersion: string;
   host: string;
   projectRoot: string;
@@ -1766,7 +1766,7 @@ function mdEscape(s: string): string {
 // ── 观测启用（O 区形态层）：先于参数窄化——已传合法观测 ID 的执行（含参数校验失败
 // 早退）都有 execution 边界；attempt 自动检测未完成时为 null，检测确定后回填。落盘
 // 路径依赖 home，探针通过后装配 ──
-obsCtx = initObservation("dev-flow-wf", "D5", null);
+obsCtx = initObservation("dev-flow-v1", "D5", null);
 
 // home 展开：模板 ~ 前缀运行时解析（脚本无 node API，经 node -e 通道）。探针先于
 // 参数窄化：观测落盘路径装配与模板 ~ 展开共同依赖（W1 同序）
@@ -1849,7 +1849,7 @@ if (probe.exitCode !== 0) {
     contestedList: [],
     overdesignCandidates: [],
     remaining: [],
-    message: `必读文件缺失或不合规：${probeBad.length > 0 ? probeBad.join("；") : probe.stdout.trim() || "（探针无输出）"}。恢复动作：核对 designDoc/implPlan/agent 模板路径（模板默认 ~/.agents/skills/dev-flow-wf/agents/，可经 args.plannerTemplate/reviewerTemplate 覆盖）后重新发起`,
+    message: `必读文件缺失或不合规：${probeBad.length > 0 ? probeBad.join("；") : probe.stdout.trim() || "（探针无输出）"}。恢复动作：核对 designDoc/implPlan/agent 模板路径（模板默认 ~/.agents/skills/dev-flow-v1/agents/，可经 args.plannerTemplate/reviewerTemplate 覆盖）后重新发起`,
   };
 }
 
@@ -2259,7 +2259,7 @@ const NODE_APPEND_TEXT = [
 
 async function appendLedger(title: string, body: string): Promise<void> {
   try {
-    // 每笔盖版本行（产物溯源字段 = SKILL_VERSION 构建注入常量，本引擎 = dev-flow-wf
+    // 每笔盖版本行（产物溯源字段 = SKILL_VERSION 构建注入常量，本引擎 = dev-flow-v1
     // 版本）：追加笔正文首行固定一行 skillVersion——ledger 是多轮追加的 markdown，
     // 逐笔携带才能回答每段记录由哪个技能版本产出
     const r = await world.run("node", ["-e", NODE_APPEND_TEXT, ledgerPath, title, `skillVersion: ${SKILL_VERSION}\n${body}`]);
