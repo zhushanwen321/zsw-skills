@@ -1,0 +1,33 @@
+{
+  "roles": [
+    {
+      "id": "builder",
+      "mayWrite": ["ImplementationRecorded", "FindingRaised"]
+    },
+    {
+      "id": "assurance",
+      "mayWrite": [
+        "AcceptanceReviewed",
+        "EvidenceRecorded",
+        "FindingRaised",
+        "FindingResolved",
+        "AssuranceCompleted",
+        "ExplorationCompleted",
+        "AssuranceRevisionDrift"
+      ]
+    },
+    {
+      "id": "user",
+      "mayWrite": [
+        "AcceptanceApproved",
+        "DesignApproved",
+        "RiskAccepted",
+        "PolicyUpgraded",
+        "RevisionBaselineConfirmed",
+        "IndependentTaskDeclared",
+        "TaskSuperseded",
+        "TaskSupersedeCancelled"
+      ]
+    }
+  ]
+}

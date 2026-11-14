@@ -1,95 +1,117 @@
-# 主 agent 操作序列
+# 主 agent 操作序列（v2：凭据文件 + 验收包哈希 + 策略快照 + 任务替换 + 租约）
 
-所有路径参数用绝对路径；不要把本机路径写进项目仓库。命令中的 `<...>` 是占位符。
+所有路径参数用绝对路径；不要把本机路径写进项目仓库。命令中的 `<...>` 是占位符。CLI 入口：
 
-## 1. 初始化
+```bash
+node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs <command> ...
+```
 
-init 前先确认 `--project-root` 归属：该目录必须是本会话自己的项目/worktree 目录。stdout 里的 `projectRoot`、`worktree`、`siblingTasks`（同分组既有任务清单）与 `evalIdentity`（projectRoot 挂有评测身份标识时出现）用于这次确认——`siblingTasks` 非空或出现 `evalIdentity` 时，先核实这些任务/标识是否本会话所建；评测等多会话同题环境下发现不是自己的，立即停止并改用自己的 worktree。
+## 1. 初始化（init：意图 + 凭据 + 血统）
+
+init 前确认 `--project-root` 归属（本会话自己的项目/worktree）。stdout 含 `projectRoot`、`worktree`、`siblingTasks`、`evalIdentity`（评测环境）。
 
 ```bash
 node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs init \
-  --project-root <项目根> --task-id <任务id>
+  --project-root <项目根> --task-id <任务id> [--intent-file <原始意图文件>] \
+  [--verification-only] [--new-round | --resume-existing]
 ```
 
-stdout 是 JSON：`taskDir` 与三把 Ed25519 角色私钥（`builderKey`／`assuranceKey`／`userKey`）及对应公钥。私钥只在 init 时输出一次，task.json 只落公钥——丢失后无法补发，只能开新任务 id 重新发起。
+- stdout 输出：`taskDir`、`credentials`（三个 credentialId，形态 `<分组>/<任务id>/<角色>`）、`intentSha256` 与三把公钥。**私钥不输出**——已写入凭据目录 `~/.agents/skill-data/delivery-keys/<分组>/<任务id>/`（0600）。
+- 血统规则：同 git 仓库身份下已存在同 intent 的未替换任务时 init 拒绝——走任务替换（第 8 节）或先 `declare-independent`。
+- `--verification-only`：纳管体系外已有实现的只核验模式（豁免方案包与 DesignApproved）。
+- 意图未随 init 带入时，后续一次性写入：`set-intent --task-dir <taskDir> --file <意图文件>`（写入后不可修改——需要新意图 = 新任务）。
 
-任务目录按 projectRoot 分组落在 `~/.agents/skill-data/delivery/<分组 slug>/<taskId>/`，`taskDir` 以 init 输出为准。同 taskId 重复 init 默认拒绝（防止两个会话共用一个任务目录）：继续既有任务加 `--resume-existing`（校验一致后复用原任务，只输出公钥不重发私钥）；同项目新一轮交付加 `--new-round`（任务目录按 `<taskId>-r2/-r3` 递增分开）。已有目录时先检查 contract/events，禁止清空历史。角色私钥只保存在主会话内存或私有位置，禁止写入 /tmp 等跨会话可读目录。
+凭据传递边界：
 
-密钥持有与传递：
+| 凭据 | 持有 | 用途 | 注入边界 |
+|------|------|------|----------|
+| `builder` | 凭据文件 | candidate-build-v2 签 ImplementationRecorded/FindingRaised | builderCredentialId 可注入该 workflow |
+| `assurance` | 凭据文件 | 验收审查、证据与发现、保证与探索事件 | assuranceCredentialId 可注入独立保证 workflow |
+| `user` | 凭据文件 | 批准、风险接受、替换、基线、策略命令 | **仅主会话**；绝不注入任何子 agent 或 workflow |
 
-| 密钥 | 持有者 | 用途 | 传递边界 |
-|------|--------|------|----------|
-| `builderKey` | 主会话 | 以 builder 角色签名追加实现类事件（`append --key`） | 只作为 `candidate-build-v2` 的 `builderKey` 参数注入该 workflow |
-| `assuranceKey` | 主会话 | 以 assurance 角色签名追加证据与发现类事件（`append --key`） | 只作为 `independent-assurance-v2` 的 `assuranceKey` 参数注入该 workflow |
-| `userKey` | 仅主会话 | 用户批准（`approve-contract --user-key`）与风险接受（`accept-risk --user-key`） | 绝不注入任何子 agent 或 workflow，不写入任务目录 |
+## 2. 目标与验收设计与批准
 
-`append --key` 校验私钥角色与事件 actor 一致：actor=builder 必须 builderKey、actor=assurance 必须 assuranceKey、actor=user 必须 userKey，跨角色密钥一律拒绝。本机信任边界：三把私钥能阻止无凭据伪造与跨角色越权，但同一操作系统用户下的进程仍可改写 task.json 公钥与 events.jsonl 后重签——本技能不声称对恶意 shell 提供文件系统隔离；密钥只交给 CLI，不写入任何 agent prompt。
+zcode：`CreateWorkflow saved: acceptance-design-v2`，args `{ projectRoot, taskDir, objective, assuranceCredentialId, taskId?, executionId?, sampleType? }`；pi：运行技能上级 `workflows/pi/acceptance-design-v2.js`。
 
-## 2. 设计并批准契约
-
-zcode：
-
-```text
-CreateWorkflow saved: acceptance-design-v2
-args: { projectRoot, taskDir, objective, maxRounds, taskId?, executionId?, sampleType? }
-```
-
-pi：运行技能上级 `workflows/pi/acceptance-design-v2.js`，传同名参数。
-
-`contract-ready` 后向用户呈现关键决策。批准后执行：
+workflow 内完成：策略快照固定（`snapshot-policy`）→ designer 起草 acceptance.json + increments.json → 机器校验 → assurance 审查（`record-review --conclusion pass|reject`，绑验收包哈希、intent 哈希、快照哈希）。呈报用户后批准：
 
 ```bash
-node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs approve-contract \
-  --task-dir <taskDir> --user-key <userKey> --confirmation user-explicit \
-  --summary "用户批准契约第 N 版及验收要求"
+node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs approve-acceptance \
+  --task-dir <taskDir> --confirmation user-explicit|standing-authorization \
+  --summary "用户批准验收 vN 及验收要求" --credential <user credentialId>
 ```
 
-已有全托管授权时 confirmation 可改为 `standing-authorization`（只适用于 approve-contract），摘要写明授权来源。只做设计的任务到此停止，不得写成代码已交付。
+批准自动绑最新通过的审查事件。同组合后发的 reject 审查会使批准失效（回 draft 重新走审查）。只做设计的任务到此停止。
 
-## 3. 形成候选实现
+## 3. 方案确认（技能② 衔接点）
 
-```text
-CreateWorkflow saved: candidate-build-v2
-args: { projectRoot, taskDir, builderKey, taskId?, executionId?, sampleType? }
+tech-design-v2 产出完整方案包（solution.md + impl-plan 双格式 + 审查终态）并经用户确认后：
+
+```bash
+node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs record-design-approved \
+  --task-dir <taskDir> --summary "方案包确认" \
+  --package-file <方案包哈希清单 JSON：[{name, sha256}]> --credential <user credentialId>
 ```
 
-前置门禁：evaluate state 为 `draft` 时 workflow 拒绝进入。builder 只写代码、测试和原始输出，每增量一次任务内完成实现与实现报告；workflow 完成后运行 evaluate；若不是 accepted，不得把 implemented 当成交付。
+方案包或验收版本变化后 DesignApproved 失效，需重新确认。
 
-## 4. 独立保证
+## 4. 候选实现（技能③）
 
-```text
-CreateWorkflow saved: independent-assurance-v2
-args: { projectRoot, taskDir, assuranceKey, taskId?, executionId?, sampleType? }
-```
+dev-flow-v2 / candidate-build-v2 按验收与方案实现；入口门校验验收包哈希与 DesignApproved。builder 事件经 `append --credential <builder credentialId> [--run-id <runId>]` 登记（ImplementationRecorded 附合并回执：起始指纹、合并后指纹、补丁哈希）。
 
-前置门禁：state 不是 `draft`/`contract-approved` 且 `missing.incrementIds` 为空；setup 与 finalize 比对 revision，assurance 期间项目内容变化即显式失败。coverage reviewer 负责逐项证据判定；explorer 负责契约外反例。后者只在契约要求时执行，未执行时不得补写 ExplorationCompleted。
+## 5. 独立保证
 
-## 5. 统一判定
+zcode：`CreateWorkflow saved: independent-assurance-v2`，args `{ projectRoot, taskDir, assuranceCredentialId, taskId?, executionId?, sampleType?, runId? }`。前置：state 非 draft、增量齐。setup/finalize 比对 revision；漂移登记 AssuranceRevisionDrift，链超上限进 revision-unstable。AssuranceCompleted 绑逐增量测试回执（命令、退出码、日志哈希、cwd、被测产物哈希）与证据/探索事件 id——防跨 run 拼接。
+
+## 6. 统一判定与风险接受
 
 ```bash
 node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs evaluate --task-dir <taskDir>
+node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs accept-risk \
+  --task-dir <taskDir> --target-type requirement|finding --target-id <id> \
+  --confirmation user-explicit --summary "接受 <具体风险、影响、恢复方式>" \
+  --credential <user credentialId>
 ```
 
-revision 判定口径：git 项目 evaluate 自动计算当前工作树 revision，代码、契约、验收资产或宿主变化后须重新取证；非 git 项目不支持自动 revision，必须显式传 `--revision <值>`（或走第 7 节手工路径）——candidate-build-v2/independent-assurance-v2 的自动 revision 同样依赖 git，非 git 项目不要声称全自动通用。
+- accept-risk 自动计算并绑定当前缺口 gapId（missing 缺口为确定性派生 id；partial/failed 绑对应证据事件 id）；boundary 类与 riskAcceptable=false 需求拒绝。
+- 按 `nextAction` 处理：实现缺陷回技能③；验收遗漏递增版本回审查；证据不足回独立保证；具体风险交用户逐项决定。
 
-按 `nextAction` 处理：
-
-- 实现缺陷：回 candidate-build-v2（命中未决发现或失败证据的增量自动进入修复轮），并在任务书提供 open findings。
-- 契约遗漏：回 acceptance-design-v2，递增 contractVersion 后重新批准。
-- 证据不足：回 independent-assurance-v2，禁止只凭旧日志补 verified。
-- 具体风险由用户决定：先展示风险、后果和恢复路径，再记录决定。
-
-## 6. 用户接受风险
+## 7. 写事务租约（workflow run 级）
 
 ```bash
-node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs accept-risk \
-  --task-dir <taskDir> --user-key <userKey> --target-type requirement \
-  --target-id R1 --confirmation user-explicit \
-  --summary "用户接受 <具体风险、影响范围、恢复方式>"
+node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs lease-acquire  --project-root <项目根> --run-id <runId>
+node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs lease-heartbeat --project-root <项目根> --run-id <runId>
+node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs lease-release  --project-root <项目根> --run-id <runId>
 ```
 
-accept-risk 只接受 `confirmation=user-explicit`；全托管授权（standing-authorization）不能替代具体风险接受。finding 使用 `--target-type finding --target-id <findingId>`。接受后重新 evaluate；状态应为 accepted_with_risk，不得改写成 accepted。
+失联租约被 acquire 接管时先按进程组终止旧进程树并递增代次；`append --run-id` 在事件锁临界区内复核租约持有者，非当前代次拒绝写入。
 
-## 7. 手工与恢复
+## 8. 任务替换与独立声明
 
-workflow 不可用时，主 agent 可按同一角色权限手工完成动作，但仍须用 CLI 的 append 记录事件：builder/assurance 事件带 `--key <对应角色私钥>`，user 事件（批准、风险接受）优先走 approve-contract/accept-risk 高层命令。每次恢复先 evaluate，不根据聊天记忆补状态；先核对当前 revision，再决定哪些旧证据仍有效。
+凭据丢失或任务接管时，在新任务上发起（不依赖旧任务密钥；血统限同一 git 仓库身份）：
+
+```bash
+# prepare：绑前任身份（task.json/verdict/openFindings 哈希）并继承未决发现
+supersede-prepare --task-dir <新任务> --predecessor-dir <前任> --summary S --credential <新任务 user>
+# committed：对前任 task.json 比较后交换写入 supersededBy 标记（幂等可重放）
+supersede-commit --task-dir <新任务> --summary S --credential <新任务 user>
+# 恢复型取消：prepare 无法完成的出口——恢复任务签取消 + 自己的 prepare，被取消任务进入不可交付终态
+supersede-cancel --task-dir <恢复任务> --cancelled-task-dir <被取消任务A> \
+  --cancelled-prepare-event-id <A 的 prepare eventId> --reason S --summary S \
+  --credential <恢复任务 user> [--transfer-marker]
+# 独立任务声明：同仓库同 intent 想另起任务时的显式声明（绑 intent 哈希与未替换清单）
+declare-independent --task-dir <既有任务> --credential <user>
+```
+
+## 9. 漂移基线与策略升级
+
+```bash
+confirm-baseline --task-dir <taskDir> --reason "排查结论" --credential <user> [--revision R]
+upgrade-policy  --task-dir <taskDir> --invalidation-note "逐事件失效范围" --summary S --credential <user>
+```
+
+revision-unstable 排查完写入源后由用户确认新基线（漂移计数归零）。策略升级重写任务快照并要求重新审查与批准受影响的验收包。
+
+## 10. 手工与恢复
+
+workflow 不可用时主会话按同一角色职责手工执行，事件仍走 CLI（`append --credential <对应角色>`；user 类命令走第 2/6/8/9 节高层命令）。每次恢复先 `evaluate` 读 verdict 与 nextAction，不根据聊天记忆补状态；跨会话凭据按 task.json 的 credentialId 定位（evaluate 不需要私钥）。
