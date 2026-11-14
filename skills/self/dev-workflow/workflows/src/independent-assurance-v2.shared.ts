@@ -586,6 +586,13 @@ try {
 await obsEnd("review", 1);
 
 await obsBegin("execute", 1);
+// 路径归一化：coverage-reviewer 可能返回裸文件名（实测两次均如此），校验前补 evidenceRoot 前缀——
+// 只补不含路径分隔符的纯文件名，已带前缀或相对/绝对路径形态不动（仍由 isEvidenceArtifact 拦非法值）
+for (const item of coverage.evidence) {
+  if (typeof item.artifact === "string" && !item.artifact.includes("/") && item.artifact.length > 0) {
+    item.artifact = `${evidenceRoot}${item.artifact}`;
+  }
+}
 const coverageError = validateCoverage(coverage);
 if (coverageError !== "") {
   return failAssurance(`独立保证返回校验失败：${coverageError}`);

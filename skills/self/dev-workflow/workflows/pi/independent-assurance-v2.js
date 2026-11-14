@@ -473,7 +473,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "2.5.1"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.5.2"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 const VALID_ARG_KEYS = new Set([
     // 事件写入凭据：delivery-gate init 输出的 assuranceKey 私钥（assurance 角色专用，
     // userKey/builderKey 等其他角色 key 不得注入本 workflow）
@@ -984,6 +984,13 @@ catch (e) {
 }
 await obsEnd("review", 1);
 await obsBegin("execute", 1);
+// 路径归一化：coverage-reviewer 可能返回裸文件名（实测两次均如此），校验前补 evidenceRoot 前缀——
+// 只补不含路径分隔符的纯文件名，已带前缀或相对/绝对路径形态不动（仍由 isEvidenceArtifact 拦非法值）
+for (const item of coverage.evidence) {
+    if (typeof item.artifact === "string" && !item.artifact.includes("/") && item.artifact.length > 0) {
+        item.artifact = `${evidenceRoot}${item.artifact}`;
+    }
+}
 const coverageError = validateCoverage(coverage);
 if (coverageError !== "") {
     return failAssurance(`独立保证返回校验失败：${coverageError}`);
