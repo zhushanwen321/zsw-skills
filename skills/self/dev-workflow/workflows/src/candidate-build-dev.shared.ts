@@ -224,7 +224,7 @@ if (
   await obsCloseExecution("setup-failure");
   const result: CandidateBuildResult = {
     terminated: "setup-failure", taskDir, revision: "", implementedIncrementIds: [], findingIds: [], verdict: initialVerdict,
-    message: `构建前置校验失败：${initialEvaluation.stderr.trim() || initialEvaluation.stdout.trim() || "task.json、角色提示词或 verdict 非法"}。恢复动作：按 delivery-gate 错误修复契约/增量/事件，并核对 task.json 后重跑 evaluate`,
+    message: `构建前置校验失败：${initialEvaluation.stderr.trim() || initialEvaluation.stdout.trim() || "task.json、角色提示词或 verdict 非法"}。恢复动作：按 delivery-gate 错误修复契约/增量/事件，并核对 task.json 后重跑 evaluate${repairSummary()}`,
   };
   return result;
 }
@@ -236,7 +236,7 @@ if (initialVerdict.state === "draft") {
   await obsCloseExecution("setup-failure");
   const result: CandidateBuildResult = {
     terminated: "setup-failure", taskDir, revision, implementedIncrementIds: [], findingIds: [], verdict: initialVerdict,
-    message: "前置状态门禁拒绝：当前 verdict state=draft，契约尚未获用户批准，不进入实现。恢复动作：先运行 acceptance-design-dev，由主会话在用户批准后执行 delivery-gate approve-acceptance（带 --credential <user credentialId>），再重新发起 candidate-build-dev",
+    message: `前置状态门禁拒绝：当前 verdict state=draft，契约尚未获用户批准，不进入实现。恢复动作：先运行 acceptance-design-dev，由主会话在用户批准后执行 delivery-gate approve-acceptance（带 --credential <user credentialId>），再重新发起 candidate-build-dev${repairSummary()}`,
   };
   return result;
 }
@@ -244,7 +244,7 @@ if (initialVerdict.state === "design" && !verificationOnlyTask) {
   await obsCloseExecution("setup-failure");
   const result: CandidateBuildResult = {
     terminated: "setup-failure", taskDir, revision, implementedIncrementIds: [], findingIds: [], verdict: initialVerdict,
-    message: "前置状态门禁拒绝：当前 verdict state=design，验收已批准但方案包未经确认（无 DesignApproved），不进入实现。恢复动作：先运行 tech-design-dev 产出完整方案包，由主会话在用户确认后执行 delivery-gate record-design-approved（带 --credential <user credentialId>），再重新发起 candidate-build-dev（--verification-only 任务豁免本门）",
+    message: `前置状态门禁拒绝：当前 verdict state=design，验收已批准但方案包未经确认（无 DesignApproved），不进入实现。恢复动作：先运行 tech-design-dev 产出完整方案包，由主会话在用户确认后执行 delivery-gate record-design-approved（带 --credential <user credentialId>），再重新发起 candidate-build-dev（--verification-only 任务豁免本门）${repairSummary()}`,
   };
   return result;
 }
@@ -278,7 +278,7 @@ if (
   await obsCloseExecution("setup-failure");
   const result: CandidateBuildResult = {
     terminated: "setup-failure", taskDir, revision, implementedIncrementIds: [], findingIds: [], verdict: initialVerdict,
-    message: `契约、增量或事件不可读（${eventsError || "版本或数组结构不匹配"}）。恢复动作：先运行 delivery-gate validate-acceptance 与 evaluate，按输出修复后重新发起`,
+    message: `契约、增量或事件不可读（${eventsError || "版本或数组结构不匹配"}）。恢复动作：先运行 delivery-gate validate-acceptance 与 evaluate，按输出修复后重新发起${repairSummary()}`,
   };
   return result;
 }
@@ -342,7 +342,7 @@ if (leaseRunId !== "") {
     await obsCloseExecution("setup-failure");
     const result: CandidateBuildResult = {
       terminated: "setup-failure", taskDir, revision, implementedIncrementIds: [], findingIds: [], verdict: initialVerdict,
-      message: `写事务租约获取失败：${(leaseRes.stderr || leaseRes.stdout).trim()}。恢复动作：按输出处理占用租约的运行（等待或由主会话接管）后重新发起`,
+      message: `写事务租约获取失败：${(leaseRes.stderr || leaseRes.stdout).trim()}。恢复动作：按输出处理占用租约的运行（等待或由主会话接管）后重新发起${repairSummary()}`,
     };
     return result;
   }
@@ -509,7 +509,14 @@ for (let index = 0; index < increments.length; index += 1) {
   if (!builderGuard.ok || builderGuard.value === null) {
     const message = `builder 实现增量 ${item.id} 时调用失败：${builderGuard.error}`;
     await runNode([NODE_WRITE_FILE, failurePath, `# 构建失败\n\n${message}\n`]);
-    return failBuild(message, failurePath);
+    // 耗尽不丢弃已申报发现：最后一次尝试返回的 findings 按 validateBuilderOutcome 单条
+    // 口径过滤出可挽救条目，随 failure 产物经 failBuild 登记（防真实缺陷静默蒸发）
+    const rawFindings = builderGuard.raw !== null && Array.isArray(builderGuard.raw.findings) ? builderGuard.raw.findings : [];
+    const salvageable = rawFindings.filter((d) =>
+      typeof d?.summary === "string" && d.summary.trim() !== "" &&
+      (d.severity === "blocker" || d.severity === "non-blocker") &&
+      Array.isArray(d.requirementIds) && d.requirementIds.every((id) => typeof id === "string" && requirementIds.has(id)));
+    return failBuild(message, failurePath, salvageable);
   }
   const outcome = builderGuard.value;
 

@@ -82,13 +82,16 @@ const OBS_LAYER_PATH = join(SRC, "observability.shared.ts");
 const SKILL_DATA_LAYER_PATH = join(SRC, "skill-data.shared.ts");
 // 韧性层单一构建输入（DEV 加固线专属）：仅拼进 RESILIENCE_WORKFLOWS 登记的 workflow
 //（版本行之后、业务正文之前）。层内不得派 agent、不得抛异常；业务 shared 禁止拷贝
-// 副本。登记外的 workflow 引用 askGuarded / recordRepair = 构建失败（防层漏拼静默）
+// 副本。对账双向闭合：登记外的 workflow 引用韧性层符号 = 构建失败（防层漏拼静默，
+// 运行时 ReferenceError）；登记内业务源零消费韧性符号 = 构建失败（防死登记静默白拼）
 const RESILIENCE_LAYER_PATH = join(SRC, "resilience.shared.ts");
 const RESILIENCE_WORKFLOWS = new Set([
   "acceptance-design-dev",
   "candidate-build-dev",
   "independent-assurance-dev",
 ]);
+// 业务源合法消费的韧性层符号词表——两个方向的对账断言共用同一份正则，防双份漂移
+const RESILIENCE_SYMBOL_RE = /\b(askGuarded|recordRepair|retryOnSpawnFailure|repairSummary|initResilience)\b/;
 
 // ── 版本权威映射：workflow → 所属技能 SKILL.md frontmatter version（手动 semver 唯一权威）──
 // 注入形态 = `const SKILL_VERSION = "<值>";` 常量行，拼在业务正文之前（全部产物同构）；
@@ -456,14 +459,18 @@ for (const name of names) {
   if (/agent\(/.test(skillDataLayer)) {
     throw new Error(`${name}: 寻址层中出现 agent( 调用点（不应发生——寻址层是纯常量声明）`);
   }
-  // 韧性层拼接（仅 RESILIENCE_WORKFLOWS；层内不得派 agent）。反向契约：未登记的
-  // workflow 业务源出现韧性层符号 = 登记遗漏（层没拼进去，运行时 ReferenceError）
+  // 韧性层拼接（仅 RESILIENCE_WORKFLOWS；层内不得派 agent）。对账双向：未登记的
+  // workflow 业务源出现韧性层符号 = 登记遗漏（层没拼进去，运行时 ReferenceError）；
+  // 已登记但业务源零消费 = 死登记（层白拼、守卫空转）
   const resilienceLayer = (() => {
     if (!RESILIENCE_WORKFLOWS.has(name)) {
-      if (/\b(askGuarded|recordRepair|retryOnSpawnFailure|repairSummary|initResilience)\b/.test(shared)) {
+      if (RESILIENCE_SYMBOL_RE.test(shared)) {
         throw new Error(`${name}: 业务源引用韧性层符号但未登记 RESILIENCE_WORKFLOWS——层不会拼入，运行时未定义。恢复动作：在 build-workflows.mjs 登记，或移除引用`);
       }
       return "";
+    }
+    if (!RESILIENCE_SYMBOL_RE.test(shared)) {
+      throw new Error(`${name}: 已登记 RESILIENCE_WORKFLOWS 但业务源未消费任何韧性层符号——死登记（层白拼、守卫空转）。恢复动作：从 RESILIENCE_WORKFLOWS 移除该登记，或在业务源接入韧性层调用（askGuarded / initResilience 等，见 resilience.shared.ts）`);
     }
     let text;
     try {

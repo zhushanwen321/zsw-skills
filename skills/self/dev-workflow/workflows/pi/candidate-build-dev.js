@@ -425,7 +425,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "2.7.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.8.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -478,7 +478,12 @@ function repairSummary() {
     if (total === 0)
         return "";
     const parts = Object.entries(repairCounts).map(([kind, n]) => `${kind} ${n}`);
-    return (`；自修复兜底被触发：共 ${total} 条（${parts.join(" / ")}），逐条明细 ${repairsJournalPath || "（任务目录不可用，仅计数）"}——主 agent 请向用户披露本块`);
+    // 登记写入曾失败（repairsWarnedWrite）后明细文件可能空或残缺：终态块自身声明明细
+    // 不可信，主 agent 转述时不指向可能不存在的逐条明细
+    const detailNote = repairsWarnedWrite
+        ? `逐条明细写入曾失败（${repairsJournalPath || "任务目录不可用"}），可能不完整，仅计数可信`
+        : `逐条明细 ${repairsJournalPath || "（任务目录不可用，仅计数）"}`;
+    return (`；自修复兜底被触发：共 ${total} 条（${parts.join(" / ")}），${detailNote}——主 agent 请向用户披露本块`);
 }
 /** 修正提示文本：附加在原 prompt 尾部（数据，不是指令替换） */
 function correctivePrompt(error) {
@@ -488,14 +493,17 @@ function correctivePrompt(error) {
  * askGuarded：agent 调用的结构校验 + 修正重问。
  * - askOnce(corrective)：corrective 为 null = 首次（原始 prompt）；非 null = 修正重问
  *   （原始 prompt + 修正提示）。askOnce 内的文件级后验失败以抛异常表达（进入修正重问）。
- * - validate(value)：返回 "" = 合法；否则为结构错误文本（进入修正重问）。
- * - 全部尝试耗尽 → { ok: false }，由调用方走原有终态路径（本校验不替代业务裁决）。
+ * - validate(value)：返回 "" = 合法；否则为结构错误文本（进入修正重问）。校验器自身
+ *   抛异常同样按结构非法处理（不穿透本层）。
+ * - 全部尝试耗尽 → { ok: false, raw = 最后一次尝试的返回值 }，由调用方走原有终态路径
+ *   （本校验不替代业务裁决），耗尽分支可从 raw 挽救部分数据（如已申报 findings）。
  * 每次失败登记一条韧性事件；后续尝试恢复则 outcome=recovered，耗尽为 exhausted。
  */
 async function askGuarded(askOnce, validate, meta) {
     const maxTries = Math.min(Math.max(meta.maxTries ?? 2, 1), 3);
     const pending = [];
     let lastError = "";
+    let lastReturned = null;
     for (let attempt = 1; attempt <= maxTries; attempt += 1) {
         let value;
         try {
@@ -503,21 +511,34 @@ async function askGuarded(askOnce, validate, meta) {
         }
         catch (e) {
             lastError = `调用抛出异常：${resilienceErrorText(e)}`;
+            lastReturned = null;
             pending.push({ workflow: meta.workflow, step: meta.step, round: meta.round, kind: "agent-error-retry", target: meta.target, trigger: resilienceErrorText(e) });
             continue;
         }
-        const structureError = validate(value);
+        // 校验器自身异常同样兜住（校验器对畸形输入可能解引用抛 TypeError）：按结构非法
+        // 进修正重问/耗尽路径，不允许穿透本层——穿透会使已登记的 pending 不落 JSONL、
+        // workflow 崩溃无终态 message、fail 出口的租约释放全部被绕过
+        let structureError = "";
+        let validatorCrashed = false;
+        try {
+            structureError = validate(value);
+        }
+        catch (e) {
+            validatorCrashed = true;
+            structureError = `校验器异常：${resilienceErrorText(e)}`;
+        }
         if (structureError === "") {
             for (const entry of pending)
                 await recordRepair(entry, "recovered");
-            return { ok: true, value, error: "" };
+            return { ok: true, value, raw: value, error: "" };
         }
-        lastError = `返回结构非法：${structureError}`;
+        lastError = validatorCrashed ? `返回结构非法（${structureError}）` : `返回结构非法：${structureError}`;
+        lastReturned = value;
         pending.push({ workflow: meta.workflow, step: meta.step, round: meta.round, kind: "agent-structure-retry", target: meta.target, trigger: structureError });
     }
     for (const entry of pending)
         await recordRepair(entry, "exhausted");
-    return { ok: false, value: null, error: `${lastError}（含修正重问共 ${maxTries} 次尝试后耗尽）` };
+    return { ok: false, value: null, raw: lastReturned, error: `${lastError}（含修正重问共 ${maxTries} 次尝试后耗尽）` };
 }
 /** CLI spawn 级失败重试（仅只读/幂等命令；变更类命令见文件头注释）。exitCode -1 重试一次 */
 async function retryOnSpawnFailure(runOnce, meta) {
@@ -684,7 +705,7 @@ if (builderRoleRes.exitCode !== 0 || taskRecord === null || taskRecord.projectRo
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision: "", implementedIncrementIds: [], findingIds: [], verdict: initialVerdict,
-        message: `构建前置校验失败：${initialEvaluation.stderr.trim() || initialEvaluation.stdout.trim() || "task.json、角色提示词或 verdict 非法"}。恢复动作：按 delivery-gate 错误修复契约/增量/事件，并核对 task.json 后重跑 evaluate`,
+        message: `构建前置校验失败：${initialEvaluation.stderr.trim() || initialEvaluation.stdout.trim() || "task.json、角色提示词或 verdict 非法"}。恢复动作：按 delivery-gate 错误修复契约/增量/事件，并核对 task.json 后重跑 evaluate${repairSummary()}`,
     };
     return result;
 }
@@ -696,7 +717,7 @@ if (initialVerdict.state === "draft") {
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision, implementedIncrementIds: [], findingIds: [], verdict: initialVerdict,
-        message: "前置状态门禁拒绝：当前 verdict state=draft，契约尚未获用户批准，不进入实现。恢复动作：先运行 acceptance-design-dev，由主会话在用户批准后执行 delivery-gate approve-acceptance（带 --credential <user credentialId>），再重新发起 candidate-build-dev",
+        message: `前置状态门禁拒绝：当前 verdict state=draft，契约尚未获用户批准，不进入实现。恢复动作：先运行 acceptance-design-dev，由主会话在用户批准后执行 delivery-gate approve-acceptance（带 --credential <user credentialId>），再重新发起 candidate-build-dev${repairSummary()}`,
     };
     return result;
 }
@@ -704,7 +725,7 @@ if (initialVerdict.state === "design" && !verificationOnlyTask) {
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision, implementedIncrementIds: [], findingIds: [], verdict: initialVerdict,
-        message: "前置状态门禁拒绝：当前 verdict state=design，验收已批准但方案包未经确认（无 DesignApproved），不进入实现。恢复动作：先运行 tech-design-dev 产出完整方案包，由主会话在用户确认后执行 delivery-gate record-design-approved（带 --credential <user credentialId>），再重新发起 candidate-build-dev（--verification-only 任务豁免本门）",
+        message: `前置状态门禁拒绝：当前 verdict state=design，验收已批准但方案包未经确认（无 DesignApproved），不进入实现。恢复动作：先运行 tech-design-dev 产出完整方案包，由主会话在用户确认后执行 delivery-gate record-design-approved（带 --credential <user credentialId>），再重新发起 candidate-build-dev（--verification-only 任务豁免本门）${repairSummary()}`,
     };
     return result;
 }
@@ -732,7 +753,7 @@ if (acceptanceRes.exitCode !== 0 || incrementsRes.exitCode !== 0 || eventsRes.ex
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision, implementedIncrementIds: [], findingIds: [], verdict: initialVerdict,
-        message: `契约、增量或事件不可读（${eventsError || "版本或数组结构不匹配"}）。恢复动作：先运行 delivery-gate validate-acceptance 与 evaluate，按输出修复后重新发起`,
+        message: `契约、增量或事件不可读（${eventsError || "版本或数组结构不匹配"}）。恢复动作：先运行 delivery-gate validate-acceptance 与 evaluate，按输出修复后重新发起${repairSummary()}`,
     };
     return result;
 }
@@ -799,7 +820,7 @@ if (leaseRunId !== "") {
         await obsCloseExecution("setup-failure");
         const result = {
             terminated: "setup-failure", taskDir, revision, implementedIncrementIds: [], findingIds: [], verdict: initialVerdict,
-            message: `写事务租约获取失败：${(leaseRes.stderr || leaseRes.stdout).trim()}。恢复动作：按输出处理占用租约的运行（等待或由主会话接管）后重新发起`,
+            message: `写事务租约获取失败：${(leaseRes.stderr || leaseRes.stdout).trim()}。恢复动作：按输出处理占用租约的运行（等待或由主会话接管）后重新发起${repairSummary()}`,
         };
         return result;
     }
@@ -960,7 +981,13 @@ for (let index = 0; index < increments.length; index += 1) {
     if (!builderGuard.ok || builderGuard.value === null) {
         const message = `builder 实现增量 ${item.id} 时调用失败：${builderGuard.error}`;
         await runNode([NODE_WRITE_FILE, failurePath, `# 构建失败\n\n${message}\n`]);
-        return failBuild(message, failurePath);
+        // 耗尽不丢弃已申报发现：最后一次尝试返回的 findings 按 validateBuilderOutcome 单条
+        // 口径过滤出可挽救条目，随 failure 产物经 failBuild 登记（防真实缺陷静默蒸发）
+        const rawFindings = builderGuard.raw !== null && Array.isArray(builderGuard.raw.findings) ? builderGuard.raw.findings : [];
+        const salvageable = rawFindings.filter((d) => typeof d?.summary === "string" && d.summary.trim() !== "" &&
+            (d.severity === "blocker" || d.severity === "non-blocker") &&
+            Array.isArray(d.requirementIds) && d.requirementIds.every((id) => typeof id === "string" && requirementIds.has(id)));
+        return failBuild(message, failurePath, salvageable);
     }
     const outcome = builderGuard.value;
     let testExitCode = 0;

@@ -43,7 +43,7 @@
 // 用法：
 //   node scripts/skill-usage-stats.mjs [选项]
 // 选项：
-//   --skill <名>            tech-design-wf | dev-flow-wf | delivery-wf | dev-merge | pr-cr-fix | all，
+//   --skill <名>            tech-design-v1|v2|dev | dev-flow-v1|v2|dev | delivery-v1|v2|dev | dev-merge | pr-cr-fix | all，
 //                           可重复；缺省 = all
 //   --since <时间>          透传给 usage CLI（run 起始时间下界）
 //   --until <时间>          透传给 usage CLI（run 起始时间上界）
@@ -137,7 +137,7 @@ function parseArgs(argv) {
           "  --output <路径>        另存完整 JSON 报告",
           "",
           "示例：",
-          "  node scripts/skill-usage-stats.mjs --skill dev-flow-wf --since 2026-10-01",
+          "  node scripts/skill-usage-stats.mjs --skill dev-flow-dev --since 2026-10-01",
           "  node scripts/skill-usage-stats.mjs --format json --output /tmp/stats.json",
           "  node scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taiji/agent --group stage --group model",
           "",

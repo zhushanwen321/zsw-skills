@@ -475,7 +475,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "2.7.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.8.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -528,7 +528,12 @@ function repairSummary() {
     if (total === 0)
         return "";
     const parts = Object.entries(repairCounts).map(([kind, n]) => `${kind} ${n}`);
-    return (`；自修复兜底被触发：共 ${total} 条（${parts.join(" / ")}），逐条明细 ${repairsJournalPath || "（任务目录不可用，仅计数）"}——主 agent 请向用户披露本块`);
+    // 登记写入曾失败（repairsWarnedWrite）后明细文件可能空或残缺：终态块自身声明明细
+    // 不可信，主 agent 转述时不指向可能不存在的逐条明细
+    const detailNote = repairsWarnedWrite
+        ? `逐条明细写入曾失败（${repairsJournalPath || "任务目录不可用"}），可能不完整，仅计数可信`
+        : `逐条明细 ${repairsJournalPath || "（任务目录不可用，仅计数）"}`;
+    return (`；自修复兜底被触发：共 ${total} 条（${parts.join(" / ")}），${detailNote}——主 agent 请向用户披露本块`);
 }
 /** 修正提示文本：附加在原 prompt 尾部（数据，不是指令替换） */
 function correctivePrompt(error) {
@@ -538,14 +543,17 @@ function correctivePrompt(error) {
  * askGuarded：agent 调用的结构校验 + 修正重问。
  * - askOnce(corrective)：corrective 为 null = 首次（原始 prompt）；非 null = 修正重问
  *   （原始 prompt + 修正提示）。askOnce 内的文件级后验失败以抛异常表达（进入修正重问）。
- * - validate(value)：返回 "" = 合法；否则为结构错误文本（进入修正重问）。
- * - 全部尝试耗尽 → { ok: false }，由调用方走原有终态路径（本校验不替代业务裁决）。
+ * - validate(value)：返回 "" = 合法；否则为结构错误文本（进入修正重问）。校验器自身
+ *   抛异常同样按结构非法处理（不穿透本层）。
+ * - 全部尝试耗尽 → { ok: false, raw = 最后一次尝试的返回值 }，由调用方走原有终态路径
+ *   （本校验不替代业务裁决），耗尽分支可从 raw 挽救部分数据（如已申报 findings）。
  * 每次失败登记一条韧性事件；后续尝试恢复则 outcome=recovered，耗尽为 exhausted。
  */
 async function askGuarded(askOnce, validate, meta) {
     const maxTries = Math.min(Math.max(meta.maxTries ?? 2, 1), 3);
     const pending = [];
     let lastError = "";
+    let lastReturned = null;
     for (let attempt = 1; attempt <= maxTries; attempt += 1) {
         let value;
         try {
@@ -553,21 +561,34 @@ async function askGuarded(askOnce, validate, meta) {
         }
         catch (e) {
             lastError = `调用抛出异常：${resilienceErrorText(e)}`;
+            lastReturned = null;
             pending.push({ workflow: meta.workflow, step: meta.step, round: meta.round, kind: "agent-error-retry", target: meta.target, trigger: resilienceErrorText(e) });
             continue;
         }
-        const structureError = validate(value);
+        // 校验器自身异常同样兜住（校验器对畸形输入可能解引用抛 TypeError）：按结构非法
+        // 进修正重问/耗尽路径，不允许穿透本层——穿透会使已登记的 pending 不落 JSONL、
+        // workflow 崩溃无终态 message、fail 出口的租约释放全部被绕过
+        let structureError = "";
+        let validatorCrashed = false;
+        try {
+            structureError = validate(value);
+        }
+        catch (e) {
+            validatorCrashed = true;
+            structureError = `校验器异常：${resilienceErrorText(e)}`;
+        }
         if (structureError === "") {
             for (const entry of pending)
                 await recordRepair(entry, "recovered");
-            return { ok: true, value, error: "" };
+            return { ok: true, value, raw: value, error: "" };
         }
-        lastError = `返回结构非法：${structureError}`;
+        lastError = validatorCrashed ? `返回结构非法（${structureError}）` : `返回结构非法：${structureError}`;
+        lastReturned = value;
         pending.push({ workflow: meta.workflow, step: meta.step, round: meta.round, kind: "agent-structure-retry", target: meta.target, trigger: structureError });
     }
     for (const entry of pending)
         await recordRepair(entry, "exhausted");
-    return { ok: false, value: null, error: `${lastError}（含修正重问共 ${maxTries} 次尝试后耗尽）` };
+    return { ok: false, value: null, raw: lastReturned, error: `${lastError}（含修正重问共 ${maxTries} 次尝试后耗尽）` };
 }
 /** CLI spawn 级失败重试（仅只读/幂等命令；变更类命令见文件头注释）。exitCode -1 重试一次 */
 async function retryOnSpawnFailure(runOnce, meta) {
@@ -605,8 +626,10 @@ const NODE_READ_FILE = "process.stdout.write(require('fs').readFileSync(process.
 const NODE_WRITE_FILE = "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2])";
 // 逐增量测试执行（cwd 可控——world.run 的 cwd 固定为 workspace，无法指定项目/干净目录）。
 // 超时入参（第 5 参）来自 increments 契约的 testCommand.timeoutMs（CLI validate-acceptance
-// 已校验 1000..3600000 整数）；非法或缺省回退 300000，与 CLI 缺省值一致——防长测试任务
-// 在 300s 被截断后回执 exitCode=-1、AssuranceCompleted 永停 candidate
+// 已校验 1000..3600000 整数）；非法或缺省回退 300000，与 CLI 缺省值一致。外层 world.run
+// wrapper 超时 = clamp 后生效值 +30s 缓冲（调用点传入，缺省 300000 时恰为 runNode 缺省
+// 330000）——防长测试被外层先于内层 spawnSync 截断成 exitCode=-1、误报「增量测试命令
+// 无法执行」且 AssuranceCompleted 永停 candidate
 const NODE_RUN_TEST = "const fs=require('fs'),cp=require('child_process'),pt=require('path');" +
     "const cwd=process.argv[1],logPath=process.argv[2],program=process.argv[3],args=JSON.parse(process.argv[4]);" +
     "const rawTimeout=parseInt(process.argv[5],10);" +
@@ -672,9 +695,9 @@ const NODE_HASH_MANIFEST = "const fs=require('fs'),pt=require('path'),cr=require
     "h.update(fs.readFileSync(abs));" +
     "}" +
     "process.stdout.write(h.digest('hex'))";
-async function runNode(argv) {
+async function runNode(argv, timeoutMs = 330000) {
     try {
-        return await world.run("node", ["-e", ...argv]);
+        return await world.run("node", ["-e", ...argv], { timeoutMs });
     }
     catch (e) {
         return { exitCode: -1, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
@@ -817,7 +840,7 @@ if (coverageRoleRes.exitCode !== 0 || taskRecord === null || taskRecord.projectR
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision: "", findingIds: [], verdict: initialVerdict,
-        message: `独立保证前置校验失败：${initialEvaluation.stderr.trim() || initialEvaluation.stdout.trim() || "task.json、验收、增量、角色提示词或 verdict 非法"}。恢复动作：按 delivery-gate 输出修复后重跑 evaluate`,
+        message: `独立保证前置校验失败：${initialEvaluation.stderr.trim() || initialEvaluation.stdout.trim() || "task.json、验收、增量、角色提示词或 verdict 非法"}。恢复动作：按 delivery-gate 输出修复后重跑 evaluate${repairSummary()}`,
     };
     return result;
 }
@@ -827,7 +850,7 @@ if (initialVerdict.state === "draft" || initialVerdict.state === "acceptance-app
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
-        message: `前置状态门禁拒绝：当前 verdict state=${initialVerdict.state}（${initialVerdict.state === "draft" ? "验收尚未获用户批准" : "验收已批准但尚无实现记录"}），独立保证要求全部增量已形成候选实现。恢复动作：先完成验收批准并形成候选实现（运行 candidate-build-dev；按 dev-flow-dev 通道执行的任务在其 D4 收尾登记实现记录后直接重新发起），再重新发起 independent-assurance-dev`,
+        message: `前置状态门禁拒绝：当前 verdict state=${initialVerdict.state}（${initialVerdict.state === "draft" ? "验收尚未获用户批准" : "验收已批准但尚无实现记录"}），独立保证要求全部增量已形成候选实现。恢复动作：先完成验收批准并形成候选实现（运行 candidate-build-dev；按 dev-flow-dev 通道执行的任务在其 D4 收尾登记实现记录后直接重新发起），再重新发起 independent-assurance-dev${repairSummary()}`,
     };
     return result;
 }
@@ -835,7 +858,7 @@ if (missingIncrementIds.some((id) => typeof id === "string" && id !== "")) {
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
-        message: `前置门禁拒绝：仍有增量未实现（missing.incrementIds=${JSON.stringify(missingIncrementIds.filter((id) => typeof id === "string"))}），未完成实现上的证据无法覆盖交付判定。恢复动作：先完成上述增量（运行 candidate-build-dev；按 dev-flow-dev 通道执行的任务在其 D4 收尾登记实现记录后直接重新发起），再重新发起 independent-assurance-dev`,
+        message: `前置门禁拒绝：仍有增量未实现（missing.incrementIds=${JSON.stringify(missingIncrementIds.filter((id) => typeof id === "string"))}），未完成实现上的证据无法覆盖交付判定。恢复动作：先完成上述增量（运行 candidate-build-dev；按 dev-flow-dev 通道执行的任务在其 D4 收尾登记实现记录后直接重新发起），再重新发起 independent-assurance-dev${repairSummary()}`,
     };
     return result;
 }
@@ -846,7 +869,7 @@ if (explorationRequired) {
         await obsCloseExecution("setup-failure");
         const result = {
             terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
-            message: `探索性审查为 required，但角色提示词不可读：${explorerRolePath}。恢复动作：安装 delivery-dev 的 explorer.md 后重新发起`,
+            message: `探索性审查为 required，但角色提示词不可读：${explorerRolePath}。恢复动作：安装 delivery-dev 的 explorer.md 后重新发起${repairSummary()}`,
         };
         return result;
     }
@@ -867,7 +890,7 @@ if (leaseRunId !== "") {
         await obsCloseExecution("setup-failure");
         const result = {
             terminated: "setup-failure", taskDir, revision: "", findingIds: [], verdict: null,
-            message: `写事务租约获取失败：${(leaseRes.stderr || leaseRes.stdout).trim()}。恢复动作：按输出处理占用租约的运行（等待或由主会话接管）后重新发起`,
+            message: `写事务租约获取失败：${(leaseRes.stderr || leaseRes.stdout).trim()}。恢复动作：按输出处理占用租约的运行（等待或由主会话接管）后重新发起${repairSummary()}`,
         };
         return result;
     }
@@ -889,7 +912,7 @@ if (eventsRes.exitCode !== 0 || eventsError !== "") {
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
-        message: `events.jsonl 不可读：${eventsError || eventsRes.stderr.trim()}。恢复动作：按 delivery-gate 事件 schema 修复后重新发起`,
+        message: `events.jsonl 不可读：${eventsError || eventsRes.stderr.trim()}。恢复动作：按 delivery-gate 事件 schema 修复后重新发起${repairSummary()}`,
     };
     return result;
 }
@@ -928,6 +951,19 @@ function validateFindings(findings) {
         }
     }
     return "";
+}
+/** askGuarded 耗尽分支的可挽救发现披露：最后一次尝试已返回的申报按 validateFindings
+ * 单条口径过滤后进终态 message（不替 agent 登记 FindingRaised——事件登记须绑 agent
+ * 亲自写就并通过后验的报告，耗尽时报告未通过后验） */
+function salvageableFindingsNote(findings) {
+    if (!Array.isArray(findings))
+        return "";
+    const salvageable = findings.filter((d) => typeof d?.summary === "string" && d.summary.trim() !== "" &&
+        (d.severity === "blocker" || d.severity === "non-blocker") &&
+        Array.isArray(d.requirementIds) && d.requirementIds.every((id) => typeof id === "string" && requirementIds.has(id)));
+    if (salvageable.length === 0)
+        return "";
+    return `；最后一次尝试已申报的可挽救发现（未登记事件，请人工核对后处置）：${JSON.stringify(salvageable.map((d) => ({ summary: d.summary, severity: d.severity, requirementIds: d.requirementIds })))}`;
 }
 function validateCoverage(value) {
     if (typeof value.summary !== "string" || value.summary.trim() === "")
@@ -1099,7 +1135,7 @@ const coverageGuard = await askGuarded(async (corrective) => {
         `对照 ${incrementsPath} 冻结的 testCommand 与上一轮测试产物（taskDir/evidence/ 内 increment-*.log），审查本轮测试内容是否被改弱（断言删除、范围收窄、skip 扩大）；发现改弱即按 defect 申报。`,
         "写覆盖报告；新发现不分配 findingId。仅当亲自确认旧发现已修复时，把其 findingId 放入 resolvedFindingIds。",
         "不得修改产品代码、验收、事件或 verdict；builder 的测试输出不能未经独立核对直接记为 verified。",
-        '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": string, "result": "verified"|"partial"|"failed", "artifact": string }], "findings": [...], "resolvedFindingIds": string[] }——evidence 须逐 requirement+kind 恰一条，artifact 为 evidence/ 内绝对路径。',
+        '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary" }], "resolvedFindingIds": string[] }——evidence 须逐 requirement+kind 恰一条，artifact 为 evidence/ 内绝对路径。',
         ...(corrective === null ? [] : [corrective]),
     ].join("\n"));
     const requiredArtifacts = [coverageReportPath, ...outcome.evidence.map((e) => e.artifact)];
@@ -1110,7 +1146,7 @@ const coverageGuard = await askGuarded(async (corrective) => {
     return outcome;
 }, validateCoverage, { workflow: "independent-assurance-dev", step: "review", round: 1, target: "coverage-review" });
 if (!coverageGuard.ok || coverageGuard.value === null) {
-    return failAssurance(`独立保证角色调用失败：${coverageGuard.error}`);
+    return failAssurance(`独立保证角色调用失败：${coverageGuard.error}${salvageableFindingsNote(coverageGuard.raw?.findings)}`);
 }
 const coverage = coverageGuard.value;
 await obsEnd("review", 1);
@@ -1187,7 +1223,7 @@ if (explorationRequired) {
             `必须覆盖的探索维度：${JSON.stringify(reviewDimensions)}`,
             "从原始意图、验收与真实实现主动寻找验收外反例；亲自运行探索命令并保存原始证据。",
             "写探索报告，申报实际覆盖维度与新发现；不分配 findingId，不修改产品代码、验收、事件或 verdict。",
-            '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [...] }——dimensions 须覆盖全部必选维度且去重。',
+            '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary" }] }——dimensions 须覆盖全部必选维度且去重。',
             ...(corrective === null ? [] : [corrective]),
         ].join("\n"));
         const reportRes = await runNode([NODE_CHECK_FILES, explorationReportPath]);
@@ -1197,7 +1233,7 @@ if (explorationRequired) {
         return outcome;
     }, validateExploration, { workflow: "independent-assurance-dev", step: "review", round: 2, target: "explorer-review" });
     if (!explorationGuard.ok || explorationGuard.value === null) {
-        return failAssurance(`独立保证角色调用失败：${explorationGuard.error}`);
+        return failAssurance(`独立保证角色调用失败：${explorationGuard.error}${salvageableFindingsNote(explorationGuard.raw?.findings)}`);
     }
     exploration = explorationGuard.value;
     await obsEnd("review", 2);
@@ -1262,7 +1298,7 @@ try {
                 `if [ -n "$(git -C '${projectRoot}' ls-files --others --exclude-standard)" ]; then`,
                 `  git -C '${projectRoot}' ls-files --others --exclude-standard -z | tar --null -cf - -C '${projectRoot}' -T - | tar -xf - -C '${cleanDir}'`,
                 "fi",
-            ].join("\n")]).catch(() => null);
+            ].join("\n")], { timeoutMs: 330000 }).catch(() => null);
         if (cleanRes === null || cleanRes.exitCode !== 0) {
             throw new Error(`干净构建失败（runsFromIgnoredArtifacts=true 要求证据来自不含 ignored 产物的干净构建）：${cleanRes === null ? "sh 调用异常" : cleanRes.stderr.trim()}`);
         }
@@ -1279,6 +1315,12 @@ try {
         if (!item.testCommand)
             continue;
         const logPath = `${evidenceRoot}increment-${item.id}-${artifactTag}.log`;
+        // 外层 wrapper 超时 = clamp 后生效值 +30s 缓冲（与 candidate-build-dev 同款），
+        // 防 world.run 先于内层 spawnSync 截断长测试；第 5 参原样传声明值，clamp 在脚本内做
+        const declaredTimeout = item.testCommand.timeoutMs;
+        const effectiveTimeout = typeof declaredTimeout === "number" && Number.isInteger(declaredTimeout) && declaredTimeout >= 1000 && declaredTimeout <= 3600000
+            ? declaredTimeout
+            : 300000;
         const testRes = await runNode([
             NODE_RUN_TEST,
             testCwd,
@@ -1286,7 +1328,7 @@ try {
             item.testCommand.program,
             JSON.stringify(item.testCommand.args),
             String(item.testCommand.timeoutMs ?? 300000),
-        ]);
+        ], effectiveTimeout + 30000);
         const testMeta = parseObject(testRes.stdout);
         if (testRes.exitCode !== 0 || testMeta === null || typeof testMeta.exitCode !== "number" ||
             (typeof testMeta.spawnError === "string" && testMeta.spawnError !== "")) {

@@ -5,7 +5,8 @@
 //   2. taskId 跨技能 / 跨 attempt 汇总（byTask）
 //   3. 并行时间口径分开：区间并集 < actor 时长相加
 //   4. legacy 分类器：execPlan/designDoc/implPlan/base/taskDir + 名称 → 五技能 + T2/D1/D2/D3/D5/
-//      gates/branch-review/pr-lifecycle，恒标 attribution=estimated；认不出 → unclassified
+//      gates/branch-review/pr-lifecycle，恒标 attribution=estimated；认不出 → unclassified；
+//      DEV 加固线六 workflow 名 → dev 三技能与阶段，design-code-sync-v2 不入 DEV 名单仍归 dev-flow-v1
 //   5. 手工段（D0 等只有事件没有 run）：耗时照报、token = unknown（null，不写 0）
 //   6. 坏 JSONL / 缺字段事件 / 未配对 start / 孤儿 end 显式计数
 //   7. selftest 过滤：run args sampleType / 事件 sample_type / legacy 明确名称特征；
@@ -861,6 +862,47 @@ test("legacy 分类器：delivery-v1 三个 workflow 按 taskDir 与名称归阶
     assert.equal(run.stage, stage);
     assert.equal(run.attribution, "estimated");
   }
+});
+
+// ── 3a. DEV 加固线 workflow 名（legacy estimated 兜底归类）──
+test("legacy 分类器：DEV 加固线六 workflow 名归 dev 三技能与阶段；design-code-sync-v2 不入 DEV 名单仍归 dev-flow-v1", (t) => {
+  const { home, runScript } = setupEnv(t);
+  const fixturePath = join(home, "fixtures.json");
+  const fixtures = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const devNames = [
+    ["tech-review-loop-dev", "tech-design-dev", "T2"],
+    ["wave-executor-dev", "dev-flow-dev", "D1"],
+    ["dev-consistency-loop-dev", "dev-flow-dev", "D2"],
+    ["acceptance-design-dev", "delivery-dev", "DESIGN"],
+    ["candidate-build-dev", "delivery-dev", "BUILD"],
+    ["independent-assurance-dev", "delivery-dev", "ASSURE"],
+  ];
+  for (const [name] of devNames) {
+    fixtures.zcode.runs.push(baseRun({ id: `dwfrun-${name}`, name, args: {} }));
+  }
+  // design-code-sync 两引擎跨代共用（dev 名单排除注释见实现分支 0）：
+  // -v2 名不得被 DEV 名单吸走，防误登记回归
+  fixtures.zcode.runs.push(baseRun({ id: "dwfrun-design-code-sync-v2", name: "design-code-sync-v2", args: {} }));
+  fixtures.zcode.count = `${fixtures.zcode.runs.length} of ${fixtures.zcode.runs.length} total`;
+  writeFileSync(fixturePath, JSON.stringify(fixtures));
+  const res = runScript(["--format", "json"]);
+  assert.equal(res.status, 0, res.stderr);
+  const report = JSON.parse(res.stdout);
+
+  for (const [name, skill, stage] of devNames) {
+    const run = report.runs.find((r) => r.id === `dwfrun-${name}`);
+    assert.ok(run, `${name} 在 runs 明细（正则失配会静默落入 unclassified）`);
+    assert.equal(run.skill, skill);
+    assert.equal(run.stage, stage);
+    assert.equal(run.attribution, "estimated");
+    assert.ok(report.bySkill[skill].stages[stage], `${skill}/${stage} 聚合桶存在`);
+  }
+
+  const sync = report.runs.find((r) => r.id === "dwfrun-design-code-sync-v2");
+  assert.ok(sync, "design-code-sync-v2 在 runs 明细");
+  assert.equal(sync.skill, "dev-flow-v1", "跨代共用引擎不属 dev 技能");
+  assert.equal(sync.stage, "D5");
+  assert.equal(sync.attribution, "estimated");
 });
 
 // ── 3b. run 级 token 对账三类 ──

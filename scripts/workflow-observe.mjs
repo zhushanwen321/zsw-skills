@@ -21,7 +21,7 @@
 //   node scripts/workflow-observe.mjs end   --task-id T --execution-id E --skill S \
 //        --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest] \
 //        [--skill-version V] [--outcome R]
-// 用法（统一运行入口 = 安装 symlink，dev-flow-wf 在任意项目运行都指向它）：
+// 用法（统一运行入口 = 安装 symlink，dev-flow-dev 在任意项目运行都指向它）：
 //   node ~/.agents/scripts/workflow-observe.mjs start --task-id T --execution-id E --skill S \
 //        --stage G --step P [--round N] [--attempt N] [--sample-type production|selftest] \
 //        [--skill-version V]
@@ -116,7 +116,7 @@ if (executionId === null) fail("--execution-id 缺失或含路径不安全字符
 
 const nonEmpty = (v) => typeof v === "string" && v.trim() !== "";
 for (const k of ["skill", "stage", "step"]) {
-  if (!nonEmpty(opts[k])) fail(`--${k} 必填且须为非空字符串（记录事件归属；workflow 外步骤填阶段机制名，如 skill=dev-flow-wf stage=D0 step=compile）`, 2);
+  if (!nonEmpty(opts[k])) fail(`--${k} 必填且须为非空字符串（记录事件归属；workflow 外步骤填所属技能 canonical 名，如 skill=dev-flow-dev stage=D0 step=compile）`, 2);
 }
 
 const intOpt = (name) => {

@@ -134,6 +134,63 @@ test("韧性层：askGuarded / recordRepair / retryOnSpawnFailure 语义", async
       assert.equal(r.exitCode, 3);
       assert.equal(journal().length, 4, "语义失败不产生登记");
     }
+
+    // 场景 6：校验器自身抛异常（对 null 解引用）→ 层内兜住按结构非法进修正重问，
+    // 不穿透（穿透会使 pending 不落 JSONL、调用方终态出口全部被绕过）
+    {
+      let correctiveSeen = null;
+      const r = await api.askGuarded(
+        async (c) => {
+          if (c === null) return null;
+          correctiveSeen = c;
+          return { summary: "fixed" };
+        },
+        (v) => (typeof v.summary === "string" && v.summary !== "" ? "" : "bad"),
+        { workflow: "w", step: "review", round: 6, target: "a6" },
+      );
+      assert.equal(r.ok, true);
+      assert.match(correctiveSeen, /返回结构非法（校验器异常：/);
+      const last = JSON.parse(journal().at(-1));
+      assert.equal(last.kind, "agent-structure-retry");
+      assert.equal(last.outcome, "recovered");
+    }
+
+    // 场景 7：重问耗尽保留最后一次返回值（raw）——已申报数据不随耗尽静默蒸发
+    {
+      const r = await api.askGuarded(
+        async () => ({ summary: "kept", findings: [{ summary: "d1" }] }),
+        () => "always bad",
+        { workflow: "w", step: "execute", round: 7, target: "a7" },
+      );
+      assert.equal(r.ok, false);
+      assert.equal(r.value, null);
+      assert.equal(r.raw.summary, "kept");
+      assert.equal(r.raw.findings.length, 1);
+    }
+
+    // 场景 8：登记写入失败后 repairSummary 声明明细不可信（终态块自身体现，不只执行日志）
+    {
+      const failingWorld = {
+        run: async (_cmd, argv) => {
+          if (argv[0] === "-e" && argv[1]?.includes("toISOString")) return { exitCode: 0, stdout: "2026-11-14T00:00:00.000Z", stderr: "" };
+          if (argv[0] === "-e" && argv[1]?.includes("appendFileSync")) return { exitCode: 1, stdout: "", stderr: "EACCES" };
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      };
+      const failLogs = [];
+      const failApi = new Function("world", "log", js + "\nreturn { askGuarded, recordRepair, repairSummary, initResilience, retryOnSpawnFailure };")(failingWorld, (m) => failLogs.push(m));
+      failApi.initResilience(dir);
+      await failApi.askGuarded(
+        async (c) => (c === null ? { summary: "" } : { summary: "ok" }),
+        (v) => (v.summary !== "" ? "" : "bad"),
+        { workflow: "w", step: "execute", round: 8, target: "a8" },
+      );
+      const summary = failApi.repairSummary();
+      assert.match(summary, /共 1 条/);
+      assert.match(summary, /逐条明细写入曾失败/);
+      assert.match(summary, /仅计数可信/);
+      assert.ok(failLogs.some((m) => m.includes("WARN")), "写失败仍告警一次");
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
