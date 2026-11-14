@@ -80,6 +80,15 @@ const OBS_LAYER_PATH = join(SRC, "observability.shared.ts");
 // 观测层之后、业务正文之前——纯常量声明，与业务无声明顺序依赖）。层文件形态约束
 //（无 import/export、探针常量单行）见 skill-data.shared.ts 头注
 const SKILL_DATA_LAYER_PATH = join(SRC, "skill-data.shared.ts");
+// 韧性层单一构建输入（DEV 加固线专属）：仅拼进 RESILIENCE_WORKFLOWS 登记的 workflow
+//（版本行之后、业务正文之前）。层内不得派 agent、不得抛异常；业务 shared 禁止拷贝
+// 副本。登记外的 workflow 引用 askGuarded / recordRepair = 构建失败（防层漏拼静默）
+const RESILIENCE_LAYER_PATH = join(SRC, "resilience.shared.ts");
+const RESILIENCE_WORKFLOWS = new Set([
+  "acceptance-design-dev",
+  "candidate-build-dev",
+  "independent-assurance-dev",
+]);
 
 // ── 版本权威映射：workflow → 所属技能 SKILL.md frontmatter version（手动 semver 唯一权威）──
 // 注入形态 = `const SKILL_VERSION = "<值>";` 常量行，拼在业务正文之前（全部产物同构）；
@@ -447,11 +456,31 @@ for (const name of names) {
   if (/agent\(/.test(skillDataLayer)) {
     throw new Error(`${name}: 寻址层中出现 agent( 调用点（不应发生——寻址层是纯常量声明）`);
   }
+  // 韧性层拼接（仅 RESILIENCE_WORKFLOWS；层内不得派 agent）。反向契约：未登记的
+  // workflow 业务源出现韧性层符号 = 登记遗漏（层没拼进去，运行时 ReferenceError）
+  const resilienceLayer = (() => {
+    if (!RESILIENCE_WORKFLOWS.has(name)) {
+      if (/\b(askGuarded|recordRepair|retryOnSpawnFailure|repairSummary|initResilience)\b/.test(shared)) {
+        throw new Error(`${name}: 业务源引用韧性层符号但未登记 RESILIENCE_WORKFLOWS——层不会拼入，运行时未定义。恢复动作：在 build-workflows.mjs 登记，或移除引用`);
+      }
+      return "";
+    }
+    let text;
+    try {
+      text = readFileSync(RESILIENCE_LAYER_PATH, "utf8");
+    } catch {
+      throw new Error(`${name}: 已登记 RESILIENCE_WORKFLOWS 但缺 ${RESILIENCE_LAYER_PATH.slice(ROOT.length + 1)}——韧性层单一构建输入不可缺失`);
+    }
+    if (/agent\(/.test(text)) {
+      throw new Error(`${name}: 韧性层中出现 agent( 调用点（不应发生——守卫经参数接收 agent，不自建）`);
+    }
+    return text;
+  })();
   // 版本常量注入（全部产物同构）：单一行常量，业务源引用它盖产物载体（run.json /
   // status.json / final.json / ledger 追加笔）。声明先于业务正文——shared 源内引用合法；
   // 行内不放反引号/插值，pi 词法改写与 TS 剥离均按普通代码行透传
   const versionLine = `const SKILL_VERSION = "${skillVersion}"; // 构建注入自 ${relative(join(ROOT, "skills/self/dev-workflow"), SKILL_VERSION_SOURCES[name])} frontmatter version（唯一权威）\n`;
-  const sharedFull = `${obsLayer !== "" ? `${obsLayer}\n` : ""}${skillDataLayer}\n${versionLine}${shared}`;
+  const sharedFull = `${obsLayer !== "" ? `${obsLayer}\n` : ""}${skillDataLayer}\n${versionLine}${resilienceLayer !== "" ? `${resilienceLayer}\n` : ""}${shared}`;
   const rewrittenFull = rewriteAgentCalls(sharedFull);
   if (rewrittenFull.count !== rewritten.count) {
     throw new Error(`${name}: 拼接层（观测/寻址）中出现 agent( 调用点（不应发生——两层均不派 agent）`);

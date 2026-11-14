@@ -7,6 +7,8 @@ description: delivery-dev 技能 DESIGN 段目标与验收设计循环：setup �
   AcceptanceReviewed（CLI 自动绑验收包哈希、intent 哈希与策略快照哈希）并返回
   acceptance-ready。AcceptanceApproved 由主会话在用户批准后追加（approve-acceptance）；
   本 workflow 不写 verdict.json，不触碰产品代码，不执行 Git 写操作
+  agent 调用结构校验与修正重问、CLI spawn 级失败重试（只读/幂等命令）、自修复
+  记录（taskDir/self-repairs.jsonl）随终态 message 上报主 agent（DEV 韧性层）
 whenToUse: delivery-dev 技能验收设计段——任务目录已由 delivery-gate init（含
   --intent-file 或先 set-intent）创建、需要把用户原始意图转成目标与验收及实施增量时
   调用；必传 projectRoot / taskDir / objective / assuranceCredentialId。不用于已批准

@@ -6,6 +6,8 @@ description: >-
   只 ask 一次（实现并写实现报告），脚本执行 testCommand、把测试摘要追加进报告并以
   append --credential 追加事件；基础设施失败不登记 FindingRaised，build-failed
   前重新 evaluate。builder 不改契约/事件/verdict、不做 Git 写操作
+  agent 调用结构校验与修正重问、CLI spawn 级失败重试（只读/幂等命令）、自修复
+  记录（taskDir/self-repairs.jsonl）随终态 message 上报主 agent（DEV 韧性层）
 when: >-
   delivery-dev 技能候选实现段——契约已获用户批准（state 非 draft）、需要形成候选
   实现或修复增量，必传 projectRoot / taskDir / builderCredentialId（builder 角色

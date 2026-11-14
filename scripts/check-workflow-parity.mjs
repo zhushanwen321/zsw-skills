@@ -27,16 +27,14 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIR = "skills/self/dev-workflow/workflows";
-const PAIRS = [
-  "tech-review-loop",
-  "wave-executor",
-  "dev-consistency-loop",
-  "design-code-sync-loop",
-  "design-code-sync-v2",
-  "contract-design",
-  "candidate-build",
-  "independent-assurance",
-];
+// 名单单一权威 = scripts/build-workflows.mjs 的 NAMES（读源提取，不双轨维护——新增
+// workflow 自动纳入对账；提取失败 fail-fast）
+const PAIRS = (() => {
+  const buildSrc = readFileSync(join(ROOT, "scripts", "build-workflows.mjs"), "utf8");
+  const m = buildSrc.match(/const NAMES = \[([\s\S]*?)\];/);
+  if (!m) throw new Error("check-workflow-parity：无法从 build-workflows.mjs 提取 NAMES——构建器名单形态变化，请同步本提取器");
+  return [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
+})();
 
 // 探针注入不变量（维度 5）的单一权威源：skill-data.shared.ts（寻址算法唯一权威源，
 // 构建器整层注入全部产物）。提取方式 = 按行正则抓单行字符串常量值——该文件头注的形态

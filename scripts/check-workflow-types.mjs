@@ -19,16 +19,14 @@ import { tmpdir } from "node:os";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WF = join(ROOT, "skills/self/dev-workflow/workflows");
-const NAMES = [
-  "tech-review-loop",
-  "wave-executor",
-  "dev-consistency-loop",
-  "design-code-sync-loop",
-  "design-code-sync-v2",
-  "contract-design",
-  "candidate-build",
-  "independent-assurance",
-];
+// 名单单一权威 = scripts/build-workflows.mjs 的 NAMES（读源提取，不双轨维护——新增
+// workflow 自动纳入类型检查；提取失败 fail-fast）
+const NAMES = (() => {
+  const buildSrc = readFileSync(join(ROOT, "scripts", "build-workflows.mjs"), "utf8");
+  const m = buildSrc.match(/const NAMES = \[([\s\S]*?)\];/);
+  if (!m) throw new Error("check-workflow-types：无法从 build-workflows.mjs 提取 NAMES——构建器名单形态变化，请同步本提取器");
+  return [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
+})();
 
 const ts = createRequire(import.meta.url)("typescript");
 

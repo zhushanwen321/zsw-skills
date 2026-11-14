@@ -7,6 +7,8 @@ description: delivery-dev 技能 ASSURE 段独立覆盖核对与探索性审查�
   逐增量测试回执）；finalize 比对 revision，漂移登记 AssuranceRevisionDrift（连续漂移
   链超上限由裁决器判 revision-unstable）。本 workflow 只产证据与发现，不改产品代码、
   验收、风险接受或 verdict，不宣告 accepted
+  agent 调用结构校验与修正重问、CLI spawn 级失败重试（只读/幂等命令）、自修复
+  记录（taskDir/self-repairs.jsonl）随终态 message 上报主 agent（DEV 韧性层）
 whenToUse: delivery-dev 技能独立保证段——验收已批准、增量已齐（evaluate 的
   missing.incrementIds 为空）时调用；必传 projectRoot / taskDir /
   assuranceCredentialId。不用于验收设计（用 acceptance-design-dev）或候选实现

@@ -4,6 +4,8 @@ description: >-
   delivery-dev 技能 DESIGN 段产品契约设计循环：designer 产契约/解决方案/增量草稿，
   contract reviewer 独立复查目标降级、可证伪性、证据类型、风险级别与增量划分，
   脚本机器校验通过才 contract-ready；ContractApproved 留给主会话在用户批准后追加
+  agent 调用结构校验与修正重问、CLI spawn 级失败重试（只读/幂等命令）、自修复
+  记录（taskDir/self-repairs.jsonl）随终态 message 上报主 agent（DEV 韧性层）
 when: >-
   delivery-dev 技能契约设计段——任务目录已由 delivery-gate init 创建、需要把用户原始意图
   转成产品契约与实施增量，必传 projectRoot / taskDir / objective

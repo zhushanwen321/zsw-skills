@@ -1,7 +1,7 @@
 ---
 name: delivery-dev
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 2.6.0
+version: 2.7.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -64,6 +64,16 @@ dev-flow-dev（技能③执行）在本体系内协作：②在已批准目标�
 | `independent-assurance-dev` | projectRoot、taskDir、assuranceCredentialId | 覆盖结论、探索发现、证据与发现事件、逐增量测试回执 | 产品代码修改、验收修订、风险接受 |
 
 三个 workflow 均接收可选 `taskId/executionId/sampleType` 观测参数（同时传 `taskId` 与 `executionId` 启用；阶段边界逐行记 `~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl`，skill 字段恒 `delivery-dev`——契约与字段表见 dev-flow-dev SKILL「阶段事件观测」节）。耗时与 token 统计：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --skill delivery-dev`（阶段窗口来自观测事件、token 经 `agent-session-reader usage` 双平台重算，口径详见该命令 `--help` 与 dev-flow-dev SKILL「统计入口」节）。写事务租约：`candidate-build-dev` 与 `independent-assurance-dev` 接收可选 `runId`（acquire/心跳/release 全程配对，事件 append 带 `--run-id` 代次复核）；`acceptance-design-dev` 接收可选 `runId`（审查登记期间持有 projectRoot 级租约，任何出口释放）。zcode 用同名 saved workflow；pi 用上级 `workflows/pi/<name>.js`。两边都不可用时主会话可按相同职责手工执行，但事件与最终判定仍必须走 `delivery-gate`。
+
+### 韧性加固（DEV 代差异，v2 无此层）
+
+三个 workflow 拼入韧性层（`workflows/src/resilience.shared.ts`，构建器按登记拼进产物），交付语义不变，执行侧多三道防线：
+
+1. **agent 调用校验与修正重问（askGuarded）**：每次 agent 调用返回后立即做结构校验（各角色的期望 JSON 形态写在 prompt 尾部——首答即合法是正常路径）；结构非法、调用抛异常或该写的报告/证据文件缺失时，携修正提示（失败原因 + 期望结构）以完整自包含 prompt 重问一次（pi 无续聊，重问不依赖上一轮上下文）；两次尝试都失败才走原有终态。覆盖的调用点：designer、acceptance-reviewer、builder（含实现报告后验）、coverage-reviewer（含报告与证据文件后验）、explorer（含探索报告后验）。
+2. **CLI 失败分类**：`delivery-gate` 只读/幂等命令（evaluate、revision、snapshot-policy、validate-acceptance）spawn 级失败（进程没起来/超时前未执行）自动重试一次；语义性失败（exit N>0）不自动重试——gate 报错自带恢复动作，workflow 按「修正提示」回喂下一轮（validate-acceptance 走 feedback 环）或按终态停回主 agent。**变更类命令（append、lease-*）不重试**：超时被杀时命令可能已写入，重试有重复写入风险。
+3. **自修复记录与终态上报**：每次防线触发（修正重问 / 重试）逐条追加 `<taskDir>/self-repairs.jsonl`（字段：at、workflow、step、round、kind、target、trigger、outcome=recovered|exhausted）；终态 message 末尾携带汇总块（`自修复兜底被触发：共 N 条（kind 计数）`）——**主 agent 收到后必须向用户披露**，不允许静默修复。正常路径零触发、message 不带该块。
+
+防御次序固定：prompt 写明返回结构（防呆）→ 结构校验 + 修正重问（兜底一）→ 原终态路径（兜底二，语义与 v2 完全一致）。兜底一被触发本身是可见事件（JSONL + 终态块），不是无声失败。
 
 ## 密钥与信任边界
 

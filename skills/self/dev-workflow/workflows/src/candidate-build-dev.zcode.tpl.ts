@@ -9,6 +9,8 @@ description: delivery-dev 技能 BUILD 段候选实现引擎：前置 evaluate �
   FindingRaised，返回 build-failed 前重新 evaluate。全部增量完成后 evaluate 并返回
   implemented（候选，不是交付）。builder 不改 acceptance/increments/events/verdict，
   不做 Git 写操作；builder 的测试输出不是 verified 证据，本 workflow 不手编 accepted
+  agent 调用结构校验与修正重问、CLI spawn 级失败重试（只读/幂等命令）、自修复
+  记录（taskDir/self-repairs.jsonl）随终态 message 上报主 agent（DEV 韧性层）
 whenToUse: delivery-dev 技能候选实现段——验收已获用户批准（evaluate state 非 draft）、
   需要形成候选实现或按未决发现/失败证据修复增量时调用；必传 projectRoot / taskDir /
   builderCredentialId。不用于验收设计（用 acceptance-design-dev）或证据核对与探索审查

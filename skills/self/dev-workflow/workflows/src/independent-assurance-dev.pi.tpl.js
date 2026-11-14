@@ -8,6 +8,8 @@ description: >-
   （FindingRaised/FindingResolved），完成后追加 AssuranceCompleted 并 evaluate；
   setup 与 finalize 比对 revision，漂移显式 assurance-failed；失败出口返回前重新
   evaluate 取当前裁决——只产证据，不直接宣告 accepted
+  agent 调用结构校验与修正重问、CLI spawn 级失败重试（只读/幂等命令）、自修复
+  记录（taskDir/self-repairs.jsonl）随终态 message 上报主 agent（DEV 韧性层）
 when: >-
   delivery-dev 技能独立保证段——候选实现已形成、需要独立覆盖核对（及高风险契约的
   探索性审查）时调用，必传 projectRoot / taskDir / assuranceKey（assurance 角色
