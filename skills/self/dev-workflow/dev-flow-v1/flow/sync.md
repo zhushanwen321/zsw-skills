@@ -17,7 +17,7 @@ v2 发起不检查该标记（标记只拦旧引擎）；v2 续跑 = 同 stateRo
 
 ```
 CreateWorkflow saved: design-code-sync-v2
-args: { designPkg, projectRoot, declaredRepos, confirmedRepoIds?, sandboxRoot?, stateRoot?, confRoot?, reviewerTemplate?, fixerTemplate?, maxRounds?, rulingsFile?, taskId?, executionId?, sampleType? }
+args: { designPkg, projectRoot, declaredRepos, confirmedRepoIds?, sandboxRoot?, stateRoot?, confRoot?, reviewerTemplate?, fixerTemplate?, maxRounds?, rulingsFile?, taskId?, executionId?, sampleType?, obsSkill=dev-flow-v1, resolvedGate=delivery-claim }
 // designPkg = 设计包目录绝对路径（tech-design 段 <name>/，含六章节 JSON）——义务提取数据源
 // projectRoot = 目标项目根绝对路径（workspace 清单扫描基准 + evidenceInputs 相对路径基准）
 // declaredRepos = workspace 登记清单 JSON（数组 [{repoId, path, editableRoot?}]）——传参即主 agent
@@ -25,6 +25,11 @@ args: { designPkg, projectRoot, declaredRepos, confirmedRepoIds?, sandboxRoot?, 
 // stateRoot = conformance-state 状态仓根（缺省 tech-design 段 <name>/conformance-state）；续跑 = 同根重发
 // rulingsFile = 用户裁决记录 json（续跑通道；元素 {address, direction: code-right|doc-right|waived, respondsTo}
 //   ——respondsTo 取上次终态 message 的在案锚点；发起时装载入流解除 awaiting-ruling）
+// obsSkill = dev-flow-v1（v1 通道必传）——该 workflow 与 dev-flow-v2 共用，观测 skill 字段
+//   缺省记 dev-flow-v2，不传则统计按技能名过滤把 v1 的 D5 归到 v2
+// resolvedGate = delivery-claim（v1 通道必传）——deliveryOutcome 追记门径：缺省 adjudicator 按
+//   delivery-v2 裁决器前提措辞（v1 通道体系外无裁决器，不适用）；delivery-claim = 主 agent
+//   交付宣告后追记，终态 message 前提与下表 deliveryOutcome 行一致
 终态（四层结论，词表见「四层结论」节）: engineOutcome = completed / awaiting-ruling / stopped / failed
 ```
 
@@ -55,7 +60,7 @@ finalize 四层结论 + 覆盖率汇总 + 残余 open 清单 + 收尾对象库�
 | scriptStatus | completed / failed | failed 按 message 恢复动作处置 |
 | engineOutcome | completed / awaiting-ruling / stopped / failed | awaiting-ruling → 携 rulingsFile 重发；stopped（轮次耗尽）→ 按 remaining 处置后重发；failed → 按 regenerateTasks/remaining 处置 |
 | integrationOutcome | not-required / not-started / verified-pending-integration / integrated / rolled-back / failed | failed/rolled-back 按 regenerateTasks 重新生成变更集 |
-| deliveryOutcome | pending / blocked | pending = 引擎收敛，主 agent 交付宣告后升 resolved（人工接管走集成器 manual 模式，actor=main-agent）；blocked = 待裁决/待修复 |
+| deliveryOutcome | pending / blocked | pending = 引擎收敛，主 agent 交付宣告后升 resolved（人工接管走集成器 manual 模式，actor=main-agent）——终态 message 前提按发起参数 resolvedGate 分叉：传 delivery-claim 时与本行一致，缺省（adjudicator）为 v2 裁决器前提；blocked = 待裁决/待修复 |
 
 监控不得把 scriptStatus=completed 当业务成功——engineOutcome 才是引擎结论层（六层结论并存见 V12，人工接管不覆盖引擎事实）。
 

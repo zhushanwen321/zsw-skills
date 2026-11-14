@@ -411,7 +411,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.3.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.4.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 // candidate-build-v2 — delivery-v2 候选实现引擎。
 // builder 只改产品代码与测试；每增量 builder 只 ask 一次（实现并写实现报告），
 // 随后脚本以 program/args 执行 testCommand 并把测试摘要追加进报告——不再二次
@@ -482,8 +482,9 @@ interface CandidateBuildResult {
 }
 
 const VALID_ARG_KEYS = new Set([
-  // 事件写入凭据：delivery-gate init 输出的 builderKey 私钥（builder 角色专用，
-  // userKey/assuranceKey 等其他角色 key 不得注入本 workflow）
+  // 事件写入凭据：delivery-gate init 输出的 builder 凭据 id（credentialId；
+  // 私钥本体不进参数与 prompt，CLI 按凭据文件定位。user/assurance 等
+  // 其他角色凭据不得注入本 workflow）
   "builderCredentialId",
   // 写事务租约（可选）：传入 runId 时 acquire/heartbeat/release 全程配对，append 带 --run-id 复核
   "runId",

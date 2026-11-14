@@ -55,6 +55,12 @@ parameters:
     sampleType:
       type: string
       description: "观测样本类型（可选）——production = 真实执行（缺省）/ selftest = 测试执行"
+    obsSkill:
+      type: string
+      description: "观测 skill 字段（canonical 技能名，可选）——缺省 dev-flow-v2；dev-flow-v1 通道（W4 v2）发起时传 dev-flow-v1（统计按技能名过滤，缺省会把 v1 的 D5 归到 v2）"
+    resolvedGate:
+      type: string
+      description: "deliveryOutcome 追记门径（可选）——adjudicator（缺省）= delivery-v2 裁决器 verdict 为 accepted/accepted_with_risk 后追记；delivery-claim = v1 通道（无 delivery-v2 裁决器）主 agent 交付宣告后追记——终态 message 按它分叉"
   required: [designPkg, projectRoot, declaredRepos]
 */
 
@@ -478,7 +484,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "1.1.7"; // 构建注入自 dev-flow-v1/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.8"; // 构建注入自 dev-flow-v1/SKILL.md frontmatter version（唯一权威）
 // ── 常量 ──
 const DEFAULT_MAX_ROUNDS = 8;
 /** semantic 非法输出回喂上限（权威 = conformance-plane/checkers/registry.mjs MAX_SEMANTIC_REFEEDS，
@@ -496,8 +502,9 @@ const SEMANTIC_CHECKER_VERSION = "1.0.0";
 const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-v1/agents/conformance-reviewer.md";
 const TILDE_FIXER_TEMPLATE = "~/.agents/skills/dev-flow-v1/agents/changeset-fixer.md";
 /** 四层结论词表（段七，GA9）：引擎产 scriptStatus/engineOutcome/integrationOutcome；
- *  deliveryOutcome 恒 pending/blocked（resolved 系列由主 agent 在裁决器 verdict 为
- *  accepted/accepted_with_risk 后追记、人工接管走集成器 manual 模式——引擎不越权） */
+ *  deliveryOutcome 恒 pending/blocked（resolved 系列由主 agent 追记、人工接管走集成器
+ *  manual 模式——引擎不越权；追记门径按 resolvedGate 分叉：adjudicator（缺省）= 裁决器
+ *  verdict 为 accepted/accepted_with_risk 后、delivery-claim = v1 通道主 agent 交付宣告后） */
 const ENGINE_OUTCOMES = ["completed", "awaiting-ruling", "stopped", "failed"];
 const VALID_ARG_KEYS = new Set([
     "designPkg",
@@ -514,6 +521,11 @@ const VALID_ARG_KEYS = new Set([
     "taskId",
     "executionId",
     "sampleType",
+    // 两代 dev-flow 共用本 workflow（v1 W4 / v2 D5），发起方差异经这两参声明：
+    // obsSkill = 观测 skill 字段（缺省 dev-flow-v2；v1 通道传 dev-flow-v1）；
+    // resolvedGate = deliveryOutcome 追记门径（缺省 adjudicator；v1 通道传 delivery-claim）
+    "obsSkill",
+    "resolvedGate",
 ]);
 function deriveInputs() {
     const problems = [];
@@ -545,8 +557,13 @@ function deriveInputs() {
             maxRounds = n;
     }
     const rulingsFile = typeof args.rulingsFile === "string" && args.rulingsFile.trim() !== "" ? args.rulingsFile.trim() : "";
+    const rawResolvedGate = typeof args.resolvedGate === "string" ? args.resolvedGate.trim() : "";
+    if (rawResolvedGate !== "" && rawResolvedGate !== "adjudicator" && rawResolvedGate !== "delivery-claim") {
+        problems.push(`resolvedGate 须为 adjudicator / delivery-claim，实际 ${JSON.stringify(args.resolvedGate)}`);
+    }
+    const resolvedGate = rawResolvedGate === "delivery-claim" ? "delivery-claim" : "adjudicator";
     // 路径形态：~/ 前缀在 home 探针后展开（这里先按原样通过，展开在 setup）
-    return { designPkg, projectRoot, declaredReposRaw, confirmedRaw, sandboxRoot, stateRoot, confRoot, reviewerTemplate, fixerTemplate, maxRounds, rulingsFile, problems };
+    return { designPkg, projectRoot, declaredReposRaw, confirmedRaw, sandboxRoot, stateRoot, confRoot, reviewerTemplate, fixerTemplate, maxRounds, rulingsFile, resolvedGate, problems };
 }
 // ── 领域探针（node -e；argv 传参、stdout JSON {ok, data|error} 返回。
 //    每个探针动态 import conformance-plane 模块——单源消费，无算法副本） ──
@@ -753,8 +770,22 @@ function derivedConclusion(st) {
 // 主流程（容器脚本体）
 // ============================================================================
 // ── 观测启用（O 区形态层）：先于参数窄化——已传合法观测 ID 的执行（含参数校验失败
-// 早退）都有 execution 边界。落盘路径依赖 home，探针通过后装配 ──
-obsCtx = initObservation("dev-flow-v1", "D5", null);
+// 早退）都有 execution 边界。落盘路径依赖 home，探针通过后装配。
+// skill 字段随发起方：本 workflow 被 dev-flow-v2（D5，缺省）与 dev-flow-v1（W4 v2
+// 通道，传 obsSkill=dev-flow-v1）共用——统计按 canonical 技能名过滤，写死单代名会把
+// 另一代的 D5 全部归错技能。两分支保持字面量实参：构建器观测门禁按
+// initObservation("<字面量>" 正则抓调用点对 skill 词表校验，变量实参会被判「未接入观测」──
+const rawObsSkill = typeof args.obsSkill === "string" ? args.obsSkill.trim() : "";
+if (rawObsSkill === "" || rawObsSkill === "dev-flow-v2") {
+    obsCtx = initObservation("dev-flow-v2", "D5", null);
+}
+else if (rawObsSkill === "dev-flow-v1") {
+    obsCtx = initObservation("dev-flow-v1", "D5", null);
+}
+else {
+    log(`WARN: 观测参数 obsSkill=${JSON.stringify(args.obsSkill)} 非法（合法值：dev-flow-v1 / dev-flow-v2，不传缺省 dev-flow-v2）——本次不写观测事件。恢复动作：修正 obsSkill 后重新发起，或不传`);
+    obsCtx = null;
+}
 // ── home 探针（观测层与 skill-data 寻址的前缀来源） ──
 const homeRes = await world.run("node", ["-e", NODE_PROBE_HOME]);
 if (homeRes.exitCode !== 0 || homeRes.stdout.trim() === "") {
@@ -1163,7 +1194,9 @@ const result = {
     message: `${stopMessage}；状态仓 ${stateRoot}（事件流 ${finalState.seq} 条）；${resumed ? "续跑" : "首跑"}；` +
         `四层结论 scriptStatus=completed / engineOutcome=${engineOutcome} / integrationOutcome=${integrationOutcome} / deliveryOutcome=${engineOutcome === "completed" ? "pending" : "blocked"}——` +
         (engineOutcome === "completed"
-            ? "裁决器 verdict 为 accepted/accepted_with_risk 后，主 agent 方可把 deliveryOutcome 追记为 resolved（人工接管走集成器 manual 模式，actor=main-agent）"
+            ? inputs.resolvedGate === "delivery-claim"
+                ? "主 agent 交付宣告后可把 deliveryOutcome 追记为 resolved（resolvedGate=delivery-claim：v1 通道无 delivery-v2 裁决器；人工接管走集成器 manual 模式，actor=main-agent）"
+                : "裁决器 verdict 为 accepted/accepted_with_risk 后，主 agent 方可把 deliveryOutcome 追记为 resolved（人工接管走集成器 manual 模式，actor=main-agent）"
             : engineOutcome === "awaiting-ruling"
                 ? "按 message 携 rulingsFile 重新发起（状态仓事件流续跑，身份与结论由事件派生）"
                 : "按 regenerateTasks/remaining 的恢复动作处置后重新发起"),

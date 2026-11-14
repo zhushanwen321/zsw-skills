@@ -3,7 +3,7 @@ name: dev-flow-v2
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 2.2.0
+version: 2.3.0
 description: >-
   Use when 一份完整设计包（tech-design-v2 产出：设计文档 + 双格式 impl-plan + 审查终态）
   需要落地为已验收代码。dev-flow 的 workflow 版（灰度并行，老版保留可随时切回）：
@@ -30,7 +30,7 @@ description: >-
 
 | 判据 | 缺失时 |
 |------|--------|
-| 交付任务目录存在已批准 acceptance.json（`delivery-gate evaluate` 的 state ∈ {design, revision-unstable, implementing, acceptance-approved, candidate, accepted, accepted_with_risk}——显式枚举，替换态 superseded / supersede-pending / supersede-cancelled 与未批准 draft 不放行；meta.json acceptanceBinding 与当前批准一致） | 回 delivery-v2 走验收设计与批准 |
+| 交付任务目录存在已批准 acceptance.json（`delivery-gate evaluate` 的 state ∈ {design, revision-unstable, implementing, acceptance-approved, candidate, accepted, accepted_with_risk}——显式枚举，替换态 superseded / supersede-pending / supersede-cancelled 与未批准 draft 不放行；meta.json acceptanceBinding 与当前批准一致——D0 编译门 `check-exec-plan.mjs --task-dir` 机器核对：acceptanceVersion 与验收包联合哈希（acceptance.json + increments.json 解析内容规范 JSON）复算比对，见 `flow/compile.md` 步骤 3） | 回 delivery-v2 走验收设计与批准 |
 | DesignApproved 存在且绑定的方案包哈希清单覆盖当前设计包（`verdict.designApproved == true`） | 回 tech-design-v2 重新确认方案包并 record-design-approved |
 | increments.json 的增量契约未被 impl-plan 变更（D0 编译门 `check-exec-plan.mjs --task-dir <交付任务目录>` 逐增量核对 exec-plan 单元归属（nodes[].incrementId）与测试命令一致；不一致 → fail-fast 回 T3） | 回 tech-design-v2 修 T3（increments 的增删改属技能①，走验收版本递增重批） |
 

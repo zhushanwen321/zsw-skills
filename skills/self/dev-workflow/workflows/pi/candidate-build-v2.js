@@ -2,14 +2,14 @@
 name: candidate-build-v2
 description: >-
   delivery-v2 技能 BUILD 段候选实现引擎：前置 evaluate 拒绝 state=draft；已实现增量
-  按 contractVersion 判定，仅命中未决发现/失败证据的增量进入修复轮；每增量 builder
+  按 acceptanceVersion 判定，仅命中未决发现/失败证据的增量进入修复轮；每增量 builder
   只 ask 一次（实现并写实现报告），脚本执行 testCommand、把测试摘要追加进报告并以
-  append --key builderKey 追加事件；基础设施失败不登记 FindingRaised，build-failed
+  append --credential 追加事件；基础设施失败不登记 FindingRaised，build-failed
   前重新 evaluate。builder 不改契约/事件/verdict、不做 Git 写操作
 when: >-
   delivery-v2 技能候选实现段——契约已获用户批准（state 非 draft）、需要形成候选
-  实现或修复增量，必传 projectRoot / taskDir / builderKey（builder 角色专用，
-  不接收其他角色 key）
+  实现或修复增量，必传 projectRoot / taskDir / builderCredentialId（builder 角色
+  专用，不接收 user/assurance 等其他角色凭据）
 notFor: >-
   契约设计（acceptance-design-v2）、覆盖核对与探索审查（independent-assurance-v2）、
   用户风险接受（主会话 delivery-gate accept-risk）
@@ -23,9 +23,9 @@ parameters:
     taskDir:
       type: string
       description: "任务目录绝对路径（delivery-gate init 创建；读契约/增量/事件/verdict，写实现报告与测试日志）"
-    builderKey:
+    builderCredentialId:
       type: string
-      description: "builderKey 私钥（delivery-gate init 输出的 builder 角色事件写入凭据；append --key 签名追加事件。不接收其他角色 key，密钥也不写入 agent prompt）"
+      description: "builder 角色凭据 id（init 输出，形态 <分组>/<任务id>/builder）——append --credential 以 builder 身份签名追加实现与发现事件。只接收本角色凭据 id——user/assurance 凭据不得注入；凭据私钥本体不进参数与 prompt"
     taskId:
       type: string
       description: "观测任务标识（可选；与 executionId 同时提供才启用阶段事件观测）"
@@ -35,7 +35,7 @@ parameters:
     sampleType:
       type: string
       description: "观测样本类型（可选）——production = 真实执行（缺省）/ selftest = 测试执行"
-  required: [projectRoot, taskDir, builderKey]
+  required: [projectRoot, taskDir, builderCredentialId]
 */
 
 // ===== zcode→pi 兼容 shim（两版差异区之一：另含 @pi-meta 头/schema 常量/TS 剥离/agent 调用层）=====
@@ -423,10 +423,11 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "2.3.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.4.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 const VALID_ARG_KEYS = new Set([
-    // 事件写入凭据：delivery-gate init 输出的 builderKey 私钥（builder 角色专用，
-    // userKey/assuranceKey 等其他角色 key 不得注入本 workflow）
+    // 事件写入凭据：delivery-gate init 输出的 builder 凭据 id（credentialId；
+    // 私钥本体不进参数与 prompt，CLI 按凭据文件定位。user/assurance 等
+    // 其他角色凭据不得注入本 workflow）
     "builderCredentialId",
     // 写事务租约（可选）：传入 runId 时 acquire/heartbeat/release 全程配对，append 带 --run-id 复核
     "runId",

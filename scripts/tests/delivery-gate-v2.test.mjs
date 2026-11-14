@@ -1,4 +1,5 @@
-// delivery-gate-v2.test.mjs — delivery-v2 裁决器（16 事件 / 凭据文件 / 验收包哈希 / 失效表 / 任务替换 / 租约）测试
+// delivery-gate-v2.test.mjs — delivery-v2 裁决器（16 事件 / 凭据文件 / 验收包哈希 / 失效表 / 任务替换 / 租约 /
+// verdict-rules 开关 / finding-categories 阻塞语义 / content-manifest 指纹与干净构建豁免）测试
 // 运行：node --test scripts/tests/delivery-gate-v2.test.mjs
 
 import test from "node:test";
@@ -168,6 +169,23 @@ function appendEvidence(fx, { requirementId, kind, result = "verified", revision
 function writeReviewArtifact(fx) {
   const version = readJson(join(fx.taskDir, "acceptance.json")).acceptanceVersion;
   evidenceFile(fx.taskDir, `acceptance-review-v${version}.md`, `# 审查报告 v${version}\n判据可证伪。\n`);
+}
+
+/** 在隔离 HOME 写用户级策略覆盖（loadPolicySources 同名文件整体替换；须在 snapshot-policy 之前写入才会进快照） */
+function overrideUserPolicy(fx, name, value) {
+  const dir = join(fx.home, ".agents", "skill-data", "delivery-policies");
+  mkdirSync(dir, { recursive: true });
+  writeJson(join(dir, name), value);
+}
+
+/** 追加一条 FindingRaised（actor=assurance），artifact 自动落 evidence 目录 */
+function raiseFinding(fx, revision, findingId, category, severity, requirementIds) {
+  const artifact = evidenceFile(fx.taskDir, `finding-${findingId}.md`, `# ${findingId}\n${category} 发现。\n`);
+  assertOk(appendEvent(fx, {
+    type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision,
+    summary: `发现 ${findingId}`, findingId, category, severity, requirementIds,
+    artifact: artifact.artifact,
+  }, "assurance"));
 }
 
 /** 快照 + 审查通过 + 批准 + 方案批准 + 实现 —— 完整链路到「待取证」状态 */
@@ -418,7 +436,7 @@ test("完整链路 draft → design → … → accepted；无 DesignApproved �
   assert.equal(evaluate(fx).state, "accepted");
 });
 
-test("accepted_with_risk 逐缺口判定：两类证据缺口只接受一类仍卡，各接受后放行", (t) => {
+test("accepted_with_risk 逐缺口判定：多缺口须 --gap-id 指定，各接受后放行", (t) => {
   const fx = makeV2Fixture(t);
   writeAcceptancePackage(fx, { r1RiskAcceptable: true });
   const revision = driveToAssuranceStage(fx);
@@ -427,15 +445,36 @@ test("accepted_with_risk 逐缺口判定：两类证据缺口只接受一类仍�
   assertOk(appendEvidence(fx, { requirementId: "R2", kind: "command", revision }));
   driveAssuranceComplete(fx, revision, { skipR1Evidence: true });
   assert.equal(evaluate(fx).state, "candidate", "存在未接受缺口应为 candidate");
-  // 第一次接受只绑一个缺口（第一个未接受缺口）
+  const r1Gaps = evaluate(fx).requirements.find((r) => r.id === "R1").evidence
+    .filter((e) => e.result !== "verified");
+  assert.equal(r1Gaps.length, 2, "R1 应有两个缺口（command=partial + inspection=missing）");
+  // 多缺口不给 --gap-id 应拒绝（防登记项与用户批准项错位）
+  const noGapId = fx.gate(
+    "accept-risk", "--task-dir", fx.taskDir, "--target-type", "requirement", "--target-id", "R1",
+    "--confirmation", "user-explicit", "--summary", "未指定缺口",
+    "--credential", fx.creds.user,
+  );
+  assertFailure(noGapId);
+  assert.match(noGapId.stderr, /--gap-id/);
+  // 指定不属于该需求的 gapId 应拒绝
+  const wrongGapId = fx.gate(
+    "accept-risk", "--task-dir", fx.taskDir, "--target-type", "requirement", "--target-id", "R1",
+    "--gap-id", sha256("not-a-gap"), "--confirmation", "user-explicit", "--summary", "错误缺口",
+    "--credential", fx.creds.user,
+  );
+  assertFailure(wrongGapId);
+  assert.match(wrongGapId.stderr, /不是需求 R1 的未接受缺口/);
+  // 只接受 command 缺口：另一类缺口未接受仍卡
   assertOk(fx.gate(
     "accept-risk", "--task-dir", fx.taskDir, "--target-type", "requirement", "--target-id", "R1",
+    "--gap-id", r1Gaps.find((e) => e.kind === "command").gapId,
     "--confirmation", "user-explicit", "--summary", "接受缺口其一",
     "--credential", fx.creds.user,
   ));
   assert.equal(evaluate(fx).state, "candidate", "另一类证据缺口未接受仍卡");
   assertOk(fx.gate(
     "accept-risk", "--task-dir", fx.taskDir, "--target-type", "requirement", "--target-id", "R1",
+    "--gap-id", r1Gaps.find((e) => e.kind === "inspection").gapId,
     "--confirmation", "user-explicit", "--summary", "接受缺口其二",
     "--credential", fx.creds.user,
   ));
@@ -670,4 +709,261 @@ test("append 完全相同事件幂等；verdict 含缺口 gapId 与非必需失�
   const r1Command = verdict.requirements.find((r) => r.id === "R1").evidence.find((e) => e.kind === "command");
   assert.ok(r1Command.gapId, "missing 缺口应有确定性派生 gapId");
   assert.equal(r1Command.result, "missing");
+});
+
+// ── 10. 增量测试命令必填与证据防覆盖写 ──
+
+test("无 testCommand 的增量被 validate-acceptance 拒绝（裁决器要求回执覆盖全部增量）", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  const increments = readJson(join(fx.taskDir, "increments.json"));
+  delete increments.items[0].testCommand;
+  writeJson(join(fx.taskDir, "increments.json"), increments);
+  const result = fx.gate("validate-acceptance", "--task-dir", fx.taskDir);
+  assertFailure(result);
+  assert.match(result.stderr, /testCommand/);
+});
+
+test("已登记 artifact 禁止覆盖写：同路径不同哈希被拒，新文件名放行", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  const revision = driveToAssuranceStage(fx);
+  const first = evidenceFile(fx.taskDir, "r1-command.md", "# v1 原始证据\n");
+  assertOk(appendEvent(fx, {
+    type: "EvidenceRecorded", actor: "assurance", acceptanceVersion: 1, revision,
+    summary: "R1 command verified", requirementId: "R1", kind: "command", result: "verified",
+    artifact: first.artifact, artifactSha256: first.artifactSha256,
+  }, "assurance"));
+  // 覆盖写：磁盘内容被改后，新事件以新哈希引用同一路径 → 预防性拒绝
+  writeFileSync(join(fx.taskDir, "evidence", "r1-command.md"), "# v2 被覆盖的证据\n");
+  const overwritten = appendEvent(fx, {
+    type: "EvidenceRecorded", actor: "assurance", acceptanceVersion: 1, revision,
+    summary: "R1 command 重记", requirementId: "R1", kind: "command", result: "verified",
+    artifact: first.artifact, artifactSha256: sha256("# v2 被覆盖的证据\n"),
+  }, "assurance");
+  assertFailure(overwritten);
+  assert.match(overwritten.stderr, /不同内容哈希登记/);
+  assert.match(overwritten.stderr, /新文件名/);
+  // 磁盘哈希与事件声明不一致（文件被改但事件沿用旧哈希）→ 同样拒绝
+  const staleSha = appendEvent(fx, {
+    type: "EvidenceRecorded", actor: "assurance", acceptanceVersion: 1, revision,
+    summary: "R1 command 旧哈希", requirementId: "R1", kind: "command", result: "verified",
+    artifact: first.artifact, artifactSha256: first.artifactSha256,
+  }, "assurance");
+  assertFailure(staleSha);
+  assert.match(staleSha.stderr, /哈希与事件声明不一致/);
+  // 新文件名 + 与磁盘一致的新哈希 → 放行
+  const fresh = evidenceFile(fx.taskDir, "r1-command-2.md", "# v2 新文件名证据\n");
+  assertOk(appendEvent(fx, {
+    type: "EvidenceRecorded", actor: "assurance", acceptanceVersion: 1, revision,
+    summary: "R1 command 新文件", requirementId: "R1", kind: "command", result: "verified",
+    artifact: fresh.artifact, artifactSha256: fresh.artifactSha256,
+  }, "assurance"));
+});
+
+// ── 11. verdict-rules 开关（requireAcceptanceReview / requireDesignApproved）──
+
+test("requireAcceptanceReview=false：不做 record-review 直接批准成功（reviewEventId=none），evaluate 不停 draft/design", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  overrideUserPolicy(fx, "verdict-rules.json", { maxDriftChain: 2, requireAcceptanceReview: false, requireDesignApproved: false });
+  assertOk(fx.gate("validate-acceptance", "--task-dir", fx.taskDir));
+  assertOk(fx.gate("snapshot-policy", "--task-dir", fx.taskDir));
+  const approve = fx.gate(
+    "approve-acceptance", "--task-dir", fx.taskDir, "--confirmation", "user-explicit",
+    "--summary", "免审查批准", "--credential", fx.creds.user,
+  );
+  assertOk(approve, "requireAcceptanceReview=false 时无 record-review 也应批准成功");
+  assert.match(approve.stderr, /requireAcceptanceReview=false，本次批准免审查/);
+  const events = readFileSync(join(fx.taskDir, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const approval = events.find((event) => event.type === "AcceptanceApproved");
+  assert.equal(approval.reviewEventId, "none", "免审查批准事件应携带 reviewEventId=none");
+  const verdict = evaluate(fx);
+  assert.equal(verdict.missing.acceptanceApproval, false, "免审查批准应计入有效批准");
+  assert.notEqual(verdict.state, "draft", "批准有效则不得停 draft");
+  assert.notEqual(verdict.state, "design", "requireDesignApproved=false 时不得停 design");
+  assert.equal(verdict.state, "acceptance-approved", "批准且零实现应为 acceptance-approved");
+});
+
+test("默认策略：reviewEventId=none 的批准双路被拒——命令前置拦截 + 手工 append 语义层拦截", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  assertOk(fx.gate("validate-acceptance", "--task-dir", fx.taskDir));
+  assertOk(fx.gate("snapshot-policy", "--task-dir", fx.taskDir));
+  // 命令路径：未 record-review 直接批准 → 前置 fail（requireAcceptanceReview 默认 true）
+  const noReview = fx.gate(
+    "approve-acceptance", "--task-dir", fx.taskDir, "--confirmation", "user-explicit",
+    "--summary", "未审查批准", "--credential", fx.creds.user,
+  );
+  assertFailure(noReview);
+  assert.match(noReview.stderr, /批准前置不满足/);
+  // 手工 append 路径：借 record-review 生成真实绑定的哈希三元组，伪造 reviewEventId=none 的批准事件 → 语义层拒绝
+  writeReviewArtifact(fx);
+  assertOk(fx.gate(
+    "record-review", "--task-dir", fx.taskDir, "--conclusion", "pass",
+    "--summary", "通过", "--credential", fx.creds.assurance,
+  ));
+  const events = readFileSync(join(fx.taskDir, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const review = events.find((event) => event.type === "AcceptanceReviewed");
+  const forged = appendEvent(fx, {
+    type: "AcceptanceApproved", actor: "user", acceptanceVersion: 1, revision: "",
+    summary: "伪造免审查批准",
+    acceptancePackageSha256: review.acceptancePackageSha256,
+    intentSha256: review.intentSha256,
+    policySnapshotSha256: review.policySnapshotSha256,
+    reviewEventId: "none",
+    confirmation: "user-explicit",
+  }, "user");
+  assertFailure(forged);
+  assert.match(forged.stderr, /reviewEventId=none 但策略要求目标与验收审查为批准前置/);
+  // 拦截只针对 none 语义：正常绑定审查的批准仍应成功
+  assertOk(fx.gate(
+    "approve-acceptance", "--task-dir", fx.taskDir, "--confirmation", "user-explicit",
+    "--summary", "正常批准", "--credential", fx.creds.user,
+  ));
+  assert.notEqual(evaluate(fx).state, "draft", "绑定真实审查的批准应有效");
+});
+
+test("requireDesignApproved=false：无 DesignApproved 时 state 路由跳过 design，全链路直达 accepted", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  overrideUserPolicy(fx, "verdict-rules.json", { maxDriftChain: 2, requireAcceptanceReview: true, requireDesignApproved: false });
+  assertOk(fx.gate("validate-acceptance", "--task-dir", fx.taskDir));
+  assertOk(fx.gate("snapshot-policy", "--task-dir", fx.taskDir));
+  writeReviewArtifact(fx);
+  assertOk(fx.gate(
+    "record-review", "--task-dir", fx.taskDir, "--conclusion", "pass",
+    "--summary", "审查通过", "--credential", fx.creds.assurance,
+  ));
+  assertOk(fx.gate(
+    "approve-acceptance", "--task-dir", fx.taskDir, "--confirmation", "user-explicit",
+    "--summary", "批准 v1", "--credential", fx.creds.user,
+  ));
+  // 批准后、零实现时刻：requireDesignApproved=false 使路由跳过 design 位，直落 acceptance-approved
+  const verdict = evaluate(fx);
+  assert.notEqual(verdict.state, "design", "requireDesignApproved=false 时不得落 design");
+  assert.equal(verdict.state, "acceptance-approved", "批准且零实现应 acceptance-approved");
+  assert.equal(verdict.missing.designApproval, true, "未做方案批准时缺口如实披露");
+  // 不补 record-design-approved，直接实现 + 保证完成 → accepted
+  const revision = currentRevision(fx);
+  const implArtifact = evidenceFile(fx.taskDir, "impl-I1.md", "# 实现报告\n");
+  assertOk(appendEvent(fx, {
+    type: "ImplementationRecorded", actor: "builder", acceptanceVersion: 1, revision,
+    summary: "I1 实现", incrementId: "I1", artifact: implArtifact.artifact,
+    mergeReceipt: { fromRevision: revision, toRevision: revision, patchSha256: sha256("patch") },
+  }, "builder"));
+  driveAssuranceComplete(fx, revision);
+  assert.equal(evaluate(fx).state, "accepted", "全程无 DesignApproved 也应 accepted");
+});
+
+// ── 12. finding-categories 阻塞语义与风险接受开关 ──
+
+test("blocksAccepted 三态与 riskAcceptAllowed：cosmetic 不阻、defect 可接受放行、boundary 确认前阻塞且禁风险接受", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  overrideUserPolicy(fx, "finding-categories.json", {
+    categories: [
+      { id: "defect", blocksAccepted: true, exits: ["fix-then-resolve", "user-risk-accept-if-allowed"], riskAcceptAllowed: true },
+      { id: "boundary", blocksAccepted: "until-confirmed", exits: ["assurance-confirm-declared"], riskAcceptAllowed: false },
+      { id: "cosmetic", blocksAccepted: false, exits: ["user-risk-accept-if-allowed"], riskAcceptAllowed: true },
+    ],
+  });
+  const revision = driveToAssuranceStage(fx);
+  driveAssuranceComplete(fx, revision);
+  // 负例：blocksAccepted=false（cosmetic）不阻 accepted
+  raiseFinding(fx, revision, "F-COS", "cosmetic", "non-blocker", ["R2"]);
+  assert.equal(evaluate(fx).state, "accepted", "blocksAccepted=false 的分类不得阻 accepted");
+  // 正例：blocksAccepted=true（defect）未决阻 accepted；riskAcceptAllowed=true 接受后放行
+  raiseFinding(fx, revision, "F-DEF", "defect", "non-blocker", ["R2"]);
+  assert.equal(evaluate(fx).state, "candidate", "defect 未决应阻 accepted");
+  assertOk(fx.gate(
+    "accept-risk", "--task-dir", fx.taskDir, "--target-type", "finding", "--target-id", "F-DEF",
+    "--confirmation", "user-explicit", "--summary", "接受缺陷风险", "--credential", fx.creds.user,
+  ));
+  assert.equal(evaluate(fx).state, "accepted_with_risk", "riskAcceptAllowed=true 的缺陷接受后应 accepted_with_risk");
+  // 正例：blocksAccepted=until-confirmed（boundary）未确认阻 accepted
+  raiseFinding(fx, revision, "F-BND", "boundary", "non-blocker", ["R1"]);
+  assert.equal(evaluate(fx).state, "candidate", "boundary 未确认应阻 accepted");
+  // 负例：riskAcceptAllowed=false 拒绝风险接受，出路是 FindingResolved
+  const denied = fx.gate(
+    "accept-risk", "--task-dir", fx.taskDir, "--target-type", "finding", "--target-id", "F-BND",
+    "--confirmation", "user-explicit", "--summary", "试图接受边界风险", "--credential", fx.creds.user,
+  );
+  assertFailure(denied);
+  assert.match(denied.stderr, /不允许风险接受（策略 riskAcceptAllowed=false）/);
+  const resolved = evidenceFile(fx.taskDir, "bnd-resolved.md", "# 边界确认\n已论证声明边界。\n");
+  assertOk(appendEvent(fx, {
+    type: "FindingResolved", actor: "assurance", acceptanceVersion: 1, revision,
+    summary: "边界已论证确认", findingId: "F-BND", artifact: resolved.artifact,
+  }, "assurance"));
+  assert.equal(evaluate(fx).state, "accepted_with_risk", "boundary 确认后不再阻塞（F-DEF 已接受维持 accepted_with_risk）");
+});
+
+// ── 13. content-manifest 指纹与干净构建豁免 ──
+
+test("content-manifest 指纹：非 git 目录清单哈希、内容变化敏感、空/重复/越界清单拒绝", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "delivery-manifest-rev-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const project = join(root, "plain");
+  const home = join(root, "home");
+  mkdirSync(project);
+  mkdirSync(home);
+  overrideUserPolicy({ home }, "revision.json", { mode: "content-manifest", runsFromIgnoredArtifacts: false });
+  writeFileSync(join(project, "app.out"), "artifact-v1\n");
+  writeFileSync(join(project, "delivery-manifest.txt"), "# 纳入 revision 的产物\napp.out\n");
+  const run = (args) => runGate(args, home);
+  const first = run(["revision", "--project-root", project]);
+  assertOk(first);
+  assert.match(first.stdout.trim(), /^manifest-[0-9a-f]{24}$/, "清单模式 revision 应输出 manifest-<24hex>");
+  // 清单条目内容变化 → revision 变化
+  writeFileSync(join(project, "app.out"), "artifact-v2\n");
+  const second = run(["revision", "--project-root", project]);
+  assertOk(second);
+  assert.notEqual(second.stdout, first.stdout, "清单内容变化必须改变 revision");
+  assert.match(second.stdout.trim(), /^manifest-[0-9a-f]{24}$/);
+  // 空清单（仅注释与空行）
+  writeFileSync(join(project, "delivery-manifest.txt"), "# 只有注释\n\n");
+  const empty = run(["revision", "--project-root", project]);
+  assertFailure(empty);
+  assert.match(empty.stderr, /内容清单为空/);
+  // 重复条目
+  writeFileSync(join(project, "delivery-manifest.txt"), "app.out\napp.out\n");
+  const dup = run(["revision", "--project-root", project]);
+  assertFailure(dup);
+  assert.match(dup.stderr, /重复条目/);
+  // 越界条目
+  writeFileSync(join(project, "delivery-manifest.txt"), "../secret.txt\n");
+  const escape = run(["revision", "--project-root", project]);
+  assertFailure(escape);
+  assert.match(escape.stderr, /越界/);
+  // 对照：默认 auto-git 策略下非 git 目录明确失败，恢复动作指引 content-manifest 出路
+  const plainHome = join(root, "home2");
+  mkdirSync(plainHome);
+  const autoGit = runGate(["revision", "--project-root", project], plainHome);
+  assertFailure(autoGit);
+  assert.match(autoGit.stderr, /mode=content-manifest/);
+});
+
+test("runsFromIgnoredArtifacts=true：mode=content-manifest 豁免干净构建，无 cleanBuild 的 AssuranceCompleted 仍有效直达 accepted", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  writeFileSync(join(fx.projectDir, "delivery-manifest.txt"), "a.txt\n");
+  overrideUserPolicy(fx, "revision.json", { mode: "content-manifest", runsFromIgnoredArtifacts: true });
+  const revision = driveToAssuranceStage(fx);
+  assert.match(revision, /^manifest-[0-9a-f]{24}$/, "全链路 revision 应为清单指纹");
+  driveAssuranceComplete(fx, revision); // cleanBuild: null
+  const verdict = evaluate(fx);
+  assert.equal(verdict.missing.assuranceCompleted, false, "清单模式应豁免干净构建记录");
+  assert.equal(verdict.state, "accepted");
+});
+
+test("runsFromIgnoredArtifacts=true 对照：mode=auto-git 不豁免，缺干净构建的 AssuranceCompleted 判无效停 candidate", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  overrideUserPolicy(fx, "revision.json", { mode: "auto-git", runsFromIgnoredArtifacts: true });
+  const revision = driveToAssuranceStage(fx);
+  driveAssuranceComplete(fx, revision); // cleanBuild: null
+  const verdict = evaluate(fx);
+  assert.equal(verdict.missing.assuranceCompleted, true, "auto-git 模式从 ignored 产物运行必须附干净构建");
+  assert.equal(verdict.state, "candidate", "缺干净构建应停 candidate 而非错误宣告 accepted");
 });

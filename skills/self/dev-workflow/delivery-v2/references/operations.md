@@ -66,6 +66,8 @@ builder 事件经 `append --credential <builder credentialId> [--run-id <runId>]
 
 zcode：`CreateWorkflow saved: independent-assurance-v2`，args `{ projectRoot, taskDir, assuranceCredentialId, taskId?, executionId?, sampleType?, runId? }`。前置：state 非 draft、增量齐（candidate-build-v2 或 dev-flow-v2 D4 登记实现皆可）。两阶段串行：coverage-reviewer 先行取证并落盘冻结覆盖清单，explorer 拿到清单后探索。setup/finalize 比对 revision；漂移登记 AssuranceRevisionDrift（driftSeq 按事件流既有漂移数递增），链超上限进 revision-unstable。AssuranceCompleted 绑逐增量测试回执（命令、退出码、日志哈希、cwd、被测产物哈希——与日志哈希来源不同，防「构建 A 测 B」）与证据/探索事件 id——防跨 run 拼接。
 
+回执与 setup/finalize 使用的产物状态指纹口径与 `delivery-gate` 的 revision 计算一致，按任务策略快照 revision.json 的 mode 分两档：`auto-git`（普通模式）= git HEAD + tracked 修改（`git diff`）+ untracked 非 ignored 文件逐文件内容——builder 新增的未跟踪文件替换内容后指纹必变；`content-manifest` = 按项目根 `delivery-manifest.txt` 清单逐文件内容计算（输出 `manifest-` 前缀指纹），非 git 项目走该模式（`auto-git` 下非 git 目录无法计算 revision，链路走不通）。
+
 策略快照 `runsFromIgnoredArtifacts=true`（policies/revision.json 随任务固定）时的执行语义：workflow 取证前生成干净构建（HEAD 导出 + 工作树补丁 + 非 ignored 新文件复制，不含 ignored 本地产物），逐增量测试在干净目录执行并统一绑 buildId，AssuranceCompleted 附 cleanBuild 记录——证明证据不依赖本机 ignored 产物；干净目录内测试失败（如需本机 ignored 依赖）会如实记入回执，裁决器按退出码判定保证无效。
 
 ## 6. 统一判定与风险接受
@@ -75,10 +77,10 @@ node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs evaluate --task-dir 
 node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs accept-risk \
   --task-dir <taskDir> --target-type requirement|finding --target-id <id> \
   --confirmation user-explicit --summary "接受 <具体风险、影响、恢复方式>" \
-  --credential <user credentialId>
+  --credential <user credentialId> [--gap-id <gapId>]
 ```
 
-- accept-risk 自动计算并绑定当前缺口 gapId（missing 缺口为确定性派生 id；partial/failed 绑对应证据事件 id）；boundary 类与 riskAcceptable=false 需求拒绝。
+- accept-risk 缺口绑定：单缺口缺省自动绑定当前 gapId（missing 缺口为确定性派生 id；partial/failed 绑对应证据事件 id）；同一需求存在多个未接受缺口时必须 `--gap-id` 指定其一（缺省执行会列出全部候选 gapId）——多缺口不允许自动绑定，防登记项与用户批准项错位。boundary 类与 riskAcceptable=false 需求拒绝。
 - 按 `nextAction` 处理：实现缺陷回技能③；验收遗漏递增版本回审查；证据不足回独立保证；具体风险交用户逐项决定。
 
 ## 7. 写事务租约（workflow run 级）

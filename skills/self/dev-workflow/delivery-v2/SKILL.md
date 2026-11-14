@@ -1,7 +1,7 @@
 ---
 name: delivery-v2
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 2.3.0
+version: 2.4.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -33,7 +33,7 @@ dev-flow-v2（技能③执行）在本体系内协作：②在已批准目标与
 | 只定义目标与验收 | `references/acceptance.md` | `acceptance-design-v2`；经用户批准后停止，不写代码 |
 | 按已有目标与验收开发 | `references/operations.md` | 校验验收包后走 tech-design-v2（方案）→ dev-flow-v2（候选实现）→ 本技能保证与裁决 |
 | 只验收已有实现 | `references/state-and-events.md`、`references/operations.md` | init 加 `--verification-only`（豁免方案包与 DesignApproved）；由 candidate-build-v2 承载只核验模式——builder 不改代码，逐增量核验在当前 revision 成立并登记当前实现记录（摘要带 `[verification-only]` 标注），再独立保证；禁止补写「当时实现完成」的旧事件 |
-| 用户接受具体残余风险 | `references/state-and-events.md` | 确认用户明确指定风险后 `accept-risk`（自动绑定缺口 gapId）→ evaluate |
+| 用户接受具体残余风险 | `references/state-and-events.md` | 确认用户明确指定风险后 `accept-risk`（单缺口缺省绑定 gapId，多缺口须 `--gap-id` 指定其一）→ evaluate |
 | 查看当前能否交付 | `references/state-and-events.md` | 直接 evaluate，不重放旧证据 |
 | 修改验收判据 | `references/acceptance.md` | 递增 acceptanceVersion 并重新审查与批准；相关旧证据失效 |
 

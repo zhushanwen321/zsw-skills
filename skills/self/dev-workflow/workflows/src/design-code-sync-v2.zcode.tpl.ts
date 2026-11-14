@@ -63,6 +63,15 @@ args:
   sampleType:
     type: string
     description: 观测样本类型（可选）——production = 真实执行（缺省）／selftest = 测试执行
+  obsSkill:
+    type: string
+    description: "观测 skill 字段（canonical 技能名，可选）——缺省 dev-flow-v2；dev-flow-v1
+      通道（W4 v2）发起时传 dev-flow-v1（统计按技能名过滤，缺省会把 v1 的 D5 归到 v2）"
+  resolvedGate:
+    type: string
+    description: "deliveryOutcome 追记门径（可选）——adjudicator（缺省）= delivery-v2 裁决器
+      verdict 为 accepted/accepted_with_risk 后追记；delivery-claim = v1 通道（无 delivery-v2
+      裁决器）主 agent 交付宣告后追记——终态 message 按它分叉"
 */
 
 // ── G 区平台恢复指引（机制词 pi 语境化；措辞沿 W4 旧引擎同款——parity 白名单已登记同文） ──

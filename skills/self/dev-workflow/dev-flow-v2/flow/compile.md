@@ -54,14 +54,15 @@
 
 ```bash
 node ~/.agents/skills/dev-flow-v2/scripts/check-exec-plan.mjs <exec-plan 绝对路径>   # 独立设计任务
-node ~/.agents/skills/dev-flow-v2/scripts/check-exec-plan.mjs <exec-plan 绝对路径> --task-dir <交付任务目录>   # 交付体系任务（验收任务门通过的必选形态：附加增量契约核对——读交付任务目录 increments.json，逐增量核 dev 节点 incrementId 归属全覆盖、引用存在、testCommand 逐字一致；判据同 tech-design-v2 flow/plan.md「增量契约对齐」节）
+node ~/.agents/skills/dev-flow-v2/scripts/check-exec-plan.mjs <exec-plan 绝对路径> --task-dir <交付任务目录>   # 交付体系任务（验收任务门通过的必选形态：附加两段核对——①增量契约核对：读交付任务目录 increments.json，逐增量核 dev 节点 incrementId 归属全覆盖、引用存在、testCommand 逐字一致（判据同 tech-design-v2 flow/plan.md「增量契约对齐」节）；②验收绑定核对：读设计包 meta.json（从 exec-plan designDocPath 推导）与交付任务目录 acceptance.json，核 acceptanceBinding 与当前批准一致——acceptanceVersion 相等 + 验收包联合哈希（acceptance.json + increments.json 解析内容规范 JSON 的联合 sha256，与 delivery-gate acceptancePackageSha256 同源）复算比对 + taskDir 同一目录（入口门判据 1 的机器载体；判据同 tech-design-v2 flow/plan.md 入口自检第 4 条））
 ```
 
-stdout `PASS` 才继续步骤 4（交付体系任务须带 `--task-dir`，缺传即跳过增量核对 = 入口门判据 3 未执行）。校验集与 W2 引擎的 validatePlan 及 W3 启动契约（testPlan / 必填字段 / 白名单）同源，错误文案逐字一致，漂移由差分测试机器对账拦截（`node --test scripts/tests/check-exec-plan-parity.test.mjs`，zsw-skills 检出内执行）。FAIL 逐行输出 `FAIL: <分类>: <明细>`（全部报完再退出），按分类路由处置：
+stdout `PASS` 才继续步骤 4（交付体系任务须带 `--task-dir`，缺传即跳过增量与验收绑定两段核对 = 入口门判据 1 与 3 未执行）。校验集与 W2 引擎的 validatePlan 及 W3 启动契约（testPlan / 必填字段 / 白名单）同源，错误文案逐字一致，漂移由差分测试机器对账拦截（`node --test scripts/tests/check-exec-plan-parity.test.mjs`，zsw-skills 检出内执行）。FAIL 逐行输出 `FAIL: <分类>: <明细>`（全部报完再退出），按分类路由处置：
 
 - 单字段错误（`territory` 形态 / `ref` 引用名 / `whitelist`、`noop` 命令形态 / `cwd`、`script`、`testPlan` / 路径层级与占位符类 `field`）→ 手修 exec-plan 对应字段后重跑本门；值转抄自 impl-plan 的字段（testCommand / deps / 单元 id）同步修 impl-plan 上游，否则重编译复现
 - 结构性缺漏（`schema`、缺数组缺必填的 `field`）→ 回步骤 2 重编译（尚无节点执行过时；已有进度改手修 + ledger 登记，重初始化会重置 status.json / runlog / ledger）
 - `cycle` 依赖环 / `overlap` territory 重叠无依赖路径 → 回 tech-design-v2 T3 修 impl-plan 后重走本清单——手修 exec-plan 会确定性复现同类错误
+- `increments` 增量契约 / `binding` 验收绑定 → 增量归属与命令转抄问题回 tech-design-v2 T3「增量契约对齐」节修；binding 不一致（验收版本或验收包已变化、设计包绑定陈旧）回 tech-design-v2 T1 入口门（flow/write.md Step 0）重新影响审查并更新 meta.json acceptanceBinding——验收内容变化属技能①职权，不在 exec-plan 侧改
 - `io:`（exec-plan 路径不存在或不可读）/ `json:`（JSON 语法错）自解释类——核对路径 / 修语法后重跑本门
 
 运行时环境断言（cwd == git rev-parse --show-toplevel、promptFile / verify script 盘上存在、projectRoot 存在）仍由 W2 引擎 setup 在派发前 fail-fast——promptFile 本清单下一步才构造，静态门不查存在性，正确计划不会恒红。
@@ -119,7 +120,7 @@ stdout `PASS` 才继续步骤 4（交付体系任务须带 `--task-dir`，缺传
 - **fail 先查排障文档**：验收失败处理写在 verify/inspect 节点 promptFile 约束——先 read 项目排障文档（典型 docs/TROUBLESHOOTING.md）归因，禁不归因重试、禁放宽断言
 - **开发期 e2e**：验收计划表「单元 committed 后」时点的项编译为 kind=verify 节点插入 dev 模式 nodes（deps=所属 dev 单元）
 
-**D3 发起门（生成即校验）**：acceptance 节点实例化落位、mode=acceptance 的 exec-plan 定稿后，发起 W2 验证实例化前跑同款校验（`node ~/.agents/skills/dev-flow-v2/scripts/check-exec-plan.mjs <exec-plan 绝对路径>`；acceptance 模式不传 --task-dir——增量契约核对在 D0 dev 模式门已完成，D3 门不重复核对验收节点）必须 PASS 再发起——schema 错误在编译点拦下并按步骤 3 同款路由处置，不留到引擎 setup 才爆。
+**D3 发起门（生成即校验）**：acceptance 节点实例化落位、mode=acceptance 的 exec-plan 定稿后，发起 W2 验证实例化前跑同款校验（`node ~/.agents/skills/dev-flow-v2/scripts/check-exec-plan.mjs <exec-plan 绝对路径>`；acceptance 模式不传 --task-dir——增量契约与验收绑定核对在 D0 dev 模式门已完成（同一设计包同一任务目录），D3 门不重复核对验收节点）必须 PASS 再发起——schema 错误在编译点拦下并按步骤 3 同款路由处置，不留到引擎 setup 才爆。
 
 ## worktree 合并排布
 

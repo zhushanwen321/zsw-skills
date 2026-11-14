@@ -3,7 +3,7 @@ name: tech-design-v2
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 2.2.0
+version: 2.3.0
 description: >-
   Use when 在已批准目标与验收（delivery-v2 产出）的约束下三阶段推敲方案并产出完整设计包：
   写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan 双格式），用户确认后登记方案包
@@ -55,7 +55,7 @@ T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
 
 | 文件 | 产生者 | 机械可查判据 |
 |------|--------|-------------|
-| `meta.json` 内的 `acceptanceBinding`（acceptanceVersion + acceptancePackageSha256 + taskDir） | T1 入口门写入 | 与交付任务目录当前批准一致；验收版本变化后旧设计包不可直接进 T3/dev-flow-v2 入口（须重新影响审查） |
+| `meta.json` 内的 `acceptanceBinding`（acceptanceVersion + acceptancePackageSha256 + taskDir） | T1 入口门写入 | 与交付任务目录当前批准一致——T3 入口自检比对 `delivery-gate evaluate` 输出的 acceptanceVersion / acceptancePackageSha256（flow/plan.md 入口自检第 4 条），dev-flow-v2 D0 编译门 `check-exec-plan.mjs --task-dir` 复算验收包联合哈希机器核对（其 flow/compile.md 步骤 3）；验收版本变化后旧设计包不可直接进 T3/dev-flow-v2 入口（须重新影响审查） |
 | `<name>/`（设计文档目录：六章节 JSON `meta.json` / `s1-context.json` / `s2-status.json` / `s3-solution.json` / `s4-accept.json` / `s5-breakdown.json`——权威源，字段规格见 `references/design-doc-schema.md`）+ `<name>.rendered.md`（渲染视图，`scripts/render-design-doc.mjs` 生成，非权威） | T1 | `scripts/check-design-doc.mjs` 对设计目录 exit 0 |
 | `<name>.impl-plan.md` + `<name>.impl-plan.json`（双格式） | T3 | 两文件存在且单元 id 集一致 |
 | `<name>.symbol-watchlist.json`（符号词表） | T3 | 文件存在且 sourceFingerprints 与源文档当前 sha256 一致（design-code-sync 发起时机器复验；词集漂移经 wordsDrift 软监测不拒启） |

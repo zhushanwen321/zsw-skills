@@ -27,9 +27,11 @@
 // 用法：node check-exec-plan.mjs <exec-plan.json 绝对路径> [--task-dir <交付任务目录>]
 // 输出契约（--check 风格）：全部通过 → stdout `PASS`，exit 0；失败 → 每条错误一行
 //   `FAIL: <分类>: <明细>`（全部报完再退出），exit 1；用法错误 exit 2（含恢复动作）。
-// --task-dir（交付体系任务必传，独立设计任务不传）：附加执行增量契约核对——读交付任务
-//   目录 increments.json，核 exec-plan dev 节点的增量归属与测试命令（判据见下方
-//   checkIncrementContract 段）；不传时本段跳过，主校验行为不变。
+// --task-dir（交付体系任务必传，独立设计任务不传）：附加执行两段核对——①增量契约核对：
+//   读交付任务目录 increments.json，核 exec-plan dev 节点的增量归属与测试命令（判据见下方
+//   checkIncrementContract 段）；②验收绑定核对：读设计包 meta.json（路径从 exec-plan
+//   designDocPath 推导）与交付任务目录 acceptance.json，核 acceptanceBinding 与当前批准
+//   一致（判据见下方 checkAcceptanceBinding 段）。不传时两段跳过，主校验行为不变。
 //
 // 分类 → 处置路由（与 W2 启动校验失败的恢复指引同语义）：
 //   field/territory/ref/whitelist/noop/cwd/script/testPlan → 单字段手修 exec-plan 后
@@ -37,10 +39,18 @@
 //     （schema、缺数组类 field）→ 回编译清单重编译；cycle/overlap（依赖环、territory
 //     重叠无依赖路径）→ 回 tech-design-v2 T3 修 impl-plan，手修 exec-plan 确定性复现；
 //   increments（增量契约）→ 回 tech-design-v2 T3「增量契约对齐」节（flow/plan.md）——
-//     增量的增删改属技能①职权，须回 delivery-v2 递增验收版本重批，不在 impl-plan 侧改。
+//     增量的增删改属技能①职权，须回 delivery-v2 递增验收版本重批，不在 impl-plan 侧改；
+//   binding（验收绑定）→ 回 tech-design-v2 T1 入口门（flow/write.md Step 0）重新影响审查
+//     并更新 meta.json acceptanceBinding——验收版本/验收包内容变化属交付体系变更（技能①
+//     裁决域），不在 exec-plan 侧改。
+//
+// 验收绑定段的 canonicalJson / acceptancePackageSha256 与 delivery-v2 裁决器 delivery-gate.mjs
+// 逐字同源（该脚本是直跑 CLI、无 export，故此处复刻）——改任一侧必须同步另一侧；哈希口径
+// 变化会使全部已登记 binding 失效，属数据契约变更（MAJOR）。
 
 import { readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // ── 常量（与两引擎逐字一致；改任一侧须同步并跑差分测试） ──
@@ -539,12 +549,127 @@ function checkIncrementContract(raw, increments) {
   return errors;
 }
 
+// ── 验收包联合哈希（delivery-gate.mjs 同源复刻，改任一侧须同步——见头部同源声明）──
+// 语义 = 对 acceptance.json 与 increments.json **解析后**的规范 JSON（键排序、无空白）做
+// 联合 sha256：绑定的不是文件字节而是解析内容，手工重排 JSON 键序/空白不改变哈希。
+
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+    .join(",")}}`;
+}
+
+function sha256Text(text) {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function acceptancePackageSha256(acceptanceParsed, incrementsParsed) {
+  return sha256Text(
+    canonicalJson({
+      "acceptance.json": canonicalJson(acceptanceParsed),
+      "increments.json": canonicalJson(incrementsParsed),
+    }),
+  );
+}
+
+// ── 验收绑定一致性核对段（--task-dir 时与增量契约同批附加执行；纯确定性数据比对）──
+// 判据与两处 SKILL 入口门声明同源（tech-design-v2 SKILL「设计包」表 acceptanceBinding 行、
+// dev-flow-v2 SKILL「验收任务门」判据 1 括注）：设计包 meta.json 的 acceptanceBinding 必须
+// 与交付任务目录当前批准一致——①acceptanceVersion 相等（拦重批后 binding 陈旧）；②验收包
+// 联合哈希相等（拦同版本号下验收包内容变化）；③taskDir 指向同一交付任务目录（拦拿错包）。
+// 任一不符 → 验收版本或验收包已变化，旧设计包绑定失效，须回 tech-design-v2 flow/write.md
+// Step 0 重新影响审查并更新 binding 后再进下游——不在 exec-plan 侧改。
+function checkAcceptanceBinding(raw, meta, acceptance, increments, taskDir) {
+  const errors = [];
+  if (!isRec(raw)) return errors; // schema 致命早退已报，不叠加噪声
+  const ab = isRec(meta) && isRec(meta.acceptanceBinding) ? meta.acceptanceBinding : null;
+  if (ab === null) {
+    errors.push({
+      category: "binding",
+      message: "设计包 meta.json 无 acceptanceBinding——交付体系任务（--task-dir 给定）的设计包必须在 T1 入口门写入 { acceptanceVersion, acceptancePackageSha256, taskDir }（tech-design-v2 flow/write.md Step 0；独立设计任务不传 --task-dir）",
+    });
+    return errors;
+  }
+  const curVer = isRec(acceptance) ? acceptance.acceptanceVersion : undefined;
+  if (ab.acceptanceVersion !== curVer) {
+    errors.push({
+      category: "binding",
+      message: `设计包 meta.json acceptanceBinding.acceptanceVersion=${JSON.stringify(ab.acceptanceVersion)} 与交付任务目录当前验收版本 ${JSON.stringify(curVer)} 不一致——验收版本已变化（重批），旧设计包绑定失效（恢复：回 tech-design-v2 flow/write.md Step 0 影响审查——对照新版本 acceptance.json 与 increments.json 逐条比对设计包覆盖，需改动回 T1 修订并按所处阶段重走 T2/T3，完成后更新 meta.json acceptanceBinding 再重编译）`,
+    });
+  }
+  const computed = acceptancePackageSha256(acceptance, increments);
+  if (ab.acceptancePackageSha256 !== computed) {
+    errors.push({
+      category: "binding",
+      message: `设计包 meta.json acceptanceBinding.acceptancePackageSha256（${String(ab.acceptancePackageSha256)}）与交付任务目录当前验收包实算哈希（${computed}）不一致——验收包内容已变化，旧绑定失效（恢复：回 tech-design-v2 flow/write.md Step 0 影响审查后更新 meta.json acceptanceBinding 再重编译；实算口径 = acceptance.json + increments.json 解析内容规范 JSON 的联合 sha256，与 delivery-gate acceptancePackageSha256 同源）`,
+    });
+  }
+  const trimSlash = (p) => (typeof p === "string" ? p.replace(/\/+$/, "") : p);
+  if (trimSlash(ab.taskDir) !== trimSlash(taskDir)) {
+    errors.push({
+      category: "binding",
+      message: `设计包 meta.json acceptanceBinding.taskDir（${String(ab.taskDir)}）与 --task-dir（${taskDir}）不是同一交付任务目录（恢复：核对 --task-dir 与 meta.json acceptanceBinding.taskDir；拿错设计包则改用其绑定任务目录下的交付任务）`,
+    });
+  }
+  return errors;
+}
+
+/** exec-plan.designDocPath（渲染视图 <name>.rendered.md 或设计目录本身）→ 设计目录内 meta.json 路径 */
+function designMetaPath(designDocPath) {
+  if (designDocPath.endsWith(".rendered.md")) {
+    return join(dirname(designDocPath), basename(designDocPath, ".rendered.md"), "meta.json");
+  }
+  return join(designDocPath, "meta.json");
+}
+
+/** realpath 归一（symlink 形态统一，如 macOS /var 与 /private/var），失败回退原串参与比对 */
+function realpathSafe(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 // 差分测试（scripts/tests/check-exec-plan-parity.test.mjs）消费：validatePlanSchema =
 // 与 W2 validatePlan 逐字对账的移植侧；checkPlan = 整门判定（schema + 附加契约段）；
-// checkIncrementContract = --task-dir 附加段（差分测试不覆盖，由 CLI 行为承载）
-export { validatePlanSchema, checkPlan, checkIncrementContract };
+// checkIncrementContract / checkAcceptanceBinding = --task-dir 附加段（差分测试不覆盖，
+// 由 CLI 行为承载）
+export { validatePlanSchema, checkPlan, checkIncrementContract, checkAcceptanceBinding };
 
 // ── CLI（被差分测试 import 时跳过） ──
+
+/** --task-dir 附加段第二环：读设计包 meta.json 与交付任务目录 acceptance.json，调
+ *  checkAcceptanceBinding 做验收绑定一致性核对（读盘失败按 FAIL 行报并 exit 1） */
+function checkBindingFromDisk(raw, taskDir, incRaw) {
+  // designDocPath 缺失/非字符串已由 contractExtras 报 field 错误，此处不叠加重复报
+  if (!isRec(raw) || !isStr(raw.designDocPath)) return [];
+  const metaPath = designMetaPath(raw.designDocPath);
+  let metaRaw;
+  try {
+    metaRaw = JSON.parse(readFileSync(metaPath, "utf8"));
+  } catch (e) {
+    console.log(`FAIL: binding: 无法读取设计包 ${metaPath}（${e.message}）——exec-plan designDocPath 须指向渲染视图（<name>.rendered.md，meta.json 在同级 <name>/ 目录）或设计目录本身，核对路径后重跑本门`);
+    process.exit(1);
+  }
+  let accRaw;
+  try {
+    accRaw = JSON.parse(readFileSync(join(taskDir, "acceptance.json"), "utf8"));
+  } catch (e) {
+    console.log(`FAIL: binding: 无法读取 ${join(taskDir, "acceptance.json")}（${e.message}）——核对 --task-dir 指向的交付任务目录（delivery-v2 验收设计产出）`);
+    process.exit(1);
+  }
+  // taskDir 判据两侧同口径 realpath 归一（--task-dir 侧在 main 已归一）：binding.taskDir
+  // 指向不存在的目录时 realpathSafe 回退原串，与现存任务目录比对自然不等、照常报错
+  const metaNorm =
+    isRec(metaRaw) && isRec(metaRaw.acceptanceBinding) && isStr(metaRaw.acceptanceBinding.taskDir)
+      ? { ...metaRaw, acceptanceBinding: { ...metaRaw.acceptanceBinding, taskDir: realpathSafe(metaRaw.acceptanceBinding.taskDir) } }
+      : metaRaw;
+  return checkAcceptanceBinding(raw, metaNorm, accRaw, incRaw, taskDir);
+}
 
 function main() {
   const argv = process.argv.slice(2);
@@ -589,6 +714,9 @@ function main() {
   const result = checkPlan(raw);
   const incErrors = [];
   if (taskDir !== null) {
+    // realpath 归一（symlink / 尾斜杠形态统一，供 binding.taskDir 两侧同口径比对）；
+    // 目录不存在时 increments.json 读取已按 FAIL 行报，realpathSafe 回退原串参与错误消息
+    taskDir = realpathSafe(taskDir);
     let incRaw;
     try {
       incRaw = JSON.parse(readFileSync(join(taskDir, "increments.json"), "utf8"));
@@ -597,6 +725,7 @@ function main() {
       process.exit(1);
     }
     incErrors.push(...checkIncrementContract(raw, incRaw));
+    incErrors.push(...checkBindingFromDisk(raw, taskDir, incRaw));
   }
   if (result.ok && incErrors.length === 0) {
     console.log("PASS");

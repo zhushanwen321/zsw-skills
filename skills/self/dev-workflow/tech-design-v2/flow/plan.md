@@ -9,6 +9,7 @@
 1. **T2 证据**：`<name>/final.json` 存在且 terminated == "converged"——本 skill 产出的设计天然满足；**外部文档入口**（用户直接给一份未经本流程的设计文档）→ 先补 T2（按 `flow/review.md` 手工路径全量审查，方向审起），补审不通过停止；禁止拿未审查文档直接拆计划
 2. **结构完整性**：写 impl-plan 时逐项引用四类内容的实际节——背景/目标、终态/机制、验收场景表、下一层拆分。引用填不出 = 结构缺失，停下告知用户回 T1 补文档
 3. 章节映射落计划文件「0 章节映射」节（下方模板）——后续所有 subagent/编译从这拿坐标，禁止自猜编号（两代结构并存：完整版 11 节 vs 五段制，一律按实质特征定位；节号坐标 = 渲染视图 `<name>.rendered.md` 的固定编号，渲染脚本保证节号稳定）
+4. **验收绑定现行性（交付体系任务 [MANDATORY]）**：设计包 meta.json `acceptanceBinding` 须仍与交付任务目录当前批准一致——跑 `node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs evaluate --task-dir <taskDir>`，把输出（verdict.json）的 `acceptanceVersion` 与 `acceptancePackageSha256` 和 meta.json acceptanceBinding 同名字段逐项比对，任一不一致 = 验收版本或验收包已变化（重批），旧设计包绑定失效 → 停止拆计划，回 `flow/write.md` Step 0 重新影响审查（对照新版本 acceptance.json 与 increments.json 逐条比对设计包覆盖，需改动回 T1 修订并按所处阶段重走 T2/T3），更新 binding 后重进本步；binding.taskDir 与 <taskDir> 不一致 = 拿错设计包，改用其绑定任务目录下的交付任务。独立设计任务（无交付任务目录）本条不适用。下游双保险：dev-flow-v2 D0 编译门（`check-exec-plan.mjs --task-dir`）对同一判据机器复算（验收包联合哈希 + 版本比对），本条在拆计划前提前拦
 
 ## 增量契约对齐（交付体系任务 [MANDATORY]）
 

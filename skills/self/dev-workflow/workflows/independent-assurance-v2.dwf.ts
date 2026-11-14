@@ -413,7 +413,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.3.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.4.0"; // 构建注入自 delivery-v2/SKILL.md frontmatter version（唯一权威）
 // independent-assurance-v2 — delivery-v2 独立覆盖核对与探索性审查。
 // assurance 角色不得修改产品代码、验收、事件或 verdict；脚本只经 delivery-gate
 // append --credential assuranceCredentialId 追加事实（assurance 角色凭据 id；
@@ -507,14 +507,19 @@ const NODE_CHECK_FILES =
 const NODE_READ_FILE = "process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8'))";
 const NODE_WRITE_FILE =
   "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2])";
-// 逐增量测试执行（cwd 可控——world.run 的 cwd 固定为 workspace，无法指定项目/干净目录）
+// 逐增量测试执行（cwd 可控——world.run 的 cwd 固定为 workspace，无法指定项目/干净目录）。
+// 超时入参（第 5 参）来自 increments 契约的 testCommand.timeoutMs（CLI validate-acceptance
+// 已校验 1000..3600000 整数）；非法或缺省回退 300000，与 CLI 缺省值一致——防长测试任务
+// 在 300s 被截断后回执 exitCode=-1、AssuranceCompleted 永停 candidate
 const NODE_RUN_TEST =
   "const fs=require('fs'),cp=require('child_process'),pt=require('path');" +
   "const cwd=process.argv[1],logPath=process.argv[2],program=process.argv[3],args=JSON.parse(process.argv[4]);" +
+  "const rawTimeout=parseInt(process.argv[5],10);" +
+  "const timeoutMs=Number.isInteger(rawTimeout)&&rawTimeout>=1000&&rawTimeout<=3600000?rawTimeout:300000;" +
   "fs.mkdirSync(pt.dirname(logPath),{recursive:true});" +
-  "const r=cp.spawnSync(program,args,{cwd,encoding:'utf8',maxBuffer:64*1024*1024,timeout:300000});" +
+  "const r=cp.spawnSync(program,args,{cwd,encoding:'utf8',maxBuffer:64*1024*1024,timeout:timeoutMs});" +
   "const code=r.error?127:(r.status===null?-1:r.status);" +
-  "fs.writeFileSync(logPath,'command: '+JSON.stringify({program,args,cwd})+'\\nexitCode: '+code+'\\n--- stdout ---\\n'+(r.stdout||'')+'\\n--- stderr ---\\n'+(r.stderr||'')+'\\n--- spawn error ---\\n'+String(r.error&&r.error.message||''));" +
+  "fs.writeFileSync(logPath,'command: '+JSON.stringify({program,args,cwd,timeoutMs})+'\\nexitCode: '+code+'\\n--- stdout ---\\n'+(r.stdout||'')+'\\n--- stderr ---\\n'+(r.stderr||'')+'\\n--- spawn error ---\\n'+String(r.error&&r.error.message||''));" +
   "process.stdout.write(JSON.stringify({exitCode:code,spawnError:r.error?String(r.error.code||r.error.message):null,artifact:logPath}))";
 // 目录树内容指纹：排序文件清单 + 每文件 sha256 → 整体 sha256（干净构建产物哈希用）
 const NODE_HASH_TREE =
@@ -524,6 +529,56 @@ const NODE_HASH_TREE =
   "walk(root);files.sort();" +
   "const h=cr.createHash('sha256');" +
   "for(const f of files){h.update(pt.relative(root,f));h.update('\\0');h.update(cr.createHash('sha256').update(fs.readFileSync(f)).digest('hex'));h.update('\\n')}" +
+  "process.stdout.write(h.digest('hex'))";
+// 被测产物指纹·auto-git 口径：HEAD + 相对 HEAD 的全量 binary diff + 非 ignored untracked
+// 文件逐文件内容（ls-files --others --exclude-standard，排序后按「路径+类型+内容」并入，
+// 纳入范围与 delivery-gate computeRevision 的 untracked 口径一致——untracked 新文件是
+// builder 常态产物，缺了它产物指纹对这类文件的内容替换不敏感）。独立指纹域，不与
+// revision 字符串互推；symlink 只哈希链接目标字符串（不跟随目标、无预算），与
+// delivery-gate 的 hashSymlinkTarget 存在声明差异，其余文件类型逐字节同构
+const NODE_HASH_TRACKED_TREE =
+  "const fs=require('fs'),pt=require('path'),cr=require('crypto'),cp=require('child_process');" +
+  "const root=process.argv[1];" +
+  "const git=(a,enc)=>{const r=cp.spawnSync('git',['-C',root].concat(a),{encoding:enc,maxBuffer:64*1024*1024});if(r.error||r.status!==0){process.stderr.write('git '+a.join(' ')+' 失败：'+String(r.error&&r.error.message||r.stderr));process.exit(1)}return r.stdout};" +
+  "const head=String(git(['rev-parse','HEAD'],'utf8')).trim();" +
+  "if(!/^[0-9a-f]{40,64}$/.test(head)){process.stderr.write('git HEAD 返回了无法识别的值：'+head);process.exit(1)}" +
+  "const diff=git(['diff','--binary','--full-index','HEAD','--'],null);" +
+  "const untracked=String(git(['ls-files','--others','--exclude-standard','-z'],'utf8')).split('\\0').filter(Boolean).sort();" +
+  "const h=cr.createHash('sha256');" +
+  "h.update('independent-assurance-v2 tracked-tree v1\\0');" +
+  "h.update(head+'\\0');" +
+  "h.update(diff);" +
+  "for(const rel of untracked){" +
+  "const abs=pt.join(root,rel);let st;try{st=fs.lstatSync(abs)}catch(e){process.stderr.write('未跟踪文件无法读取：'+rel);process.exit(1)}" +
+  "h.update('\\0untracked\\0'+rel+'\\0');" +
+  "if(st.isSymbolicLink()){h.update('symlink\\0');try{h.update(fs.readlinkSync(abs),'utf8')}catch(e){process.stderr.write('未跟踪符号链接无法读取：'+rel);process.exit(1)}h.update('\\0')}" +
+  "else if(st.isFile()){h.update('file\\0');h.update(fs.readFileSync(abs))}" +
+  "else{h.update('other\\0')}" +
+  "}" +
+  "process.stdout.write(h.digest('hex'))";
+// 被测产物指纹·content-manifest 口径（revision.json mode=content-manifest，非 git 项目
+// 的正式出路）：update 序列与 delivery-gate contentManifestRevision 完全相同（域分隔
+// delivery-gate-revision-v1\0content-manifest\0 + 每条 file\0<清单条目>\0 + 原始字节），
+// 仅保留完整 64 位 digest 供回执指纹校验——复核方可按 delivery-gate 同算法复算
+const NODE_HASH_MANIFEST =
+  "const fs=require('fs'),pt=require('path'),cr=require('crypto');" +
+  "const root=process.argv[1];const manifestPath=pt.join(root,'delivery-manifest.txt');" +
+  "let text;try{text=fs.readFileSync(manifestPath,'utf8')}catch(e){process.stderr.write('内容清单读取失败：'+manifestPath+'（恢复动作：在项目根创建 delivery-manifest.txt，每行一条纳入指纹的文件相对路径，# 开头为注释）');process.exit(1)}" +
+  "const entries=text.split('\\n').map(l=>l.trim()).filter(l=>l.length>0&&!l.startsWith('#')).sort();" +
+  "if(entries.length===0){process.stderr.write('内容清单为空：'+manifestPath+'（恢复动作：列出至少一个文件相对路径）');process.exit(1)}" +
+  "const seen=new Set();" +
+  "const h=cr.createHash('sha256');" +
+  "h.update('delivery-gate-revision-v1\\0content-manifest\\0');" +
+  "for(const entry of entries){" +
+  "if(seen.has(entry)){process.stderr.write('内容清单含重复条目：'+entry+'（恢复动作：删除重复行）');process.exit(1)}" +
+  "seen.add(entry);" +
+  "const abs=pt.resolve(root,entry);const rel=pt.relative(root,abs);" +
+  "if(entry.includes('..')||pt.isAbsolute(entry)||rel.startsWith('..')){process.stderr.write('内容清单条目越界：'+entry+'（恢复动作：条目必须是项目根内的相对路径）');process.exit(1)}" +
+  "let st;try{st=fs.statSync(abs)}catch(e){process.stderr.write('内容清单条目无法读取：'+entry+'（恢复动作：恢复该文件或从清单移除该条目）');process.exit(1)}" +
+  "if(!st.isFile()){process.stderr.write('内容清单条目不是文件：'+entry+'（恢复动作：条目必须指向普通文件，目录不纳入清单）');process.exit(1)}" +
+  "h.update('file\\0'+entry+'\\0');" +
+  "h.update(fs.readFileSync(abs));" +
+  "}" +
   "process.stdout.write(h.digest('hex'))";
 
 async function runNode(argv: string[]): Promise<CommandResult> {
@@ -636,7 +691,7 @@ const incrementsDoc = parseObject(incrementsRes.stdout);
 // 逐增量测试回执的数据源：increments.items（id + testCommand）
 const incrementItems = Array.isArray(incrementsDoc?.items) ? incrementsDoc.items as {
   id: string;
-  testCommand?: { program: string; args: string[] };
+  testCommand?: { program: string; args: string[]; timeoutMs?: number };
 }[] : [];
 // 策略快照的 revision 策略：runsFromIgnoredArtifacts=true 时取证必须来自干净构建
 const policySnapshotDoc = parseObject(policySnapshotRes.stdout);
@@ -644,6 +699,9 @@ const revisionPolicy = policySnapshotDoc !== null && policySnapshotDoc["revision
   ? policySnapshotDoc["revision.json"] as Record<string, unknown>
   : null;
 const runsFromIgnoredArtifacts = revisionPolicy !== null && revisionPolicy.runsFromIgnoredArtifacts === true;
+// revision 模式（与 delivery-gate revisionModeFromPolicy 同判定：mode 缺省 auto-git，
+// 只有显式 content-manifest 才走清单口径）——决定被测产物指纹与干净构建豁免的分支
+const revisionMode = revisionPolicy !== null && revisionPolicy.mode === "content-manifest" ? "content-manifest" : "auto-git";
 const requirements = Array.isArray(acceptanceDoc?.requirements) ? acceptanceDoc.requirements as {
   id: string;
   evidenceKinds: ("command" | "scenario" | "inspection")[];
@@ -852,16 +910,24 @@ async function hashTree(dirPath: string): Promise<string> {
   return res.stdout.trim();
 }
 
-/** 被测产物指纹（普通模式，测试执行后计算）：HEAD commit + 工作树相对 HEAD 的全量
- * diff（含 tracked 内容修改）整体 sha256——与测试日志哈希来源不同，供复算核对
- * 「测试运行的产物状态」，防构建与测试产物不一致 */
-async function trackedTreeSha256(projectRootPath: string): Promise<string> {
-  const res = await world.run("sh", [
-    "-c",
-    `(git -C '${projectRootPath}' rev-parse HEAD && git -C '${projectRootPath}' diff --binary --full-index HEAD --) | shasum -a 256 | cut -d' ' -f1`,
-  ]).catch(() => null);
-  if (res === null || res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {
-    throw new Error(`被测产物指纹计算失败：${projectRootPath}（非 git 工作树或 git 不可用）`);
+/** 被测产物指纹（普通模式，测试执行后计算），按 revision 模式分两种口径：
+ * - auto-git：HEAD + 相对 HEAD 的全量 diff（含 tracked 修改）+ 非 ignored untracked
+ *   文件逐文件内容，整体 sha256（NODE_HASH_TRACKED_TREE）——untracked 新文件是
+ *   builder 常态产物形态，纳入后产物指纹才对这类文件的内容替换敏感
+ * - content-manifest：按 delivery-manifest.txt 清单复算（NODE_HASH_MANIFEST），
+ *   update 序列与 delivery-gate contentManifestRevision 相同、可复算——非 git 项目
+ *   的正式出路，产物指纹不再硬依赖 git
+ * 与测试日志哈希来源不同，供复算核对「测试运行的产物状态」，防构建与测试产物不一致 */
+async function trackedTreeSha256(projectRootPath: string, revisionMode: string): Promise<string> {
+  const res = await runNode([
+    revisionMode === "content-manifest" ? NODE_HASH_MANIFEST : NODE_HASH_TRACKED_TREE,
+    projectRootPath,
+  ]);
+  if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {
+    throw new Error(
+      `被测产物指纹计算失败：${projectRootPath}（revision 模式 ${revisionMode}；${res.stderr.trim() || res.stdout.trim()}）。` +
+        "恢复动作：auto-git 模式要求项目是 git 工作树且 git 可用；非 git 项目请在 revision.json 设 mode=content-manifest 并提供 delivery-manifest.txt 内容清单。",
+    );
   }
   return res.stdout.trim();
 }
@@ -1062,10 +1128,13 @@ try {
   if (summaryRes.exitCode !== 0) throw new Error(`assurance 总结写入失败：${summaryRes.stderr.trim()}`);
   // runsFromIgnoredArtifacts=true（策略快照固定）：取证前生成干净构建——HEAD 导出 +
   // 工作树补丁 + 非 ignored 新文件复制，不含 ignored 本地产物；逐增量测试在干净目录
-  // 执行并统一绑 buildId，AssuranceCompleted 附 cleanBuild——证明证据不依赖 ignored 产物
+  // 执行并统一绑 buildId，AssuranceCompleted 附 cleanBuild——证明证据不依赖 ignored 产物。
+  // mode=content-manifest 豁免干净构建（与 delivery-gate requiresCleanBuild 同判定）：
+  // 产物已纳入内容清单、产物变化会改变 revision，且干净构建的 git archive 在非 git
+  // 项目上必然失败——豁免后链路才能走通
   let cleanBuild: { buildId: string; artifactSha256: string } | null = null;
   let testCwd = projectRoot;
-  if (runsFromIgnoredArtifacts) {
+  if (runsFromIgnoredArtifacts && revisionMode !== "content-manifest") {
     const cleanDir = `${evidenceRoot}clean-build-${artifactTag}`;
     const patchPath = `${evidenceRoot}clean-build-${artifactTag}.patch`;
     const cleanRes = await world.run("sh", ["-c", [
@@ -1085,8 +1154,10 @@ try {
     testCwd = cleanDir;
   }
   // 逐增量测试回执：由引擎亲自重跑全部增量测试命令（不信 builder 自报）。回执里
-  // logSha256=测试日志哈希、artifactSha256=被测产物指纹（普通模式=项目 tracked 内容
-  // 指纹；干净模式=干净目录树哈希），两者来源不同，防「构建 A 测 B」
+  // logSha256=测试日志哈希、artifactSha256=被测产物指纹（普通模式=按 revision 模式
+  // 取整树内容指纹，auto-git 含 tracked diff + untracked、content-manifest 按清单；
+  // 干净模式=干净目录树哈希），两者来源不同，防「构建 A 测 B」。测试超时取
+  // item.testCommand.timeoutMs（缺省 300000），生效值记录在日志 command: 头部
   const incrementReceipts: unknown[] = [];
   for (const item of incrementItems) {
     if (!item.testCommand) continue;
@@ -1097,6 +1168,7 @@ try {
       logPath,
       item.testCommand.program,
       JSON.stringify(item.testCommand.args),
+      String(item.testCommand.timeoutMs ?? 300000),
     ]);
     const testMeta = parseObject(testRes.stdout);
     if (
@@ -1106,7 +1178,7 @@ try {
       throw new Error(`增量 ${item.id} 测试命令无法执行或日志不可读：${testRes.stderr.trim() || testRes.stdout.trim()}`);
     }
     const logSha256 = await artifactSha256Of(logPath);
-    const artifactSha256 = cleanBuild !== null ? cleanBuild.artifactSha256 : await trackedTreeSha256(projectRoot);
+    const artifactSha256 = cleanBuild !== null ? cleanBuild.artifactSha256 : await trackedTreeSha256(projectRoot, revisionMode);
     const receipt: Record<string, unknown> = {
       incrementId: item.id,
       program: item.testCommand.program,
