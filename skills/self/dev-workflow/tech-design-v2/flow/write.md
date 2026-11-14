@@ -20,7 +20,11 @@
 
 **交付体系入口门（先于本步一切内容）**：本设计属于三技能交付体系时（用户目标 = 设计并实现 / 修复 /
 开发），必须已有已批准的验收包——`node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs
-evaluate --task-dir <taskDir>` 的 state 为 `design`（已批准、待方案）。通过后把 `acceptanceBinding`
+evaluate --task-dir <taskDir>` 的 state 为 `design`（已批准、待方案）。该判据仅对应 verdict-rules
+`requireDesignApproved` 默认 true 的任务——`requireDesignApproved=false` 的任务 state 不落 design
+（delivery-gate 状态路由跳过 design 分支，直接落到 acceptance-approved）：该策略下设计阶段非裁决
+前置，不得按「未批准」误判回 delivery-v2，仍需推敲方案时按用户明确要求进入（照常走三阶段并
+record-design-approved）。通过后把 `acceptanceBinding`
 （taskDir + acceptanceVersion + acceptancePackageSha256）写进 `meta.json`；验收版本此后变化
 （delivery-v2 递增 acceptanceVersion 重批）时，本设计包须重新过影响审查——对照新版本
 acceptance.json 与 increments.json 逐条比对设计包是否仍覆盖（判据缩窄 / 新增需求逐条核对
