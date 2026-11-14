@@ -1626,7 +1626,12 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     if (!allIncrementIds.every((id) => covered.has(id))) return false;
     if (!event.incrementReceipts.every((receipt) => receipt.exitCode === 0)) return false;
     if (!event.evidenceEventIds.every((id) => currentEvidenceIds.has(id))) return false;
-    if (!currentExplorationIds.has(event.explorationEventId)) return false;
+    // 探索绑定：required 时必须命中当前 revision 的 ExplorationCompleted；not-required 时接受 "none" 占位
+    if (acceptance.exploratoryReview === "required") {
+      if (!currentExplorationIds.has(event.explorationEventId)) return false;
+    } else if (event.explorationEventId !== "none" && !currentExplorationIds.has(event.explorationEventId)) {
+      return false;
+    }
     if (requiresCleanBuild) {
       if (event.cleanBuild === null) return false;
       if (!event.incrementReceipts.every((receipt) => receipt.buildId === event.cleanBuild.buildId)) return false;

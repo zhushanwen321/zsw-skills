@@ -189,8 +189,16 @@ for (const skill of SKILLS) {
 }
 
 // ── 规则 2：共享源联动（产物逐字节 diff） ──
+// 共享层文件（skill-data/observability/provenance.shared.ts）拼入全部产物——变化要求全技能联动；
+// 单 workflow 独享源（<name>.shared.ts 及其模板）只影响本 workflow 产物——只要求产物所属技能 bump。
+const SHARED_LAYER_FILES = new Set([
+  "skill-data.shared.ts",
+  "observability.shared.ts",
+  "provenance.shared.ts",
+]);
 const sharedTouched = stagedFiles.filter((p) => p.startsWith(SHARED_SRC_PREFIX)).sort();
-let rule2State = "none"; // none = 无共享源变更；exempt = 有变更但产物零 diff；linked = 产物变且全部技能已联动 bump
+const hasSharedLayerChange = sharedTouched.some((p) => SHARED_LAYER_FILES.has(p.slice(SHARED_SRC_PREFIX.length)));
+let rule2State = "none"; // none = 无共享源变更；exempt = 有变更但产物零 diff；linked = 产物变且应联动技能已联动 bump
 if (sharedTouched.length > 0) {
   rule2State = "exempt";
   const productSet = new Set(
@@ -210,23 +218,34 @@ if (sharedTouched.length > 0) {
     notes.push(`规则 2（共享源联动）：workflows/src/ 有 staged 改动（${sharedTouched.length} 个文件），产物与 HEAD 逐字节相同 → 豁免`);
   } else {
     rule2State = "linked";
-    const unbumped = SKILLS.filter((s) => !versions.get(s.name).bumped);
+    // 联动范围：共享层变化 → 全技能；仅独享源变化 → 变化产物所属技能（PRODUCT_SKILL 映射）
+    const changedProductRels = [...productSet].filter((rel) => {
+      const head = gitBlob(`HEAD:${rel}`);
+      const staged = gitBlob(`:${rel}`);
+      return !blobsEqual(head, staged);
+    });
+    const affectedSkills = hasSharedLayerChange
+      ? SKILLS.map((s) => s.name)
+      : [...new Set(changedProductRels
+          .map((rel) => PRODUCT_SKILL[rel.slice(WORKFLOWS.length + 1)])
+          .filter(Boolean))];
+    const unbumped = SKILLS.filter((s) => affectedSkills.includes(s.name) && !versions.get(s.name).bumped);
     for (const skill of unbumped) {
       const v = versions.get(skill.name);
       violations.push({
-        title: `规则 2（共享源联动）：workflows/src/ 的 staged 改动改变了产物，但 ${skill.name} 版本未联动 bump`,
+        title: `规则 2（${hasSharedLayerChange ? "共享源联动" : "独享源联动"}）：workflows/src/ 的 staged 改动改变了产物，但 ${skill.name} 版本未联动 bump`,
         details: [
           `未 bump 的技能：${skill.name}（HEAD ${v.headVersion} → staged ${v.stagedVersion}）`,
-          `权威源：scripts/build-workflows.mjs 从各 SKILL.md frontmatter version 注入产物 SKILL_VERSION；共享构建源的唯一行为出口是产物`,
-          `共享构建源：`,
+          `权威源：scripts/build-workflows.mjs 从各 SKILL.md frontmatter version 注入产物 SKILL_VERSION；构建源的唯一行为出口是产物`,
+          hasSharedLayerChange ? `共享层构建源：` : `独享构建源（仅影响本 workflow 产物）：`,
           ...sharedTouched.map((p) => `  - ${p}`),
           `产物逐字节 diff（${changedProducts.length} 份，与 HEAD 比较）：`,
           ...changedProducts.map((p) => `  - ${p}`),
         ],
         recovery:
-          `共享构建源变更使产物变化时全部技能联动升版本：把每个 SKILL.md frontmatter 的 version 都升号，` +
-          `重跑 node scripts/build-workflows.mjs 重建产物后重新 git add 再提交；` +
-          `若本次共享源改动是纯注释、不应改变产物，重跑构建确认产物与 HEAD 逐字节相同即自动豁免`,
+          `构建源变更使产物变化时对应技能联动升版本：把所属 SKILL.md frontmatter 的 version 升号` +
+          `（共享层变化时全部技能升号），重跑 node scripts/build-workflows.mjs 重建产物后重新 git add 再提交；` +
+          `若本次源改动是纯注释、不应改变产物，重跑构建确认产物与 HEAD 逐字节相同即自动豁免`,
       });
     }
   }
