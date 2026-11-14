@@ -184,7 +184,7 @@ test("改 workflows/src/ 且产物变、未 bump → 拦（全部技能联动文
   assert.match(r.output, /tech-design-v1/);
   assert.match(r.output, /dev-flow-v1/);
   assert.match(r.output, /delivery-v1/);
-  assert.match(r.output, /全部技能联动升版本/);
+  assert.match(r.output, /共享层变化时全部技能升号/);
   assert.match(r.output, /恢复动作：/);
 });
 
