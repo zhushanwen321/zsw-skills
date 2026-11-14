@@ -20,9 +20,12 @@
 
 **交付体系入口门（先于本步一切内容）**：本设计属于三技能交付体系时（用户目标 = 设计并实现 / 修复 /
 开发），必须已有已批准的验收包——`node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs
-evaluate --task-dir <taskDir>` 的 state 为 `design` 或更后。通过后把 `acceptanceBinding`
-（taskDir + acceptanceVersion + acceptancePackageSha256）写进 `meta.json`；验收版本此后变化，
-本设计包须重新过影响审查。无任务目录或未批准 → 停止，回 delivery-v2 走验收设计；用户明确不走
+evaluate --task-dir <taskDir>` 的 state 为 `design`（已批准、待方案）。通过后把 `acceptanceBinding`
+（taskDir + acceptanceVersion + acceptancePackageSha256）写进 `meta.json`；验收版本此后变化
+（delivery-v2 递增 acceptanceVersion 重批）时，本设计包须重新过影响审查——对照新版本
+acceptance.json 与 increments.json 逐条比对设计包是否仍覆盖（判据缩窄 / 新增需求逐条核对
+设计章节与 impl-plan 归属），需要改动的回 T1 修订并按所处阶段重走 T2/T3，重批后更新
+meta.json acceptanceBinding 再进下游。无任务目录或未批准 → 停止，回 delivery-v2 走验收设计；用户明确不走
 交付体系的独立设计（用 tech-design-v1 通道）不经本门。**判据与验收设计的关系**：验收包定义
 「什么算对」，本技能的 §4 验收章节与验收判据对齐并细化可执行的验证场景——发现判据遗漏或缩窄，
 回 delivery-v2 递增版本，不在设计文档内改判据。

@@ -435,7 +435,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "1.1.6"; // 构建注入自 dev-flow-v1/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "1.1.7"; // 构建注入自 dev-flow-v1/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // design-code-sync-v2 — dev-flow-v1 技能 W4 v2 一致性对账引擎（sync-conformance-plane
 // U4/M4：D5 从 issue 循环升级为「设计义务 + 证据 + 隔离变更集」对账）
@@ -527,7 +527,8 @@ const SEMANTIC_CHECKER_VERSION = "1.0.0";
 const TILDE_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-v1/agents/conformance-reviewer.md";
 const TILDE_FIXER_TEMPLATE = "~/.agents/skills/dev-flow-v1/agents/changeset-fixer.md";
 /** 四层结论词表（段七，GA9）：引擎产 scriptStatus/engineOutcome/integrationOutcome；
- *  deliveryOutcome 恒 pending/blocked（resolved 系列由主 agent 交付宣告/人工接管追加——引擎不越权） */
+ *  deliveryOutcome 恒 pending/blocked（resolved 系列由主 agent 在裁决器 verdict 为
+ *  accepted/accepted_with_risk 后追记、人工接管走集成器 manual 模式——引擎不越权） */
 const ENGINE_OUTCOMES = ["completed", "awaiting-ruling", "stopped", "failed"] as const;
 
 const VALID_ARG_KEYS = new Set([
@@ -1347,7 +1348,7 @@ const result: SyncV2Result = {
     `${stopMessage}；状态仓 ${stateRoot}（事件流 ${finalState.seq} 条）；${resumed ? "续跑" : "首跑"}；` +
     `四层结论 scriptStatus=completed / engineOutcome=${engineOutcome} / integrationOutcome=${integrationOutcome} / deliveryOutcome=${engineOutcome === "completed" ? "pending" : "blocked"}——` +
     (engineOutcome === "completed"
-      ? "主 agent 交付宣告后 deliveryOutcome 升 resolved（人工接管走集成器 manual 模式，actor=main-agent）"
+      ? "裁决器 verdict 为 accepted/accepted_with_risk 后，主 agent 方可把 deliveryOutcome 追记为 resolved（人工接管走集成器 manual 模式，actor=main-agent）"
       : engineOutcome === "awaiting-ruling"
         ? "按 message 携 rulingsFile 重新发起（状态仓事件流续跑，身份与结论由事件派生）"
         : "按 regenerateTasks/remaining 的恢复动作处置后重新发起"),

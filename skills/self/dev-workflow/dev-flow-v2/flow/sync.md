@@ -6,6 +6,7 @@
 
 1. 设计包章节 JSON 已带 conformance 绑定（`design-doc-schema.md` §9b；覆盖率分母 = 全部绑定义务，无绑定叙述不进分母）。未绑定 legacy 包走「legacy 只读期收尾」节（下方）。
 2. 该包未切换：带 cutover 标记的包由 v2 管辖（标记是旧引擎的拒启信号，v2 正常运行）。
+3. 交付体系任务：D4 收尾的增量实现登记已完成（逐增量 ImplementationRecorded 落交付任务事件流，`flow/acceptance.md` 收尾节第 3 步）——终态同步不替代实现登记，两者独立成环（缺登记 state 无法进 candidate，回 D4 补）。
 
 ## cutover 拒启检查（workflow 与手工路径共用，[MANDATORY]）
 
@@ -55,7 +56,7 @@ finalize 四层结论 + 覆盖率汇总 + 残余 open 清单 + 收尾对象库�
 | scriptStatus | completed / failed | failed 按 message 恢复动作处置 |
 | engineOutcome | completed / awaiting-ruling / stopped / failed | awaiting-ruling → 携 rulingsFile 重发；stopped（轮次耗尽）→ 按 remaining 处置后重发；failed → 按 regenerateTasks/remaining 处置 |
 | integrationOutcome | not-required / not-started / verified-pending-integration / integrated / rolled-back / failed | failed/rolled-back 按 regenerateTasks 重新生成变更集 |
-| deliveryOutcome | pending / blocked | pending = 引擎收敛，主 agent 交付宣告后升 resolved（人工接管走集成器 manual 模式，actor=main-agent）；blocked = 待裁决/待修复 |
+| deliveryOutcome | pending / blocked | pending = 引擎收敛；裁决器 verdict 为 accepted/accepted_with_risk 后主 agent 方可追记为 resolved（人工接管走集成器 manual 模式，actor=main-agent）；blocked = 待裁决/待修复 |
 
 监控不得把 scriptStatus=completed 当业务成功——engineOutcome 才是引擎结论层（六层结论并存见 V12，人工接管不覆盖引擎事实）。
 

@@ -18,7 +18,7 @@
   "projectRoot": "<项目根绝对路径>",      // 引擎缺省 cwd；W2/W3/W4 的节点 git 操作基准（执行位置绑定一次编译）；节点 cwd 为 null 时用
   "workspaceRoot": "<工作区根绝对路径>",  // 可选：工作区形态填（工作区根 = 各 worktree 的父目录），单仓项目省略——additive 字段，缺省不拒执行、不参与执行裁决。寻址与统计按它派生工作区级地址；节点 git 操作仍用 projectRoot
   "planPath": "<tech-design 段>/<slug>/<name>.impl-plan.json",
-  "designDocPath": "<tech-design 段>/<slug>/<name>.md",
+  "designDocPath": "<tech-design 段>/<slug>/<name>.rendered.md",   // 渲染视图（W3 reviewer / 终态同步的阅读锚点；权威源 = <name>/ 设计目录六章节 JSON——从 impl-plan.designDoc 目录拼 .rendered.md；tech-design-v2 不产出裸 md 主文档）
   "baseline": "<git rev-parse HEAD>",
   "statusPath": "<dev-flow 段>/<slug>[/<worktreeName>]/<name>.status.json",
   "testPlan": {                        // 从 impl-plan.json 的 testPlan 继承（W3 Gate A 消费，缺失即 fail-fast）
@@ -30,6 +30,7 @@
   "commitTemplate": "<type>(<scope>): {unitId} — {summary}",   // 占位符 {unitId}/{summary} 必含（dev 模式引擎校验；acceptance 模式不 commit 可省略）；summary 内容契约 = 任务书要求 dev 返回的 summary 末行含「测试：<命令> 绿」
   "nodes": [
     { "id": "u-foundation", "kind": "dev", "deps": [], "wave": 1,
+      "incrementId": "inc-1",           // 交付体系任务必填（从 impl-plan units[].incrementId 逐字转抄 = increments.items[].id；步骤 3 --task-dir 门核对归属全覆盖与 testCommand 一致）；独立设计任务省略本字段
       "cwd": null,                      // null = projectRoot；worktree 单元填 worktree 绝对路径。禁填仓库子目录——引擎启动断言 cwd == git rev-parse --show-toplevel，子目录会被拒绝（porcelain 相对 cwd / territory 相对仓库根，基准错位）
       "designRef": "§3.2",              // 设计章节锚（从 impl-plan 章节映射提取；commit 渲染时前置于 summary——老三要素保真：unit id + 设计章节 + 测试结论）
       "territory": ["packages/shared/src/..."],   // 相对该节点 cwd 所在 git 仓库根（与 files_changed / porcelain 同基准；禁绝对路径——引擎启动校验拒绝）
@@ -52,10 +53,11 @@
 ### 3. exec-plan 校验（fail-fast，生成即校验）
 
 ```bash
-node ~/.agents/skills/dev-flow-v2/scripts/check-exec-plan.mjs <exec-plan 绝对路径>
+node ~/.agents/skills/dev-flow-v2/scripts/check-exec-plan.mjs <exec-plan 绝对路径>   # 独立设计任务
+node ~/.agents/skills/dev-flow-v2/scripts/check-exec-plan.mjs <exec-plan 绝对路径> --task-dir <交付任务目录>   # 交付体系任务（验收任务门通过的必选形态：附加增量契约核对——读交付任务目录 increments.json，逐增量核 dev 节点 incrementId 归属全覆盖、引用存在、testCommand 逐字一致；判据同 tech-design-v2 flow/plan.md「增量契约对齐」节）
 ```
 
-stdout `PASS` 才继续步骤 4。校验集与 W2 引擎的 validatePlan 及 W3 启动契约（testPlan / 必填字段 / 白名单）同源，错误文案逐字一致，漂移由差分测试机器对账拦截（`node --test scripts/tests/check-exec-plan-parity.test.mjs`，zsw-skills 检出内执行）。FAIL 逐行输出 `FAIL: <分类>: <明细>`（全部报完再退出），按分类路由处置：
+stdout `PASS` 才继续步骤 4（交付体系任务须带 `--task-dir`，缺传即跳过增量核对 = 入口门判据 3 未执行）。校验集与 W2 引擎的 validatePlan 及 W3 启动契约（testPlan / 必填字段 / 白名单）同源，错误文案逐字一致，漂移由差分测试机器对账拦截（`node --test scripts/tests/check-exec-plan-parity.test.mjs`，zsw-skills 检出内执行）。FAIL 逐行输出 `FAIL: <分类>: <明细>`（全部报完再退出），按分类路由处置：
 
 - 单字段错误（`territory` 形态 / `ref` 引用名 / `whitelist`、`noop` 命令形态 / `cwd`、`script`、`testPlan` / 路径层级与占位符类 `field`）→ 手修 exec-plan 对应字段后重跑本门；值转抄自 impl-plan 的字段（testCommand / deps / 单元 id）同步修 impl-plan 上游，否则重编译复现
 - 结构性缺漏（`schema`、缺数组缺必填的 `field`）→ 回步骤 2 重编译（尚无节点执行过时；已有进度改手修 + ledger 登记，重初始化会重置 status.json / runlog / ledger）
@@ -117,7 +119,7 @@ stdout `PASS` 才继续步骤 4。校验集与 W2 引擎的 validatePlan 及 W3 
 - **fail 先查排障文档**：验收失败处理写在 verify/inspect 节点 promptFile 约束——先 read 项目排障文档（典型 docs/TROUBLESHOOTING.md）归因，禁不归因重试、禁放宽断言
 - **开发期 e2e**：验收计划表「单元 committed 后」时点的项编译为 kind=verify 节点插入 dev 模式 nodes（deps=所属 dev 单元）
 
-**D3 发起门（生成即校验）**：acceptance 节点实例化落位、mode=acceptance 的 exec-plan 定稿后，发起 W2 验证实例化前跑同款校验（`node ~/.agents/skills/dev-flow-v2/scripts/check-exec-plan.mjs <exec-plan 绝对路径>`）必须 PASS 再发起——schema 错误在编译点拦下并按步骤 3 同款路由处置，不留到引擎 setup 才爆。
+**D3 发起门（生成即校验）**：acceptance 节点实例化落位、mode=acceptance 的 exec-plan 定稿后，发起 W2 验证实例化前跑同款校验（`node ~/.agents/skills/dev-flow-v2/scripts/check-exec-plan.mjs <exec-plan 绝对路径>`；acceptance 模式不传 --task-dir——增量契约核对在 D0 dev 模式门已完成，D3 门不重复核对验收节点）必须 PASS 再发起——schema 错误在编译点拦下并按步骤 3 同款路由处置，不留到引擎 setup 才爆。
 
 ## worktree 合并排布
 

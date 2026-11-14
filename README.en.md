@@ -33,7 +33,6 @@ scripts/           Dual-platform workflow build and validation scripts
 | tech-design-v2 | Solution design under an approved acceptance package (produced by delivery-v2): design document → adversarial review loop → full solution package (bound to the acceptance package hash, registered as DesignApproved afterwards) |
 | dev-flow-v2 | Executes the candidate implementation under the acceptance package + solution package: entry gate checks the acceptance package hash and DesignApproved; finish yields a candidate handed to delivery-v2 for verdict, never self-declares delivery |
 | delivery-v2 | Acceptance (referee) skill: acceptance design → independent assurance → machine gate as the only delivery verdict; three-role signed event stream + policy packages + raw-intent anti-narrowing |
-
 | symbol-watchlist | Symbol watchlist generation and self-check tool (extract-backticks.mjs): shared contract carrier for tech-design-v2 T3 watchlist production and dev-flow-v2 D5 pre-launch self-check |
 | design-code-sync | Keep code implementation and design documents in sync |
 | architecture-clean-domain-design | Domain modeling and architecture analysis with DDD and hexagonal architecture as analysis lenses: ubiquitous language, bounded contexts, aggregate invariants, ring-nature mapping; records and maps only — never outputs structural transformation designs |

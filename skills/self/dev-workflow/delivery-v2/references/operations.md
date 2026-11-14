@@ -18,7 +18,7 @@ node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs init \
 
 - stdout 输出：`taskDir`、`credentials`（三个 credentialId，形态 `<分组>/<任务id>/<角色>`）、`intentSha256` 与三把公钥。**私钥不输出**——已写入凭据目录 `~/.agents/skill-data/delivery-keys/<分组>/<任务id>/`（0600）。
 - 血统规则：同 git 仓库身份下已存在同 intent 的未替换任务时 init 拒绝——走任务替换（第 8 节）或先 `declare-independent`。
-- `--verification-only`：纳管体系外已有实现的只核验模式（豁免方案包与 DesignApproved）。
+- `--verification-only`：纳管体系外已有实现的只核验模式（豁免方案包与 DesignApproved）；由 candidate-build-v2 承载——builder 不改代码，逐增量核验在当前 revision 成立并登记实现记录。
 - 意图未随 init 带入时，后续一次性写入：`set-intent --task-dir <taskDir> --file <意图文件>`（写入后不可修改——需要新意图 = 新任务）。
 
 凭据传递边界：
@@ -31,9 +31,9 @@ node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs init \
 
 ## 2. 目标与验收设计与批准
 
-zcode：`CreateWorkflow saved: acceptance-design-v2`，args `{ projectRoot, taskDir, objective, assuranceCredentialId, taskId?, executionId?, sampleType? }`；pi：运行技能上级 `workflows/pi/acceptance-design-v2.js`。
+zcode：`CreateWorkflow saved: acceptance-design-v2`，args `{ projectRoot, taskDir, objective, assuranceCredentialId, taskId?, executionId?, sampleType?, runId? }`；pi：运行技能上级 `workflows/pi/acceptance-design-v2.js`。
 
-workflow 内完成：策略快照固定（`snapshot-policy`）→ designer 起草 acceptance.json + increments.json → 机器校验 → assurance 审查（`record-review --conclusion pass|reject`，绑验收包哈希、intent 哈希、快照哈希）。呈报用户后批准：
+workflow 内完成：策略快照固定（`snapshot-policy`）→ designer 起草 acceptance.json + increments.json → assurance 对照 intent.md 独立审查（修订轮对照上一版草稿备份的完整差异）→ 机器校验；审查与校验双通过后由 workflow 以 assurance 凭据执行 `record-review --conclusion pass`（自动绑验收包哈希、intent 哈希、快照哈希——approve-acceptance 的审查前置由此满足），审查不通过则打回 designer 修订重审。呈报用户后批准：
 
 ```bash
 node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs approve-acceptance \
@@ -45,7 +45,7 @@ node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs approve-acceptance \
 
 ## 3. 方案确认（技能② 衔接点）
 
-tech-design-v2 产出完整方案包（solution.md + impl-plan 双格式 + 审查终态）并经用户确认后：
+tech-design-v2 产出完整方案包（设计文档目录 + 渲染视图 + impl-plan 双格式 + 审查终态）并经用户确认后：
 
 ```bash
 node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs record-design-approved \
@@ -55,13 +55,18 @@ node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs record-design-approv
 
 方案包或验收版本变化后 DesignApproved 失效，需重新确认。
 
-## 4. 候选实现（技能③）
+## 4. 候选实现（技能③，两通道任选）
 
-dev-flow-v2 / candidate-build-v2 按验收与方案实现；入口门校验验收包哈希与 DesignApproved。builder 事件经 `append --credential <builder credentialId> [--run-id <runId>]` 登记（ImplementationRecorded 附合并回执：起始指纹、合并后指纹、补丁哈希）。
+- `candidate-build-v2`：入口门校验验收批准；非 `--verification-only` 任务还要求 DesignApproved（state=design 直接拒绝，恢复动作指向 `record-design-approved`）。只核验任务（init `--verification-only`）由 builder 逐增量核验不改代码，实现摘要带 `[verification-only]` 标注。
+- dev-flow-v2（技能③）：按验收与方案实现，其 D4 收尾按 increments 逐增量以 builder 凭据登记 `ImplementationRecorded`（衔接定义见 dev-flow-v2 文档），与 candidate-build-v2 的实现记录与合并回执口径一致。
+
+builder 事件经 `append --credential <builder credentialId> [--run-id <runId>]` 登记（ImplementationRecorded 附合并回执：起始指纹=上一增量完成指纹或 setup 基线、合并后指纹、补丁哈希）。
 
 ## 5. 独立保证
 
-zcode：`CreateWorkflow saved: independent-assurance-v2`，args `{ projectRoot, taskDir, assuranceCredentialId, taskId?, executionId?, sampleType?, runId? }`。前置：state 非 draft、增量齐。setup/finalize 比对 revision；漂移登记 AssuranceRevisionDrift，链超上限进 revision-unstable。AssuranceCompleted 绑逐增量测试回执（命令、退出码、日志哈希、cwd、被测产物哈希）与证据/探索事件 id——防跨 run 拼接。
+zcode：`CreateWorkflow saved: independent-assurance-v2`，args `{ projectRoot, taskDir, assuranceCredentialId, taskId?, executionId?, sampleType?, runId? }`。前置：state 非 draft、增量齐（candidate-build-v2 或 dev-flow-v2 D4 登记实现皆可）。两阶段串行：coverage-reviewer 先行取证并落盘冻结覆盖清单，explorer 拿到清单后探索。setup/finalize 比对 revision；漂移登记 AssuranceRevisionDrift（driftSeq 按事件流既有漂移数递增），链超上限进 revision-unstable。AssuranceCompleted 绑逐增量测试回执（命令、退出码、日志哈希、cwd、被测产物哈希——与日志哈希来源不同，防「构建 A 测 B」）与证据/探索事件 id——防跨 run 拼接。
+
+策略快照 `runsFromIgnoredArtifacts=true`（policies/revision.json 随任务固定）时的执行语义：workflow 取证前生成干净构建（HEAD 导出 + 工作树补丁 + 非 ignored 新文件复制，不含 ignored 本地产物），逐增量测试在干净目录执行并统一绑 buildId，AssuranceCompleted 附 cleanBuild 记录——证明证据不依赖本机 ignored 产物；干净目录内测试失败（如需本机 ignored 依赖）会如实记入回执，裁决器按退出码判定保证无效。
 
 ## 6. 统一判定与风险接受
 

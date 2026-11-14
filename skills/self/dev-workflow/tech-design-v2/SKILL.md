@@ -3,7 +3,7 @@ name: tech-design-v2
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 2.1.0
+version: 2.2.0
 description: >-
   Use when 在已批准目标与验收（delivery-v2 产出）的约束下三阶段推敲方案并产出完整设计包：
   写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan 双格式），用户确认后登记方案包
@@ -24,7 +24,7 @@ description: >-
 
 **入口门 [MANDATORY]**：T1 开始前，交付任务目录必须存在已批准的 acceptance.json——用
 `node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs evaluate --task-dir <taskDir>` 检查，
-state 须为 `design`（已批准、待方案）或更后。缺任务目录或未批准 → 停止并回 delivery-v2 走验收设计
+state 须为 `design`（已批准、待方案——验收版本递增重批后 DesignApproved 失效、state 亦回到该态，重入设计走同一判据）。缺任务目录或未批准 → 停止并回 delivery-v2 走验收设计
 （用户明确不走交付体系的独立设计任务用 tech-design-v1，不经本门）。设计包全程绑定该任务的
 acceptanceVersion 与 acceptancePackageSha256。
 
@@ -89,7 +89,13 @@ node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs record-design-approv
 ```
 
 方案包或验收版本变化后 DesignApproved 自动失效（重新确认）。**方案包不得变更 increments.json 的增量契约**
-（增量×需求×测试命令由技能①的 acceptance-design 产出并随验收包批准）——impl-plan 只细化实施步骤与调度。
+（增量×需求×测试命令由技能①的 acceptance-design 产出并随验收包批准）——impl-plan 只细化实施步骤与调度，
+逐增量核对要求见 `flow/plan.md`「增量契约对齐」节。
+
+**decisionRef（决策记录落点）**：`record-design-approved` 不传 `--decision-file` 时 decisionRef 缺省指向
+交付任务目录 `evidence/design-decisions.md`——主会话在执行登记命令前把 A/B 级决策清单写入该文件
+（从 `meta.json` reviewNav 导出：decisionId / level / title / anchor，各附一句结论与用户裁决结果），
+使裁决与复核可回溯（该文件同时计入方案包哈希清单）；决策记录放别处时显式传 `--decision-file <路径>`。
 
 ## W1 workflow 契约（执行体按宿主环境选择）
 

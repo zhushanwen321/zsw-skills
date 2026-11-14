@@ -543,7 +543,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "2.1.0"; // 构建注入自 tech-design-v2/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.2.0"; // 构建注入自 tech-design-v2/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // tech-review-loop-v2 — tech-design-v2 技能 W1 审查循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
@@ -1233,7 +1233,7 @@ async function finish(terminated, rounds, message, blocked = null) {
         result.message += `；（注：final.json 落盘失败 exit ${w.exitCode}）`;
     }
     // run.json（分析契约，skill-data-redesign §5.1）与 final.json 同批终态写出；固定名
-    // final.json 是 dev-flow-wf 入口门契约保持不动，run.json 承载跨 run 分析字段
+    // final.json 是 dev-flow-v2 入口门契约保持不动，run.json 承载跨 run 分析字段
     if (runStartedAt !== null) {
         const endRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
         const gitRev = await gitRevProbe();

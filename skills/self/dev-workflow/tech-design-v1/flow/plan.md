@@ -129,7 +129,7 @@
 
 ## 并行度复审（门槛触发，落盘前）
 
-触发门槛：实现链关键路径深度 ≥3 或单元数 ≥4（门槛内小计划不派——零收益）。派 `~/.agents/skills/dev-flow-wf/agents/parallelism-reviewer.md`（zcode 环境按 subagent_type 派发；无注册机制环境用 general-purpose + 内嵌 agent 文件全文）；task 附 impl-plan 双格式 + 设计文档 + 项目根三绝对路径；报告落 `~/.agents/skill-data/tech-design/<project-slug>/<name>.plan-review.md`。reviewer 只报告——主 agent 逐条裁决（采纳即改计划并重跑自检；不采纳记理由），裁决记入 json 的 notes。头两个使用并行度复审的项目交付后回看其产出：连续零 finding 则降级为自检清单条目、砍掉派发（流程环节要能证明收益）。
+触发门槛：实现链关键路径深度 ≥3 或单元数 ≥4（门槛内小计划不派——零收益）。派 `~/.agents/skills/dev-flow-v1/agents/parallelism-reviewer.md`（zcode 环境按 subagent_type 派发；无注册机制环境用 general-purpose + 内嵌 agent 文件全文）；task 附 impl-plan 双格式 + 设计文档 + 项目根三绝对路径；报告落 `~/.agents/skill-data/tech-design/<project-slug>/<name>.plan-review.md`。reviewer 只报告——主 agent 逐条裁决（采纳即改计划并重跑自检；不采纳记理由），裁决记入 json 的 notes。头两个使用并行度复审的项目交付后回看其产出：连续零 finding 则降级为自检清单条目、砍掉派发（流程环节要能证明收益）。
 
 ## 落盘与 T3 确认
 

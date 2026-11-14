@@ -1,7 +1,7 @@
 ---
 name: delivery-v2
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 2.2.0
+version: 2.3.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -32,7 +32,7 @@ dev-flow-v2（技能③执行）在本体系内协作：②在已批准目标与
 | 设计并实现、修复 bug、开发功能 | `references/risk-routing.md`、`references/operations.md` | 完整主流程（①验收 → ②设计 → ③执行 → ①保证与裁决） |
 | 只定义目标与验收 | `references/acceptance.md` | `acceptance-design-v2`；经用户批准后停止，不写代码 |
 | 按已有目标与验收开发 | `references/operations.md` | 校验验收包后走 tech-design-v2（方案）→ dev-flow-v2（候选实现）→ 本技能保证与裁决 |
-| 只验收已有实现 | `references/state-and-events.md`、`references/operations.md` | init 加 `--verification-only`（豁免方案包与 DesignApproved），在当前 revision 登记当前实现记录，再独立保证；禁止补写「当时实现完成」的旧事件 |
+| 只验收已有实现 | `references/state-and-events.md`、`references/operations.md` | init 加 `--verification-only`（豁免方案包与 DesignApproved）；由 candidate-build-v2 承载只核验模式——builder 不改代码，逐增量核验在当前 revision 成立并登记当前实现记录（摘要带 `[verification-only]` 标注），再独立保证；禁止补写「当时实现完成」的旧事件 |
 | 用户接受具体残余风险 | `references/state-and-events.md` | 确认用户明确指定风险后 `accept-risk`（自动绑定缺口 gapId）→ evaluate |
 | 查看当前能否交付 | `references/state-and-events.md` | 直接 evaluate，不重放旧证据 |
 | 修改验收判据 | `references/acceptance.md` | 递增 acceptanceVersion 并重新审查与批准；相关旧证据失效 |
@@ -40,11 +40,11 @@ dev-flow-v2（技能③执行）在本体系内协作：②在已批准目标与
 ## 主流程
 
 1. `init`（可带 `--intent-file` 原始意图）：写 intent.md、生成凭据文件与公钥登记；血统检查——同 git 仓库身份下已存在同 intent 的未替换任务时，改走任务替换（`supersede-prepare`）或先 `declare-independent`。
-2. 发起 `acceptance-design-v2`：固定策略快照（`snapshot-policy`）→ designer 起草 acceptance.json 与 increments.json → assurance 角色独立审查（`record-review`）→ 产出草稿，不是直接批准。
+2. 发起 `acceptance-design-v2`：固定策略快照（`snapshot-policy`）→ designer 起草 acceptance.json 与 increments.json → assurance 角色对照 intent.md 独立审查，审查与机器校验双通过后由 workflow 以 assurance 凭据登记 `AcceptanceReviewed`（`record-review --conclusion pass`）→ 产出草稿，不是直接批准。
 3. 呈报关键目标、非目标、风险与相对原始意图的覆盖对照；用户明确批准后 `approve-acceptance`（批准绑验收包哈希、intent 哈希、策略快照哈希与通过审查的事件 id）。全托管授权用 `standing-authorization`。
 4. tech-design-v2（技能②）产出完整方案包，用户确认后 `record-design-approved` 绑方案包哈希清单。
-5. dev-flow-v2（技能③）按验收与方案做候选实现（入口门校验验收包哈希与 DesignApproved）。
-6. 发起 `independent-assurance-v2`：coverage-reviewer 逐「需求×证据类型」取证并重跑全部增量测试（逐增量回执），explorer 按维度构造验收外反例；setup/finalize 比对 revision，漂移登记 `AssuranceRevisionDrift`，连续漂移链超上限进 `revision-unstable`（用户排查后 `confirm-baseline`）。
+5. 候选实现两通道任选其一：内置 `candidate-build-v2`（入口门校验验收批准；非 `--verification-only` 任务还要求 DesignApproved——state=design 直接拒绝并指向 `record-design-approved`），或 dev-flow-v2（技能③）执行并在其 D4 收尾按 increments 逐增量以 builder 凭据登记 `ImplementationRecorded`（衔接定义见 dev-flow-v2 文档）；两通道的实现记录与合并回执口径一致。
+6. 发起 `independent-assurance-v2`：coverage-reviewer 逐「需求×证据类型」取证并重跑全部增量测试（逐增量回执：命令、退出码、日志哈希、被测产物哈希），审查本轮测试是否被改弱；explorer 在覆盖清单冻结后按维度构造验收外反例；策略 `runsFromIgnoredArtifacts=true` 时取证来自干净构建（见 operations.md 第 5 节）；setup/finalize 比对 revision，漂移登记 `AssuranceRevisionDrift`，连续漂移链超上限进 `revision-unstable`（用户排查后 `confirm-baseline`）。
 7. `evaluate`：按 state/missing/nextAction 决定回环（修实现 / 补证据 / 改验收 / 请用户逐项接受风险）。
 8. 只有 `accepted` 或 `accepted_with_risk` 才能按对应口径交付；后者逐项披露用户接受的风险。verdict 哈希由用户在任务目录之外保存参照（A 档复核）。
 
@@ -63,7 +63,7 @@ dev-flow-v2（技能③执行）在本体系内协作：②在已批准目标与
 | `candidate-build-v2` | projectRoot、taskDir、builderCredentialId | 代码、测试、原始输出、ImplementationRecorded（带合并回执） | verified 证据、验收修订、最终交付结论 |
 | `independent-assurance-v2` | projectRoot、taskDir、assuranceCredentialId | 覆盖结论、探索发现、证据与发现事件、逐增量测试回执 | 产品代码修改、验收修订、风险接受 |
 
-三个 workflow 均接收可选 `taskId/executionId/sampleType` 观测参数与 `runId`（写事务租约复核）。zcode 用同名 saved workflow；pi 用上级 `workflows/pi/<name>.js`。两边都不可用时主会话可按相同职责手工执行，但事件与最终判定仍必须走 `delivery-gate`。
+三个 workflow 均接收可选 `taskId/executionId/sampleType` 观测参数。写事务租约：`candidate-build-v2` 与 `independent-assurance-v2` 接收可选 `runId`（acquire/心跳/release 全程配对，事件 append 带 `--run-id` 代次复核）；`acceptance-design-v2` 接收可选 `runId`（审查登记期间持有 projectRoot 级租约，任何出口释放）。zcode 用同名 saved workflow；pi 用上级 `workflows/pi/<name>.js`。两边都不可用时主会话可按相同职责手工执行，但事件与最终判定仍必须走 `delivery-gate`。
 
 ## 密钥与信任边界
 

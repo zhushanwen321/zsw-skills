@@ -412,7 +412,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "0.3.2"; // 构建注入自 delivery-v1/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.3.3"; // 构建注入自 delivery-v1/SKILL.md frontmatter version（唯一权威）
 // contract-design — delivery-v1 产品契约设计循环。
 // designer 只写契约草稿、解决方案辅助文档与实施增量；reviewer 独立审查。
 // events.jsonl 只作为事实文件读取：已批准契约的最大 contractVersion 是修订下界，

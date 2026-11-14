@@ -52,7 +52,7 @@
 ### 3. exec-plan 校验（fail-fast，生成即校验）
 
 ```bash
-node ~/.agents/skills/dev-flow-wf/scripts/check-exec-plan.mjs <exec-plan 绝对路径>
+node ~/.agents/skills/dev-flow-v1/scripts/check-exec-plan.mjs <exec-plan 绝对路径>
 ```
 
 stdout `PASS` 才继续步骤 4。校验集与 W2 引擎的 validatePlan 及 W3 启动契约（testPlan / 必填字段 / 白名单）同源，错误文案逐字一致，漂移由差分测试机器对账拦截（`node --test scripts/tests/check-exec-plan-parity.test.mjs`，zsw-skills 检出内执行）。FAIL 逐行输出 `FAIL: <分类>: <明细>`（全部报完再退出），按分类路由处置：
@@ -92,7 +92,7 @@ stdout `PASS` 才继续步骤 4。校验集与 W2 引擎的 validatePlan 及 W3 
 - （进 D3 前）环境 smoke：场景依赖的每个环境面跑无 LLM 探针验证可用；项目 verification skill 提供环境体检脚本（doctor 类启动前体检）时纳入 smoke 探针清单；剧本 dry-run：机械断言先对样本数据跑通；bash 语义歧义点（管道子 shell 的 cwd 隔离、`$()` 剥尾换行、引号嵌套、**管道退出码陷阱**）逐行过一遍——`cmd | tail; echo $?` 取的是管道末段（tail）的退出码，主命令失败会被判绿，验收/测试命令一律无管道形态 `cmd > log 2>&1; echo "EXIT=$?"`，判定读 EXIT 行 + grep 日志，禁止 `| tail`/`| head` 后跟 `$?`/`&&` 判定退出；采样管道复用检查：read 项目采样管道文档，已有脚本直接复用，新做法记录回写（进管道文档），禁现场重写管道；多实例分配：互斥场景组绑独立 dev 实例（装配器端口段派生 + 独立数据目录）
 - **verify 剧本每步汇总落盘 [MANDATORY]**：剧本骨架的 step 函数每步结束时向 `<artifactsDir>/summary.jsonl` 追加一行 JSON：`{"step":"<步骤名>","command":"<命令>","exitCode":<n>,"stats":"<vitest/断言统计行，可空>"}`——供 L4 inspect 以汇总文件为准核对（只读 summary、仅异常步骤读全文日志；实测 inspect 逐个全文读 19 份日志耗 259 万 token 占 D3 时长 85.7%，2026-09-29）。step 函数自身拿不到 artifactsDir 时由剧本头部变量注入
 
-本步编入完成后（含产物类条目编入 `testPlan.artifacts`）重跑步骤 3 校验门（`node ~/.agents/skills/dev-flow-wf/scripts/check-exec-plan.mjs <exec-plan 绝对路径>`）确认 PASS 再进步骤 7。
+本步编入完成后（含产物类条目编入 `testPlan.artifacts`）重跑步骤 3 校验门（`node ~/.agents/skills/dev-flow-v1/scripts/check-exec-plan.mjs <exec-plan 绝对路径>`）确认 PASS 再进步骤 7。
 
 ### 7. 验收编译规则（为 D3 预生成 acceptance 面）
 
@@ -117,7 +117,7 @@ stdout `PASS` 才继续步骤 4。校验集与 W2 引擎的 validatePlan 及 W3 
 - **fail 先查排障文档**：验收失败处理写在 verify/inspect 节点 promptFile 约束——先 read 项目排障文档（典型 docs/TROUBLESHOOTING.md）归因，禁不归因重试、禁放宽断言
 - **开发期 e2e**：验收计划表「单元 committed 后」时点的项编译为 kind=verify 节点插入 dev 模式 nodes（deps=所属 dev 单元）
 
-**D3 发起门（生成即校验）**：acceptance 节点实例化落位、mode=acceptance 的 exec-plan 定稿后，发起 W2 验证实例化前跑同款校验（`node ~/.agents/skills/dev-flow-wf/scripts/check-exec-plan.mjs <exec-plan 绝对路径>`）必须 PASS 再发起——schema 错误在编译点拦下并按步骤 3 同款路由处置，不留到引擎 setup 才爆。
+**D3 发起门（生成即校验）**：acceptance 节点实例化落位、mode=acceptance 的 exec-plan 定稿后，发起 W2 验证实例化前跑同款校验（`node ~/.agents/skills/dev-flow-v1/scripts/check-exec-plan.mjs <exec-plan 绝对路径>`）必须 PASS 再发起——schema 错误在编译点拦下并按步骤 3 同款路由处置，不留到引擎 setup 才爆。
 
 ## worktree 合并排布
 

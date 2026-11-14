@@ -7,7 +7,7 @@
 init 前先确认 `--project-root` 归属：该目录必须是本会话自己的项目/worktree 目录。stdout 里的 `projectRoot`、`worktree`、`siblingTasks`（同分组既有任务清单）与 `evalIdentity`（projectRoot 挂有评测身份标识时出现）用于这次确认——`siblingTasks` 非空或出现 `evalIdentity` 时，先核实这些任务/标识是否本会话所建；评测等多会话同题环境下发现不是自己的，立即停止并改用自己的 worktree。
 
 ```bash
-node ~/.agents/skills/delivery-wf/scripts/delivery-gate.mjs init \
+node ~/.agents/skills/delivery-v1/scripts/delivery-gate.mjs init \
   --project-root <项目根> --task-id <任务id>
 ```
 
@@ -39,7 +39,7 @@ pi：运行技能上级 `workflows/pi/contract-design.js`，传同名参数。
 `contract-ready` 后向用户呈现关键决策。批准后执行：
 
 ```bash
-node ~/.agents/skills/delivery-wf/scripts/delivery-gate.mjs approve-contract \
+node ~/.agents/skills/delivery-v1/scripts/delivery-gate.mjs approve-contract \
   --task-dir <taskDir> --user-key <userKey> --confirmation user-explicit \
   --summary "用户批准契约第 N 版及验收要求"
 ```
@@ -67,7 +67,7 @@ args: { projectRoot, taskDir, assuranceKey, taskId?, executionId?, sampleType? }
 ## 5. 统一判定
 
 ```bash
-node ~/.agents/skills/delivery-wf/scripts/delivery-gate.mjs evaluate --task-dir <taskDir>
+node ~/.agents/skills/delivery-v1/scripts/delivery-gate.mjs evaluate --task-dir <taskDir>
 ```
 
 revision 判定口径：git 项目 evaluate 自动计算当前工作树 revision，代码、契约、验收资产或宿主变化后须重新取证；非 git 项目不支持自动 revision，必须显式传 `--revision <值>`（或走第 7 节手工路径）——candidate-build/independent-assurance 的自动 revision 同样依赖 git，非 git 项目不要声称全自动通用。
@@ -82,7 +82,7 @@ revision 判定口径：git 项目 evaluate 自动计算当前工作树 revision
 ## 6. 用户接受风险
 
 ```bash
-node ~/.agents/skills/delivery-wf/scripts/delivery-gate.mjs accept-risk \
+node ~/.agents/skills/delivery-v1/scripts/delivery-gate.mjs accept-risk \
   --task-dir <taskDir> --user-key <userKey> --target-type requirement \
   --target-id R1 --confirmation user-explicit \
   --summary "用户接受 <具体风险、影响范围、恢复方式>"

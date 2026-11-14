@@ -6,4 +6,16 @@
 
 meta.json 的 `relatedDocs` 是关联登记清单：本设计触及、修改、推翻的存量权威文档（ADR / 产品定义 / 领域模型等）逐条登记 `{ path, relation }`，供下游终态同步核对回写；无关联时保持空数组即可。
 
+交付体系任务（三技能交付体系，delivery-v2 已批准验收）另须在 T1 入口门给 meta.json 加 `acceptanceBinding` 字段（模板最小形态不含它——独立设计任务省略）。示例形态：
+
+```json
+"acceptanceBinding": {
+  "acceptanceVersion": 1,
+  "acceptancePackageSha256": "<64 位 sha256：绑定的验收包哈希>",
+  "taskDir": "~/.agents/skill-data/delivery/<分组 slug>/<任务 id>"
+}
+```
+
+写入义务与判据见 `flow/write.md` Step 0 交付体系入口门（验收批准检查通过后写入）；子字段规格见 schema §3；渲染视图头部呈现为「验收绑定」行。
+
 决策含守护 / 命令 / 正则类可执行内容时，登记在该决策的 `guards` 字段（id / text / note，单一登记），其他章节的文本字段内联完整标记 `{{G1}}` 引用——渲染自动展开为登记全文（字段规格见 schema §6.3，引用语法见 §9）。

@@ -473,7 +473,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "0.3.2"; // 构建注入自 delivery-v1/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.3.3"; // 构建注入自 delivery-v1/SKILL.md frontmatter version（唯一权威）
 const VALID_ARG_KEYS = new Set([
     // 事件写入凭据：delivery-gate init 输出的 assuranceKey 私钥（assurance 角色专用，
     // userKey/builderKey 等其他角色 key 不得注入本 workflow）

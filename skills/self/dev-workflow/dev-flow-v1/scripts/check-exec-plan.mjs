@@ -497,7 +497,7 @@ function main() {
   process.exit(1);
 }
 
-// 直跑入口判定按 realpath 比对：技能经 symlink 安装（~/.agents/skills/dev-flow-wf）时
+// 直跑入口判定按 realpath 比对：技能经 symlink 安装（~/.agents/skills/dev-flow-v1）时
 // argv[1] 是 symlink 路径，而 ESM 的 import.meta.url 是解析后的真实路径——直比会失配、
 // CLI 静默不执行（冒烟实测）。realpath 归一后两侧恒等
 function isMainEntry() {

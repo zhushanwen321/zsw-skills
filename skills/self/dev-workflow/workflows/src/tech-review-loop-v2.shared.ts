@@ -771,7 +771,7 @@ async function finish(
     result.message += `；（注：final.json 落盘失败 exit ${w.exitCode}）`;
   }
   // run.json（分析契约，skill-data-redesign §5.1）与 final.json 同批终态写出；固定名
-  // final.json 是 dev-flow-wf 入口门契约保持不动，run.json 承载跨 run 分析字段
+  // final.json 是 dev-flow-v2 入口门契约保持不动，run.json 承载跨 run 分析字段
   if (runStartedAt !== null) {
     const endRes = await world.run("node", ["-e", NODE_PROBE_NOW]);
     const gitRev = await gitRevProbe();

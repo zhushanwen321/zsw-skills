@@ -413,7 +413,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "0.3.2"; // 构建注入自 delivery-v1/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "0.3.3"; // 构建注入自 delivery-v1/SKILL.md frontmatter version（唯一权威）
 // independent-assurance — delivery-v1 独立覆盖核对与探索性审查。
 // assurance 角色不得修改产品代码、契约、事件或 verdict；脚本只经 delivery-gate
 // append --key assuranceKey 追加事实（assurance 角色凭据；不接收 userKey/

@@ -38,6 +38,7 @@
 | riskRationale | string | 必填 | 风险分依据一句话 |
 | reviewNav | object 数组 | 必填 | 人工审核导航，每条 A/B 级决策一行；全部 decisionId 的集合必须与 `s3-solution.json` decisions 的 id 集合完全一致（A/B 级决策不得缺导航行） |
 | skillVersion | string | 可选 | 产出本设计的技能版本（semver `MAJOR.MINOR.PATCH`），值读本技能 SKILL.md frontmatter `version`（唯一权威，T1 创建 meta.json 时写入——写入义务见 `flow/write.md`「meta.json skillVersion 写入」节）。产物溯源字段：回答「本设计包由哪个技能版本产出」，只读溯源不参与任何执行裁决；机器检查校验 semver 形态（有则查、无则放行——存量设计目录零影响） |
+| acceptanceBinding | object | 交付体系任务必填；独立设计任务省略 | 验收绑定 `{ acceptanceVersion, acceptancePackageSha256, taskDir }`（子字段见下表）——T1 入口门（`flow/write.md` Step 0）在验收批准检查通过后写入；绑定交付任务目录的当前批准（dev-flow-v2 入口门核对其与当前批准一致）；验收版本变化后旧设计包不可直接进 T3 / dev-flow-v2 入口，须重新影响审查。机器检查按「有则核形态与子字段齐全，无则 warning 提示（独立设计任务合法省略）」处理 |
 | relatedDocs | object 数组 | 可选（默认空数组） | 关联登记清单：本设计触及、修改、推翻的项目内存量权威文档（决策记录 ADR、产品定义、领域模型等），供下游终态同步（design-code-sync）核对回写——登记了没同步 = 可立项的遗漏。纯语义登记，不强制非空（无关联时空数组，校验只查数组形态）；渲染为头部表「关联登记」行（空数组不渲染该行） |
 
 **reviewNav 行内字段**：
@@ -50,6 +51,14 @@
 | title | string | 必填 | 决策标题，与被引用决策的 title 一致 |
 | criteria | string | 必填 | 命中的审查判据编号 |
 | impact | string | 必填 | 关键影响简述（写有实质影响的维度，不写「无」） |
+
+**acceptanceBinding 行内字段**：
+
+| 字段 | 类型 | 必填 | 填写要求 |
+|---|---|---|---|
+| acceptanceVersion | number（正整数） | 必填 | 绑定的验收版本号（delivery-v2 `approve-acceptance` 后的当前 acceptanceVersion） |
+| acceptancePackageSha256 | string | 必填 | 绑定的验收包哈希（64 位 sha256 十六进制） |
+| taskDir | string | 必填 | 交付任务目录绝对路径（`~/.agents/skill-data/delivery/<分组 slug>/<taskId>/`） |
 
 **relatedDocs 行内字段**：
 

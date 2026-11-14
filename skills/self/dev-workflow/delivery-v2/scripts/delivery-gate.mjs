@@ -119,7 +119,7 @@ const EVENT_SCHEMAS = {
   },
   TaskSupersedeCancelled: {
     actors: ["user"],
-    fields: ["cancelledPrepareEventId", "predecessorTaskDir", "cancelledTaskJsonSha256", "cancelledVerdictSha256", "reason"],
+    fields: ["cancelledPrepareEventId", "predecessorTaskDir", "predecessorTaskJsonSha256", "cancelledTaskJsonSha256", "cancelledVerdictSha256", "reason"],
   },
 };
 const EVENT_TYPES = Object.keys(EVENT_SCHEMAS);
@@ -156,7 +156,7 @@ const HELP = `delivery-gate（v2）：delivery-v2 的确定性交付裁决器
   delivery-gate approve-acceptance --task-dir D --confirmation user-explicit|standing-authorization --summary S --credential <user credentialId> [--revision R]
   delivery-gate record-design-approved --task-dir D --package-file F --decision-file F2 --summary S --credential <user credentialId>
   delivery-gate append --task-dir D --event '<JSON>' --credential <credentialId> [--run-id R]
-  delivery-gate accept-risk --task-dir D --target-type requirement|finding --target-id ID --confirmation user-explicit --summary S --credential <user credentialId> [--revision R]
+  delivery-gate accept-risk --task-dir D --target-type requirement|finding --target-id ID --confirmation user-explicit --summary S --credential <user credentialId> [--revision R] [--gap-id G]
   delivery-gate evaluate --task-dir D [--revision R]
   delivery-gate revision --project-root P
   delivery-gate confirm-baseline --task-dir D --reason S --credential <user credentialId> [--revision R]
@@ -178,6 +178,7 @@ init 重复语义：任务目录按 projectRoot 分组（~/.agents/skill-data/de
   主会话据此确认 --project-root 是本会话自己的 worktree；评测等多会话同题环境必须每会话独立 worktree。
   血统规则：同一 git 仓库身份（覆盖全部 worktree）下已存在 intent 哈希或验收包相同的任务时，新 init
   必须走任务替换（supersede-prepare 继承未决发现）或由用户签署 IndependentTaskDeclared 声明确属独立任务。
+  intent 对账在 init 执行；验收包对账在 validate-acceptance / record-review（验收包首次成型与绑定）执行。
 `;
 
 class GateError extends Error {
@@ -534,6 +535,10 @@ function validatePolicySources(sources) {
     requireNonEmptyString(category.id, `${label}.id`);
     if (seenCategories.has(category.id)) fail(`${label}.id 重复。`, "分类 id 必须唯一，修正后重试。");
     seenCategories.add(category.id);
+    // blocksAccepted 三态：true（修复或接受风险后放行）/ "until-confirmed"（确认前阻塞，不可接受）/ false（不阻）
+    if (category.blocksAccepted !== true && category.blocksAccepted !== false && category.blocksAccepted !== "until-confirmed") {
+      fail(`${label}.blocksAccepted 必须是 true、false 或 "until-confirmed"。`, `把 ${label}.blocksAccepted 改为三态之一后重试。`);
+    }
     requireBoolean(category.riskAcceptAllowed, `${label}.riskAcceptAllowed`);
     requireStringArray(category.exits, `${label}.exits`, { nonEmptyItems: true, unique: true });
   }
@@ -543,6 +548,8 @@ function validatePolicySources(sources) {
   const rules = sources["verdict-rules.json"];
   requireRecord(rules, "verdict-rules.json");
   requireNonNegativeInteger(rules.maxDriftChain ?? 2, "verdict-rules.json maxDriftChain");
+  requireBoolean(rules.requireAcceptanceReview ?? true, "verdict-rules.json requireAcceptanceReview");
+  requireBoolean(rules.requireDesignApproved ?? true, "verdict-rules.json requireDesignApproved");
   const revision = sources["revision.json"];
   requireRecord(revision, "revision.json");
   requireEnum(revision.mode ?? "auto-git", ["auto-git", "content-manifest"], "revision.json mode");
@@ -754,9 +761,8 @@ function validateIncrements(increments, acceptance) {
     const item = increments.items[index];
     const label = `increments.items[${index}]`;
     requireRecord(item, label);
-    const allowed = ["id", "title", "requirementIds"];
-    if (Object.hasOwn(item, "testCommand")) allowed.push("testCommand");
-    requireExactKeys(item, allowed, label);
+    // testCommand 必填（redesign 3.4/5.3：每个增量有自己的测试命令；裁决器要求回执覆盖全部增量）
+    requireExactKeys(item, ["id", "title", "requirementIds", "testCommand"], label);
     requireNonEmptyString(item.id, `${label}.id`);
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(item.id)) {
       fail(`${label}.id 格式非法：${JSON.stringify(item.id)}。`, "把增量 id 改为字母或数字开头、仅含字母数字/下划线/连字符且长度不超过 64 的形式后重试。");
@@ -775,18 +781,16 @@ function validateIncrements(increments, acceptance) {
         fail(`${label}.requirementIds 引用了未知需求 ${JSON.stringify(requirementId)}。`, "把该引用改为 acceptance.requirements 中已声明的 id，或先补充验收条目后重试。");
       }
     }
-    if (Object.hasOwn(item, "testCommand")) {
-      requireRecord(item.testCommand, `${label}.testCommand`);
-      const testCommandAllowed = ["program", "args"];
-      if (Object.hasOwn(item.testCommand, "timeoutMs")) testCommandAllowed.push("timeoutMs");
-      requireExactKeys(item.testCommand, testCommandAllowed, `${label}.testCommand`);
-      requireNonEmptyString(item.testCommand.program, `${label}.testCommand.program`);
-      requireStringArray(item.testCommand.args, `${label}.testCommand.args`);
-      if (Object.hasOwn(item.testCommand, "timeoutMs")) {
-        const timeoutMs = item.testCommand.timeoutMs;
-        if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 3_600_000) {
-          fail(`${label}.testCommand.timeoutMs 必须是 1000..3600000 的整数。`, `把 ${label}.testCommand.timeoutMs 改为该区间的整数（缺省 300000）后重试。`);
-        }
+    requireRecord(item.testCommand, `${label}.testCommand`);
+    const testCommandAllowed = ["program", "args"];
+    if (Object.hasOwn(item.testCommand, "timeoutMs")) testCommandAllowed.push("timeoutMs");
+    requireExactKeys(item.testCommand, testCommandAllowed, `${label}.testCommand`);
+    requireNonEmptyString(item.testCommand.program, `${label}.testCommand.program`);
+    requireStringArray(item.testCommand.args, `${label}.testCommand.args`);
+    if (Object.hasOwn(item.testCommand, "timeoutMs")) {
+      const timeoutMs = item.testCommand.timeoutMs;
+      if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 3_600_000) {
+        fail(`${label}.testCommand.timeoutMs 必须是 1000..3600000 的整数。`, `把 ${label}.testCommand.timeoutMs 改为该区间的整数（缺省 300000）后重试。`);
       }
     }
   }
@@ -895,7 +899,8 @@ function requireInheritedFindingsShape(value, label) {
     requireRecord(finding, entryLabel);
     requireExactKeys(finding, ["findingId", "category", "severity", "requirementIds"], entryLabel);
     requireFindingId(finding.findingId, `${entryLabel}.findingId`);
-    requireEnum(finding.category, FINDING_CATEGORIES, `${entryLabel}.category`);
+    // category 词表不在此处枚举：shape 层只保证非空字符串，合法性由 fold 层按策略快照分类校验（TaskSuperseded prepare 分支）
+    requireNonEmptyString(finding.category, `${entryLabel}.category`);
     requireEnum(finding.severity, FINDING_SEVERITIES, `${entryLabel}.severity`);
     requireStringArray(finding.requirementIds, `${entryLabel}.requirementIds`, { unique: true });
     if (seen.has(finding.findingId)) fail(`${entryLabel}.findingId 重复。`, "继承清单内的 findingId 必须唯一。");
@@ -937,7 +942,8 @@ function validateEventShape(event, { record = false } = {}) {
       requireSha256(event.acceptancePackageSha256, "event.acceptancePackageSha256");
       requireSha256(event.intentSha256, "event.intentSha256");
       requireSha256(event.policySnapshotSha256, "event.policySnapshotSha256");
-      requireSha256(event.reviewEventId, "event.reviewEventId");
+      // "none" 占位仅当策略 requireAcceptanceReview=false 时合法（语义层 appendEvent/verdict 按策略判定）
+      if (event.reviewEventId !== "none") requireSha256(event.reviewEventId, "event.reviewEventId");
       requireEnum(event.confirmation, CONFIRMATIONS, "event.confirmation");
       break;
     case "DesignApproved":
@@ -957,7 +963,8 @@ function validateEventShape(event, { record = false } = {}) {
       break;
     case "FindingRaised":
       requireFindingId(event.findingId, "event.findingId");
-      requireEnum(event.category, FINDING_CATEGORIES, "event.category");
+      // category 词表不在此处枚举：shape 层只保证非空字符串，合法性由 fold 层按策略快照分类校验
+      requireNonEmptyString(event.category, "event.category");
       requireEnum(event.severity, FINDING_SEVERITIES, "event.severity");
       // 无关联需求的发现允许空数组（blocker 时触发全量增量修复）
       requireStringArray(event.requirementIds, "event.requirementIds", { unique: true });
@@ -1027,6 +1034,7 @@ function validateEventShape(event, { record = false } = {}) {
     case "TaskSupersedeCancelled":
       requireSha256(event.cancelledPrepareEventId, "event.cancelledPrepareEventId");
       requireNonEmptyString(event.predecessorTaskDir, "event.predecessorTaskDir");
+      requireSha256(event.predecessorTaskJsonSha256, "event.predecessorTaskJsonSha256");
       requireSha256(event.cancelledTaskJsonSha256, "event.cancelledTaskJsonSha256");
       requireSha256(event.cancelledVerdictSha256, "event.cancelledVerdictSha256");
       requireNonEmptyString(event.reason, "event.reason");
@@ -1115,9 +1123,22 @@ function validateArtifact(taskDir, artifact) {
   fail(`artifact 无法使用：${artifact}。`, "把真实证据文件放入 evidence/ 后重试当前命令。");
 }
 
-// 已登记 artifact 禁止覆盖写：同名写入即失败，新证据用新文件名（追加前校验）
+// 已登记 artifact 禁止覆盖写：同名写入即失败，新证据用新文件名（追加前校验）。
+// 两道对账：① 既有事件已以不同内容哈希登记同一路径 → 覆盖写，直接拒绝（预防性）；
+// ② 本次事件声明的哈希与磁盘现状不一致 → 拒绝（防止把已覆盖的文件再登记进事件流）
 function validateArtifactNotOverwritten(world, artifact, artifactSha256) {
   const filePath = isAbsolute(artifact) ? resolve(artifact) : resolve(world.taskDir, artifact);
+  for (const entry of world.entries) {
+    const prior = entry.record;
+    if (!Object.hasOwn(prior, "artifact") || !Object.hasOwn(prior, "artifactSha256")) continue;
+    const priorPath = isAbsolute(prior.artifact) ? resolve(prior.artifact) : resolve(world.taskDir, prior.artifact);
+    if (priorPath === filePath && prior.artifactSha256 !== artifactSha256) {
+      fail(
+        `artifact ${artifact} 已被事件 seq=${prior.seq} 以不同内容哈希登记，拒绝覆盖写（登记 ${prior.artifactSha256.slice(0, 12)}…，本次 ${artifactSha256.slice(0, 12)}…）。`,
+        `已登记证据禁止覆盖写——新证据用新文件名（如 ${basename(filePath)} 递增序号）追加新事件后重试。`,
+      );
+    }
+  }
   const currentSha = sha256File(filePath, `artifact ${artifact}`);
   if (currentSha !== artifactSha256) {
     fail(
@@ -1422,6 +1443,9 @@ function foldEvents(world, entries) {
             if (fold.findings.has(inherited.findingId)) {
               fail(`${lineLabel} 继承的 findingId ${inherited.findingId} 与本地登记冲突。`, "继承发现沿用前任 findingId；本地新发现请用新 id。");
             }
+            if (policyFindingCategory(world.policy, inherited.category) === undefined) {
+              fail(`${lineLabel} 继承发现的 category=${inherited.category} 不在策略 finding-categories.json 词表内。`, "使用策略登记的分类；新增分类走策略升级（upgrade-policy）。");
+            }
             fold.findings.set(inherited.findingId, {
               raised: {
                 type: "FindingRaised",
@@ -1464,8 +1488,9 @@ function foldEvents(world, entries) {
             if (!finding) {
               fail(`${lineLabel} 的风险接受指向当前版本中不存在的 finding ${event.targetId}。`, "先追加当前版本的 FindingRaised，并确认 targetId 与 findingId 完全一致后重试。");
             }
-            if (finding.raised.category === "boundary") {
-              fail(`finding ${event.targetId} 是 boundary 类，不允许风险接受。`, "boundary 的出路是 assurance 对照论证后 FindingResolved 确认，或递增验收版本缩减判据。");
+            const categoryPolicy = policyFindingCategory(world.policy, finding.raised.category);
+            if (categoryPolicy !== undefined && categoryPolicy.riskAcceptAllowed === false) {
+              fail(`finding ${event.targetId} 所属分类 ${finding.raised.category} 不允许风险接受（策略 riskAcceptAllowed=false）。`, `该类发现的出路是 assurance 对照论证后 FindingResolved 确认，或递增验收版本缩减判据。`);
             }
             if (finding.raised.severity === "blocker" && finding.raised.requirementIds.length === 0) {
               // 无关联需求的 blocker：策略上仍允许用户显式接受（关联需求全 strict 时由下一分支拦截）
@@ -1499,14 +1524,16 @@ function missingGapId(acceptanceVersion, requirementId, evidenceKind, revision) 
 }
 
 // ── 漂移链（redesign 3.9）：链式衔接 + 基线后计数 + 预期修复豁免 + 失败保证 ──
-function computeDriftChain(fold, revision, implementations, maxDriftChain) {
+// validAssurances = 有效性校验通过的 AssuranceCompleted（绑定完整、回执全绿）；
+// 只有这些事件使链归零——回执无效的完成事件不清零漂移链（链长不被低估）
+function computeDriftChain(fold, revision, implementations, maxDriftChain, validAssurances) {
   const baselineSeq = fold.baselines.length > 0
     ? Math.max(...fold.baselines.map((event) => event.seq))
     : 0;
   const drifts = [...fold.drifts].sort((left, right) => left.seq - right.seq)
     .filter((event) => event.seq > baselineSeq);
-  // 成功的 AssuranceCompleted 使链归零：只统计最近一次保证完成之后的漂移
-  const assuranceSeqs = fold.assurances.map((event) => event.seq);
+  // 有效性校验通过的 AssuranceCompleted 使链归零：只统计最近一次有效保证完成之后的漂移
+  const assuranceSeqs = validAssurances.map((event) => event.seq);
   const lastAssuranceSeq = assuranceSeqs.length > 0 ? Math.max(...assuranceSeqs) : 0;
   const effectiveDrifts = drifts.filter((event) => event.seq > lastAssuranceSeq);
   let chainLength = 0;
@@ -1555,7 +1582,10 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   const currentVersion = acceptance.acceptanceVersion;
   const currentRevision = (event) => event.revision === revision;
 
-  // 批准有效性四元组：版本 + 验收包哈希 + intent 哈希 + 策略快照哈希；绑定的审查必须通过且未被后续打回收回
+  // 批准有效性四元组：版本 + 验收包哈希 + intent 哈希 + 策略快照哈希；绑定的审查必须通过且未被后续打回收回。
+  // 策略 requireAcceptanceReview=false 时允许 reviewEventId="none" 的免审查批准（verdict-rules L2 开关）
+  const rules = world.policy["verdict-rules.json"];
+  const acceptanceReviewOptional = rules.requireAcceptanceReview === false;
   const reviewById = new Map(fold.reviews.map((event) => [event.eventId, event]));
   const matchingReviews = fold.reviews.filter(
     (event) =>
@@ -1571,6 +1601,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
       event.intentSha256 !== world.intentSha256 ||
       event.policySnapshotSha256 !== world.policySnapshotSha256
     ) return false;
+    if (event.reviewEventId === "none") return acceptanceReviewOptional;
     const review = reviewById.get(event.reviewEventId);
     if (!review || review.conclusion !== "pass") return false;
     // 同组合下后发的打回审查使旧通过失效
@@ -1618,8 +1649,11 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   const currentEvidenceIds = new Set(fold.evidence.filter(currentRevision).map((event) => event.eventId));
   const currentExplorationIds = new Set(fold.explorations.filter(currentRevision).map((event) => event.eventId));
   const allIncrementIds = world.increments.items.map((item) => item.id);
-  // runsFromIgnoredArtifacts=true（项目从 ignored 产物运行且产物未纳入内容清单）时必须附干净构建记录
-  const requiresCleanBuild = world.policy["revision.json"].runsFromIgnoredArtifacts === true;
+  // runsFromIgnoredArtifacts=true（项目从 ignored 产物运行）时必须附干净构建记录；
+  // mode=content-manifest 即产物已纳入内容清单（产物变化会改变 revision），豁免干净构建（redesign 3.6）
+  const requiresCleanBuild =
+    world.policy["revision.json"].runsFromIgnoredArtifacts === true &&
+    (world.policy["revision.json"].mode ?? "auto-git") !== "content-manifest";
   const assuranceValid = fold.assurances.filter((event) => {
     if (!currentRevision(event)) return false;
     const covered = new Set(event.incrementReceipts.map((receipt) => receipt.incrementId));
@@ -1683,7 +1717,14 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   });
 
   const maxDriftChain = world.policy["verdict-rules.json"].maxDriftChain ?? 2;
-  const drift = computeDriftChain(fold, revision, fold.implementations, maxDriftChain);
+  const drift = computeDriftChain(fold, revision, fold.implementations, maxDriftChain, assuranceValid);
+
+  // 完整证据清单哈希（redesign 3.7：verdict 含完整证据清单哈希）：本轮参与判定的证据事件
+  // （当前版本+当前 revision、同需求×类型最后一条）的 eventId + artifactSha256 清单 canonicalJson 哈希
+  const evidenceManifest = [...latestEvidence.values()]
+    .sort((left, right) => (left.eventId < right.eventId ? -1 : left.eventId > right.eventId ? 1 : 0))
+    .map((event) => ({ eventId: event.eventId, artifactSha256: event.artifactSha256 }));
+  const evidenceManifestSha256 = sha256Text(canonicalJson(evidenceManifest));
 
   // ── 两个终态的完整判定式 ──
   const evidenceGaps = [];
@@ -1700,8 +1741,16 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     const entry = requirement.evidence.find((item) => item.kind === gap.kind);
     return !entry.riskAccepted;
   });
-  const openDefects = openFindings.filter((finding) => finding.category === "defect");
-  const unconfirmedBoundaries = openFindings.filter((finding) => finding.category === "boundary");
+  // 发现阻塞语义按策略分类实例化（finding-categories L2）：
+  //   blocksAccepted=true → defect 位（修复或用户接受风险后放行，默认 defect 分类）
+  //   blocksAccepted="until-confirmed" → boundary 位（确认前阻塞且不可接受，默认 boundary 分类）
+  //   blocksAccepted=false → 不阻 accepted
+  const openDefects = openFindings.filter(
+    (finding) => policyFindingCategory(world.policy, finding.category)?.blocksAccepted === true,
+  );
+  const unconfirmedBoundaries = openFindings.filter(
+    (finding) => policyFindingCategory(world.policy, finding.category)?.blocksAccepted === "until-confirmed",
+  );
   const unacceptedDefects = openDefects.filter((finding) => !finding.riskAccepted);
 
   // accepted 要求全部必需证据 verified、无未决 defect（不是「全部缺口被接受」——被接受的缺口只通往 accepted_with_risk）
@@ -1730,13 +1779,17 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     (requirement) => requirement.required && requirement.evidence.some((item) => item.result === "failed" && !item.riskAccepted),
   );
   const unacceptedBlockers = openDefects.filter((finding) => finding.severity === "blocker" && !finding.riskAccepted);
+  // 无关联需求的未接受 non-blocker：无法按需求定位修复面，修复时须全部增量复查（与 candidate-build 的全量复查口径一致）
+  const unlinkedNonBlockers = openDefects
+    .filter((finding) => finding.severity === "non-blocker" && !finding.riskAccepted && finding.requirementIds.length === 0)
+    .map((finding) => finding.findingId);
 
   let state;
   if (world.task.supersededBy !== null) state = "superseded";
   else if (world.task.supersedeCancelled !== null) state = "supersede-cancelled";
   else if (fold.supersedePrepare !== null && fold.supersedeCommitted === null) state = "supersede-pending";
   else if (!approved) state = "draft";
-  else if (!designApproved && !isVerificationOnlyTask(world)) state = "design";
+  else if (!designApproved && !isVerificationOnlyTask(world) && rules.requireDesignApproved !== false) state = "design";
   else if (drift.unstable) state = "revision-unstable";
   else if (unacceptedFailed.length > 0) state = "implementing";
   else if (unacceptedBlockers.length > 0) state = "implementing";
@@ -1780,6 +1833,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     missingIncrementIds,
     unacceptedFailed: unacceptedFailed.map((requirement) => requirement.id),
     unacceptedBlockers: unacceptedBlockers.map((finding) => finding.findingId),
+    unlinkedNonBlockers,
   });
 
   return {
@@ -1798,6 +1852,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     openFindings,
     nonRequiredFailures,
     driftChain: drift,
+    evidenceManifestSha256,
     missing,
     integrity: { eventCount: world.entries.length, signatureVerified: true },
     nextAction,
@@ -1827,6 +1882,7 @@ function buildNextAction({
   missingIncrementIds,
   unacceptedFailed,
   unacceptedBlockers,
+  unlinkedNonBlockers = [],
 }) {
   const taskArg = JSON.stringify(taskDir);
   const revisionArg = JSON.stringify(revision);
@@ -1845,7 +1901,7 @@ function buildNextAction({
     return `先 set-intent 与 snapshot-policy 固定意图与策略，再运行 delivery-v2/acceptance-design-v2 复核验收包，由用户执行 ${GATE_COMMAND} approve-acceptance --task-dir ${taskArg} --confirmation user-explicit --summary "批准当前验收" --credential ${JSON.stringify(userCredential)}。`;
   }
   if (state === "design") {
-    return `运行 tech-design-v2 产出完整方案包（solution.md + impl-plan 双格式 + 审查终态），用户确认后执行 ${GATE_COMMAND} record-design-approved 登记方案包哈希清单。`;
+    return `运行 tech-design-v2 产出完整方案包（设计文档目录 + 渲染视图 + impl-plan 双格式 + 审查终态），用户确认后执行 ${GATE_COMMAND} record-design-approved 登记方案包哈希清单。`;
   }
   if (state === "revision-unstable") {
     return `连续漂移超上限：人工排查项目写入源后由用户执行 ${GATE_COMMAND} confirm-baseline --task-dir ${taskArg} --reason "排查结论" --credential ${JSON.stringify(userCredential)} --revision ${revisionArg} 确认新基线。`;
@@ -1869,7 +1925,10 @@ function buildNextAction({
   if (state === "accepted_with_risk") {
     return `按 verdict.json 中已接受的风险交付并逐项披露；下一内容版本运行 delivery-v2/independent-assurance-v2，再执行 ${GATE_COMMAND} evaluate --task-dir ${taskArg} --revision <新revision>。`;
   }
-  return `运行 delivery-v2/independent-assurance-v2（taskDir=${taskArg}）补齐 missing.evidence、当前保证与探索审查；对允许风险的缺口执行 accept-risk（绑缺口 gapId），然后执行 ${evaluate}。`;
+  if (unlinkedNonBlockers.length > 0) {
+    return `未接受的 non-blocker ${unlinkedNonBlockers.join(", ")} 无关联需求——修复时全部增量复查（或对其执行 accept-risk）；再运行 delivery-v2/independent-assurance-v2（taskDir=${taskArg}）补齐 missing.evidence 与当前保证，然后执行 ${evaluate}。`;
+  }
+  return `运行 delivery-v2/independent-assurance-v2（taskDir=${taskArg}）补齐 missing.evidence、当前保证与探索审查；对允许风险的缺口执行 accept-risk（多缺口时用 --gap-id 指定其一），然后执行 ${evaluate}。`;
 }
 
 // ── 事件锁（与 v1 同语义：目录锁 + 死持有者抢占）与写事务租约（projectRoot 级）──
@@ -2060,6 +2119,8 @@ function withEventsLock(taskDirValue, run) {
 function appendEvent(world, event, privateKey, options = {}) {
   validateEventShape(event);
   if (Object.hasOwn(event, "artifact")) validateArtifact(world.taskDir, event.artifact);
+  // 带内容哈希的证据事件（EvidenceRecorded）追加前做覆盖写对账（redesign 3.7 证据内容寻址）
+  if (Object.hasOwn(event, "artifactSha256")) validateArtifactNotOverwritten(world, event.artifact, event.artifactSha256);
   const eventId = computeEventId(event);
   const contentKey = canonicalJson(event);
   for (const entry of world.entries) {
@@ -2090,18 +2151,24 @@ function appendEvent(world, event, privateKey, options = {}) {
     if (world.policySnapshotSha256 === null || event.policySnapshotSha256 !== world.policySnapshotSha256) {
       fail("AcceptanceApproved.policySnapshotSha256 与任务目录快照不一致。", `先 snapshot-policy 固定策略快照，再由 approve-acceptance 自动绑定当前快照哈希。`);
     }
-    const review = world.entries.find((entry) => entry.record.eventId === event.reviewEventId);
-    if (!review || review.record.type !== "AcceptanceReviewed") {
-      fail("AcceptanceApproved.reviewEventId 不指向任何 AcceptanceReviewed 事件。", `先由 assurance 执行 record-review（同版本、同包哈希、同 intent、同快照且 conclusion=pass），再引用其 eventId 批准。`);
-    }
-    const reviewRecord = review.record;
-    if (
-      reviewRecord.conclusion !== "pass" ||
-      reviewRecord.acceptancePackageSha256 !== world.packageSha256 ||
-      reviewRecord.intentSha256 !== world.intentSha256 ||
-      reviewRecord.policySnapshotSha256 !== world.policySnapshotSha256
-    ) {
-      fail("AcceptanceApproved 引用的审查事件不满足批准前置（须同版本、同验收包、同 intent、同快照且 conclusion=pass）。", `重新执行 record-review 通过当前验收包后，用新的 reviewEventId 批准。`);
+    if (event.reviewEventId === "none") {
+      if (world.policy["verdict-rules.json"].requireAcceptanceReview !== false) {
+        fail("AcceptanceApproved.reviewEventId=none 但策略要求目标与验收审查为批准前置。", `先由 assurance 执行 record-review --conclusion pass 再批准；确需免审查由用户升级策略（requireAcceptanceReview=false）并重新审查与批准。`);
+      }
+    } else {
+      const review = world.entries.find((entry) => entry.record.eventId === event.reviewEventId);
+      if (!review || review.record.type !== "AcceptanceReviewed") {
+        fail("AcceptanceApproved.reviewEventId 不指向任何 AcceptanceReviewed 事件。", `先由 assurance 执行 record-review（同版本、同包哈希、同 intent、同快照且 conclusion=pass），再引用其 eventId 批准。`);
+      }
+      const reviewRecord = review.record;
+      if (
+        reviewRecord.conclusion !== "pass" ||
+        reviewRecord.acceptancePackageSha256 !== world.packageSha256 ||
+        reviewRecord.intentSha256 !== world.intentSha256 ||
+        reviewRecord.policySnapshotSha256 !== world.policySnapshotSha256
+      ) {
+        fail("AcceptanceApproved 引用的审查事件不满足批准前置（须同版本、同验收包、同 intent、同快照且 conclusion=pass）。", `重新执行 record-review 通过当前验收包后，用新的 reviewEventId 批准。`);
+      }
     }
   }
   if (event.type === "AcceptanceReviewed") {
@@ -2319,11 +2386,67 @@ function hashSymlinkTarget(hash, linkPath, target, budget, depth) {
   }
 }
 
+// ── 内容清单指纹（revision.json mode=content-manifest，redesign 3.6 内置算法）──
+// 清单 = 项目根 delivery-manifest.txt，每行一条纳入 revision 计算的文件相对路径（# 注释与空行忽略）。
+// 产物路径纳入清单后其内容变化即改变 revision（旧证据自动失效），且豁免干净构建记录。
+const CONTENT_MANIFEST_FILE = "delivery-manifest.txt";
+
+function contentManifestRevision(projectRoot) {
+  const manifestPath = join(projectRoot, CONTENT_MANIFEST_FILE);
+  if (!existsSync(manifestPath)) {
+    fail(
+      `内容清单模式缺少清单文件：${manifestPath}。`,
+      `在项目根创建 ${CONTENT_MANIFEST_FILE}（每行一条纳入 revision 计算的文件相对路径，# 开头为注释），或把 revision.json 的 mode 改回 auto-git（git 工作树自动指纹）。`,
+    );
+  }
+  const entries = readText(manifestPath, "内容清单", `修正 ${CONTENT_MANIFEST_FILE} 的语法后重试 revision。`)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"))
+    .sort();
+  if (entries.length === 0) {
+    fail(`内容清单为空：${manifestPath}。`, `在 ${CONTENT_MANIFEST_FILE} 中列出至少一个纳入 revision 计算的文件相对路径后重试。`);
+  }
+  const hash = createHash("sha256");
+  hash.update("delivery-gate-revision-v1\0content-manifest\0");
+  const seen = new Set();
+  for (const entry of entries) {
+    if (seen.has(entry)) {
+      fail(`内容清单含重复条目 ${JSON.stringify(entry)}。`, `删除 ${CONTENT_MANIFEST_FILE} 中的重复行后重试。`);
+    }
+    seen.add(entry);
+    const absolutePath = resolve(projectRoot, entry);
+    const lexicalRelative = relative(projectRoot, absolutePath);
+    if (entry.includes("..") || isAbsolute(entry) || lexicalRelative.startsWith("..")) {
+      fail(`内容清单条目越界：${JSON.stringify(entry)}。`, `把 ${CONTENT_MANIFEST_FILE} 的条目改为项目根内的相对路径后重试。`);
+    }
+    let stat;
+    try {
+      stat = statSync(absolutePath);
+    } catch (error) {
+      fail(`内容清单条目无法读取：${entry}（${error.message}）。`, `恢复该文件，或从 ${CONTENT_MANIFEST_FILE} 移除该条目后重试 revision。`);
+    }
+    if (!stat.isFile()) {
+      fail(`内容清单条目不是文件：${entry}。`, `把 ${CONTENT_MANIFEST_FILE} 的条目改为普通文件的相对路径（目录不纳入清单）后重试。`);
+    }
+    hash.update(`file\0${entry}\0`);
+    hashFileContents(hash, absolutePath);
+  }
+  return `manifest-${hash.digest("hex").slice(0, 24)}`;
+}
+
+function revisionModeFromPolicy() {
+  const sources = loadPolicySources();
+  validatePolicySources(sources);
+  return sources["revision.json"].mode ?? "auto-git";
+}
+
 function computeRevision(projectRootValue) {
   requireExistingDirectory(projectRootValue, "--project-root");
   const projectRoot = realpathSync(projectRootValue);
+  if (revisionModeFromPolicy() === "content-manifest") return contentManifestRevision(projectRoot);
   if (!isGitWorktree(projectRoot)) {
-    fail(`目录不是可自动计算 revision 的 git 工作树：${projectRoot}。`, "在 git 项目根目录重试 revision；非 git 项目请使用 evaluate --task-dir <dir> --revision <非空内容版本>。");
+    fail(`目录不是可自动计算 revision 的 git 工作树：${projectRoot}。`, "在 git 项目根目录重试 revision；非 git 项目请在 revision.json 设 mode=content-manifest 并提供内容清单，或使用 evaluate --task-dir <dir> --revision <非空内容版本>。");
   }
   const topLevelResult = runGit(["-C", projectRoot, "rev-parse", "--show-toplevel"], projectRoot);
   const gitRoot = topLevelResult.stdout.trim();
@@ -2447,8 +2570,9 @@ function taskIdentityOf(taskRecord) {
 
 // ── 命令层 ──
 function parseOptions(args, specification) {
+  // optional/flags 允许缺省（新命令漏写不致崩溃；required 必填）
   const flags = new Set(specification.flags ?? []);
-  const allowed = new Set([...specification.required, ...specification.optional, ...flags]);
+  const allowed = new Set([...specification.required, ...(specification.optional ?? []), ...flags]);
   const values = {};
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -2514,7 +2638,8 @@ function readEvalIdentity(projectRoot) {
 }
 
 // 血统检查（redesign 3.3）：同 git 仓库身份下已存在 intent 或验收包相同的未替换任务时，
-// 新任务必须走替换（继承未决发现）或由用户签署独立任务声明
+// 新任务必须走替换（继承未决发现）或由用户签署独立任务声明。
+// intent 对账在 init（意图首次固定）；验收包对账在验收包首次成型与绑定（validate-acceptance / record-review）
 function lineageCheckForInit(projectRoot, newIntentSha256, excludeTaskDir) {
   const conflicts = [];
   const identity = gitRepositoryIdentity(projectRoot);
@@ -2530,24 +2655,62 @@ function lineageCheckForInit(projectRoot, newIntentSha256, excludeTaskDir) {
     if (!sameRepositoryIdentity(identity, taskIdentityOf(taskRecord))) continue;
     const taskIntentPath = join(task.taskDir, "intent.md");
     const taskIntentSha = existsSync(taskIntentPath) ? sha256File(taskIntentPath, "intent.md") : null;
-    const taskAcceptancePath = join(task.taskDir, "acceptance.json");
-    const taskIncrementsPath = join(task.taskDir, "increments.json");
-    let taskPackageSha = null;
-    if (existsSync(taskAcceptancePath) && existsSync(taskIncrementsPath)) {
-      try {
-        taskPackageSha = acceptancePackageSha256(
-          JSON.parse(readFileSync(taskAcceptancePath, "utf8")),
-          JSON.parse(readFileSync(taskIncrementsPath, "utf8")),
-        );
-      } catch {
-        taskPackageSha = null;
-      }
-    }
     if (newIntentSha256 !== null && taskIntentSha === newIntentSha256) {
       conflicts.push({ taskId: task.taskId, taskDir: task.taskDir, reason: `intent 哈希相同（${newIntentSha256.slice(0, 12)}…）` });
     }
   }
   return conflicts;
+}
+
+// 验收包哈希对账（血统规则的包维度）：同仓库身份下已存在验收包相同的未替换任务时拒绝，
+// 出口与 intent 冲突一致——任务替换或独立任务声明（声明的豁免基线是 intent 哈希）
+function lineageCheckForPackage(projectRoot, newPackageSha256, excludeTaskDir) {
+  const conflicts = [];
+  const identity = gitRepositoryIdentity(projectRoot);
+  for (const task of iterateAllTaskDirs()) {
+    if (excludeTaskDir && realpathOf(task.taskDir) === realpathOf(excludeTaskDir)) continue;
+    let taskRecord;
+    try {
+      taskRecord = readJson(join(task.taskDir, "task.json"), `任务 ${task.taskId} task.json`);
+    } catch {
+      continue;
+    }
+    if (taskRecord.supersededBy || taskRecord.supersedeCancelled) continue;
+    if (!sameRepositoryIdentity(identity, taskIdentityOf(taskRecord))) continue;
+    const taskAcceptancePath = join(task.taskDir, "acceptance.json");
+    const taskIncrementsPath = join(task.taskDir, "increments.json");
+    if (!existsSync(taskAcceptancePath) || !existsSync(taskIncrementsPath)) continue;
+    let taskPackageSha256;
+    try {
+      taskPackageSha256 = acceptancePackageSha256(
+        JSON.parse(readFileSync(taskAcceptancePath, "utf8")),
+        JSON.parse(readFileSync(taskIncrementsPath, "utf8")),
+      );
+    } catch {
+      continue;
+    }
+    if (taskPackageSha256 === newPackageSha256) {
+      conflicts.push({ taskId: task.taskId, taskDir: task.taskDir, reason: `验收包哈希相同（${newPackageSha256.slice(0, 12)}…）` });
+    }
+  }
+  return conflicts;
+}
+
+// 验收包首次成型与绑定（validate-acceptance / record-review）时执行包对账：
+// 冲突任务上已有同 intent 的独立声明则豁免（与 init 的豁免口径一致）
+function requireNoPackageLineageConflict(world) {
+  const conflicts = lineageCheckForPackage(world.task.projectRoot, world.packageSha256, world.taskDir);
+  if (conflicts.length === 0) return;
+  const independentDeclared = conflicts.every((conflict) => {
+    const declarations = scanEventsOfType(conflict.taskDir, (record) => record.type === "IndependentTaskDeclared");
+    return world.intentSha256 !== null && declarations.some((declaration) => declaration.intentSha256 === world.intentSha256);
+  });
+  if (!independentDeclared) {
+    fail(
+      `血统对账未通过：同一 git 仓库身份下已有未替换任务 ${conflicts.map((conflict) => `${conflict.taskId}（${conflict.reason}）`).join("、")}。`,
+      `改走任务替换（supersede-prepare 继承未决发现），或确认确属独立任务后先在既有任务上 declare-independent 再重试；复制旧任务验收包洗历史不属于独立任务。`,
+    );
+  }
 }
 
 function commandInit(args) {
@@ -2738,6 +2901,8 @@ function commandSetIntent(args) {
 function commandValidateAcceptance(args) {
   const options = parseOptions(args, { required: ["task-dir"], optional: [] });
   const world = loadWorld(options["task-dir"], { withEvents: false });
+  // 验收包首次成型时执行血统包对账（intent 对账已在 init 完成）
+  requireNoPackageLineageConflict(world);
   printJson({
     valid: true,
     taskDir: world.taskDir,
@@ -2778,6 +2943,8 @@ function commandRecordReview(args) {
   });
   const world = loadWorld(options["task-dir"], { requirePackage: true });
   const privateKey = loadCredentialPrivateKey(world, options.credential, "assurance");
+  // 审查绑定验收包时执行血统包对账（与 validate-acceptance 同口径，双时点拦复制）
+  requireNoPackageLineageConflict(world);
   const revision = computeRevision(world.task.projectRoot);
   const artifact = Object.hasOwn(options, "artifact") ? options.artifact : `evidence/acceptance-review-v${world.acceptance.acceptanceVersion}.md`;
   const event = {
@@ -2816,11 +2983,14 @@ function commandApproveAcceptance(args) {
         event.acceptancePackageSha256 === world.packageSha256 &&
         event.intentSha256 === world.intentSha256 &&
         event.policySnapshotSha256 === world.policySnapshotSha256);
-    if (!passReview) {
+    if (!passReview && world.policy["verdict-rules.json"].requireAcceptanceReview !== false) {
       fail(
         "批准前置不满足：不存在同版本、同验收包、同 intent、同策略快照且 conclusion=pass 的 AcceptanceReviewed。",
-        `先由 assurance 执行 record-review --conclusion pass，再以返回的 eventId 执行 approve-acceptance（--review-event-id 省略时自动取最新通过审查）。`,
+        `先由 assurance 执行 record-review --conclusion pass，再执行 approve-acceptance（自动绑定最新通过审查，无需手工指定 eventId）。`,
       );
+    }
+    if (!passReview && world.policy["verdict-rules.json"].requireAcceptanceReview === false) {
+      process.stderr.write("delivery-gate: 策略 requireAcceptanceReview=false，本次批准免审查（reviewEventId=none）。\n");
     }
     const event = {
       type: "AcceptanceApproved",
@@ -2831,7 +3001,7 @@ function commandApproveAcceptance(args) {
       acceptancePackageSha256: world.packageSha256,
       intentSha256: world.intentSha256,
       policySnapshotSha256: world.policySnapshotSha256,
-      reviewEventId: passReview.eventId,
+      reviewEventId: passReview ? passReview.eventId : "none",
       confirmation: options.confirmation,
     };
     printJson(appendEvent(world, event, privateKey));
@@ -2849,7 +3019,7 @@ function commandRecordDesignApproved(args) {
     // 方案包清单文件：[{name, sha256}]（主会话按方案包文件逐个计算）
     const manifest = readJson(options["package-file"], "--package-file（方案包哈希清单）");
     if (!Array.isArray(manifest) || manifest.length === 0) {
-      fail("--package-file 必须是非空数组（方案包文件哈希清单）。", "按 [{name, sha256}] 逐文件登记 solution.md、impl-plan 双格式与审查终态后重试。");
+      fail("--package-file 必须是非空数组（方案包文件哈希清单）。", "按 [{name, sha256}] 逐文件登记设计文档目录、渲染视图、impl-plan 双格式与审查终态后重试。");
     }
     requirePackageFilesShape(manifest, "--package-file");
     const revision = computeRevision(world.task.projectRoot);
@@ -2891,7 +3061,7 @@ function commandAppend(args) {
 function commandAcceptRisk(args) {
   const options = parseOptions(args, {
     required: ["task-dir", "target-type", "target-id", "confirmation", "summary", "credential"],
-    optional: ["revision"],
+    optional: ["revision", "gap-id"],
   });
   withEventsLock(options["task-dir"], () => {
     const world = loadWorld(options["task-dir"]);
@@ -2907,19 +3077,41 @@ function commandAcceptRisk(args) {
       if (!requirement) {
         fail(`--target-id ${options["target-id"]} 不是当前验收中的需求。`, "核对 acceptance.requirements 的 id 后重试 accept-risk。");
       }
-      const gap = requirement.evidence.find((item) => item.result !== "verified" && !item.riskAccepted);
-      if (!gap) {
+      const gaps = requirement.evidence.filter((item) => item.result !== "verified" && !item.riskAccepted);
+      const gapList = gaps.map((item) => `${item.kind}=${item.gapId}`).join(" | ");
+      if (Object.hasOwn(options, "gap-id")) {
+        // 显式指定缺口：必须确属该需求的未接受缺口，防登记项与用户批准项错位
+        const gap = gaps.find((item) => item.gapId === options["gap-id"]);
+        if (!gap) {
+          fail(
+            `--gap-id ${options["gap-id"]} 不是需求 ${options["target-id"]} 的未接受缺口（候选：${gaps.length > 0 ? gapList : "无——全部证据已 verified 或已接受"}）。`,
+            `以 evaluate 输出的 verdict.requirements 中该需求的 gapId 重试；缺口已全部处理时不要执行 accept-risk。`,
+          );
+        }
+        gapId = gap.gapId;
+        evidenceState = gap.result;
+      } else if (gaps.length === 0) {
         fail(`需求 ${options["target-id"]} 的全部证据类型均已 verified，不存在可接受的缺口。`, "不要对该需求执行 accept-risk；如需覆盖历史风险请核对 verdict 后再决定。");
+      } else if (gaps.length > 1) {
+        fail(
+          `需求 ${options["target-id"]} 存在 ${gaps.length} 个未接受缺口，必须用 --gap-id 指定其一：${gapList}。`,
+          `用户批准了哪个缺口就指定哪个 gapId 重试 accept-risk；多缺口时不允许自动绑定（登记项可能与批准项错位）。`,
+        );
+      } else {
+        gapId = gaps[0].gapId;
+        evidenceState = gaps[0].result;
       }
-      gapId = gap.gapId;
-      evidenceState = gap.result;
     } else {
       const finding = verdict.openFindings.find((entry) => entry.findingId === options["target-id"]);
       if (!finding) {
         fail(`--target-id ${options["target-id"]} 不是当前未决 finding。`, "核对 verdict.openFindings 的 findingId 后重试 accept-risk。");
       }
-      if (finding.category === "boundary") {
-        fail(`finding ${options["target-id"]} 是 boundary 类，不允许风险接受。`, "boundary 的出路是 assurance 对照论证后确认（FindingResolved），或递增验收版本缩减判据。");
+      const categoryPolicy = policyFindingCategory(world.policy, finding.category);
+      if (categoryPolicy !== undefined && categoryPolicy.riskAcceptAllowed === false) {
+        fail(`finding ${options["target-id"]} 所属分类 ${finding.category} 不允许风险接受（策略 riskAcceptAllowed=false）。`, `该类发现的出路是 assurance 对照论证后确认（FindingResolved），或递增验收版本缩减判据。`);
+      }
+      if (Object.hasOwn(options, "gap-id") && options["gap-id"] !== options["target-id"]) {
+        fail(`--gap-id 与 --target-id 不一致：finding 目标的缺口 id 即 findingId。`, `去掉 --gap-id，或将其改为与 --target-id 相同的值后重试。`);
       }
       gapId = finding.findingId;
       evidenceState = "failed";
@@ -3206,6 +3398,7 @@ function commandSupersedeCommit(args) {
 function commandSupersedeCancel(args) {
   const options = parseOptions(args, {
     required: ["task-dir", "cancelled-task-dir", "cancelled-prepare-event-id", "reason", "summary", "credential"],
+    optional: [],
     flags: ["transfer-marker"],
   });
   withEventsLock(options["task-dir"], () => {
@@ -3240,6 +3433,8 @@ function commandSupersedeCancel(args) {
       summary: options.summary,
       cancelledPrepareEventId: prepareEventId,
       predecessorTaskDir: cancelledPrepare.predecessor.taskDir,
+      // 前任（O）当时的 task.json 哈希：单看取消事件即可锚定 O 身份（与恢复 prepare 内的绑定对账）
+      predecessorTaskJsonSha256: sha256File(join(predecessorCore.taskDir, "task.json"), "前任 task.json"),
       cancelledTaskJsonSha256: sha256File(join(cancelledCore.taskDir, "task.json"), "被取消任务 task.json"),
       cancelledVerdictSha256: bindings.verdictSha256,
       reason: options.reason,

@@ -7,6 +7,8 @@
 // 十条规则：
 //   1. 完整性：六文件存在；meta 必填字段非空；designType / priority / nature 枚举合法；
 //      skillVersion 可选（有则查 semver 形态、无则放行——存量设计目录零影响）；
+//      acceptanceBinding 有则核形态与子字段齐全（交付体系任务的验收绑定；无则 warning
+//      提示——独立设计任务合法省略，子字段规格见 references/design-doc-schema.md §3）；
 //      relatedDocs 为数组形态且元素有 path（不强制非空——纯语义登记，通用性不设 warning）
 //   2. id 唯一：各数组内 id 不重复，全部 id 数组并集无重复（不同前缀 G/U/D 等各自编号）；
 //      decisions[].guards[].id 同入全局并集（守护 id 与 gapTable 同为 G 前缀建议，编号须全局错开）；
@@ -192,6 +194,38 @@ if (meta !== undefined) {
         `[枚举] meta.json skillVersion 值「${String(meta.skillVersion)}」不是 semver 形态（MAJOR.MINOR.PATCH）——值读本技能 SKILL.md frontmatter version（唯一权威），不填可整字段删除（存量兼容形态）`,
       );
     }
+  }
+  // acceptanceBinding：交付体系任务的验收绑定（flow/write.md Step 0 入口门写入，子字段
+  // 规格见 references/design-doc-schema.md §3；dev-flow-v2 入口门核对其与当前批准一致）。
+  // additive 校验：有则核形态与子字段齐全（fail），无则 warning 提示——独立设计任务
+  // （非交付体系）合法省略，缺失不阻塞（存量设计目录零影响）
+  if (meta.acceptanceBinding !== undefined) {
+    const ab = meta.acceptanceBinding;
+    if (ab === null || typeof ab !== "object" || Array.isArray(ab)) {
+      failures.push(
+        "[验收绑定] meta.json acceptanceBinding 须为对象 { acceptanceVersion, acceptancePackageSha256, taskDir }——子字段规格见 references/design-doc-schema.md §3；独立设计任务整字段删除",
+      );
+    } else {
+      if (typeof ab.acceptanceVersion !== "number" || !Number.isInteger(ab.acceptanceVersion) || ab.acceptanceVersion < 1) {
+        failures.push(
+          `[验收绑定] meta.json acceptanceBinding.acceptanceVersion 值「${String(ab.acceptanceVersion)}」须为 ≥1 的整数（delivery-v2 approve-acceptance 后的当前验收版本号）`,
+        );
+      }
+      if (typeof ab.acceptancePackageSha256 !== "string" || !/^[0-9a-f]{64}$/.test(ab.acceptancePackageSha256)) {
+        failures.push(
+          "[验收绑定] meta.json acceptanceBinding.acceptancePackageSha256 须为 64 位 sha256 十六进制字符串（绑定的验收包哈希）",
+        );
+      }
+      if (!isFilled(ab.taskDir)) {
+        failures.push(
+          "[验收绑定] meta.json acceptanceBinding.taskDir 缺失或为空——填交付任务目录绝对路径（~/.agents/skill-data/delivery/<分组 slug>/<taskId>/）",
+        );
+      }
+    }
+  } else {
+    warnings.push(
+      "[验收绑定] meta.json 无 acceptanceBinding——交付体系任务须在 T1 入口门写入（flow/write.md Step 0：验收批准检查通过后写 { acceptanceVersion, acceptancePackageSha256, taskDir }）；独立设计任务（非交付体系）合法省略（不阻塞本判定）",
+    );
   }
 }
 if (s2 !== undefined) {

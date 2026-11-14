@@ -24,17 +24,23 @@
 //   盘上存在、projectRoot 存在）仍在 W2 引擎 setup 派发前 fail-fast，不进本静态门——
 //   promptFile 在编译清单下一步才构造，静态门若查存在性会在正确计划上恒红。
 //
-// 用法：node check-exec-plan.mjs <exec-plan.json 绝对路径>
+// 用法：node check-exec-plan.mjs <exec-plan.json 绝对路径> [--task-dir <交付任务目录>]
 // 输出契约（--check 风格）：全部通过 → stdout `PASS`，exit 0；失败 → 每条错误一行
 //   `FAIL: <分类>: <明细>`（全部报完再退出），exit 1；用法错误 exit 2（含恢复动作）。
+// --task-dir（交付体系任务必传，独立设计任务不传）：附加执行增量契约核对——读交付任务
+//   目录 increments.json，核 exec-plan dev 节点的增量归属与测试命令（判据见下方
+//   checkIncrementContract 段）；不传时本段跳过，主校验行为不变。
 //
 // 分类 → 处置路由（与 W2 启动校验失败的恢复指引同语义）：
 //   field/territory/ref/whitelist/noop/cwd/script/testPlan → 单字段手修 exec-plan 后
 //     重跑本门（值转抄自 impl-plan 的字段须同步修上游，否则重编译复现）；结构性缺漏
 //     （schema、缺数组类 field）→ 回编译清单重编译；cycle/overlap（依赖环、territory
-//     重叠无依赖路径）→ 回 tech-design-v2 T3 修 impl-plan，手修 exec-plan 确定性复现。
+//     重叠无依赖路径）→ 回 tech-design-v2 T3 修 impl-plan，手修 exec-plan 确定性复现；
+//   increments（增量契约）→ 回 tech-design-v2 T3「增量契约对齐」节（flow/plan.md）——
+//     增量的增删改属技能①职权，须回 delivery-v2 递增验收版本重批，不在 impl-plan 侧改。
 
 import { readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // ── 常量（与两引擎逐字一致；改任一侧须同步并跑差分测试） ──
@@ -461,19 +467,111 @@ function checkPlan(raw) {
   return { ok: errors.length === 0, errors };
 }
 
+// ── 增量契约核对段（--task-dir <交付任务目录> 时附加执行；纯确定性数据比对）──
+// 数据源 = 交付任务目录 increments.json（delivery-v2 acceptance-design 产出、随验收包批准
+// 冻结：{ schemaVersion, acceptanceVersion, items: [{ id, title, requirementIds, testCommand? }] }）。
+// 判据与 tech-design-v2 flow/plan.md「增量契约对齐」节同源（SKILL 入口门判据 3 的执行载体）：
+//   ①归属全覆盖——每个增量至少被一个 dev 节点 incrementId 归属（防 impl-plan 删/漏增量）；
+//   ②引用存在——节点 incrementId 必须指向真实增量 id（防编造 / 改名）；
+//   ③测试命令逐字一致——归属节点 testCommand 与增量 testCommand 的 program/args 相等
+//     （增量未声明 testCommand 时不比对命令——其必填性由 delivery-gate validate-acceptance 管）。
+// mode=acceptance 时整段跳过：dev 单元归属已在 D0 dev 模式门核对，D3 门不重复核对验收节点。
+function checkIncrementContract(raw, increments) {
+  const errors = [];
+  if (!isRec(raw) || raw.mode !== "dev" || !Array.isArray(raw.nodes)) return errors;
+  const incIds = new Set();
+  const incTest = new Map();
+  for (const item of Array.isArray(increments?.items) ? increments.items : []) {
+    if (!isRec(item) || !isStr(item.id)) continue;
+    incIds.add(item.id);
+    incTest.set(item.id, isRec(item.testCommand) ? item.testCommand : null);
+  }
+  if (incIds.size === 0) {
+    errors.push({
+      category: "increments",
+      message: "increments.json items 为空或无合法 id——核对 --task-dir 指向的交付任务目录与 increments.json 形态（delivery-v2 validate-acceptance 产物）",
+    });
+    return errors;
+  }
+  const owned = new Set();
+  for (const rn of raw.nodes) {
+    if (!isRec(rn) || !isStr(rn.id) || rn.kind !== "dev") continue;
+    const incId = rn.incrementId;
+    if (incId === undefined) continue;
+    if (!isStr(incId)) {
+      errors.push({
+        category: "increments",
+        message: `dev 节点 ${rn.id} 的 incrementId 须为非空字符串（= increments.items[].id；不归属增量的单元删除该字段）`,
+      });
+      continue;
+    }
+    if (!incIds.has(incId)) {
+      errors.push({
+        category: "increments",
+        message: `dev 节点 ${rn.id} 的 incrementId「${incId}」不在 increments.json items 中（现有增量：${[...incIds].join("、")}）——增量 id 以 increments.json 为准；增删改增量回 delivery-v2 递增验收版本重批（恢复：修 T3 units[].incrementId 后重编译）`,
+      });
+      continue;
+    }
+    owned.add(incId);
+    const incCmd = incTest.get(incId);
+    if (incCmd === null) continue;
+    const nodeCmd = isRec(rn.testCommand) ? rn.testCommand : null;
+    const nodeArgs = nodeCmd !== null && Array.isArray(nodeCmd.args) ? nodeCmd.args : null;
+    const same =
+      nodeCmd !== null &&
+      nodeCmd.program === incCmd.program &&
+      nodeArgs !== null &&
+      JSON.stringify(nodeArgs) === JSON.stringify(Array.isArray(incCmd.args) ? incCmd.args : []);
+    if (!same) {
+      errors.push({
+        category: "increments",
+        message: `dev 节点 ${rn.id} 的 testCommand 与增量 ${incId} 的 testCommand 不一致——增量契约的测试命令照抄不改编（恢复：按 increments.json 该增量 testCommand 逐字转抄 T3 units 与 exec-plan 后重跑本门）`,
+      });
+    }
+  }
+  const missing = [...incIds].filter((id) => !owned.has(id));
+  if (missing.length > 0) {
+    errors.push({
+      category: "increments",
+      message: `增量无单元归属：${missing.join("、")}——每个增量至少被一个 dev 节点 incrementId 归属（恢复：回 tech-design-v2 T3「增量契约对齐」节补齐归属单元；增量不该存在则回 delivery-v2 递增验收版本重批）`,
+    });
+  }
+  return errors;
+}
+
 // 差分测试（scripts/tests/check-exec-plan-parity.test.mjs）消费：validatePlanSchema =
-// 与 W2 validatePlan 逐字对账的移植侧；checkPlan = 整门判定（schema + 附加契约段）
-export { validatePlanSchema, checkPlan };
+// 与 W2 validatePlan 逐字对账的移植侧；checkPlan = 整门判定（schema + 附加契约段）；
+// checkIncrementContract = --task-dir 附加段（差分测试不覆盖，由 CLI 行为承载）
+export { validatePlanSchema, checkPlan, checkIncrementContract };
 
 // ── CLI（被差分测试 import 时跳过） ──
 
 function main() {
   const argv = process.argv.slice(2);
-  if (argv.length !== 1 || argv[0] === "-h" || argv[0] === "--help") {
-    console.error("用法：node check-exec-plan.mjs <exec-plan.json 绝对路径>（D0 编译「生成即校验」门；PASS exit 0 / FAIL 逐行分类明细 exit 1）");
+  // 参数形态：<exec-plan.json 绝对路径> [--task-dir <交付任务目录>]
+  let planPath = null;
+  let taskDir = null;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--task-dir") {
+      taskDir = argv[i + 1];
+      if (!taskDir || taskDir.startsWith("--")) {
+        console.error("用法错误：--task-dir 须带交付任务目录参数（读其下 increments.json 做增量契约核对）");
+        console.error("用法：node check-exec-plan.mjs <exec-plan.json 绝对路径> [--task-dir <交付任务目录>]（D0 编译「生成即校验」门；交付体系任务必传 --task-dir；PASS exit 0 / FAIL 逐行分类明细 exit 1）");
+        process.exit(2);
+      }
+      i++;
+    } else if (planPath === null) {
+      planPath = argv[i];
+    } else {
+      console.error(`用法错误：未知参数 ${argv[i]}`);
+      console.error("用法：node check-exec-plan.mjs <exec-plan.json 绝对路径> [--task-dir <交付任务目录>]（D0 编译「生成即校验」门；交付体系任务必传 --task-dir；PASS exit 0 / FAIL 逐行分类明细 exit 1）");
+      process.exit(2);
+    }
+  }
+  if (!planPath || planPath === "-h" || planPath === "--help") {
+    console.error("用法：node check-exec-plan.mjs <exec-plan.json 绝对路径> [--task-dir <交付任务目录>]（D0 编译「生成即校验」门；交付体系任务必传 --task-dir；PASS exit 0 / FAIL 逐行分类明细 exit 1）");
     process.exit(2);
   }
-  const planPath = argv[0];
   let text;
   try {
     text = readFileSync(planPath, "utf8");
@@ -489,11 +587,23 @@ function main() {
     process.exit(1);
   }
   const result = checkPlan(raw);
-  if (result.ok) {
+  const incErrors = [];
+  if (taskDir !== null) {
+    let incRaw;
+    try {
+      incRaw = JSON.parse(readFileSync(join(taskDir, "increments.json"), "utf8"));
+    } catch (e) {
+      console.log(`FAIL: increments: 无法读取 ${taskDir}/increments.json（${e.message}）——核对 --task-dir 指向的交付任务目录（delivery-v2 init / approve-acceptance 产出）`);
+      process.exit(1);
+    }
+    incErrors.push(...checkIncrementContract(raw, incRaw));
+  }
+  if (result.ok && incErrors.length === 0) {
     console.log("PASS");
     process.exit(0);
   }
   for (const e of result.errors) console.log(`FAIL: ${e.category}: ${e.message}`);
+  for (const e of incErrors) console.log(`FAIL: ${e.category}: ${e.message}`);
   process.exit(1);
 }
 

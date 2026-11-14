@@ -10,6 +10,17 @@
 2. **结构完整性**：写 impl-plan 时逐项引用四类内容的实际节——背景/目标、终态/机制、验收场景表、下一层拆分。引用填不出 = 结构缺失，停下告知用户回 T1 补文档
 3. 章节映射落计划文件「0 章节映射」节（下方模板）——后续所有 subagent/编译从这拿坐标，禁止自猜编号（两代结构并存：完整版 11 节 vs 五段制，一律按实质特征定位；节号坐标 = 渲染视图 `<name>.rendered.md` 的固定编号，渲染脚本保证节号稳定）
 
+## 增量契约对齐（交付体系任务 [MANDATORY]）
+
+方案包不得变更 increments.json 的增量契约（SKILL 约束段）——T3 的自由度只有「细化实施步骤与调度」。拆单元前先读交付任务目录的 `<taskDir>/increments.json`（随验收包批准冻结：items[].id / requirementIds / testCommand），逐增量核对落位：
+
+1. **逐增量声明单元归属**：impl-plan 每单元带 `incrementId` 字段（= increments.items[].id），声明该单元实现哪个增量；同一增量可拆多单元（细化调度），每个增量至少被一个单元归属——增量被漏拆或删除会在 D0 编译门红灯（回本节补齐；确需增删增量走交付体系版本递增重批，不在本技能内改）
+2. **测试命令照抄不改编**：归属单元的 testCommand 从该增量 testCommand 逐字转抄（program / args 不改写、不换「等价」命令）——执行与独立保证两侧按同一命令跑增量测试，改写即契约变更
+3. **只细化调度不增删改增量**：增量条目的增删、requirementIds 调整属技能①（delivery-v2 acceptance-design）职权——确需变更回 delivery-v2 递增 acceptanceVersion 重批，不在本技能顺手改
+4. **机器核对**：D0 编译门对交付体系任务必跑 `node ~/.agents/skills/dev-flow-v2/scripts/check-exec-plan.mjs <exec-plan> --task-dir <taskDir>`（增量归属全覆盖、incrementId 引用存在、测试命令逐字一致，任一不符 fail-fast 回 T3 本节——见 dev-flow-v2 `flow/compile.md` 步骤 3）
+
+交付体系外的独立设计任务（无交付任务目录）本节不适用，单元不带 incrementId。
+
 ## 终态型设计：波次单元与跨版本交付
 
 设计分型为终态型（meta.json designType=terminal，Step D 判定，见 `flow/write.md`）时，单元拆分遵循：
@@ -27,8 +38,9 @@
 ## 0 章节映射     # 四类内容 + 待验证检查点在本文档的实际位置（坐标唯一来源）
 ## 1 目标快照     # 摘录设计背景/目标 + Out-of-scope，逐字摘录禁止改写
 ## 2 单元列表
-| Unit | 职责 | 范围声明（精确文件路径） | 依赖 | 隔离(plain/worktree) | 验收条款 | 决策分级 |
+| Unit | 职责 | 范围声明（精确文件路径） | 依赖 | 隔离(plain/worktree) | 验收条款 | 决策分级 | 增量归属 |
 # u-foundation 固定为共享契约根节点，初始即就绪的 DAG 根
+# 增量归属 = increments.items[].id（交付体系任务逐单元必填，见「增量契约对齐」节；独立设计任务该列填「-」）
 # 终态型设计：单元 = 迁移波次（来自设计文档差距-波次映射，见「终态型设计」节）
 # 决策分级 = 该单元实现的设计决策中的最高审核级别（A/B，来源 = meta.json reviewNav 人工审核导航，渲染视图呈现为导航表）；无决策覆盖的单元标 B
 ## 3 DAG 图       # mermaid
@@ -76,7 +88,8 @@
   "sectionMap": { "goal": "§N", "mechanism": "§N", "acceptance": "§N", "breakdown": "§N" },
   "units": [
     { "id": "u-foundation", "responsibility": "…", "territory": ["…"],
-      "deps": [], "isolation": "plain", "acceptance": ["条款…"], "decisionTier": "A" }
+      "deps": [], "isolation": "plain", "acceptance": ["条款…"], "decisionTier": "A",
+      "incrementId": "<increments.items[].id——交付体系任务必填（D0 编译门核对归属与测试命令一致），独立设计任务省略>" }
   ],
   "testPlan": { "incremental": "…", "fullSuite": "…" },
   "acceptancePlan": [

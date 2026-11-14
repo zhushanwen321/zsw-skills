@@ -42,7 +42,7 @@ worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 workt
 
 | 终态 | 主 agent 动作 |
 |------|--------------|
-| completed | 全节点 done——D1 完成转 D2（consistency-review.md）；D3 完成转 D4 收尾 |
+| completed | 全节点 done——D1 完成转 D2（consistency-review.md）；D3 完成转 D4 收尾（含交付体系任务的增量实现登记 ImplementationRecorded，`flow/acceptance.md` 收尾节第 3 步） |
 | blocked | 读 blocked 清单逐条处置：打回超限类 → 人工裁决（采纳修复方案/放弃该单元）；引擎层异常 → ResumeWorkflowRun 或修复 exec-plan 后重发 |
 | core-failed | 读 coreFailure 归因。verify/inspect 验收失败（D1 与 D3 一律）与 commit 门禁被拒已经统一失败处理中心轮内修（失败池 → 聚合裁决 phase → 修复组 phase → 机器重验，≤3 轮）——此终态 = 修复环已耗尽仍不收敛。聚合清单与全部失败归因在 acceptanceFix.fixesDir，按归因逐条人工裁决（采纳修复方案重验 / 放弃节点）；主 agent 只裁决与重发起，不亲编码 |
 

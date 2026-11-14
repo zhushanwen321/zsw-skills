@@ -30,7 +30,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-const GATE_COMMAND = "node ~/.agents/skills/delivery-wf/scripts/delivery-gate.mjs";
+const GATE_COMMAND = "node ~/.agents/skills/delivery-v1/scripts/delivery-gate.mjs";
 // 事件写入角色与签名密钥一一对应；designer 的产物是契约草稿文件，engine 的测试摘要由 builder 角色记录，均不写事件
 const ACTORS = ["builder", "assurance", "user"];
 const CONFIRMATIONS = ["user-explicit", "standing-authorization"];

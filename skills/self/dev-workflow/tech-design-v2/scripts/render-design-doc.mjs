@@ -185,6 +185,15 @@ const headRows = [
   ["功能分级", cell(meta.priority)],
   ["风险分", `${cell(meta.riskScore)}——${cell(meta.riskRationale)}`],
 ];
+// 验收绑定（acceptanceBinding）：交付体系任务的验收版本绑定（schema §3）；缺省不渲染
+// 该行——独立设计任务合法省略
+if (meta.acceptanceBinding !== undefined && meta.acceptanceBinding !== null && typeof meta.acceptanceBinding === "object") {
+  const ab = meta.acceptanceBinding;
+  headRows.push([
+    "验收绑定",
+    `acceptanceVersion ${cell(ab.acceptanceVersion)}——${cell(ab.acceptancePackageSha256)}（taskDir：${cell(ab.taskDir)}）`,
+  ]);
+}
 // 关联登记（relatedDocs）：空数组不渲染该行；每条「path——relation」用分号分隔
 const relatedDocs = arr(meta.relatedDocs);
 if (relatedDocs.length > 0) {

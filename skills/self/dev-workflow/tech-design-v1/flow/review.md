@@ -127,7 +127,7 @@ task:
 1. 聚合裁决（独立环节，先于修复）：把四席发现按同根因合并为去重权威清单——同根因跨席位表述合并为一条（保留全部原始 ref，禁止静默丢弃），不同根因绝不合并，每条给可执行修复指导；原始清单合并落 `<runDir>/round-N/problems.json`（`{ round, problems: [...] }`，条目 `{ ref, title }`——无 level 字段），聚合清单落 `<runDir>/round-N/aggregated.md`（每条 AG 项含全部原始 ref 与修复指导）。自检：聚合项 refs 全体 = 原始清单的精确划分（每条 ref 恰好归属一条 AG 项）
 2. 按 `flow/write.md` Step 8.1/8.2 修复全部 must-fix，不留尾巴。修复 = 编辑设计目录内章节 JSON（长文本是字段值；跨章节引用字段 gapRefs / unitRefs / axiomRefs / goalRefs / reviewNav.decisionId 与被引用数组的 id 同步更新），每轮修复后重跑 `node <skill 安装位置>/scripts/render-design-doc.mjs <设计目录>` 刷新渲染视图。每条问题处置三选一：**修复（fixed）** / **登记不修（deferred，记一句话理由）** / **归档（archived，记入章节 JSON 相应内容的待办或残留风险）**——判定存疑按修复处理（滑坡防护）
 3. 产出当轮处置表 `<runDir>/round-N/dispositions.md`（每条九字段：id（D-<轮>-<序>）/ title（一句话标题）/ source（数组，逐条引用 problems.json 的 ref）/ action（fixed|deferred|archived）/ location（修订位置）/ reenactment（反例重演）/ attackHints（攻击点建议）/ affectsDecision（影响决策）/ affectsDelivery（影响交付）），并同步落 `<runDir>/round-N/dispositions.json`（结构：`{ dispositions: [...] }`，字段同 workflow 路径）
-4. 处置表机器校验（与 workflow 路径同一校验器——双轨语义等价由此保证）：`node ~/.agents/skills/tech-design-wf/scripts/check-dispositions.mjs <runDir>/round-N/dispositions.json --problems <runDir>/round-N/problems.json`；exit 1 时按 stdout 校验报告（缺失 ref 清单）补正处置表后重跑，至 exit 0
+4. 处置表机器校验（与 workflow 路径同一校验器——双轨语义等价由此保证）：`node ~/.agents/skills/tech-design-v1/scripts/check-dispositions.mjs <runDir>/round-N/dispositions.json --problems <runDir>/round-N/problems.json`；exit 1 时按 stdout 校验报告（缺失 ref 清单）补正处置表后重跑，至 exit 0
 5. 终态判定（机械）：三报告 must-fix==0 且上轮处置全部经复核确认（reconciliation 无 not-fixed / regressed / escalate）即终止（converged，写 final.json）；R1 三报告全 0 直接收敛，不派修复者。否则 → 下一轮聚焦复审（Step 3 的 R2+ 形态），轮次 +1
 6. 停机线：maxRounds（默认 10）；连续 3 轮 must-fix 不降 → stuck 呈报用户
 

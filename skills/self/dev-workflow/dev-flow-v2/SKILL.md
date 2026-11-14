@@ -3,7 +3,7 @@ name: dev-flow-v2
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 2.1.0
+version: 2.2.0
 description: >-
   Use when 一份完整设计包（tech-design-v2 产出：设计文档 + 双格式 impl-plan + 审查终态）
   需要落地为已验收代码。dev-flow 的 workflow 版（灰度并行，老版保留可随时切回）：
@@ -30,15 +30,15 @@ description: >-
 
 | 判据 | 缺失时 |
 |------|--------|
-| 交付任务目录存在已批准 acceptance.json（`delivery-gate evaluate` 的 state ∈ {design 之后各态，非 draft}；meta.json acceptanceBinding 与当前批准一致） | 回 delivery-v2 走验收设计与批准 |
+| 交付任务目录存在已批准 acceptance.json（`delivery-gate evaluate` 的 state ∈ {design, revision-unstable, implementing, acceptance-approved, candidate, accepted, accepted_with_risk}——显式枚举，替换态 superseded / supersede-pending / supersede-cancelled 与未批准 draft 不放行；meta.json acceptanceBinding 与当前批准一致） | 回 delivery-v2 走验收设计与批准 |
 | DesignApproved 存在且绑定的方案包哈希清单覆盖当前设计包（`verdict.designApproved == true`） | 回 tech-design-v2 重新确认方案包并 record-design-approved |
-| increments.json 的增量契约未被 impl-plan 变更（D0 编译时逐增量核对 exec-plan 单元归属与测试命令一致；不一致 → fail-fast 回 T3） | 回 tech-design-v2 修 T3（increments 的增删改属技能①，走验收版本递增重批） |
+| increments.json 的增量契约未被 impl-plan 变更（D0 编译门 `check-exec-plan.mjs --task-dir <交付任务目录>` 逐增量核对 exec-plan 单元归属（nodes[].incrementId）与测试命令一致；不一致 → fail-fast 回 T3） | 回 tech-design-v2 修 T3（increments 的增删改属技能①，走验收版本递增重批） |
 
 设计包判据表（交付体系任务同样适用）：
 
 | 文件 | 判据 |
 |------|------|
-| `~/.agents/skill-data/tech-design/<slug>/<name>.md` | 存在 |
+| `~/.agents/skill-data/tech-design/<slug>/<name>/`（设计目录：六章节 JSON 权威源，tech-design-v2 产物形态）+ `<slug>/<name>.rendered.md`（渲染视图） | 存在 |
 | `<name>.impl-plan.md` + `.impl-plan.json`（与设计文档同目录） | 存在且单元 id 集一致 |
 | `<name>/final.json`（审查报告目录，与设计文档同根） | terminated == "converged" |
 | `<name>.plan-review.md`（与设计文档同目录） | 触发门槛（关键路径深度 ≥3 或单元 ≥4）时必须存在 |
@@ -54,7 +54,7 @@ description: >-
 | D1 开发循环 | 单元 DAG 流式并行（写码→核验→commit→解锁；开发期 e2e verify 失败与 commit 门禁被拒同入统一失败处理中心轮内修） | W2 wave-executor-v2（手工路径 `flow/execute.md`） | 全节点 done 或 blocked |
 | D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组流式槽位池并行（在途 ≤5；文档修复组按文件门控进同一派发池——不相交同池并行、相交回退串行段）+ Gate A 全量测试（红后归因分诊独立 phase：本批回归条目回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态，≤2 轮） | W3 dev-consistency-loop-v2（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
 | D3 端到端验收 | 验收计划表 L3/L4 编译成 verify/inspect 节点（核心先行 + 短路）+ 验收失败修复循环（failed 入失败池 → 聚合裁决独立 phase（跨节点同根因合并/disputed 反证/文件不相交分组）→ 修复组独立 phase（fixer 修产品代码与验收资产，引擎按组 commit）→ 节点重置机器重验回调度循环，≤3 轮不收敛才熔断） | W2 第二实例化（手工路径 `flow/acceptance.md`） | 验收全绿 |
-| D4 收尾（候选完成） | 交付汇总 + 功能分级登记 + 文档资产同步 + ADR 复审 + 最终 commit——收尾产出的是**候选实现**，不是交付结论 | 主 agent | `flow/acceptance.md` 收尾节 |
+| D4 收尾（候选完成） | 交付汇总 + 增量实现登记（交付体系任务：逐增量以 builder 凭据 `delivery-gate append` 登记 ImplementationRecorded，与 candidate-build-v2 同一事件流与回执口径——`flow/acceptance.md` 收尾节）+ 功能分级登记 + 文档资产同步 + ADR 复审 + 最终 commit——收尾产出的是**候选实现**，不是交付结论 | 主 agent | `flow/acceptance.md` 收尾节 |
 | D5 终态同步 | 代码与设计差距收敛为固定义务覆盖率的一致性对账（义务表 → checker 派发（机械优先/语义缓存）→ 差距地址聚合 → 隔离变更集 → 集成器唯一写入门径 → 四层结论；状态唯一权威 = conformance-state 事件流，agent 无状态；未绑定 legacy 包由旧引擎只读期收尾，带 cutover 标记的包旧引擎入口拒启） | W4 v2 design-code-sync-v2（绑定包；手工路径 `flow/sync.md`）/ W4 legacy design-code-sync-loop（未绑定包收尾） | 引擎 completed + 覆盖率分母全 verified/waived |
 | D6 交付后守护 | 交付后修复回写纪律 + 按需定向对抗审查 | 主 agent | `flow/post-delivery.md`（[HISTORICAL] 原样） |
 
@@ -97,7 +97,7 @@ description: >-
 | 字段 | 含义 |
 |------|------|
 | `task_id` / `execution_id` | 任务标识 / 单次执行标识（同时是落盘目录名与文件名主干；命名规则：字母或数字开头，只含字母、数字、点、连字符、下划线，≤128 字符，禁「..」——防路径穿越，非法即告警并关闭观测） |
-| `skill` / `stage` / `step` | 所属技能的 canonical 名（tech-design-v2 / dev-flow-v2——统计按它过滤，禁止写 workflow 脚本名）/ 流程阶段编号（D0-D6、T2）/ 阶段内步骤（execution / setup / review / aggregate / fix / execute / finalize / gate-a / retire，外部步骤自定） |
+| `skill` / `stage` / `step` | 所属技能的 canonical 名（tech-design-v2 / dev-flow-v2 / delivery-v2——统计按它过滤，禁止写 workflow 脚本名）/ 流程阶段编号（tech-design-v2 的 T2、dev-flow-v2 的 D0-D6、delivery-v2 三 workflow 的 DESIGN / BUILD / ASSURE）/ 阶段内步骤（execution / setup / review / aggregate / fix / execute / finalize / gate-a / retire，外部步骤自定） |
 | `round` / `attempt` | 循环轮次 / 重发起序号（无则 null；attempt 在启动早期自动检测未完成时也为 null，检测确定后其后的事件带值） |
 | `event` / `timestamp` / `sample_type` | start 或 end / ISO8601 / production（真实执行，缺省）或 selftest（测试执行） |
 | `outcome`（可选） | 仅出现在终态统一补记的 end 上，值 = 本次执行的终态词（如 completed / converged / blocked / setup-failure） |
@@ -141,7 +141,7 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 |----------|----|------|------|
 | W2 `wave-executor-v2`（saved） | D1 / D3（两实例化） | `{ execPlan, taskId?, executionId?, sampleType? }` | completed / blocked / core-failed（统一失败处理中心：verify/inspect failed（dev 与 acceptance 模式一律）与 commit 门禁被拒入失败池 → 聚合裁决 → 修复组 → 机器重验（节点重跑 / 原 message 重试 commit），≤3 轮；终态携带 acceptanceFix = { rounds, disputed（聚合级与 fixer 级反证清单，人工裁决）, fixesDir }，非 null 时 disputed 必处置；轮内修不动的 commit 残留留 deferredCommits 呈报） |
 | W3 `dev-consistency-loop-v2`（saved） | D2 | `{ execPlan, maxRounds?, reviewerTemplate?, attempt?, taskId?, executionId?, sampleType? }` | converged / stuck / gate-a-failed / review-failure / fix-failure（Gate A 红后归因分诊独立 phase ≤2 轮：本批回归条目（GA-id）回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态；产物构建失败先引擎重跑自愈（stale），仍败回注修复轮（fixer 修产物脚本/基建），回注轮耗尽才终态；终态回写 status.json events：consistency 终态一笔恒写 + gate-a 笔在 converged/gate-a-failed 恒写、stuck 且 Gate A 已跑时同写；必填字段双无条目降级登记项——deferredLedger 回流；attempt>1 时 Gate A 日志带 .attemptM 后缀） |
-| W4 v2 `design-code-sync-v2`（saved） | D5（conformance 绑定包） | `{ designPkg, projectRoot, declaredRepos, confirmedRepoIds?, sandboxRoot?, stateRoot?, confRoot?, reviewerTemplate?, fixerTemplate?, maxRounds?, rulingsFile?, taskId?, executionId?, sampleType? }` | 四层结论 scriptStatus / engineOutcome（completed / awaiting-ruling / stopped / failed）/ integrationOutcome（not-required / not-started / verified-pending-integration / integrated / rolled-back / failed）/ deliveryOutcome（pending / blocked——resolved 系列由主 agent 交付宣告/人工接管追加）；续跑 = 同 stateRoot 重发（事件流恢复），裁决续跑携 rulingsFile（respondsTo 锚点在停回 message）；文档侧差距走 doc-proposals 提案 + 裁决门径 |
+| W4 v2 `design-code-sync-v2`（saved） | D5（conformance 绑定包） | `{ designPkg, projectRoot, declaredRepos, confirmedRepoIds?, sandboxRoot?, stateRoot?, confRoot?, reviewerTemplate?, fixerTemplate?, maxRounds?, rulingsFile?, taskId?, executionId?, sampleType? }` | 四层结论 scriptStatus / engineOutcome（completed / awaiting-ruling / stopped / failed）/ integrationOutcome（not-required / not-started / verified-pending-integration / integrated / rolled-back / failed）/ deliveryOutcome（pending / blocked——resolved 系列由主 agent 在裁决器 verdict 为 accepted/accepted_with_risk 后追记，人工接管走集成器 manual 模式）；续跑 = 同 stateRoot 重发（事件流恢复），裁决续跑携 rulingsFile（respondsTo 锚点在停回 message）；文档侧差距走 doc-proposals 提案 + 裁决门径 |
 | W4 legacy `design-code-sync-loop`（saved） | D5（未绑定 legacy 包只读期收尾） | `{ designDoc, implPlan, projectRoot, maxRounds?, statusPath?, plannerTemplate?, reviewerTemplate?, attempt?, taskId?, executionId?, sampleType? }` | converged / contested / stuck + setup/planner/review/fix/retire/io-failure 族（修复组 commit 被仓库钩子拒时先派门禁修复 fixer 做合规修复（豁免标记/清单登记/指针跟改）+ 原 message 重试 ≤2 轮，仍拒才 fix-failure——真代码问题 fixer 返回空 fixed 转人工；模板路径与 attempt 缺省自动处理，attempt>1 历史产物不覆盖；终态含 overdesignCandidates——越权候选卡呈报；setup 第一步 cutover 检查——已切换包拒启） |
 
 执行体按宿主环境选择：**zcode**（会话可见 CreateWorkflow 工具 / saved workflows）→ 上表 saved workflow 经 `CreateWorkflow saved` 发起；**pi**（subagent-workflow extension、workflow 工具可用）→ 本 skill 安装位置上级的 `../workflows/pi/<name>.js`（五件：wave-executor-v2 / dev-consistency-loop-v2 / design-code-sync-loop / design-code-sync-v2 / tech-review-loop-v2——tech-review-loop-v2 属 tech-design-v2 的 W1，dev-flow-v2 运行只需前四件）复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run <name> --args k=v`——两版脚本业务逻辑逐行一致，仅 agent 调用层与文件头不同；--args 值全字符串，数字参数脚本内自动归一，数组型不支持。两版均未就绪或发起失败 → 各段 flow 文件的手工路径（与 workflow 语义等价；断点恢复：zcode workflow 用 ResumeWorkflowRun/AmendWorkflow，pi 重新 run（attempt 递增防产物覆盖），手工路径以 status.json + git log 对账，冲突以 git 为准）。
@@ -166,7 +166,7 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 - [MANDATORY] 数字阈值：单元 dev→fix 超 2 轮 = blocked 升级用户；一致性审查累计 ≥3 轮不收敛或活跃数不减反增 = stuck 呈报（顽固条目 ≥2 轮修复未清随 escalated 清单标注，优先人工裁决）；终态同步 must-fix 连续 4 轮不降或单条 must-fix 存活超 2 轮 = 呈报
 - [MANDATORY] e2e 只在开发阶段按改动范围跑（清单继承 T3 验收计划表），空载串行；PR/merge/CI 门禁只跑单测（SSOT = 项目 AGENTS.md 测试节）；自动化回归的长期方向 = e2e 逐步单测化——能以 mock/fixture 重放等价覆盖的圈定项，随所属单元转化为 L1/L2 单测
 - [MANDATORY] 偏差三分类：合理 → 登记表固化；不合理 → 打回修；doc_errors → 引擎文档修复组在审出它的轮次当场修（方向 = 改文档对齐实现；fixer 核实方向两可或实现侧错误的条目回流主 agent 裁决）——哪个阶段审出来就在哪个阶段修，禁止把方向已明确的发现转手下一阶段（2026-10-06 裁决）
-- [MANDATORY] D3 全绿 + D4 最终 commit 后自动进 D5（仅用户明示跳过可免，跳过须记录）；D5 收敛后回 delivery-v2 发起 independent-assurance-v2 独立取证并 `evaluate`——**本技能任何阶段都不宣告交付**，accepted/accepted_with_risk 只由裁决器给出
+- [MANDATORY] D3 全绿 + D4 最终 commit 后自动进 D5（仅用户明示跳过可免，跳过须记录）；交付体系任务在 D4 收尾完成**增量实现登记**（逐增量以 builder 凭据 `delivery-gate append` 登记 ImplementationRecorded 含合并回执——独立保证与裁决器消费该事件，缺它主流程 5→6 步走不通，步骤见 `flow/acceptance.md` 收尾节）；D5 收敛后回 delivery-v2 发起 independent-assurance-v2 独立取证并 `evaluate`——**本技能任何阶段都不宣告交付**，accepted/accepted_with_risk 只由裁决器给出
 - [MANDATORY] 发现桥接：D2/D3 的终态未决项（不合理遗留、escalated 顽固条目）由主会话经 `delivery-gate append`（builder 凭据）登记 FindingRaised（category=defect；实现有意的边界申报用 boundary 并附对照论证）后随候选交付——裁决器据此判定，不在本技能内部静默吞掉；D5 的 conformance 未覆盖项按其状态分流登记
 - [OPTIONAL] 高风险大单元可开 worktree 隔离（判据见 references/dag-authoring.md；exec-plan 节点 cwd 字段承载）
 
