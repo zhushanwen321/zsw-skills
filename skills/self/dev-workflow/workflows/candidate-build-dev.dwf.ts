@@ -413,7 +413,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.8.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.8.1"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -433,7 +433,10 @@ const SKILL_VERSION = "2.8.0"; // 构建注入自 delivery-dev/SKILL.md frontmat
 //      命令是否已写入，不重试保持保守正确。
 //   3. recordRepair：自修复登记。逐条追加 <taskDir>/self-repairs.jsonl 并内存计数，
 //      repairSummary() 生成终态上报块（由 workflow 终态 message 携带给主 agent，
-//      转述用户）。兜底被触发这件事本身必须可见，不允许静默修复。
+//      转述用户）。兜底被触发这件事本身必须可见，不允许静默修复。写通道与观测层
+//      obsAppend 同款 world.run——zcode journal 语义下 resume 重放回放首次记录值、
+//      不重复写行；pi spawnSync 每次实写、无 resume 重放场景（见 observability.shared.ts
+//      平台注释）。
 // 层自身不派 agent、不抛异常：登记失败只告警（同文件一次），不拖垮业务。
 // 与观测层（observability.shared.ts）的分工：观测记「阶段边界」（谁在何时跑到哪），
 // 本层记「执行韧性事件」（哪次调用失败、如何修正、是否恢复）——字段独立，互不代读。
@@ -554,8 +557,9 @@ interface AskGuardMeta {
 interface AskGuardResult<T> {
   ok: boolean;
   value: T | null;
-  /** 最后一次尝试实际返回的原始值（未通过校验也保留——耗尽分支可从中挽救部分数据，
-   *  如已申报 findings）；全程异常（从未成功返回）时为 null */
+  /** 最后一次实际返回的原始值（未通过校验也保留——耗尽分支可从中挽救部分数据，
+   *  如已申报 findings；末次尝试抛异常时保留此前返回值）；全程异常（从未成功
+   *  返回）时为 null */
   raw: T | null;
   /** ok=false 时的一句话终因（已含重问耗尽说明） */
   error: string;
@@ -586,7 +590,8 @@ async function askGuarded<T>(
       value = await askOnce(attempt === 1 ? null : correctivePrompt(lastError));
     } catch (e) {
       lastError = `调用抛出异常：${resilienceErrorText(e)}`;
-      lastReturned = null;
+      // 不清空 lastReturned：混合路径（首答返回非法结构、重问抛异常）耗尽时保留
+      // 首答已返回值供调用方挽救（与 raw=null 仅限全程异常的接口注释一致）
       pending.push({ workflow: meta.workflow, step: meta.step, round: meta.round, kind: "agent-error-retry", target: meta.target, trigger: resilienceErrorText(e) });
       continue;
     }

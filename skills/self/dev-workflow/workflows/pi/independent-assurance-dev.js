@@ -475,7 +475,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "2.8.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.8.1"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -561,7 +561,8 @@ async function askGuarded(askOnce, validate, meta) {
         }
         catch (e) {
             lastError = `调用抛出异常：${resilienceErrorText(e)}`;
-            lastReturned = null;
+            // 不清空 lastReturned：混合路径（首答返回非法结构、重问抛异常）耗尽时保留
+            // 首答已返回值供调用方挽救（与 raw=null 仅限全程异常的接口注释一致）
             pending.push({ workflow: meta.workflow, step: meta.step, round: meta.round, kind: "agent-error-retry", target: meta.target, trigger: resilienceErrorText(e) });
             continue;
         }

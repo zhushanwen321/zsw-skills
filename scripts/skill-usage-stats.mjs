@@ -452,16 +452,21 @@ function classifyLegacy(name, args) {
   // 0. DEV 加固线 workflow 名 → dev 技能（estimated 兜底归类；带 executionId 的 run 走
   // observed 前分支，不经此处）。design-code-sync 两引擎跨代共用，不属 dev 技能
   if (/^(tech-review-loop-dev|wave-executor-dev|dev-consistency-loop-dev|acceptance-design-dev|candidate-build-dev|independent-assurance-dev)$/.test(name)) {
+    // wave-executor 按 exec-plan mode 分 D1/D3，mode 不在 run args 无法区分，不估阶段防 D1 虚高
+    const isWaveExecutor = /^wave-executor-dev$/.test(name);
     const stage =
       /^acceptance-design-dev$/.test(name) ? "DESIGN" :
       /^candidate-build-dev$/.test(name) ? "BUILD" :
       /^independent-assurance-dev$/.test(name) ? "ASSURE" :
       /^tech-review-loop-dev$/.test(name) ? "T2" :
+      isWaveExecutor ? null :
       matchDevFlowStage(name) ?? (/wave/i.test(name) ? "D1" : "D2");
     return {
       skill: /^(acceptance|candidate|independent)-/.test(name) ? "delivery-dev" : /^tech-review/.test(name) ? "tech-design-dev" : "dev-flow-dev",
       stage,
-      reason: `DEV workflow 名(${name})`,
+      reason: isWaveExecutor
+        ? "DEV workflow 名(wave-executor-dev)：按 exec-plan mode 分 D1/D3，mode 不在 run args 无法区分，不估阶段防 D1 虚高"
+        : `DEV workflow 名(${name})`,
     };
   }
   // 1. delivery-wf：taskDir 是三个 workflow 的共同硬特征；阶段按 workflow 名判定

@@ -865,13 +865,13 @@ test("legacy 分类器：delivery-v1 三个 workflow 按 taskDir 与名称归阶
 });
 
 // ── 3a. DEV 加固线 workflow 名（legacy estimated 兜底归类）──
-test("legacy 分类器：DEV 加固线六 workflow 名归 dev 三技能与阶段；design-code-sync-v2 不入 DEV 名单仍归 dev-flow-v1", (t) => {
+test("legacy 分类器：DEV 加固线六 workflow 名归 dev 三技能与阶段（wave-executor-dev 按 mode 分 D1/D3 无法估，归 (未归) 桶）；design-code-sync-v2 不入 DEV 名单仍归 dev-flow-v1", (t) => {
   const { home, runScript } = setupEnv(t);
   const fixturePath = join(home, "fixtures.json");
   const fixtures = JSON.parse(readFileSync(fixturePath, "utf8"));
   const devNames = [
     ["tech-review-loop-dev", "tech-design-dev", "T2"],
-    ["wave-executor-dev", "dev-flow-dev", "D1"],
+    ["wave-executor-dev", "dev-flow-dev", null],
     ["dev-consistency-loop-dev", "dev-flow-dev", "D2"],
     ["acceptance-design-dev", "delivery-dev", "DESIGN"],
     ["candidate-build-dev", "delivery-dev", "BUILD"],
@@ -895,7 +895,8 @@ test("legacy 分类器：DEV 加固线六 workflow 名归 dev 三技能与阶段
     assert.equal(run.skill, skill);
     assert.equal(run.stage, stage);
     assert.equal(run.attribution, "estimated");
-    assert.ok(report.bySkill[skill].stages[stage], `${skill}/${stage} 聚合桶存在`);
+    const bucket = stage ?? "(未归)";
+    assert.ok(report.bySkill[skill].stages[bucket], `${skill}/${bucket} 聚合桶存在`);
   }
 
   const sync = report.runs.find((r) => r.id === "dwfrun-design-code-sync-v2");

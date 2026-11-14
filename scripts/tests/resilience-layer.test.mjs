@@ -168,6 +168,28 @@ test("韧性层：askGuarded / recordRepair / retryOnSpawnFailure 语义", async
       assert.equal(r.raw.findings.length, 1);
     }
 
+    // 场景 7b：混合路径——首答返回非法结构、修正重问抛异常，耗尽时 raw 仍保留
+    // 首答已返回值（findings 不蒸发）；末因 = 最后一次尝试的异常
+    {
+      const r = await api.askGuarded(
+        async (c) => {
+          if (c === null) return { summary: "kept-mixed", findings: [{ summary: "d1" }] };
+          throw new Error("boom-mixed");
+        },
+        () => "always bad",
+        { workflow: "w", step: "execute", round: 7, target: "a7b" },
+      );
+      assert.equal(r.ok, false);
+      assert.equal(r.value, null);
+      assert.equal(r.raw.summary, "kept-mixed");
+      assert.equal(r.raw.findings.length, 1);
+      assert.match(r.error, /boom-mixed/);
+      assert.match(r.error, /共 2 次尝试后耗尽/);
+      const lines = journal();
+      const tail = lines.slice(-2).map((l) => JSON.parse(l).kind);
+      assert.deepEqual(tail, ["agent-structure-retry", "agent-error-retry"]);
+    }
+
     // 场景 8：登记写入失败后 repairSummary 声明明细不可信（终态块自身体现，不只执行日志）
     {
       const failingWorld = {

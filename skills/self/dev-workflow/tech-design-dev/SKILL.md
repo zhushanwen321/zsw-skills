@@ -3,7 +3,7 @@ name: tech-design-dev
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 2.5.0
+version: 2.5.1
 description: >-
   Use when 在已批准目标与验收（delivery-dev 产出）的约束下三阶段推敲方案并产出完整设计包：
   写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan 双格式），用户确认后登记方案包
@@ -108,7 +108,7 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 
 **两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers?, taskId?, executionId?, sampleType?, attempt? }`——designDoc = 设计目录绝对路径（或其渲染 md 路径，workflow 内部归一为设计目录；reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件 = 方向审 `tech-design-direction-review` + 三审 `tech-design-review` / `tech-design-impact-review` / `tech-design-simplicity-review`；attempt = 重发起序号——环境失败族重发时递增，防轮次产物覆盖；缺省时自动检测已有产物并递增）；终态：converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 终态处置表）。
 
-**阶段事件观测（可选）**：`taskId` 与 `executionId` 同时传入即启用——每次执行的阶段边界（setup / review / aggregate / fix / finalize）逐行记录到 `~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl`，skill 恒 `tech-design-dev`（canonical 技能名，非 workflow 脚本名）、stage 恒 `T2`。task_id = 本次设计包任务标识（建议 = 设计包 `<name>`，进 dev-flow-dev 执行时同一 task_id 延续共用）；execution_id = 本次审查发起标识（建议 `T2-<发起时点短时间戳>`）。两参都不传 = 观测关闭、业务照常；只传其一 = 告警并关闭；观测写失败只告警不改终态。事件契约与 D0/D4/D6 外部步骤的记录命令见 dev-flow-dev SKILL 的「阶段事件观测」节（`~/.agents/skills/dev-flow-dev/SKILL.md`）。
+**阶段事件观测（可选）**：`taskId` 与 `executionId` 同时传入即启用——每次执行的阶段边界（setup / review / aggregate / fix / finalize）逐行记录到 `~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl`，skill 恒 `tech-design-dev`（canonical 技能名，非 workflow 脚本名）、stage 恒 `T2`。task_id = 本次设计包任务标识（建议 = 设计包 `<name>`，进 dev-flow-dev 执行时同一 task_id 延续共用）；execution_id = 本次审查发起标识（建议 `T2-<发起时点短时间戳>`）。两参都不传 = 观测关闭、业务照常；只传其一 = 告警并关闭；观测写失败只告警不改终态。事件契约与 D0/D4/D6 外部步骤的记录命令见 dev-flow-dev SKILL 的「阶段事件观测」节（`~/.agents/skills/dev-flow-dev/SKILL.md`）。耗时与 token 统计：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --skill tech-design-dev`（阶段窗口来自观测事件、token 经 `agent-session-reader usage` 双平台重算，口径详见该命令 `--help` 与 dev-flow-dev SKILL「统计入口」节）。
 
 ## 核心红线（14 条，详解见 references/design-principles.md 与 references/principles.md）
 
