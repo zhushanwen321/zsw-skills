@@ -3,18 +3,30 @@ name: tech-design-v2
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 2.0.0
+version: 2.1.0
 description: >-
-  Use when 三阶段产出完整设计包（设计文档 + 实施计划）：写技术设计文档 → 对抗式审查循环 →
-  实施计划（impl-plan 双格式）。tech-design 的 workflow 形态版本（老 tech-design 保留作对照，可随时切回）。
-  触发词：「三阶段设计」「设计包」「wf 设计」「workflow 版设计」；「优化表达」「换个说法」「agent 说得太绕」（借用 flow/express.md 易理解性准则优化沟通表达，不走 review 流程）。
+  Use when 在已批准目标与验收（delivery-v2 产出）的约束下三阶段推敲方案并产出完整设计包：
+  写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan 双格式），用户确认后登记方案包
+  （DesignApproved）交 dev-flow-v2 执行。三技能体系的技能②（裁判 = delivery-v2）。
+  触发词：「三阶段设计」「设计包」「方案推敲」；「优化表达」「换个说法」「agent 说得太绕」（借用 flow/express.md 易理解性准则优化沟通表达，不走 review 流程）。
   每阶段结束默认停下等用户确认，前期授权可连跑。含 W1 tech-review-loop-v2 审查循环
   （workflow 就绪前走内置手工路径）。
-  Not for 写代码实现、写测试（用 test-quality）、纯架构分析无文档产出；
-  只写设计文档不走三阶段（用老 tech-design）。
+  Not for 未验收定义就直接设计（先走 delivery-v2 的验收设计）、写代码实现、写测试（用 test-quality）、
+  纯架构分析无文档产出、体系外独立设计（用户明确不走交付体系时用 tech-design-v1）。
 ---
 
-# tech-design-v2（tech-design 三阶段版）
+# tech-design-v2（技能②：设计——三技能交付体系的生产侧上游）
+
+本技能是三技能体系的技能②：**在已批准的目标与验收（delivery-v2 = 技能①产出）约束下推敲方案**。
+方案可以换，验收不跟着方案改——发现验收本身有遗漏时，回 delivery-v2 递增 acceptanceVersion 重批，
+不在本技能内顺手改判据。产出经用户确认后登记 DesignApproved（绑方案包哈希），作为 dev-flow-v2
+（技能③）的入口输入之一。
+
+**入口门 [MANDATORY]**：T1 开始前，交付任务目录必须存在已批准的 acceptance.json——用
+`node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs evaluate --task-dir <taskDir>` 检查，
+state 须为 `design`（已批准、待方案）或更后。缺任务目录或未批准 → 停止并回 delivery-v2 走验收设计
+（用户明确不走交付体系的独立设计任务用 tech-design-v1，不经本门）。设计包全程绑定该任务的
+acceptanceVersion 与 acceptancePackageSha256。
 
 **三阶段产出完整设计包**，每阶段结束默认停下向用户确认产出是否合理，确认后进下一阶段：
 
@@ -26,16 +38,16 @@ T2 审查循环（四席并行审查 → 聚合裁决独立 phase → 修复循�
    │ 确认
    ▼
 T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
-   │ 确认
+   │ 确认（A 级逐条、B 级扫清单）
    ▼
-设计包交付 → dev-flow-v2 执行
+方案包确认 → 主会话 record-design-approved（绑方案包哈希清单）→ dev-flow-v2 候选实现
 ```
 
 - **跳过确认的唯一通道 = 前期授权**：用户宣布全托管/夜间托管，或显式说「一路执行」时三阶段连续推进，阶段产出仍完整呈现（陈述性展示，不构成等待点）
 - **T2 进场门槛 = 机器项全绿 [MANDATORY]**：进 T2 派审前 `scripts/check-design-doc.mjs` 对设计目录跑必须 exit 0（T1 Step 6 机器自检跑同一脚本）——六文件完整、跨章节引用存在、导航对齐这类机器可查的写作完备性问题在 T1 拦截，T2 审查不花轮次报它们（执行细节见 `flow/review.md` T2 进场门槛节）
 - **用语规范 [MANDATORY]**：T1 动笔写设计文档前必须加载 meta-words-guidance skill（zcode 用 Skill 工具；pi / 无 Skill 工具环境直接 Read `~/.agents/skills/meta-words-guidance/SKILL.md` 及其词表），写出的文档必须遵守其中的用语规范（四张词表逐条适用 + 该 skill 的扫描自查），细则见 `flow/write.md` 头部
 - 确认的裁决维度：T1 = 问题定义、方案方向与用例走查缺口处置；T2 = 审查是否真收敛（含方向审一句话判定的转述）；T3 = 拆分粒度与验收计划。打回 = 回该阶段或上一阶段修订。**T1/T3 确认点以「人工审核导航」为入口**：每条关键决策写作期已定审核级别（A = 必须逐条裁决 / B = 无异议即过 / C = 局部实现细节不入决策节），用户只逐条裁决 A 级、扫 B 级清单，无需通读全文；分级判据与六维影响评估（架构/功能/复杂度/性能/资源/红线触碰）见 `references/review-guide-rubric.md`
-- **与老 tech-design 的关系**：两技能独立维护。本技能自带原则层（references/principles.md）、Step D 诊断期、方向审与三态修复循环，impl-plan 创建在 T3，审查循环为 workflow 形态；老 tech-design 保留作对照，任一时点可切回，退役时点由用户裁决
+- **与 tech-design-v1 的关系**：v1 为冻结维护版（独立设计的旧通道）；v2 是三技能体系的设计技能，入口多一道已批准验收的强制门，产物多一层验收绑定与 DesignApproved 登记。过程质量层（原则层 / Step D 诊断期 / 方向审 / 三态修复循环 / T2 机器门槛）与 v1 同源，继续演进
 
 ## 设计包（dev-flow-v2 的唯一入口输入）
 
@@ -43,6 +55,7 @@ T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
 
 | 文件 | 产生者 | 机械可查判据 |
 |------|--------|-------------|
+| `meta.json` 内的 `acceptanceBinding`（acceptanceVersion + acceptancePackageSha256 + taskDir） | T1 入口门写入 | 与交付任务目录当前批准一致；验收版本变化后旧设计包不可直接进 T3/dev-flow-v2 入口（须重新影响审查） |
 | `<name>/`（设计文档目录：六章节 JSON `meta.json` / `s1-context.json` / `s2-status.json` / `s3-solution.json` / `s4-accept.json` / `s5-breakdown.json`——权威源，字段规格见 `references/design-doc-schema.md`）+ `<name>.rendered.md`（渲染视图，`scripts/render-design-doc.mjs` 生成，非权威） | T1 | `scripts/check-design-doc.mjs` 对设计目录 exit 0 |
 | `<name>.impl-plan.md` + `<name>.impl-plan.json`（双格式） | T3 | 两文件存在且单元 id 集一致 |
 | `<name>.symbol-watchlist.json`（符号词表） | T3 | 文件存在且 sourceFingerprints 与源文档当前 sha256 一致（design-code-sync 发起时机器复验；词集漂移经 wordsDrift 软监测不拒启） |
@@ -64,6 +77,19 @@ T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
 | 行为 × 状态组合类决策的裁决材料（穷举矩阵 + 视觉元素 HTML demo） | `references/enumeration-matrix.md` |
 | 要设计文档模板（六章节 JSON 起步样例） | `resources/templates/design-doc/` |
 | 优化表达 / 换个说法 / agent 说得太绕 | `flow/express.md`（一次性表达优化，不写文档不派 review） |
+
+## 方案包确认与登记（T3 之后的技能①衔接点）
+
+T3 确认通过即形成**完整方案包** = 设计文档目录 + `<name>.impl-plan.md/.json` + 审查终态（final.json）+
+方案决策记录。用户确认（A 级逐条、B 级扫清单）后，主会话执行：
+
+```bash
+# 方案包哈希清单：逐文件 name+sha256（solution 主文档取渲染视图、impl-plan 双格式、final.json、决策记录）
+node ~/.agents/skills/delivery-v2/scripts/delivery-gate.mjs record-design-approved   --task-dir <交付任务目录> --summary "方案包确认"   --package-file <方案包哈希清单 JSON> --credential <user credentialId>
+```
+
+方案包或验收版本变化后 DesignApproved 自动失效（重新确认）。**方案包不得变更 increments.json 的增量契约**
+（增量×需求×测试命令由技能①的 acceptance-design 产出并随验收包批准）——impl-plan 只细化实施步骤与调度。
 
 ## W1 workflow 契约（执行体按宿主环境选择）
 
