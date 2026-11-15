@@ -179,8 +179,9 @@ const SCHEMA_AggregatedItem = {
     refs: { type: "array", items: { type: "string" }, description: "该聚合项覆盖的原始问题 ref（四席报告锚点，至少一个；全体聚合项的 refs 构成原始清单的精确划分）" },
     title: { type: "string", description: "一句话根因标题" },
     guidance: { type: "string", description: "合并后的可执行修复操作清单（改哪个章节 JSON 哪个条目、补什么内容、跑什么检索）" },
+    impact: { type: "string", enum: ["critical", "minor"], description: "DEV 代关键决策分级：critical=影响关键 ADR/关键设计决策（分型、公理/不变量、问题定义、方案主干、关键决策前提失实或矛盾、影响决策走向的事实错误），进修复循环参与收敛计数；minor=不影响关键决策（登记缺口、产物表完备性、非关键措辞、实施期探针补登记），不进循环、跨轮收集至 minor-findings.json 最后一波统一处理" },
   },
-  required: ["refs", "title", "guidance"],
+  required: ["refs", "title", "guidance", "impact"],
 };
 
 const SCHEMA_AggregationOutcome = {

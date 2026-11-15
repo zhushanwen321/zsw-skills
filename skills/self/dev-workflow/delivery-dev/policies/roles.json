@@ -11,6 +11,7 @@
         "EvidenceRecorded",
         "FindingRaised",
         "FindingResolved",
+        "ResolutionReaffirmed",
         "AssuranceCompleted",
         "ExplorationCompleted",
         "AssuranceRevisionDrift"
@@ -22,6 +23,7 @@
         "AcceptanceApproved",
         "DesignApproved",
         "RiskAccepted",
+        "RiskPreauthorized",
         "PolicyUpgraded",
         "RevisionBaselineConfirmed",
         "IndependentTaskDeclared",

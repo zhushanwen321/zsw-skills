@@ -25,9 +25,11 @@ interface EvidenceConclusion {
 interface FindingDraft {
   summary: string;
   requirementIds: string[];
-  severity: "blocker" | "non-blocker";
-  /** defect=违反判据；boundary=设计边界申报（assurance 确认走 FindingResolved 附对照论证） */
-  category?: "defect" | "boundary";
+  /** 三档分级（DEV 代裁决规则）：must-fix=违反验收判据，立即修复；suggestion=建议级缺陷，
+   * 攒批最后一波统一处理；info=边界申报/信息登记，披露即可。事件侧映射（与 v2 词表兼容）：
+   * must-fix→severity=blocker+category=defect；suggestion→severity=non-blocker+category=defect；
+   * info→severity=non-blocker+category=boundary */
+  tier: "must-fix" | "suggestion" | "info";
 }
 
 interface CoverageOutcome {
@@ -37,6 +39,9 @@ interface CoverageOutcome {
   findings: FindingDraft[];
   /** 仅可引用本轮开始前已存在且仍 open 的 findingId */
   resolvedFindingIds: string[];
+  /** 亲自核对后确认「仍未修复」的既有 open finding（DEV 代：排除自动重认领——
+   * 测试全绿不等于逐条修复有效，reviewer 的逐条否定结论优先于机器信号） */
+  unresolvedFindingIds: string[];
 }
 
 interface ExplorationOutcome {
@@ -403,8 +408,9 @@ for (const event of events) {
   if (event.acceptanceVersion !== acceptanceVersion || typeof event.findingId !== "string") continue;
   if (event.type === "FindingRaised") openFindings.set(event.findingId, event.summary);
   // resolution 只在当前裁决 revision 下关闭 finding（与 gate 折叠同口径）：
-  // 新 revision 上旧 resolution 失效，finding 保持 open 待重新确认
+  // 新 revision 上旧 resolution 失效，finding 保持 open 待重新确认；重认领同口径
   if (event.type === "FindingResolved" && event.revision === revision) openFindings.delete(event.findingId);
+  if (event.type === "ResolutionReaffirmed" && event.revision === revision) openFindings.delete(event.findingId);
 }
 const evidenceRoot = `${taskDir}/evidence/`;
 const artifactTag = revisionHash(revision);
@@ -422,7 +428,9 @@ function validateFindings(findings: FindingDraft[]): string {
   if (!Array.isArray(findings)) return "findings 须为数组";
   for (const finding of findings) {
     if (typeof finding.summary !== "string" || finding.summary.trim() === "") return "finding.summary 须为非空字符串";
-    if (finding.severity !== "blocker" && finding.severity !== "non-blocker") return "finding.severity 非法";
+    if (finding.tier !== "must-fix" && finding.tier !== "suggestion" && finding.tier !== "info") {
+      return "finding.tier 须为 must-fix / suggestion / info 三档之一";
+    }
     if (!Array.isArray(finding.requirementIds) || finding.requirementIds.some((id) => typeof id !== "string" || !requirementIds.has(id))) {
       return "finding.requirementIds 必须引用验收条目或为空数组";
     }
@@ -437,10 +445,10 @@ function salvageableFindingsNote(findings: FindingDraft[] | undefined): string {
   if (!Array.isArray(findings)) return "";
   const salvageable = findings.filter((d) =>
     typeof d?.summary === "string" && d.summary.trim() !== "" &&
-    (d.severity === "blocker" || d.severity === "non-blocker") &&
+    (d.tier === "must-fix" || d.tier === "suggestion" || d.tier === "info") &&
     Array.isArray(d.requirementIds) && d.requirementIds.every((id) => typeof id === "string" && requirementIds.has(id)));
   if (salvageable.length === 0) return "";
-  return `；最后一次尝试已申报的可挽救发现（未登记事件，请人工核对后处置）：${JSON.stringify(salvageable.map((d) => ({ summary: d.summary, severity: d.severity, requirementIds: d.requirementIds })))}`;
+  return `；最后一次尝试已申报的可挽救发现（未登记事件，请人工核对后处置）：${JSON.stringify(salvageable.map((d) => ({ summary: d.summary, tier: d.tier, requirementIds: d.requirementIds })))}`;
 }
 
 function validateCoverage(value: CoverageOutcome): string {
@@ -464,6 +472,13 @@ function validateCoverage(value: CoverageOutcome): string {
   }
   for (const id of value.resolvedFindingIds) {
     if (typeof id !== "string" || !openFindings.has(id)) return `只能解决本轮开始前仍 open 的 finding：${String(id)}`;
+  }
+  if (!Array.isArray(value.unresolvedFindingIds) || new Set(value.unresolvedFindingIds).size !== value.unresolvedFindingIds.length) {
+    return "unresolvedFindingIds 须为去重数组";
+  }
+  for (const id of value.unresolvedFindingIds) {
+    if (typeof id !== "string" || !openFindings.has(id)) return `unresolvedFindingIds 只能引用本轮开始前仍 open 的 finding：${String(id)}`;
+    if (value.resolvedFindingIds.includes(id)) return `unresolvedFindingIds 与 resolvedFindingIds 不得同时含 ${String(id)}`;
   }
   return "";
 }
@@ -543,6 +558,12 @@ async function appendFinding(draft: FindingDraft, artifact: string): Promise<str
     findingSequence += 1;
     findingId = `F-A${findingSequence}`;
   } while (events.some((e) => e.findingId === findingId));
+  // 三档→事件词表映射（词表与 v2 双向兼容：tier 只存在于 reviewer 报告与 workflow 层）
+  const tierToEvent = draft.tier === "must-fix"
+    ? { category: "defect", severity: "blocker" }
+    : draft.tier === "suggestion"
+      ? { category: "defect", severity: "non-blocker" }
+      : { category: "boundary", severity: "non-blocker" };
   await appendEvent({
     type: "FindingRaised",
     actor: "assurance",
@@ -550,9 +571,9 @@ async function appendFinding(draft: FindingDraft, artifact: string): Promise<str
     revision,
     summary: draft.summary,
     findingId,
-    category: draft.category === "boundary" ? "boundary" : "defect",
+    category: tierToEvent.category,
     requirementIds: draft.requirementIds,
-    severity: draft.severity,
+    severity: tierToEvent.severity,
     artifact,
   });
   findingIds.push(findingId);
@@ -609,10 +630,11 @@ const coverageGuard = await askGuarded<CoverageOutcome>(
       `报告写入路径：${coverageReportPath}`,
       `逐项覆盖要求：${JSON.stringify(requirements.map((r) => ({ requirementId: r.id, evidenceKinds: r.evidenceKinds })))}`,
       "对照验收、候选代码与原始证据，亲自运行必要命令；每 requirement+kind 恰返回一次 verified/partial/failed 和 evidence/ 内原始文件。",
-      `对照 ${incrementsPath} 冻结的 testCommand 与上一轮测试产物（taskDir/evidence/ 内 increment-*.log），审查本轮测试内容是否被改弱（断言删除、范围收窄、skip 扩大）；发现改弱即按 defect 申报。`,
-      "写覆盖报告；新发现不分配 findingId。仅当亲自确认旧发现已修复时，把其 findingId 放入 resolvedFindingIds。",
+      `对照 ${incrementsPath} 冻结的 testCommand 与上一轮测试产物（taskDir/evidence/ 内 increment-*.log），审查本轮测试内容是否被改弱（断言删除、范围收窄、skip 扩大）；发现改弱即按 must-fix 申报。`,
+      "写覆盖报告；新发现不分配 findingId。仅当亲自确认旧发现已修复时，把其 findingId 放入 resolvedFindingIds；亲自核对后确认仍未修复的旧发现放入 unresolvedFindingIds（两者不得重叠）。",
+      "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。",
       "不得修改产品代码、验收、事件或 verdict；builder 的测试输出不能未经独立核对直接记为 verified。",
-      '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary" }], "resolvedFindingIds": string[] }——evidence 须逐 requirement+kind 恰一条，artifact 为 evidence/ 内绝对路径。',
+      '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info" }], "resolvedFindingIds": string[], "unresolvedFindingIds": string[] }——evidence 须逐 requirement+kind 恰一条，artifact 为 evidence/ 内绝对路径。',
       ...(corrective === null ? [] : [corrective]),
     ].join("\n"));
     const requiredArtifacts = [coverageReportPath, ...outcome.evidence.map((e) => e.artifact)];
@@ -674,6 +696,7 @@ const manifestDoc = JSON.stringify({
   acceptanceVersion,
   coverage: coverage.evidence.map((e) => ({ requirementId: e.requirementId, kind: e.kind, result: e.result, artifact: e.artifact })),
   resolvedFindingIds: coverage.resolvedFindingIds,
+  unresolvedFindingIds: coverage.unresolvedFindingIds,
 }, null, 2);
 const manifestWriteRes = await runNode([NODE_WRITE_FILE, manifestPath, `${manifestDoc}\n`]);
 if (manifestWriteRes.exitCode !== 0) {
@@ -703,7 +726,8 @@ if (explorationRequired) {
         `必须覆盖的探索维度：${JSON.stringify(reviewDimensions)}`,
         "从原始意图、验收与真实实现主动寻找验收外反例；亲自运行探索命令并保存原始证据。",
         "写探索报告，申报实际覆盖维度与新发现；不分配 findingId，不修改产品代码、验收、事件或 verdict。",
-        '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary" }] }——dimensions 须覆盖全部必选维度且去重。',
+        "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。",
+        '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info" }] }——dimensions 须覆盖全部必选维度且去重。',
         ...(corrective === null ? [] : [corrective]),
       ].join("\n"));
       const reportRes = await runNode([NODE_CHECK_FILES, explorationReportPath]);
@@ -755,6 +779,8 @@ try {
     `探索审查：${exploration === null ? "按验收不要求，未执行" : exploration.summary}`,
     `本轮新发现：${findingIds.length > 0 ? findingIds.join("、") : "无"}`,
     `本轮解决旧发现：${coverage.resolvedFindingIds.length > 0 ? coverage.resolvedFindingIds.join("、") : "无"}`,
+    `本轮确认仍未修复（排除自动重认领）：${coverage.unresolvedFindingIds.length > 0 ? coverage.unresolvedFindingIds.join("、") : "无"}`,
+    "自动重认领结果见事件流 ResolutionReaffirmed（总结先于逐增量测试写盘，无法预写）。",
     "",
     "本总结只表示保证活动完成，不表示交付已接受；最终状态以 delivery-gate evaluate 为准。",
   ];
@@ -848,6 +874,49 @@ try {
     cleanBuild,
     artifact: assuranceSummaryPath,
   });
+  // ── DEV 代收敛机制：resolution 自动重认领 ──
+  // 修复批次间的 revision 前进使既有 resolution 失效（裁决器设计语义：证据绑定被裁决的
+  // 代码）。对 setup 时 evaluate 报告的 reaffirmableFindings（未决但有本版本历史
+  // resolution），若本轮逐增量测试在当前 revision 全部 exit 0、且 coverage reviewer 未将
+  // 其列入 unresolvedFindingIds（逐条否定结论优先于测试全绿的机器信号），自动登记
+  // ResolutionReaffirmed——消除「已修项因 revision 前进永远回 open、而保证角色看到已
+  // 解决不再补写」的闭环死锁。依据边界如实写进 basis：机器信号是测试全绿，非逐条对照论证。
+  const receipts = incrementReceipts as Array<{ exitCode?: unknown }>;
+  const receiptsAllGreen = receipts.length > 0 && receipts.every((receipt) => receipt.exitCode === 0);
+  const reaffirmableList = Array.isArray(initialVerdict?.reaffirmableFindings)
+    ? (initialVerdict.reaffirmableFindings as Array<Record<string, unknown>>)
+    : [];
+  const reaffirmedIds: string[] = [];
+  if (receiptsAllGreen && reaffirmableList.length > 0) {
+    for (const item of reaffirmableList) {
+      const fid = typeof item.findingId === "string" ? item.findingId : "";
+      const originIds = Array.isArray(item.originalResolutionEventIds)
+        ? (item.originalResolutionEventIds as unknown[]).filter((x): x is string => typeof x === "string")
+        : [];
+      const lastOrigin = originIds.length > 0 ? originIds[originIds.length - 1] : "";
+      if (fid === "" || lastOrigin === "") continue;
+      // reviewer 已确认修复的走 FindingResolved（更强语义）；确认未修复的不得重认领
+      if (coverage.resolvedFindingIds.includes(fid)) continue;
+      if (coverage.unresolvedFindingIds.includes(fid)) continue;
+      try {
+        await appendEvent({
+          type: "ResolutionReaffirmed",
+          actor: "assurance",
+          acceptanceVersion,
+          revision,
+          summary: `重认领 ${fid}：原修复在当前 revision 仍有效（本轮逐增量测试全部 exit 0）`,
+          findingId: fid,
+          originalResolutionEventId: lastOrigin,
+          basis: `本轮逐增量测试在当前 revision 复跑全部 exit 0（回执绑定本轮 AssuranceCompleted 事件）；原 resolution 登记于更早 revision（lastResolvedRevision=${String(item.lastResolvedRevision ?? "unknown")}）。coverage reviewer 未将该发现列入 unresolvedFindingIds。`,
+          artifact: assuranceSummaryPath,
+        });
+        reaffirmedIds.push(fid);
+        openFindings.delete(fid);
+      } catch (e) {
+        throw new Error(`重认领 ${fid} 事件登记失败：${errorText(e)}`);
+      }
+    }
+  }
 } catch (e) {
   return failAssurance(errorText(e));
 }
@@ -895,12 +964,33 @@ if (typeof finalVerdict.revision !== "string" || finalVerdict.revision !== revis
 await releaseLease();
 await obsEnd("finalize", null);
 await obsCloseExecution("assurance-completed");
+// ── DEV 代：三档停修判据（终态建议块——裁决权在主 agent 与用户，workflow 只给判据结论）──
+// 三档规则：must-fix（severity=blocker 的 defect）未清零 → 下一轮立即修复；must-fix 清零
+// 且攒批项（suggestion=non-blocker defect、info=boundary）非空 → 执行最后一波统一修复后
+// 循环退出（boundary/info 档可按风险预授权或用户裁决登记处置）；零未决 → 循环退出进裁决。
+const openVerdictFindings = Array.isArray(finalVerdict.openFindings)
+  ? (finalVerdict.openFindings as Array<Record<string, unknown>>)
+  : [];
+const mustFixOpen = openVerdictFindings.filter(
+  (f) => f.severity === "blocker" && f.category === "defect" && f.riskAccepted !== true,
+);
+const suggestionOpen = openVerdictFindings.filter(
+  (f) => f.severity === "non-blocker" && f.category === "defect" && f.riskAccepted !== true,
+);
+const infoOpen = openVerdictFindings.filter((f) => f.category === "boundary" && f.riskAccepted !== true);
+const assuranceRoundsTotal = events.filter((e) => e.type === "AssuranceCompleted").length + 1;
+const triageNote =
+  mustFixOpen.length > 0
+    ? `三档停修判据未满足：must-fix 未清零（${mustFixOpen.map((f) => String(f.findingId)).join("、") || "?"}）——立即修复后重新发起`
+    : suggestionOpen.length + infoOpen.length > 0
+      ? `三档停修判据满足（must-fix 清零）：攒批 ${suggestionOpen.length + infoOpen.length} 条（suggestion ${suggestionOpen.length} + info ${infoOpen.length}，清单见 verdict.openFindings）——执行最后一波统一修复后循环退出；info/boundary 档也可按风险预授权（preauthorize-risk）或用户裁决登记处置`
+      : "三档停修判据满足：零未决发现，循环退出，按 verdict 进入裁决";
 const result: AssuranceResult = {
   terminated: "assurance-completed",
   taskDir,
   revision,
   findingIds,
   verdict: finalVerdict,
-  message: `独立保证活动已完成，返回值携带 delivery-gate 生成的 verdict；workflow 本身不宣告 accepted${repairSummary()}${statsTailNote()}`,
+  message: `独立保证活动已完成，返回值携带 delivery-gate 生成的 verdict；workflow 本身不宣告 accepted；${triageNote}；本任务累计保证轮次 ${assuranceRoundsTotal}（重发前先核对累计成本再决定）${repairSummary()}${statsTailNote()}`,
 };
 return result;

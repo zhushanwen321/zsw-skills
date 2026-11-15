@@ -103,9 +103,9 @@ const SCHEMA_CoverageOutcome = {
         properties: {
           summary: { type: "string", description: "缺陷现象与影响" },
           requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
-          severity: { type: "string", enum: ["blocker", "non-blocker"], description: "blocker = 阻断交付；non-blocker = 可继续" },
+          tier: { type: "string", enum: ["must-fix", "suggestion", "info"], description: "DEV 代三档分级：must-fix=违反验收判据（立即修复档）；suggestion=建议改进但不违反判据（攒批档）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 按 must-fix" },
         },
-        required: ["summary", "requirementIds", "severity"],
+        required: ["summary", "requirementIds", "tier"],
       },
     },
     resolvedFindingIds: {
@@ -113,8 +113,13 @@ const SCHEMA_CoverageOutcome = {
       items: { type: "string" },
       description: "亲自复核确认已修复的旧 findingId（仅限本轮开始前仍 open 的发现；未确认不报）",
     },
+    unresolvedFindingIds: {
+      type: "array",
+      items: { type: "string" },
+      description: "DEV 代：亲自核对后确认仍未修复的既有 open finding（排除自动重认领；与 resolvedFindingIds 不得重叠）",
+    },
   },
-  required: ["summary", "evidence", "findings", "resolvedFindingIds"],
+  required: ["summary", "evidence", "findings", "resolvedFindingIds", "unresolvedFindingIds"],
 };
 
 // explorer（explorer.md 角色）结构化返回：探索审查结论——dimensions 必须完整覆盖
@@ -136,9 +141,9 @@ const SCHEMA_ExplorationOutcome = {
         properties: {
           summary: { type: "string", description: "缺陷现象与影响" },
           requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
-          severity: { type: "string", enum: ["blocker", "non-blocker"], description: "blocker = 阻断交付；non-blocker = 可继续" },
+          tier: { type: "string", enum: ["must-fix", "suggestion", "info"], description: "DEV 代三档分级：must-fix=违反验收判据（立即修复档）；suggestion=建议改进但不违反判据（攒批档）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 按 must-fix" },
         },
-        required: ["summary", "requirementIds", "severity"],
+        required: ["summary", "requirementIds", "tier"],
       },
     },
   },

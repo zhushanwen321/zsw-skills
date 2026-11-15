@@ -56,6 +56,10 @@ const VALID_ARG_KEYS = new Set([
 // node -e 通道（argv 传参，无 shell 注入风险；node 代码不受脚本 facade 限制）
 const NODE_WRITE_FILE =
   "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2])";
+// final.json 防覆盖转存（DEV 代）：写新 final 前把既有文件改名为 final.attempt-N.json
+//（N 从 1 递增找空位；改名失败静默——防覆盖是尽力而为的存档，不得阻塞终态写出）
+const NODE_BACKUP_FINAL =
+  "const fs=require('fs'),pt=require('path');try{const p=process.argv[1];if(fs.existsSync(p)){let n=1;while(fs.existsSync(pt.join(pt.dirname(p),'final.attempt-'+n+'.json')))n++;fs.renameSync(p,pt.join(pt.dirname(p),'final.attempt-'+n+'.json'))}}catch(e){}";
 const NODE_CHECK_EXISTS =
   "const fs=require('fs');const missing=process.argv.slice(1).filter(p=>!fs.existsSync(p));if(missing.length>0){process.stdout.write(missing.join(' | '));process.exit(1)}";
 const NODE_EXISTS_ONE = "process.exit(require('fs').existsSync(process.argv[1])?0:1)";
@@ -386,6 +390,7 @@ function makeAggregationValidator(rawRefs: string[]): (v: unknown) => Validated<
       }
       if (typeof it.title !== "string" || it.title.trim() === "") errors.push(`items[${i}] title 须非空`);
       if (typeof it.guidance !== "string" || it.guidance.trim() === "") errors.push(`items[${i}] guidance 须非空（合并后的可执行修复操作清单）`);
+      if (it.impact !== "critical" && it.impact !== "minor") errors.push(`items[${i}] impact 须为 critical / minor 二档之一（DEV 代关键决策分级：critical 进修复循环，minor 跨轮收集最后一波处理）`);
     });
     const missing = rawRefs.filter((r) => !seen.has(r));
     if (missing.length > 0) {
@@ -402,6 +407,7 @@ function renderAggregatedMd(round: number, items: AggregatedItem[]): string {
     lines.push(
       `## AG-${i + 1} ${it.title}`,
       `- 原始 ref：${it.refs.join("、")}`,
+      `- 分级：${it.impact}${it.impact === "minor" ? "（不进本轮修复循环，进 minor 收集清单）" : ""}`,
       `- 修复指导：${it.guidance}`,
       "",
     );
@@ -735,9 +741,25 @@ async function finish(
   message: string,
   blocked: { items: string[]; reason: string } | null = null,
 ): Promise<LoopResult> {
+  // DEV 代：remaining 逐条带 guidance/reportRefs——从最后一次聚合批次按 source ref 找回
+  // 可执行处方与报告锚点，主 agent 按清单直接处置，不必再派复审 run 回读四份报告
+  const lastRefGuidance = new Map<string, { guidance: string; refs: string[] }>();
+  for (const item of lastAggregatedItems) {
+    for (const ref of item.refs) lastRefGuidance.set(ref, { guidance: item.guidance, refs: item.refs });
+  }
   const remaining = ledger
     .filter((e) => e.status === "open" || e.status === "pending")
-    .map((e) => ({ id: e.id, title: e.title, status: e.status, attackHints: e.attackHints }));
+    .map((e) => {
+      const hit = e.source.map((ref) => lastRefGuidance.get(ref)).find((x) => x !== undefined);
+      return {
+        id: e.id,
+        title: e.title,
+        status: e.status,
+        attackHints: e.attackHints,
+        guidance: hit !== undefined ? hit.guidance : "",
+        reportRefs: [...e.source],
+      };
+    });
   const result: LoopResult = {
     terminated,
     rounds,
@@ -746,9 +768,27 @@ async function finish(
     directionOneliner,
     mustFixTrajectory: [...trajectory],
     remaining,
+    minorFindings: [...minorFindings],
     blocked,
     message,
   };
+  // DEV 代：minor 收集清单独立落盘（final.json 是 dev-flow-dev 入口门契约，字段保持不动；
+  // minor 清单经返回值与该文件双通道呈报，主 agent 最后一波统一处理或登记放行）
+  if (minorFindings.length > 0) {
+    const minorWrite = await world.run("node", [
+      "-e",
+      NODE_WRITE_FILE,
+      `${runDir}/minor-findings.json`,
+      `${JSON.stringify({ count: minorFindings.length, rule: "DEV 代关键决策分级：不影响关键决策的设计问题，跨轮收集、最后一波统一处理或登记放行", items: minorFindings }, null, 2)}\n`,
+    ]);
+    if (minorWrite.exitCode !== 0) {
+      log(`WARN: minor-findings.json 落盘失败（exit ${minorWrite.exitCode}：${minorWrite.stderr.trim() || minorWrite.stdout.trim()}）——minor 清单以返回值为准`);
+      result.message += `；（注：minor-findings.json 落盘失败 exit ${minorWrite.exitCode}，清单见返回值 minorFindings）`;
+    }
+  }
+  // DEV 代：final.json 防覆盖——attempt 续跑的第二次运行先转存既有 final.json 为
+  // final.attempt-N.json（历次实例：续跑覆盖后轮数与轨迹只剩末次，跨 run 分析失真）
+  await world.run("node", ["-e", NODE_BACKUP_FINAL, finalJsonPath]);
   // final.json（对外字段名 = oneliner，skill 文本契约同此——设计 §5.2 双形态契约权威表）
   const finalDoc = {
     terminated: result.terminated,
@@ -844,13 +884,19 @@ const REVIEWER_PERSONA =
   "你是资深设计文档评审员：只读评审，绝不修改设计文档与项目文件（验证样例可用管道或临时文件）；每个发现都要有你亲自读到的文档原文依据；报告与返回计数一致；指令无法执行或有矛盾时如实说明，不伪造结论。" +
   NO_ASK_RULE;
 const FIXER_PERSONA =
-  "你是设计文档修复者：直接编辑设计目录内的章节 JSON（六个 json 是权威源，渲染视图由脚本生成、不手改）；先核实再修改、反例重演验证修复、联动同步关联章节与跨章节引用字段、修改后重跑渲染脚本；指导给出的正则/守护/命令类内容，构造正例与反例实跑验证（正例命中、反例不命中）后才写入文档，实跑不过时自行修正后重验，并在处置表该条的 reenactment 字段登记对指导的偏离及理由（随实跑验证记录一并写入），不照抄未验证的指导；写入文档的每个断言必须标核实状态——能静态核实的（读源码/API 查询/文档核对）本会话核实后才写 ✅，不能核实的写 ⏳ 前提并指向实施期探针，禁止把推断、未尝试的查询、平台通用知识写成事实或 ✅；方案性意见修不动时如实置 status=\"blocked\" 并申报卡点，不硬改、不静默跳过。" +
+  "你是设计文档修复者：直接编辑设计目录内的章节 JSON（六个 json 是权威源，渲染视图由脚本生成、不手改）；先核实再修改、反例重演验证修复、联动同步关联章节与跨章节引用字段、修改后重跑渲染脚本；指导给出的正则/守护/命令类内容，构造正例与反例实跑验证（正例命中、反例不命中）后才写入文档，实跑不过时自行修正后重验，并在处置表该条的 reenactment 字段登记对指导的偏离及理由（随实跑验证记录一并写入），不照抄未验证的指导；写入文档的每个断言必须标核实状态——能静态核实的（读源码/API 查询/文档核对）本会话核实后才写 ✅，不能核实的写 ⏳ 前提并指向实施期探针，禁止把推断、未尝试的查询、平台通用知识写成事实或 ✅；修复不得新增语义——新增验收场景、前提条目、决策条目仅当本会话亲自核实（读源码/实跑探针）其成立后才可写入，无法核实的行为断言一律写 ⏳ 前提并指向实施期探针、禁止以 ✅ 新增未核实条目，聚合清单未涉及的内容不主动扩写（历次实例：修复者凭推断新增场景前提，被四席后续轮各自独立击穿）；方案性意见修不动时如实置 status=\"blocked\" 并申报卡点，不硬改、不静默跳过。" +
   NO_ASK_RULE;
 
 let prevDispositions: Disposition[] = [];
 let prevRevisionSummary = "";
 let prevRoundMustFix = 0;
 let streak = 0;
+// DEV 代关键决策分级：minor 项跨轮收集（按 ref 去重；不进修复循环与对账——修复者的
+// 问题清单与覆盖校验只认 critical）。终态统一落盘 minor-findings.json，最后一波处理或登记放行
+const minorFindings: { round: number; refs: string[]; title: string; guidance: string }[] = [];
+const collectedMinorRefs = new Set<string>();
+// 最后一次成功聚合的批次（终态 remaining 找回 guidance 的数据源；R1 全 0 无聚合时为空）
+let lastAggregatedItems: AggregatedItem[] = [];
 
 for (let round = 1; round <= maxRounds; round++) {
   phase("四席并行聚焦复审");
@@ -1038,8 +1084,9 @@ for (let round = 1; round <= maxRounds; round++) {
           "- guidance 枚举完备性：改写清单/枚举类字段（清单条目、端点枚举、时段枚举、形态列举等）时，对该字段做完备性枚举——列全全部合法成员，不是只改报告点名的那一项；同一内容在多个章节重复登记时，若可收敛为单一权威登记加引用则 guidance 优先要求收敛——可执行内容（正则/命令/守护类）的收敛走机器通道：登记在 s3-solution.json 的 decisions[].guards（{ id, text, note }，规格见 schema §6.3），消费处文本字段内联完整标记 {{Gx}} 引用（Gx 替换为登记的真实守护 id，不写「以决策 id 引用」式文字指引）；非可执行内容以章节字段 id 或条目标识引用。确需保留多处登记时列出全部登记点并要求逐字同步。",
           "- guidance 先验证后写入：正则/守护/命令类内容必须先实跑验证再写进指导——构造正例与反例样例（正例全命中、反例不命中），把样例与结果作为验证记录写进 guidance；验证用管道或临时文件进行，不修改设计文档与项目文件（与只读裁决约束兼容）。",
           "- guidance 自包含：修复者无需自行推断联动点——改哪个章节 JSON 的哪个字段、同步哪些跨章节引用、跑什么验证，逐条列清。",
+          "- 每条聚合项标注 impact 分级（DEV 代裁决规则，以影响关键 ADR / 关键设计决策为准）：critical=影响关键决策——分型错误、公理/不变量不成立、问题定义失真、方案主干有更优解或被击穿、关键决策（A 级）的前提失实/矛盾/证据错误、影响决策走向的事实错误；minor=不影响关键决策——前提登记缺口、产物表/清单完备性、非关键场景措辞、实施期探针指向的补登记（即处置时 affectsDecision 应为「无」的那类）。拿不准 critical 还是 minor 时按 critical——降级漏修的代价高于多修一轮。",
           "",
-          "完成后返回 JSON：items（聚合项数组，每条 { refs: string[]（该条覆盖的原始 ref，至少一个）, title, guidance }）。refs 全体构成原始清单的精确划分——每条原始 ref 恰好出现在一条聚合项里，不丢、不重、不造。",
+          "完成后返回 JSON：items（聚合项数组，每条 { refs: string[]（该条覆盖的原始 ref，至少一个）, title, guidance, impact: \"critical\"|\"minor\" }）。refs 全体构成原始清单的精确划分——每条原始 ref 恰好出现在一条聚合项里，不丢、不重、不造。",
         ].join("\n"),
       );
     } catch (e) {
@@ -1053,6 +1100,7 @@ for (let round = 1; round <= maxRounds; round++) {
       );
     }
     aggregatedItems = aggregation.items;
+    lastAggregatedItems = aggregation.items;
     const aggWrite = await world.run("node", ["-e", NODE_WRITE_FILE, `${roundAbs}/aggregated.md`, renderAggregatedMd(round, aggregatedItems)]);
     if (aggWrite.exitCode !== 0) {
       return await finish("aggregator-failure", round, `聚合清单落盘失败（${roundAbs}/aggregated.md，exit ${aggWrite.exitCode}）：${aggWrite.stderr.trim() || aggWrite.stdout.trim()}。恢复动作：args.attempt 递增重新发起`);
@@ -1061,10 +1109,23 @@ for (let round = 1; round <= maxRounds; round++) {
     await obsEnd("aggregate", round);
   }
 
-  // 轨迹与对账以聚合后计数为准（去重后的真实工作负载；原始计数仅校验用）
-  const roundMustFix = aggregatedItems !== null ? aggregatedItems.length : 0;
+  // 轨迹与对账以聚合后计数为准（去重后的真实工作负载；原始计数仅校验用）。
+  // DEV 代关键决策分级：roundMustFix 只数 critical 项；minor 项不进本轮修复循环，
+  // 按 ref 去重收集进跨轮清单，终态统一落盘（裁决规则 2026-11-15：不影响关键决策的
+  // 设计问题放行或统一收集最后一波一起处理）
+  if (aggregatedItems !== null) {
+    for (const item of aggregatedItems) {
+      if (item.impact !== "minor") continue;
+      if (item.refs.every((r) => collectedMinorRefs.has(r))) continue;
+      for (const r of item.refs) collectedMinorRefs.add(r);
+      minorFindings.push({ round, refs: item.refs, title: item.title, guidance: item.guidance });
+    }
+  }
+  const criticalItems = aggregatedItems !== null ? aggregatedItems.filter((it) => it.impact !== "minor") : [];
+  const criticalRefs = new Set(criticalItems.flatMap((it) => it.refs));
+  const roundMustFix = criticalItems.length;
   trajectory.push(roundMustFix);
-  report({ round, mustFix: roundMustFix }, "trajectory");
+  report({ round, mustFix: roundMustFix, minorCollected: minorFindings.length }, "trajectory");
 
   // 对账套用（verify-first：fixed 必须带非空 evidence 才采信）
   const confirmedIds = new Set<string>();
@@ -1095,13 +1156,13 @@ for (let round = 1; round <= maxRounds; round++) {
   const coreIds = new Set(outstandingCore.map((d) => d.id));
   const outstanding = [...outstandingCore, ...parkedWatch.filter((d) => escalateIds.has(d.id) && !coreIds.has(d.id))];
 
-  // converged 判定（设计 §5.2 唯一权威公式）：must-fix==0 且上轮处置表全处置即终止。
-  // R1 全 0 → 直接 converged（不派修复者）。
+  // converged 判定（设计 §5.2 唯一权威公式 + DEV 代分级口径）：critical must-fix==0 且
+  // 上轮处置表全处置即终止（minor 项不参与收敛，已进收集清单）。R1 全 0 → 直接 converged。
   if (roundMustFix === 0 && outstanding.length === 0) {
     return await finish(
       "converged",
       round,
-      `第 ${round} 轮收敛：四报告 must-fix 均 0${round > 1 ? "，上轮处置条目全部经实证复核确认" : "（首轮即净，未派修复者）"}。下游：T2 确认点`,
+      `第 ${round} 轮收敛：四报告 critical must-fix 均 0${round > 1 ? "，上轮处置条目全部经实证复核确认" : "（首轮即净，未派修复者）"}${minorFindings.length > 0 ? `；minor 项 ${minorFindings.length} 条已收集（不影响关键决策，见 minor-findings.json——最后一波统一处理或登记放行）` : ""}。下游：T2 确认点`,
     );
   }
 
@@ -1113,7 +1174,7 @@ for (let round = 1; round <= maxRounds; round++) {
     return await finish(
       "stuck",
       round,
-      `must-fix 总和连续 ${STUCK_THRESHOLD} 轮未下降（当前 ${roundMustFix}，轨迹 ${trajectory.join(" → ")}）。停回通道：呈报残余风险矩阵（见 remaining），由用户裁决——修复已不再收敛，续跑只烧轮次`,
+      `must-fix 总和连续 ${STUCK_THRESHOLD} 轮未下降（当前 ${roundMustFix}，轨迹 ${trajectory.join(" → ")}）。停回通道：remaining 已逐条带 guidance/reportRefs，主 agent 按清单直接处置后登记 dispositions，不必再派复审 run；minor 项见 minor-findings.json（${minorFindings.length} 条）。由用户裁决——修复已不再收敛，续跑只烧轮次`,
     );
   }
 
@@ -1129,13 +1190,16 @@ for (let round = 1; round <= maxRounds; round++) {
         ].join("\n")
       : "";
 
-  // 本轮问题清单内联：处置表 source 引用的唯一合法锚点集（覆盖校验按此集合判定）
+  // 本轮问题清单内联：处置表 source 引用的唯一合法锚点集（覆盖校验按此集合判定）。
+  // DEV 代只内联 critical 项的 ref——minor 项不要求本轮处置（已进收集清单），
+  // 注入反而会被覆盖校验强制逐条处置、把 minor 拖回循环
+  const criticalProblems = roundProblems.filter((p) => criticalRefs.has(p.ref));
   const problemsBlock =
-    roundProblems.length > 0
+    criticalProblems.length > 0
       ? [
           "",
-          "本轮问题清单（四份报告的逐条问题锚点，ref 形如 review-main#2 / 方向审 review-direction#2）：",
-          wrapUntrusted(JSON.stringify(roundProblems)),
+          "本轮问题清单（四份报告的逐条问题锚点，ref 形如 review-main#2 / 方向审 review-direction#2；仅 critical 项——minor 项由引擎收集另处）：",
+          wrapUntrusted(JSON.stringify(criticalProblems)),
         ].join("\n")
       : "";
 
@@ -1162,7 +1226,7 @@ for (let round = 1; round <= maxRounds; round++) {
     `审查对象：设计目录 ${designDoc}——权威源是目录内六个章节 JSON（meta / s1-context / s2-status / s3-solution / s4-accept / s5-breakdown），${renderedMd} 是渲染出的阅读视图（非权威，禁止手改）。直接编辑章节 JSON 文件完成修复（你有文件工具，逐文件小步修改）；字段规格见 ${schemaPath}。`,
     "",
     "任务：",
-    "1. 按聚合清单逐条处置：每条 AG 项至少对应一条处置，source 填该 AG 项覆盖的全部原始 ref（聚合裁决已去重——跨 AG 项不再二次合并；发现两条 AG 项实为同根因时在 revisionSummary 登记提示，不自行吞并）。",
+    "1. 按聚合清单逐条处置 critical 项（分级为 minor 的项由引擎另行收集，不要求你处置、不计入覆盖校验）：每条 critical AG 项至少对应一条处置，source 填该 AG 项覆盖的全部原始 ref（聚合裁决已去重——跨 AG 项不再二次合并；发现两条 AG 项实为同根因时在 revisionSummary 登记提示，不自行吞并）。",
     "2. 逐条三选一处置全部问题：fixed（修复——默认处置，直接编辑章节 JSON 落实）/ deferred（登记不修，理由必须具体：涉及章节/机制/代价）/ archived（归档——已过时或不适用，理由必须具体）。判定存疑按 fixed 处理（滑坡防护）。",
     "3. 方案性意见（需要用户裁决的方向变化，如推翻问题定义、方案主干、最小形态）修不动 → 不要硬改：status 取 \"blocked\"，并在 blocked 里申报（items=卡住的问题清单，reason=为什么需要用户裁决）；其余可修的照常完成并产出处置表。无方案性卡点时 status 取 \"done\"，返回体不得含 blocked 字段——不要在 blocked 里填「无卡点」之类的说明（引擎只认 status，blocked 不是表态字段）。",
     outstandingBlock,
@@ -1356,5 +1420,5 @@ await obsBegin("finalize", null);
 return await finish(
   "max-rounds",
   maxRounds,
-  `轮次上限耗尽仍有未收敛条目（must-fix 轨迹：${trajectory.join(" → ")}）。停回通道：呈报残余风险矩阵（见 remaining），由用户裁决——继续循环或人工接管`,
+  `轮次上限耗尽仍有未收敛条目（critical must-fix 轨迹：${trajectory.join(" → ")}）。停回通道：remaining 已逐条带 guidance/reportRefs（聚合批次的可执行处方与报告锚点）——主 agent 按清单直接处置后登记 dispositions，不必再派复审 run；minor 项见 minor-findings.json（${minorFindings.length} 条，最后一波统一处理或登记放行）；由用户裁决——继续循环或人工接管`,
 );

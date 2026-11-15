@@ -78,6 +78,12 @@ const EVENT_SCHEMAS = {
     actors: ["assurance"],
     fields: ["findingId", "artifact"],
   },
+  // 重认领（DEV 代收敛机制）：revision 前进使旧 resolution 失效后，assurance 在新 revision 上
+  // 确认「原修复仍有效」——指向原 resolution 的 eventId，不凭空产生新 resolution 语义
+  ResolutionReaffirmed: {
+    actors: ["assurance"],
+    fields: ["findingId", "originalResolutionEventId", "basis", "artifact"],
+  },
   ExplorationCompleted: {
     actors: ["assurance"],
     fields: ["dimensions", "coverageManifestSha256", "artifact"],
@@ -100,6 +106,13 @@ const EVENT_SCHEMAS = {
   RiskAccepted: {
     actors: ["user"],
     fields: ["targetType", "targetId", "gapId", "evidenceState", "confirmation"],
+  },
+  // 风险预授权（DEV 代收敛机制）：用户预先声明可由 standing-authorization 接受的 finding 范围。
+  // 持久事实（不随版本/revision 失效——它是授权声明不是证据）。安全边界三条硬编码：
+  // 仅 finding 目标、severity 上限恒 non-blocker（blocker 永不可预授权）、数量上限必填
+  RiskPreauthorized: {
+    actors: ["user"],
+    fields: ["categories", "maxSeverity", "maxFindings", "confirmation"],
   },
   PolicyUpgraded: {
     actors: ["user"],
@@ -157,6 +170,8 @@ const HELP = `delivery-gate（DEV）：delivery-dev 的确定性交付裁决器�
   delivery-gate record-design-approved --task-dir D --package-file F --decision-file F2 --summary S --credential <user credentialId>
   delivery-gate append --task-dir D --event '<JSON>' --credential <credentialId> [--run-id R]
   delivery-gate accept-risk --task-dir D --target-type requirement|finding --target-id ID --confirmation user-explicit --summary S --credential <user credentialId> [--revision R] [--gap-id G]
+  delivery-gate accept-risk --task-dir D --target-type finding --target-id ID --confirmation standing-authorization --summary S --credential <user credentialId>  # DEV 代：须先由用户 preauthorize-risk 登记覆盖该 finding 的预授权（类别白名单 + 名额上限；severity 上限恒 non-blocker）
+  delivery-gate preauthorize-risk --task-dir D --categories defect,boundary --max-findings N --summary S --credential <user credentialId>  # DEV 代：用户预先声明 standing 接受范围（持久授权声明；blocker 永不可预授权）
   delivery-gate evaluate --task-dir D [--revision R]
   delivery-gate revision --project-root P
   delivery-gate confirm-baseline --task-dir D --reason S --credential <user credentialId> [--revision R]
@@ -972,6 +987,11 @@ function validateEventShape(event, { record = false } = {}) {
     case "FindingResolved":
       requireFindingId(event.findingId, "event.findingId");
       break;
+    case "ResolutionReaffirmed":
+      requireFindingId(event.findingId, "event.findingId");
+      requireNonEmptyString(event.originalResolutionEventId, "event.originalResolutionEventId");
+      requireNonEmptyString(event.basis, "event.basis");
+      break;
     case "ExplorationCompleted":
       requireStringArray(event.dimensions, "event.dimensions", { nonEmptyItems: true, unique: true });
       requireSha256(event.coverageManifestSha256, "event.coverageManifestSha256");
@@ -1008,7 +1028,23 @@ function validateEventShape(event, { record = false } = {}) {
       else requireFindingId(event.gapId, "event.gapId");
       requireEnum(event.evidenceState, [...EVIDENCE_RESULTS, "missing"], "event.evidenceState");
       if (event.confirmation !== "user-explicit") {
-        fail("RiskAccepted.confirmation 只允许 user-explicit。", "把 confirmation 改为 user-explicit 后重试；standing-authorization 仅适用于 approve-acceptance，全托管授权不能替代具体风险接受。");
+        // DEV 代：standing-authorization 仅在「finding 目标 + 有效风险预授权覆盖」时合法，
+        // 预授权匹配在 fold 重放层按世界状态校验（shape 层只拦 requirement 目标）
+        if (!(event.confirmation === "standing-authorization" && event.targetType === "finding")) {
+          fail(
+            "RiskAccepted.confirmation 非法。",
+            "requirement 目标只允许 user-explicit；finding 目标允许 user-explicit，或 standing-authorization（须先由用户 preauthorize-risk 登记覆盖该 finding 的预授权）。",
+          );
+        }
+      }
+      break;
+    case "RiskPreauthorized":
+      requireStringArray(event.categories, "event.categories", { nonEmptyItems: true, unique: true });
+      // blocker 永不可预授权——分级判据安全底线，词表收窄为单项
+      requireEnum(event.maxSeverity, ["non-blocker"], "event.maxSeverity");
+      requirePositiveInteger(event.maxFindings, "event.maxFindings");
+      if (event.confirmation !== "user-explicit") {
+        fail("RiskPreauthorized.confirmation 只允许 user-explicit。", "风险预授权本身必须用户亲自登记——全托管授权不能代替用户对未来风险接受的预先声明；由用户执行 preauthorize-risk 后重试。");
       }
       break;
     case "PolicyUpgraded":
@@ -1276,15 +1312,32 @@ function coversDimensions(eventDimensions, requiredDimensions) {
   return requiredDimensions.every((dimension) => actual.has(dimension));
 }
 
-// 逐事件折叠。失效范围（redesign 3.9）：
+// 逐事件折叠。失效范围（redesign 3.9；DEV 代增补见标注）：
 //   AcceptanceReviewed/Approved —— 当前版本 + 包哈希 + intent + 快照（verdict 端组合判定）
 //   DesignApproved —— 当前版本（方案包哈希清单是声明值，技能③入口门核对）
 //   ImplementationRecorded —— 按版本有效、跨 revision 保留
 //   EvidenceRecorded / AssuranceCompleted / ExplorationCompleted / FindingResolved / RiskAccepted
 //     —— 当前版本 + 当前 revision（revision 过滤在 verdict，fold 只做版本与结构校验）
+//   ResolutionReaffirmed（DEV 代）—— 当前版本 + 当前 revision（与 FindingResolved 同口径：
+//     修复被回退时重认领同样失效，须 assurance 重新核对后再次登记）
 //   FindingRaised —— 按版本持久；继承发现同语义且跨版本持久
+//   RiskPreauthorized（DEV 代）—— 持久事实（授权声明不是证据；名额用量按事件流顺序累计）
 //   AssuranceRevisionDrift / RevisionBaselineConfirmed / IndependentTaskDeclared /
 //   TaskSuperseded / TaskSupersedeCancelled —— 持久事实
+// ── 风险预授权匹配（DEV 代）：standing RiskAccepted(finding) 逐条消耗预授权名额 ──
+// 名额按事件流顺序贪心分配（一条 standing 接受消耗一条匹配预授权的一个名额），fold 重放
+// 可复现。匹配条件：categories 含该 finding 分类、severity 非 blocker（双保险——shape 层
+// 已限 maxSeverity=non-blocker）、该预授权本版本已用名额 < maxFindings。
+function matchPreauthorization(preauthorizations, usedCounts, category, severity) {
+  for (let index = 0; index < preauthorizations.length; index += 1) {
+    if (usedCounts[index] >= preauthorizations[index].maxFindings) continue;
+    if (severity === "blocker") continue;
+    if (!preauthorizations[index].categories.includes(category)) continue;
+    return index;
+  }
+  return -1;
+}
+
 function foldEvents(world, entries) {
   const currentVersion = world.acceptance ? world.acceptance.acceptanceVersion : null;
   const fold = {
@@ -1297,6 +1350,7 @@ function foldEvents(world, entries) {
     explorations: [],
     findings: new Map(),
     risks: [],
+    preauthorizations: [],
     drifts: [],
     baselines: [],
     declarations: [],
@@ -1305,6 +1359,8 @@ function foldEvents(world, entries) {
     cancelRecords: [],
     missingArtifacts: [],
   };
+  // 预授权名额用量（与 fold.preauthorizations 按 index 对齐；每验收版本独立配额）
+  const preauthUsedCounts = [];
   const seenEvents = new Map();
   const raisedFindings = new Map();
   const currentIncrementIds = world.increments
@@ -1412,7 +1468,7 @@ function foldEvents(world, entries) {
           }
         }
         raisedFindings.set(event.findingId, event.acceptanceVersion);
-        if (current) fold.findings.set(event.findingId, { raised: event, resolutions: [], inherited: false });
+        if (current) fold.findings.set(event.findingId, { raised: event, resolutions: [], reaffirmations: [], inherited: false });
         break;
       }
       case "FindingResolved": {
@@ -1423,6 +1479,30 @@ function foldEvents(world, entries) {
         if (current && finding) finding.resolutions.push(event);
         break;
       }
+      case "ResolutionReaffirmed": {
+        if (!raisedFindings.has(event.findingId)) {
+          fail(`${lineLabel} 试图重认领尚未出现的 finding ${event.findingId}。`, `先追加对应 FindingRaised；若 id 写错，修正 ${event.findingId} 后重试。`);
+        }
+        const finding = fold.findings.get(event.findingId);
+        if (current && finding) {
+          // 重认领必须锚定该 finding 在本版本内的既有 resolution——防凭空 resolve
+          //（跨版本的 resolution 不是重认领依据：验收版本递增后应重新 FindingResolved）
+          const origin = finding.resolutions.find((resolution) => resolution.eventId === event.originalResolutionEventId);
+          if (!origin) {
+            fail(
+              `${lineLabel} 的 originalResolutionEventId 不指向 finding ${event.findingId} 在本版本内的 FindingResolved。`,
+              `以 evaluate 输出的 reaffirmableFindings[].originalResolutionEventIds 中的值重试；该 finding 从未在本版本内 resolved 时走 FindingResolved 而非重认领。`,
+            );
+          }
+          finding.reaffirmations.push(event);
+        }
+        break;
+      }
+      case "RiskPreauthorized":
+        // 持久事实，不按版本/revision 过滤；shape 层已强制 user-explicit 与 non-blocker 上限
+        fold.preauthorizations.push(event);
+        preauthUsedCounts.push(0);
+        break;
       case "AssuranceRevisionDrift":
         fold.drifts.push(event);
         break;
@@ -1460,6 +1540,7 @@ function foldEvents(world, entries) {
                 artifact: `evidence/inherited-${inherited.findingId}.md`,
               },
               resolutions: [],
+              reaffirmations: [],
               inherited: true,
             });
           }
@@ -1500,6 +1581,23 @@ function foldEvents(world, entries) {
               if (requirement && !requirement.riskAcceptable) {
                 fail(`finding ${event.targetId} 关联的需求 ${requirementId} 不允许接受风险。`, "不要接受该 finding 风险；修复问题并追加 FindingResolved，或递增验收版本重新裁决风险策略。");
               }
+            }
+            // DEV 代：standing-authorization 的风险接受必须落在预授权范围内（名额按事件流
+            // 顺序贪心消耗；版本递增后旧消耗不再计数——每个验收版本独立配额）
+            if (event.confirmation === "standing-authorization") {
+              const matched = matchPreauthorization(
+                fold.preauthorizations,
+                preauthUsedCounts,
+                finding.raised.category,
+                finding.raised.severity,
+              );
+              if (matched < 0) {
+                fail(
+                  `finding ${event.targetId} 的 standing 风险接受无预授权覆盖（类别 ${finding.raised.category}、severity ${finding.raised.severity} 或名额已耗尽）。`,
+                  `由用户执行 ${GATE_COMMAND} preauthorize-risk 追加覆盖范围或名额后重试；或该 finding 改用 --confirmation user-explicit 由用户亲自接受。`,
+                );
+              }
+              preauthUsedCounts[matched] += 1;
             }
           }
           fold.risks.push(event);
@@ -1627,8 +1725,12 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   }
 
   // 发现状态：defect 未决阻 accepted；boundary 未经确认阻 accepted
-  const openFindings = [...fold.findings.values()]
-    .filter((finding) => !finding.resolutions.some(currentRevision))
+  // DEV 代：resolved 判定 = 当前 revision 上有 resolution 或重认领（ResolutionReaffirmed）——
+  // 修复提交使旧 resolution 失效后，assurance 核对原修复仍有效即可重认领，无须重跑全量取证
+  const openFindingEntries = [...fold.findings.values()].filter(
+    (finding) => !finding.resolutions.some(currentRevision) && !finding.reaffirmations.some(currentRevision),
+  );
+  const openFindings = openFindingEntries
     .map((finding) => ({
       findingId: finding.raised.findingId,
       category: finding.raised.category,
@@ -1637,6 +1739,19 @@ function buildVerdict(world, revision, revisionSource = "computed") {
       inherited: finding.inherited,
       artifact: finding.raised.artifact,
       riskAccepted: false,
+    }));
+  // DEV 代收敛出口：未决但有本版本历史 resolution 的 finding——典型场景是修复批次之间的
+  // revision 前进使已修项失效回 open。independent-assurance-dev 逐条核对（原修复 commit 在
+  // 当前 HEAD 祖先内、关联增量测试当前 revision 复跑绿）后批量 ResolutionReaffirmed。
+  const reaffirmableFindings = openFindingEntries
+    .filter((finding) => finding.resolutions.length > 0)
+    .map((finding) => ({
+      findingId: finding.raised.findingId,
+      category: finding.raised.category,
+      severity: finding.raised.severity,
+      requirementIds: [...finding.raised.requirementIds],
+      originalResolutionEventIds: finding.resolutions.map((resolution) => resolution.eventId),
+      lastResolvedRevision: finding.resolutions[finding.resolutions.length - 1].revision,
     }));
   const findingRiskById = new Map(
     fold.risks
@@ -1850,6 +1965,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     requirements,
     implementedIncrementIds,
     openFindings,
+    reaffirmableFindings,
     nonRequiredFailures,
     driftChain: drift,
     evidenceManifestSha256,
@@ -2224,6 +2340,8 @@ function isTaskLevelEventType(type) {
     "RevisionBaselineConfirmed",
     "PolicyUpgraded",
     "AssuranceRevisionDrift",
+    // DEV 代：授权声明先于验收包存在（托管开始前登记），任务级事件形态
+    "RiskPreauthorized",
   ].includes(type);
 }
 
@@ -3058,6 +3176,53 @@ function commandAppend(args) {
   });
 }
 
+// DEV 代收敛机制：用户预先声明可由 standing-authorization 接受的 finding 范围。
+// 安全边界（shape 层与 shape 后校验双保险）：仅 finding 目标生效、severity 上限恒
+// non-blocker（blocker 永不可预授权——出现 blocker 的出路只有修复或用户亲自接受）、
+// 名额必填且按事件流顺序消耗（每个验收版本独立配额）。
+function commandPreauthorizeRisk(args) {
+  const options = parseOptions(args, {
+    required: ["task-dir", "categories", "max-findings", "summary", "credential"],
+    optional: [],
+  });
+  const categories = options.categories
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+  if (categories.length === 0) {
+    fail("--categories 为空。", "逗号分隔登记策略分类（如 defect,boundary），至少一项后重试。");
+  }
+  const maxFindings = Number.parseInt(options["max-findings"], 10);
+  if (!Number.isInteger(maxFindings) || maxFindings < 1) {
+    fail("--max-findings 须为正整数。", "登记可消耗的名额上限（该授权下允许的 standing 接受累计数）后重试。");
+  }
+  withEventsLock(options["task-dir"], () => {
+    const world = loadWorld(options["task-dir"], { requirePackage: false });
+    if (world.policy === null) {
+      fail("策略快照缺失，无法校验预授权分类词表。", "先 set-intent 与 snapshot-policy 固定策略快照，再登记预授权。");
+    }
+    for (const category of categories) {
+      if (policyFindingCategory(world.policy, category) === undefined) {
+        fail(`--categories 含未登记分类 ${category}。`, "只允许策略 finding-categories.json 词表内的分类（新增分类走策略升级 upgrade-policy）。");
+      }
+    }
+    const privateKey = loadCredentialPrivateKey(world, options.credential, "user");
+    const event = {
+      type: "RiskPreauthorized",
+      actor: "user",
+      // 持久事件：验收包出现前也允许登记（托管开始前的授权声明）
+      acceptanceVersion: world.acceptance !== null ? world.acceptance.acceptanceVersion : 0,
+      revision: computeRevision(world.task.projectRoot),
+      summary: options.summary,
+      categories,
+      maxSeverity: "non-blocker",
+      maxFindings,
+      confirmation: "user-explicit",
+    };
+    printJson(appendEvent(world, event, privateKey));
+  });
+}
+
 function commandAcceptRisk(args) {
   const options = parseOptions(args, {
     required: ["task-dir", "target-type", "target-id", "confirmation", "summary", "credential"],
@@ -3109,6 +3274,36 @@ function commandAcceptRisk(args) {
       const categoryPolicy = policyFindingCategory(world.policy, finding.category);
       if (categoryPolicy !== undefined && categoryPolicy.riskAcceptAllowed === false) {
         fail(`finding ${options["target-id"]} 所属分类 ${finding.category} 不允许风险接受（策略 riskAcceptAllowed=false）。`, `该类发现的出路是 assurance 对照论证后确认（FindingResolved），或递增验收版本缩减判据。`);
+      }
+      // DEV 代：standing-authorization 仅在预授权覆盖内放行（与 fold 重放校验同规则同口径）
+      if (options.confirmation === "standing-authorization") {
+        const preauthUsedCounts = [];
+        for (const preauthorization of world.fold.preauthorizations) preauthUsedCounts.push(0);
+        // 名额口径与 fold 重放一致：按事件流顺序重放 standing 接受，先占先得
+        for (const risk of world.fold.risks) {
+          if (risk.confirmation !== "standing-authorization" || risk.targetType !== "finding") continue;
+          const riskFinding = world.fold.findings.get(risk.targetId);
+          if (!riskFinding) continue;
+          const matched = matchPreauthorization(
+            world.fold.preauthorizations,
+            preauthUsedCounts,
+            riskFinding.raised.category,
+            riskFinding.raised.severity,
+          );
+          if (matched >= 0) preauthUsedCounts[matched] += 1;
+        }
+        const matched = matchPreauthorization(
+          world.fold.preauthorizations,
+          preauthUsedCounts,
+          finding.category,
+          finding.severity,
+        );
+        if (matched < 0) {
+          fail(
+            `finding ${options["target-id"]} 超出风险预授权范围（类别 ${finding.category}、severity ${finding.severity} 或名额已耗尽）。`,
+            `由用户执行 ${GATE_COMMAND} preauthorize-risk --task-dir <dir> --categories <类别> --max-findings <n> --summary <理由> --credential <user credentialId> 追加覆盖后重试；或改用 --confirmation user-explicit 由用户亲自接受。`,
+          );
+        }
       }
       if (Object.hasOwn(options, "gap-id") && options["gap-id"] !== options["target-id"]) {
         fail(`--gap-id 与 --target-id 不一致：finding 目标的缺口 id 即 findingId。`, `去掉 --gap-id，或将其改为与 --target-id 相同的值后重试。`);
@@ -3598,6 +3793,9 @@ function main() {
         break;
       case "accept-risk":
         commandAcceptRisk(commandArgs);
+        break;
+      case "preauthorize-risk":
+        commandPreauthorizeRisk(commandArgs);
         break;
       case "evaluate":
         commandEvaluate(commandArgs);

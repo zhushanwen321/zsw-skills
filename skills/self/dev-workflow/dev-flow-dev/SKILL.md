@@ -3,7 +3,7 @@ name: dev-flow-dev
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 2.4.0
+version: 2.5.0
 description: >-
   Use when 一份完整设计包（tech-design-dev 产出：设计文档 + 双格式 impl-plan + 审查终态）
   需要落地为已验收代码。纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 →
@@ -60,6 +60,27 @@ description: >-
 
 段间不设用户确认（gate 驱动连续推进）；熔断终态（blocked / stuck / core-failed / contested / gate-a-failed / review-failure / fix-failure）停回主 agent 按 flow/execute.md 与 flow/consistency-review.md 的终态处置表处置——core-failed / gate-a-failed 在 D3/D2 是修复循环不收敛的出口（常态失败已由轮内聚合修复消化），终态自带归因材料（聚合清单 / 分诊报告 / disputed 反证）。
 
+### D3 验收 wrapper 模板（DEV 代，主 agent 编译 verify 节点时照抄）
+
+两场实跑证实 D3 首发失败集中在此处，三个坑全部来自引擎接口与直觉相反：引擎以 `node <script>` 直跑 wrapper、**不传任何参数**；`node` 从 stdin 读脚本时 `__dirname` 是 `.`（不是脚本目录）；产物目录不存在时引擎按「节点失败」判定（必须脚本自建）。模板（`<ARTIFACTS_DIR>` 与测试命令写死为绝对路径）：
+
+```js
+const fs = require("fs");
+const path = require("path");
+const { spawnSync } = require("child_process");
+// 产物目录必须脚本自建（引擎不建；exec-plan 里也要存这个绝对路径，不是相对路径）
+const ARTIFACTS_DIR = "<taskDir>/evidence/<node-id>-artifacts";
+fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
+const run = spawnSync("<program>", [<args>], { encoding: "utf8", timeout: <timeoutMs> });
+// summary.jsonl 是 inspect 节点的核对依据：passed 与 skipped 必须分开统计（不可从 exitCode 推断）
+const counts = { passed: <数>, failed: <数>, skipped: <数> };
+fs.appendFileSync(path.join(ARTIFACTS_DIR, "summary.jsonl"), JSON.stringify({ node: "<node-id>", ...counts, exitCode: run.status }) + "\n");
+process.stdout.write(`PASS ${counts.passed} FAIL ${counts.failed} SKIP ${counts.skipped}\n`);
+process.exitCode = run.status === 0 ? 0 : 1;
+```
+
+要点：wrapper 落盘位置在交付体系产物区（skill-data），不进答卷/项目仓；测试日志同时落 `ARTIFACTS_DIR` 供 inspect 核对；stats 行输出 `PASS n FAIL n SKIP n`（数字分开，禁止只打 ok）。
+
 ## 核心原则
 
 1. **编排者零编码**：主 agent 只编译、发起、裁决、commit（workflow 形态下 commit 也归引擎）；一切 src/tests 编写修改走 subagent/节点
@@ -69,6 +90,7 @@ description: >-
 5. **git 单点**：subagent 禁止一切 git 写；workflow 形态下 commit 由引擎 world.run 执行（精确路径 add，禁 -A），手工形态下由主 agent 执行；文档类同步改动禁止单独成笔——随触发它的单元同笔提交（files_changed 含文档路径即同笔）；确因验收结论后置的攒批成一笔，禁止一文档一笔
 6. **基线先行**：exec-plan.json 落盘即基线（产物在 `~/.agents/skill-data/`，HOME 下天然不入 git）；执行态事实源 = `<name>.status.json`
 7. **单波次交付**：一个设计包 = 一次实施流程，实际执行只有一个波次；未经用户明确指示，禁止按「波次/批次」把一个 impl-plan 拆成多次独立实施（每波各自走 D1-D6 完整流程）。允许的拆分 = impl-plan 内部的单元分组与 DAG 并行（多 subagent / 多组执行，W2 一次承接全部单元）；分期交付仅随用户明确指示出现
+8. **独立保证重发纪律（DEV 代）**：`independent-assurance-dev` 终态 message 携带三档停修判据结论（must-fix 清零与否、攒批项清单）与累计轮次。重发条件 = 判据未满足（must-fix 未清零）；must-fix 清零后的攒批项（suggestion+info）走最后一波统一修复，修完循环退出——不再为攒批项单独发起取证轮（三档规则见 delivery-dev SKILL「收敛机制」节）。每次重发前用统计入口核对本次交付的累计成本；连续重发超过 3 轮必须向用户披露累计轮次与 token 再决策（两场实跑教训：无判据重发曾连续 14 轮、约 1.8 亿 token）。
 
 ## 运行记录（防丢失）[MANDATORY]
 

@@ -967,3 +967,119 @@ test("runsFromIgnoredArtifacts=true 对照：mode=auto-git 不豁免，缺干净
   assert.equal(verdict.missing.assuranceCompleted, true, "auto-git 模式从 ignored 产物运行必须附干净构建");
   assert.equal(verdict.state, "candidate", "缺干净构建应停 candidate 而非错误宣告 accepted");
 });
+
+// ── DEV 代收敛机制（ResolutionReaffirmed / RiskPreauthorized）──
+
+test("DEV 收敛：ResolutionReaffirmed 在新 revision 恢复已修发现的 resolved 态；reaffirmableFindings 提供核对清单", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  assertOk(fx.gate("validate-acceptance", "--task-dir", fx.taskDir));
+  assertOk(fx.gate("snapshot-policy", "--task-dir", fx.taskDir));
+  const rev1 = currentRevision(fx);
+  raiseFinding(fx, rev1, "F-A1", "defect", "blocker", ["R1"]);
+  const resArtifact = evidenceFile(fx.taskDir, "resolve-a1.md");
+  const resolved = appendEvent(fx, {
+    type: "FindingResolved", actor: "assurance", acceptanceVersion: 1, revision: rev1,
+    summary: "已修复 F-A1", findingId: "F-A1", artifact: resArtifact.artifact,
+  }, "assurance");
+  assertOk(resolved);
+  const resolutionEventId = JSON.parse(parseStdout(resolved)).eventId;
+
+  // rev1 上：resolved、不列入 reaffirmable
+  assert.equal(evaluate(fx).openFindings.filter((f) => f.findingId === "F-A1").length, 0);
+  assert.equal(evaluate(fx).reaffirmableFindings.filter((f) => f.findingId === "F-A1").length, 0);
+
+  // 修复提交 → revision 前进：旧 resolution 失效回 open，列入 reaffirmable（带原 resolution eventId）
+  writeFileSync(join(fx.projectDir, "b.txt"), "fix\n");
+  spawnSync("git", ["add", "."], { cwd: fx.projectDir });
+  spawnSync("git", ["commit", "-qm", "fix F-A1"], { cwd: fx.projectDir });
+  let verdict = evaluate(fx);
+  assert.equal(verdict.openFindings.filter((f) => f.findingId === "F-A1").length, 1, "revision 前进后旧 resolution 应失效");
+  const reaffirmable = verdict.reaffirmableFindings.find((f) => f.findingId === "F-A1");
+  assert.ok(reaffirmable, "F-A1 应列入 reaffirmableFindings");
+  assert.deepEqual(reaffirmable.originalResolutionEventIds, [resolutionEventId]);
+  assert.equal(reaffirmable.lastResolvedRevision, rev1);
+
+  // 重认领：锚定原 resolution 的 eventId
+  const basisArtifact = evidenceFile(fx.taskDir, "reaffirm-a1.md");
+  assertOk(appendEvent(fx, {
+    type: "ResolutionReaffirmed", actor: "assurance", acceptanceVersion: 1, revision: currentRevision(fx),
+    summary: "原修复仍有效（本轮增量测试全绿）", findingId: "F-A1",
+    originalResolutionEventId: resolutionEventId,
+    basis: "本轮逐增量测试在当前 revision 复跑全部 exit 0", artifact: basisArtifact.artifact,
+  }, "assurance"));
+  verdict = evaluate(fx);
+  assert.equal(verdict.openFindings.filter((f) => f.findingId === "F-A1").length, 0, "重认领后 F-A1 不再 open");
+  assert.equal(verdict.reaffirmableFindings.filter((f) => f.findingId === "F-A1").length, 0, "已不 open 的不再列 reaffirmable");
+
+  // 反例：锚定不存在的 resolution → fold 拒绝
+  const bad = appendEvent(fx, {
+    type: "ResolutionReaffirmed", actor: "assurance", acceptanceVersion: 1, revision: currentRevision(fx),
+    summary: "x", findingId: "F-A1", originalResolutionEventId: `nonexistent-${resolutionEventId}`,
+    basis: "x", artifact: basisArtifact.artifact,
+  }, "assurance");
+  assertFailure(bad);
+  assert.match(bad.stderr, /originalResolutionEventId/);
+});
+
+test("DEV 收敛：风险预授权——standing 接受按类别/名额放行；blocker 与 requirement 目标永不可预授权；重放校验一致", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  assertOk(fx.gate("validate-acceptance", "--task-dir", fx.taskDir));
+  assertOk(fx.gate("snapshot-policy", "--task-dir", fx.taskDir));
+  const rev = currentRevision(fx);
+  raiseFinding(fx, rev, "F-A1", "defect", "non-blocker", ["R2"]);
+  raiseFinding(fx, rev, "F-A2", "defect", "non-blocker", ["R2"]);
+  raiseFinding(fx, rev, "F-A3", "defect", "blocker", ["R2"]);
+  const accept = (targetType, targetId, confirmation, extra = []) =>
+    fx.gate("accept-risk", "--task-dir", fx.taskDir, "--target-type", targetType, "--target-id", targetId,
+      "--confirmation", confirmation, "--summary", "s", "--credential", fx.creds.user, "--revision", rev, ...extra);
+
+  // 预授权前 standing 被拒
+  assertFailure(accept("finding", "F-A1", "standing-authorization"));
+  // 登记（user 凭据；confirmation 由命令固定 user-explicit）
+  assertOk(fx.gate("preauthorize-risk", "--task-dir", fx.taskDir, "--categories", "boundary", "--max-findings", "5",
+    "--summary", "boundary 预授权", "--credential", fx.creds.user));
+  // 类别不匹配（F-A1 是 defect）→ 拒
+  assertFailure(accept("finding", "F-A1", "standing-authorization"));
+  // 追加 defect 授权，名额 1
+  assertOk(fx.gate("preauthorize-risk", "--task-dir", fx.taskDir, "--categories", "defect", "--max-findings", "1",
+    "--summary", "suggestion 档预授权", "--credential", fx.creds.user));
+  assertOk(accept("finding", "F-A1", "standing-authorization"), "defect+non-blocker 命中预授权应通过");
+  // 名额耗尽 → 拒
+  assertFailure(accept("finding", "F-A2", "standing-authorization"));
+  // blocker：standing 永拒（分级安全底线）
+  assertFailure(accept("finding", "F-A3", "standing-authorization"));
+  // requirement 目标（证据缺口）standing 永拒
+  assertFailure(accept("requirement", "R1", "standing-authorization", ["--gap-id", "0".repeat(64)]));
+  // user-explicit 通道不受预授权影响（blocker 用户可显式接受）
+  assertOk(accept("finding", "F-A3", "user-explicit"), "user-explicit 不依赖预授权");
+  // fold 重放一致性：绕过命令直接 append 无覆盖的 standing RiskAccepted → fail
+  const bad = appendEvent(fx, {
+    type: "RiskAccepted", actor: "user", acceptanceVersion: 1, revision: rev,
+    summary: "x", targetType: "finding", targetId: "F-A2", gapId: "F-A2",
+    evidenceState: "failed", confirmation: "standing-authorization",
+  }, "user");
+  assertFailure(bad);
+  assert.match(bad.stderr, /预授权/);
+});
+
+test("DEV 收敛：preauthorize-risk 输入校验——未登记分类与非法名额被拒；maxSeverity 恒 non-blocker", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  assertOk(fx.gate("validate-acceptance", "--task-dir", fx.taskDir));
+  assertOk(fx.gate("snapshot-policy", "--task-dir", fx.taskDir));
+  assertFailure(fx.gate("preauthorize-risk", "--task-dir", fx.taskDir, "--categories", "nonexistent-cat",
+    "--max-findings", "3", "--summary", "s", "--credential", fx.creds.user));
+  assertFailure(fx.gate("preauthorize-risk", "--task-dir", fx.taskDir, "--categories", "defect",
+    "--max-findings", "0", "--summary", "s", "--credential", fx.creds.user));
+  const wrongRole = fx.gate("preauthorize-risk", "--task-dir", fx.taskDir, "--categories", "defect",
+    "--max-findings", "3", "--summary", "s", "--credential", fx.creds.assurance);
+  assertFailure(wrongRole, 1);
+  const ok = fx.gate("preauthorize-risk", "--task-dir", fx.taskDir, "--categories", "defect,boundary",
+    "--max-findings", "2", "--summary", "s", "--credential", fx.creds.user);
+  assertOk(ok);
+  const event = JSON.parse(parseStdout(ok));
+  assert.equal(event.maxSeverity, "non-blocker", "severity 上限硬编码 non-blocker（blocker 永不可预授权）");
+  assert.equal(event.confirmation, "user-explicit");
+});

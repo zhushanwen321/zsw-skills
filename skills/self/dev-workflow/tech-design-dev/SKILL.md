@@ -3,7 +3,7 @@ name: tech-design-dev
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 2.5.1
+version: 2.6.0
 description: >-
   Use when 在已批准目标与验收（delivery-dev 产出）的约束下三阶段推敲方案并产出完整设计包：
   写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan 双格式），用户确认后登记方案包
@@ -107,6 +107,8 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 | pi（subagent-workflow extension） | 宿主为 pi coding agent、workflow 工具可用 | 本 skill 安装位置上级的 `../workflows/pi/tech-review-loop-dev.js`——复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run tech-review-loop-dev --args designDoc=<路径> projectRoot=<路径> maxRounds=<N>`（数组型参数 reviewers 不支持——--args 值全字符串，用缺省四件模板） |
 
 **两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers?, taskId?, executionId?, sampleType?, attempt? }`——designDoc = 设计目录绝对路径（或其渲染 md 路径，workflow 内部归一为设计目录；reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件 = 方向审 `tech-design-direction-review` + 三审 `tech-design-review` / `tech-design-impact-review` / `tech-design-simplicity-review`；attempt = 重发起序号——环境失败族重发时递增，防轮次产物覆盖；缺省时自动检测已有产物并递增）；终态：converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 终态处置表）。
+
+**关键决策分级收敛（DEV 代，裁决规则 2026-11-15）**：聚合裁决对每条聚合项标注 impact 分级——critical（影响关键 ADR / 关键设计决策：分型、公理/不变量、问题定义、方案主干、关键决策的前提失实或矛盾、影响决策走向的事实错误）进修复循环参与收敛计数；minor（不影响关键决策：登记缺口、产物表完备性、非关键措辞、实施期探针补登记）不进循环，跨轮收集，converged 或触顶时统一落盘 `minor-findings.json`——主 agent 最后一波统一处理或登记放行。收敛判据只看 critical（两场实跑教训：patch 档前提层问题与关键决策问题等权计数时，T2 十轮触顶、约 4 亿 token 仍未收敛）。触顶/stuck 终态的 `remaining` 逐条带 `guidance`（最后一次聚合的可执行处方）与 `reportRefs`（报告锚点）——主 agent 按清单直接处置后登记 dispositions，不必再派复审 run；final.json 续跑前自动转存 `final.attempt-N.json`（防跨 run 轨迹覆盖）。
 
 **阶段事件观测（可选）**：`taskId` 与 `executionId` 同时传入即启用——每次执行的阶段边界（setup / review / aggregate / fix / finalize）逐行记录到 `~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl`，skill 恒 `tech-design-dev`（canonical 技能名，非 workflow 脚本名）、stage 恒 `T2`。task_id = 本次设计包任务标识（建议 = 设计包 `<name>`，进 dev-flow-dev 执行时同一 task_id 延续共用）；execution_id = 本次审查发起标识（建议 `T2-<发起时点短时间戳>`）。两参都不传 = 观测关闭、业务照常；只传其一 = 告警并关闭；观测写失败只告警不改终态。事件契约与 D0/D4/D6 外部步骤的记录命令见 dev-flow-dev SKILL 的「阶段事件观测」节（`~/.agents/skills/dev-flow-dev/SKILL.md`）。耗时与 token 统计：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --skill tech-design-dev`（阶段窗口来自观测事件、token 经 `agent-session-reader usage` 双平台重算，口径详见该命令 `--help` 与 dev-flow-dev SKILL「统计入口」节）。
 

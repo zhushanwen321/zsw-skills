@@ -144,6 +144,11 @@ interface AggregatedItem {
   title: string;
   /** 合并后的可执行修复操作清单（改哪个章节 JSON 哪个条目、补什么内容、跑什么检索） */
   guidance: string;
+  /** DEV 代关键决策分级（裁决规则 2026-11-15）：critical=影响关键 ADR/关键设计决策（分型、
+   *  公理/不变量、问题定义、方案主干、关键决策的前提失实或矛盾、影响决策走向的事实错误），
+   *  进修复循环参与收敛计数；minor=不影响关键决策（登记缺口、产物表完备性、非关键措辞、
+   *  实施期探针补登记），不进循环，跨轮收集至 minor-findings.json 最后一波统一处理 */
+  impact: "critical" | "minor";
 }
 
 interface AggregationOutcome {
@@ -166,8 +171,13 @@ interface LoopResult {
   directionOneliner: string;
   /** 每轮三报告 must-fix 总和轨迹（下标 0 = 第 1 轮） */
   mustFixTrajectory: number[];
-  /** 终态仍未收敛/未复核的条目（stuck/max-rounds 残余风险矩阵的输入） */
-  remaining: { id: string; title: string; status: string; attackHints: string }[];
+  /** 终态仍未收敛/未复核的条目（stuck/max-rounds 残余风险矩阵的输入）；
+   *  DEV 代加 guidance/reportRefs（最后一次聚合的可执行处方与报告锚点——主 agent
+   *  按清单直接处置，不必再派复审 run 回读报告） */
+  remaining: { id: string; title: string; status: string; attackHints: string; guidance: string; reportRefs: string[] }[];
+  /** DEV 代关键决策分级：跨轮收集的 minor 项（不影响关键决策，不进循环）；
+   *  空数组 = 无 minor 项或未进入聚合阶段 */
+  minorFindings: { round: number; refs: string[]; title: string; guidance: string }[];
   /** escalated 时的方案性卡点（其余终态为 null） */
   blocked: { items: string[]; reason: string } | null;
   /** 一句话终态说明；失败态与停回态含恢复动作/停回通道 */
