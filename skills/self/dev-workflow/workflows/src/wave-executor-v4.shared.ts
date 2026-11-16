@@ -1577,6 +1577,7 @@ async function executeInspectNode(node: PlanNode): Promise<void> {
 const REVIEW_PERSONA =
   "你是过程审查 reviewer：按任务书对指定单元的增量改动做对抗审查（主干走偏 / 模块划分与实现 / 过度设计 / 设计遗漏反查），" +
   "范围以任务书给定的 diff 与直接调用方为限，排除清单内的已知中间态不得报为缺陷；" +
+  "共享状态 / 异步时序 / 外部交互的高风险单元须核对测试实际构造了入口、初始状态、故障与时序（行为证据），不只核对测试清单是否存在；" +
   "每条问题给 file:line 证据与影响说明，无问题返回空 problems；只读代码与文档，不改任何文件；" +
   NO_ASK_RULE;
 

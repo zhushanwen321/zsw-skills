@@ -531,7 +531,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "4.3.0"; // 构建注入自 dev-flow-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.3.1"; // 构建注入自 dev-flow-v4/SKILL.md frontmatter version（唯一权威）
 // ── W2 wave-executor-v4 ──
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
@@ -1888,6 +1888,7 @@ async function executeInspectNode(node) {
 // ── D1 过程审查节点（渐进式 review）：机器检查三态 + reviewer 按需触发；过程记录独立于交付事件流 ──
 const REVIEW_PERSONA = "你是过程审查 reviewer：按任务书对指定单元的增量改动做对抗审查（主干走偏 / 模块划分与实现 / 过度设计 / 设计遗漏反查），" +
     "范围以任务书给定的 diff 与直接调用方为限，排除清单内的已知中间态不得报为缺陷；" +
+    "共享状态 / 异步时序 / 外部交互的高风险单元须核对测试实际构造了入口、初始状态、故障与时序（行为证据），不只核对测试清单是否存在；" +
     "每条问题给 file:line 证据与影响说明，无问题返回空 problems；只读代码与文档，不改任何文件；" +
     NO_ASK_RULE;
 function validateReviewResult(v) {
