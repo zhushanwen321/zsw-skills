@@ -68,7 +68,7 @@
         { "stage": "t1-mechanism-reconciliation", "mechanism": "机制对账：归类机制公式对照断言自然语义，构造满足机制描述却违反断言的反例（两条通道同现时的归类判定）。" }
       ],
       "interceptionAnchors": [
-        { "mechanismId": "acceptance-qualifier-counterexample", "doc": "skills/self/dev-workflow/delivery-v4/references/acceptance.md", "anchor": "每个限定条件至少一个可实际构造的反例场景" },
+        { "mechanismId": "acceptance-qualifier-counterexample", "doc": "skills/self/dev-workflow/delivery-v4/references/acceptance.md", "anchor": "每个限定条件有反例场景或不适用理由" },
         { "mechanismId": "t1-assertion-mechanism-reconciliation", "doc": "skills/self/dev-workflow/tech-design-v4/flow/write.md", "anchor": "每条断言与 s3 机制对账，检查是否存在满足机制却违反断言的反例" }
       ]
     },

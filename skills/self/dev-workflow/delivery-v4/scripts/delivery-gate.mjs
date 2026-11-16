@@ -2082,7 +2082,11 @@ function buildVerdict(world, revision, revisionSource = "computed") {
       } else if (event.explorationEventId !== "none" && !allExplorationIds.has(event.explorationEventId)) {
         return false;
       }
-    } else if (event.explorationEventId !== "none" && !allExplorationIds.has(event.explorationEventId)) {
+    } else if (usesAssertions
+      ? // recheck 必须引用既有探索（合并稿 §6：recheck 引用已有探索结果并记录定向复核依据）——
+        // schema 2 全部任务都有候选探索证据，"none" 会把定向复核降级成无探索依据的复核
+        !allExplorationIds.has(event.explorationEventId)
+      : acceptance.exploratoryReview === "required" && !allExplorationIds.has(event.explorationEventId)) {
       return false;
     }
     if (requiresCleanBuild) {

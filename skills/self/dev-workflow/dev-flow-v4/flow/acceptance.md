@@ -35,7 +35,7 @@ V4 schema 2 交付任务在 D3 验收执行后、D4 登记前，必须运行 `in
 - 每条 must-fix 必须有回归测试和受影响一致性复核；修复后重跑受影响场景与全量确定性测试，并在新 revision 重新 explore-only。
 - 非 must-fix 必须附 consequenceRefutation，不能只按判据字面合规降级。
 - D4 的 ImplementationRecorded 由 delivery-gate 强制检查：当前 revision 必须有 ExplorationCompleted 且 must-fix 清零，否则拒绝登记。
-- schema 1 老任务不触发本阶段；探索性审查为 not-required 的 schema 2 任务按验收声明免除 explore-only，但断言与测试绑定门仍需通过。
+- schema 1 老任务不触发本阶段；schema 2 全部任务（与 exploratoryReview 风险字段无关）在 D4 登记前必须完成当前 revision 的 explore-only——delivery-gate 对 schema 2 的 ImplementationRecorded 无条件要求当前 revision 的 ExplorationCompleted，没有 not-required 豁免分支。
 
 ## D4 收尾（主 agent，不 workflow 化）
 

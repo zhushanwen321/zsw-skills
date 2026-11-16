@@ -12,6 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -208,6 +209,44 @@ test("process-failed 早停：coverage 登记后第 11 条 must-fix 已超限 �
     assert.ok(events.some((e) => e.type === "EvidenceRecorded"), "coverage 证据应已登记");
     assert.ok(!events.some((e) => e.type === "ExplorationCompleted"), "不得登记探索事件");
     assert.ok(!events.some((e) => e.type === "AssuranceCompleted"), "不得登记 AssuranceCompleted");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("full 探索未 due：已有候选探索证据时不派 explorer，AssuranceCompleted 引用既有探索事件（MF-1-20 死锁回归）", async () => {
+  const home = tmpHome();
+  try {
+    const s = makeScaffold(home, {
+      verdictQueue: [
+        implementingVerdict,
+        // coverage 发现登记后的早停检查：正常态
+        { state: "candidate", revision: "rev-1", acceptanceVersion: 1, missing: { incrementIds: [] }, openFindings: [] },
+        // finalize evaluate
+        { state: "accepted", revision: "rev-1", acceptanceVersion: 1, missing: { incrementIds: [] }, openFindings: [] },
+      ],
+    });
+    // 候选反例审查阶段的探索（晚于批准登记、artifact 在盘且哈希一致）：full 的
+    // explorationDue=false——不得重新开放探索，且必须引用该事件而非 "none"
+    const explorationArtifact = join(s.taskDir, "evidence", "candidate-exploration.md");
+    writeFileSync(explorationArtifact, "# 候选探索报告（桩）\n");
+    const explorationSha = createHash("sha256").update(readFileSync(explorationArtifact, "utf8")).digest("hex");
+    writeFileSync(join(s.taskDir, "events.jsonl"), [
+      JSON.stringify({ seq: 1, eventId: "evt-approval", recordedAt: "2026-01-01T00:00:00.000Z", signature: "stub", type: "AcceptanceApproved", actor: "user", acceptanceVersion: 1, revision: "rev-1", summary: "批准" }),
+      JSON.stringify({ seq: 2, eventId: "evt-design", recordedAt: "2026-01-01T00:00:00.000Z", signature: "stub", type: "DesignApproved", actor: "user", acceptanceVersion: 1, revision: "rev-1", summary: "方案" }),
+      JSON.stringify({ seq: 3, eventId: "evt-candidate-exploration", recordedAt: "2026-01-01T00:00:00.000Z", signature: "stub", type: "ExplorationCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-1", summary: "候选探索", dimensions: ["smoke"], coverageManifestSha256: explorationSha, artifactSha256: explorationSha, artifact: explorationArtifact }),
+      "",
+    ].join("\n"));
+    const stub = assuranceAgentStub(s);
+    const { result, logs } = await runZcode(home, baseArgs(s), stub.impl);
+    assert.equal(result.terminated, "assurance-completed", `主路径应走通（logs: ${logs.join(" | ")}，message: ${result.message}）`);
+    assert.equal(stub.state.explorerCalls, 0, "已有候选探索证据且验收/设计未变化时不得重新派 explorer");
+    const events = readEvents(s.taskDir);
+    assert.ok(!events.some((e) => e.type === "ExplorationCompleted" && e.eventId !== "evt-candidate-exploration"), "不得新增开放探索事件");
+    const assurance = events.find((e) => e.type === "AssuranceCompleted");
+    assert.ok(assurance !== undefined, "应登记 AssuranceCompleted");
+    assert.equal(assurance.explorationEventId, "evt-candidate-exploration", "full 未派探索时必须引用既有探索事件（none 会被裁决器判无效）");
+    assert.equal(assurance.mode, "full");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

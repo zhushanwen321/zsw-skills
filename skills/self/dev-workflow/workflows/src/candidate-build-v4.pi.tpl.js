@@ -79,6 +79,25 @@ const artifact = { chart: () => {}, board: () => {}, markdown: async () => {}, f
 // ── 结果 schema 常量（ask 结构化返回契约；与 shared 的 interface 顶层字段/required 对齐——
 //    check-workflow-parity 维度 4 按字段名核对） ──
 
+// FindingDraft（builder 侧发现申报）——BuilderOutcome/ExplorationOutcome 的 findings
+// 条目一律复用本常量，不内联副本（内联副本会与 FindingDraft 契约分叉漏字段——pi 平台
+// schema 校验按本常量执行，漏字段会让合法返回被结构化校验拒收）
+const SCHEMA_FindingDraft = {
+  type: "object",
+  properties: {
+    summary: { type: "string", description: "缺陷现象与影响" },
+    requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
+    severity: { type: "string", enum: ["blocker", "non-blocker"], description: "blocker = 阻断该增量完成；non-blocker = 可继续" },
+    category: { type: "string", enum: ["defect", "boundary"], description: "defect=违反判据；boundary=设计边界申报（争议按 defect）" },
+    consequenceRefutation: { type: "string", description: "非 blocker 必填：否定其用户可观察后果的依据；禁止只按字面合规降级" },
+    consequenceRefutationType: { type: "string", enum: ["will-not-occur", "not-observable", "accepted-by-acceptance"], description: "非 blocker 必填：论证类型三择一（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许），先标类型再给依据" },
+    origin: { type: "string", enum: ["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"], description: "来源阶段" },
+    expectedStage: { type: "string", description: "该问题本应在哪个阶段被拦截" },
+    regressionTestRef: { type: "string", description: "回归测试标识" },
+  },
+  required: ["summary", "requirementIds", "severity"],
+};
+
 // builder（builder.md 角色）结构化返回：实现摘要与新发现（不分配 findingId，由引擎
 // 统一生成；不申报 verified——builder 的测试输出不是 verified 证据）
 const SCHEMA_BuilderOutcome = {
@@ -88,15 +107,7 @@ const SCHEMA_BuilderOutcome = {
     findings: {
       type: "array",
       description: "新发现清单（无则空数组；findingId 由引擎统一分配，不在此申报）",
-      items: {
-        type: "object",
-        properties: {
-          summary: { type: "string", description: "缺陷现象与影响" },
-          requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
-          severity: { type: "string", enum: ["blocker", "non-blocker"], description: "blocker = 阻断该增量完成；non-blocker = 可继续" },
-        },
-        required: ["summary", "requirementIds", "severity"],
-      },
+      items: SCHEMA_FindingDraft,
     },
   },
   required: ["summary", "findings"],
@@ -109,20 +120,7 @@ const SCHEMA_ExplorationOutcome = {
     dimensions: { type: "array", items: { type: "string" } },
     findings: {
       type: "array",
-      items: {
-        type: "object",
-        properties: {
-          summary: { type: "string" },
-          requirementIds: { type: "array", items: { type: "string" } },
-          severity: { type: "string", enum: ["blocker", "non-blocker"] },
-          category: { type: "string", enum: ["defect", "boundary"] },
-          consequenceRefutation: { type: "string" },
-          origin: { type: "string", enum: ["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"] },
-          expectedStage: { type: "string" },
-          regressionTestRef: { type: "string" },
-        },
-        required: ["summary", "requirementIds", "severity"],
-      },
+      items: SCHEMA_FindingDraft,
     },
   },
   required: ["summary", "dimensions", "findings"],

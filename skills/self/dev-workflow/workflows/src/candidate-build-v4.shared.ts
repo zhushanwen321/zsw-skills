@@ -571,6 +571,12 @@ for (let index = 0; index < increments.length; index += 1) {
     return failBuild(message, writtenFailurePath === "" ? failurePath : writtenFailurePath, salvageable);
   }
   const outcome = builderGuard.value;
+  // builder 与 explorer 是同一增量内的两个顺序长调用：循环头心跳只覆盖增量边界，此处
+  // 补中间点（与 ia/arl 同口径——把常见租约窗口缩到单次调用；残余窗口后果有界：接管后
+  // append 被代次复核拒之门外，响亮失败不双写）
+  if (leaseHeld) {
+    await runGate(gatePath, ["lease-heartbeat", "--project-root", projectRoot, "--run-id", leaseRunId]).catch(() => undefined);
+  }
 
   let testExitCode = 0;
   let testSummary = "当前增量未声明 testCommand";

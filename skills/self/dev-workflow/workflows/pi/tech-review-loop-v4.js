@@ -181,6 +181,7 @@ const SCHEMA_AggregatedItem = {
     guidance: { type: "string", description: "合并后的可执行修复操作清单（改哪个章节 JSON 哪个条目、补什么内容、跑什么检索）" },
     impact: { type: "string", enum: ["critical", "minor"], description: "V4 代关键决策分级：critical=影响关键 ADR/关键设计决策（分型、公理/不变量、问题定义、方案主干、关键决策前提失实或矛盾、影响决策走向的事实错误），进修复循环参与收敛计数；minor=不影响关键决策（登记缺口、产物表完备性、非关键措辞、实施期探针补登记），不进循环、跨轮收集至 minor-findings.json 最后一波统一处理" },
     consequenceRefutation: { type: "string", description: "minor 必须给出的行为后果否决论证：不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据" },
+    consequenceRefutationType: { type: "string", enum: ["will-not-occur", "not-observable", "accepted-by-acceptance"], description: "minor 必填：论证类型三择一（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许），先标类型再给依据" },
   },
   required: ["refs", "title", "guidance", "impact"],
 };
@@ -545,7 +546,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "4.1.0"; // 构建注入自 tech-design-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.1.1"; // 构建注入自 tech-design-v4/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // tech-review-loop-v4 — tech-design-v4 技能 W1 审查循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
@@ -895,6 +896,9 @@ function makeAggregationValidator(rawRefs) {
             if (it.impact === "minor" && (typeof it.consequenceRefutation !== "string" || it.consequenceRefutation.trim() === "")) {
                 errors.push(`items[${i}] 为 minor，必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据）`);
             }
+            if (it.impact === "minor" && it.consequenceRefutationType !== "will-not-occur" && it.consequenceRefutationType !== "not-observable" && it.consequenceRefutationType !== "accepted-by-acceptance") {
+                errors.push(`items[${i}] 为 minor，必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给依据（合并稿 §9）`);
+            }
         });
         const missing = rawRefs.filter((r) => !seen.has(r));
         if (missing.length > 0) {
@@ -907,7 +911,7 @@ function makeAggregationValidator(rawRefs) {
 function renderAggregatedMd(round, items) {
     const lines = [`# 聚合清单（第 ${round} 轮）`, ""];
     items.forEach((it, i) => {
-        lines.push(`## AG-${i + 1} ${it.title}`, `- 原始 ref：${it.refs.join("、")}`, `- 分级：${it.impact}${it.impact === "minor" ? "（不进本轮修复循环，进 minor 收集清单）" : ""}`, `- 修复指导：${it.guidance}`, ...(it.consequenceRefutation ? [`- 行为后果否决：${it.consequenceRefutation}`] : []), "");
+        lines.push(`## AG-${i + 1} ${it.title}`, `- 原始 ref：${it.refs.join("、")}`, `- 分级：${it.impact}${it.impact === "minor" ? "（不进本轮修复循环，进 minor 收集清单）" : ""}`, `- 修复指导：${it.guidance}`, ...(it.consequenceRefutation ? [`- 行为后果否决（${it.consequenceRefutationType ?? "未标类型"}）：${it.consequenceRefutation}`] : []), "");
     });
     return lines.join("\n");
 }
@@ -1542,7 +1546,8 @@ for (let round = 1; round <= maxRounds; round++) {
                 "- 每条聚合项标注 impact 分级（V4 代裁决规则，以影响关键 ADR / 关键设计决策为准）：critical=影响关键决策——分型错误、公理/不变量不成立、问题定义失真、方案主干有更优解或被击穿、关键决策（A 级）的前提失实/矛盾/证据错误、影响决策走向的事实错误；minor=不影响关键决策——前提登记缺口、产物表/清单完备性、非关键场景措辞、实施期探针指向的补登记（即处置时 affectsDecision 应为「无」的那类）。拿不准 critical 还是 minor 时按 critical——降级漏修的代价高于多修一轮。",
                 "",
                 "minor 必须附 consequenceRefutation：不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据；已推演出用户可观察的不正确行为时不得只按判据字面合规降级。",
-                "完成后返回 JSON：items（聚合项数组，每条 { refs: string[]（该条覆盖的原始 ref，至少一个）, title, guidance, impact: \"critical\"|\"minor\", consequenceRefutation?: string }）。refs 全体构成原始清单的精确划分——每条原始 ref 恰好出现在一条聚合项里，不丢、不重、不造。",
+                "minor 必须同时标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）——先标类型再给依据，缺类型即结构校验失败（合并稿 §9）。",
+                "完成后返回 JSON：items（聚合项数组，每条 { refs: string[]（该条覆盖的原始 ref，至少一个）, title, guidance, impact: \"critical\"|\"minor\", consequenceRefutation?: string, consequenceRefutationType?: \"will-not-occur\"|\"not-observable\"|\"accepted-by-acceptance\" }）。refs 全体构成原始清单的精确划分——每条原始 ref 恰好出现在一条聚合项里，不丢、不重、不造。",
             ].join("\n"));
         }
         catch (e) {
@@ -1572,7 +1577,7 @@ for (let round = 1; round <= maxRounds; round++) {
                 continue;
             for (const r of item.refs)
                 collectedMinorRefs.add(r);
-            minorFindings.push({ round, refs: item.refs, title: item.title, guidance: item.guidance, consequenceRefutation: item.consequenceRefutation });
+            minorFindings.push({ round, refs: item.refs, title: item.title, guidance: item.guidance, consequenceRefutation: item.consequenceRefutation, consequenceRefutationType: item.consequenceRefutationType });
         }
     }
     const criticalItems = aggregatedItems !== null ? aggregatedItems.filter((it) => it.impact !== "minor") : [];

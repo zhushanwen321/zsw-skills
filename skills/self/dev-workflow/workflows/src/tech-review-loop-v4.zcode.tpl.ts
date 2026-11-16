@@ -151,6 +151,8 @@ interface AggregatedItem {
   impact: "critical" | "minor";
   /** minor 必须给出行为后果否决论证：不会发生 / 用户不可观察 / 验收明确允许，三择一 */
   consequenceRefutation?: string;
+  /** minor 必填：论证类型三择一（合并稿 §9：先标类型再给依据，缺类型即结构校验失败） */
+  consequenceRefutationType?: "will-not-occur" | "not-observable" | "accepted-by-acceptance";
 }
 
 interface AggregationOutcome {

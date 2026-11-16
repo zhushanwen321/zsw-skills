@@ -520,7 +520,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "4.1.3"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.1.4"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -1391,6 +1391,11 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
     if (!planGuard.ok || planGuard.value === null)
         return failAssurance(`修复聚合失败：${planGuard.error}`);
     const plan = planGuard.value;
+    // 顺序 agent 调用之间的心跳：planner→builder→reviewer 三段各自可能分钟级，仅靠阶段
+    // 边界心跳会让整个序列超过 LEASE_STALE_MS(120s) 判失联——补中间点把常见窗口缩到单次
+    // 调用。残余窗口（单次 agent 调用超 120s）的后果是有界的：异 runId 接管后本 run 的
+    // append 被代次复核拒之门外（响亮失败，不双写），重新发起即可
+    await leaseHeartbeat();
     const repairReportPath = `${evidenceRoot}repair-${artifactTag}-r${repairRound}.md`;
     const builder = wfAgent(`repair-builder-r${repairRound}`, builderRoleRes.stdout);
     const builderGuard = await askGuarded(async (corrective) => {
@@ -1421,6 +1426,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
     if (!builderGuard.ok || builderGuard.value === null)
         return failAssurance(`builder 修复失败：${builderGuard.error}`);
     const built = builderGuard.value;
+    await leaseHeartbeat();
     // 提交按精确文件路径 --only 提交：git add 仅为让 untracked 新文件可被 commit 识别，
     // commit --only 只纳入 builder 申报路径的工作区内容——暂存区里预先存在的无关内容
     // 不会被卷进修复笔

@@ -261,6 +261,7 @@ test("zcode 主路径：修复轮提交 + RepairRoundRecorded 溯源 + recheck �
     assert.equal(repair.round, 1);
     assert.equal(repair.fromRevision, "rev-initial");
     assert.equal(repair.toRevision, "rev-after-fix");
+    assert.ok(Array.isArray(repair.incrementReceipts) && repair.incrementReceipts.length > 0, "受控修复轮必须随事件附带全量确定性测试回执（合并稿 §11.1；缺回执会被 gate 拒收）");
     const resolved = events.find((e) => e.type === "FindingResolved");
     assert.ok(resolved !== undefined, "复核确认后应登记 FindingResolved");
     const assurance = events.filter((e) => e.type === "AssuranceCompleted").at(-1);

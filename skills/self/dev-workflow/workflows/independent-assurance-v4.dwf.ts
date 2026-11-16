@@ -419,7 +419,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "4.1.3"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.1.4"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -1096,15 +1096,48 @@ if (eventsRes.exitCode !== 0 || eventsError !== "") {
 // 判无效（missing.assuranceFullFirst），在 setup 即拦下省一轮成本。explore-only 只产生
 // ExplorationCompleted，不构成 full
 const knownEvidenceEventIds = new Set(events.filter((e) => e.type === "EvidenceRecorded").map((e) => String(e.eventId)));
+// artifact 路径解析（与 gate probeArtifact 同口径：绝对路径原样用，相对路径按 taskDir 解析）
+const artifactAbs = (artifact: unknown): string => {
+  const raw = String(artifact ?? "");
+  return raw === "" ? "" : raw.startsWith("/") ? raw : `${taskDir}/${raw}`;
+};
+// 可用探索集（与 gate fold.explorations 同口径：同验收版本 + artifact 在盘 + 哈希一致）——
+// 探索 due 判定、full/recheck 的 explorationEventId 引用与 full-first 预检的探索引用三处
+// 共用；任何一处用原始事件而不用可用集都会与裁决器漂移（引用失效探索 → 保证被判无效，
+// 任务停在 candidate 无可达终态）
+const sameVersionExplorations = events.filter(
+  (event) => event.type === "ExplorationCompleted" && event.acceptanceVersion === acceptanceVersion,
+);
+const explorationArtifactCheck = await runNode([
+  NODE_CHECK_FILES,
+  ...sameVersionExplorations.map((event) => artifactAbs(event.artifact)).filter((path) => path !== ""),
+]);
+const missingExplorationArtifacts = new Set(
+  explorationArtifactCheck.exitCode === 0 ? [] : explorationArtifactCheck.stdout.trim().split(" | ").filter((part) => part !== ""),
+);
+const usableExplorations: DeliveryEvent[] = [];
+for (const event of sameVersionExplorations) {
+  const absPath = artifactAbs(event.artifact);
+  if (absPath === "" || missingExplorationArtifacts.has(absPath)) continue;
+  if (typeof event.artifactSha256 === "string" && event.artifactSha256 !== "") {
+    const diskSha = await artifactSha256Of(absPath).catch(() => "");
+    if (diskSha !== event.artifactSha256) continue;
+  }
+  usableExplorations.push(event);
+}
+const usableExplorationIds = new Set(usableExplorations.map((event) => String(event.eventId)));
+// full 探索未 due（已有候选探索证据且验收/关键设计未变化）与 recheck 都引用最后一次可用
+// 探索——full 派了新探索时该值被新事件覆盖；取不到才留 "none"（schema 1 无探索语义）
+const latestUsableExplorationId = usableExplorations.at(-1)?.eventId ?? "none";
 const priorFullEvents = events.filter((e) => e.type === "AssuranceCompleted" && (e.mode ?? "full") === "full" && e.acceptanceVersion === acceptanceVersion);
 // full 自身 artifact 可用性（gate fold.assurances 只收 artifactUsable 的保证——artifact
 // 失效的 full 不能给 recheck 背书）
-const priorFullArtifactCheck = await runNode([NODE_CHECK_FILES, ...priorFullEvents.map((e) => String(e.artifact))]);
+const priorFullArtifactCheck = await runNode([NODE_CHECK_FILES, ...priorFullEvents.map((e) => artifactAbs(e.artifact)).filter((path) => path !== "")]);
 const unusableFullArtifactEventIds = new Set(
   priorFullArtifactCheck.exitCode === 0
     ? []
     : priorFullEvents
-        .filter((e) => priorFullArtifactCheck.stdout.trim().split(" | ").includes(String(e.artifact)))
+        .filter((e) => priorFullArtifactCheck.stdout.trim().split(" | ").includes(artifactAbs(e.artifact)))
         .map((e) => String(e.eventId)),
 );
 const qualifiedPriorFull = (event: DeliveryEvent): boolean => {
@@ -1115,10 +1148,11 @@ const qualifiedPriorFull = (event: DeliveryEvent): boolean => {
   const coveredIncrementIds = new Set(receipts.map((receipt) => String(receipt.incrementId)));
   if (!incrementItems.every((item) => coveredIncrementIds.has(item.id))) return false;
   if (!Array.isArray(event.evidenceEventIds) || !event.evidenceEventIds.every((id) => id === "none" || knownEvidenceEventIds.has(id))) return false;
-  // 探索引用存在性（与 gate priorFullQualified 同口径：schema 2 无条件校验，schema 1 保持词表语义）
+  // 探索引用存在性（与 gate priorFullQualified 同口径：引用必须落在可用探索集内——schema 2
+  // 无条件校验，schema 1 保持词表语义）
   const explorationRefOk = assertionMode
-    ? events.some((candidate) => candidate.type === "ExplorationCompleted" && candidate.eventId === event.explorationEventId)
-    : (!explorationRequired || events.some((candidate) => candidate.type === "ExplorationCompleted" && candidate.eventId === event.explorationEventId));
+    ? usableExplorationIds.has(String(event.explorationEventId))
+    : (!explorationRequired || usableExplorationIds.has(String(event.explorationEventId)));
   if (!explorationRefOk) return false;
   return true;
 };
@@ -1135,19 +1169,18 @@ if (mode === "recheck" && !events.some(qualifiedPriorFull)) {
   return result;
 }
 // 探索需求判定（合并稿 §6，与 gate explorationDueAt 同口径）：schema 2 的 full 探索
-// 只在「缺少候选探索证据（同验收版本无 ExplorationCompleted）、验收或关键设计变化
-//（最后一次 AcceptanceApproved/DesignApproved 晚于最后一次探索）」时执行，否则引用
-// 既有候选探索作为证据来源；schema 1 保持 exploratoryReview 词表语义
+// 只在「缺少可用候选探索证据（可用集为空）、验收或关键设计变化（最后一次
+// AcceptanceApproved/DesignApproved 晚于最后一次可用探索）」时执行，否则引用既有候选
+// 探索作为证据来源；schema 1 保持 exploratoryReview 词表语义。可用集与 gate
+// fold.explorations 同口径——artifact 失效的探索不构成证据来源
 const seqOf = (e: DeliveryEvent): number => (typeof e.seq === "number" ? e.seq : 0);
-const currentVersionExplorationSeqs = events
-  .filter((e) => e.type === "ExplorationCompleted" && e.acceptanceVersion === acceptanceVersion)
-  .map(seqOf);
+const usableExplorationSeqs = usableExplorations.map(seqOf);
 const lastChangeSeq = events
   .filter((e) => e.type === "AcceptanceApproved" || e.type === "DesignApproved")
   .map(seqOf)
   .reduce((max, seq) => Math.max(max, seq), 0);
 const explorationDue = assertionMode
-  ? (currentVersionExplorationSeqs.length === 0 || lastChangeSeq > Math.max(0, ...currentVersionExplorationSeqs))
+  ? (usableExplorationSeqs.length === 0 || lastChangeSeq > Math.max(0, ...usableExplorationSeqs))
   : explorationRequired;
 const requirementIds = new Set(requirements.map((r) => r.id));
 const openFindings = new Map<string, string>();
@@ -1510,6 +1543,10 @@ if (!coverageGuard.ok || coverageGuard.value === null) {
 }
 const coverage = coverageGuard.value;
 await obsEnd("review", 1);
+// coverage reviewer 与 explorer 是两个顺序长调用（各自可能分钟级）：中间补心跳点，
+// 把常见租约窗口缩到单次调用。残余窗口（单次 agent 调用超 LEASE_STALE_MS=120s）的
+// 后果有界——异 runId 接管后本 run 的 append 被代次复核拒之门外（响亮失败，不双写）
+await leaseHeartbeat();
 
 await obsBegin("execute", 1);
 await leaseHeartbeat();
@@ -1577,9 +1614,11 @@ if (processFailedAfterCoverage !== null) return processFailedAfterCoverage;
 // explorationDue——缺少候选探索证据或验收/关键设计变化（合并稿 §6），与
 // exploratoryReview 风险字段解耦
 let exploration: ExplorationOutcome | null = null;
-let explorationEventId = mode === "recheck"
-  ? (events.filter((event) => event.type === "ExplorationCompleted" && event.acceptanceVersion === acceptanceVersion).at(-1)?.eventId ?? "none")
-  : "none";
+// recheck 与「full 探索未 due」都引用最后一次可用探索（合并稿 §6：recheck 引用已有探索
+// 结果；full 在已有合格候选探索且验收/关键设计未变化时同样以既有探索为证据来源，不重复
+// 开放探索）——取不到才留 "none"（schema 1 无探索语义时合法）。full 派了新探索时该值
+// 在下方被新 ExplorationCompleted 事件覆盖
+let explorationEventId = latestUsableExplorationId;
 if (explorationDue && mode === "full") {
   await obsBegin("review", 2);
   await leaseHeartbeat();
@@ -1655,7 +1694,7 @@ try {
     `acceptanceVersion：${acceptanceVersion}`,
     `revision：${revision}`,
     `覆盖核对：${coverage.summary}`,
-    `探索审查：${mode === "recheck" ? `recheck 定向复核，引用历史 ExplorationCompleted=${explorationEventId}` : exploration === null ? "已存在候选探索证据且验收与关键设计未变化，未重新开放探索（引用既有探索）" : exploration.summary}`,
+    `探索审查：${mode === "recheck" ? `recheck 定向复核，引用历史 ExplorationCompleted=${explorationEventId}` : exploration === null ? `已存在候选探索证据且验收与关键设计未变化，未重新开放探索（引用既有探索 ExplorationCompleted=${explorationEventId}）` : exploration.summary}`,
     `本轮新发现：${findingIds.length > 0 ? findingIds.join("、") : "无"}`,
     `本轮解决旧发现：${coverage.resolvedFindingIds.length > 0 ? coverage.resolvedFindingIds.join("、") : "无"}`,
     `本轮确认仍未修复（排除自动重认领）：${coverage.unresolvedFindingIds.length > 0 ? coverage.unresolvedFindingIds.join("、") : "无"}`,

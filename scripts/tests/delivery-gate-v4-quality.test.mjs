@@ -233,6 +233,74 @@ test("schema 2 必须逐断言取证；recheck 可引用历史探索且不重新
   assert.equal(readFileSync(join(fx.taskDir, "events.jsonl"), "utf8").split("\n").filter((line) => line.includes("ExplorationCompleted")).length, 1, "不得新增开放探索事件");
 });
 
+test("full 探索未 due 时不得以 none 登记：引用既有探索才构成有效保证（MF-1-20 死锁回归）", (t) => {
+  const fx = fixture(t);
+  const rev = driveToAssurance(fx);
+  appendAllEvidence(fx, rev);
+  // 候选探索已存在且验收/关键设计未变化（探索晚于批准登记，explorationDue=false）：full
+  // 未派新探索。若以 "none" 登记即与裁决器互斥——保证永无效、任务停在 candidate
+  // 无可达终态（第 1 轮修复只改了 gate 侧要求、漏改 workflow 侧登记值）
+  completeAssurance(fx, rev, "full", "none");
+  let verdict = evaluate(fx);
+  assert.equal(verdict.state, "candidate", "full 未引用既有探索不构成有效保证");
+  assert.equal(verdict.missing.assuranceCompleted, true, "缺口应呈报为 assuranceCompleted 缺失");
+  // 对照组：同 fixture 唯一差异是 explorationEventId 改指既有探索事件
+  completeAssurance(fx, rev, "full", fx.explorationEventId);
+  verdict = evaluate(fx);
+  assert.equal(verdict.state, "accepted", "full 引用既有探索即构成有效保证");
+});
+
+test("schema 2 recheck 不得以 none 登记：必须引用既有探索（合并稿 §6 定向复核依据）", (t) => {
+  const fx = fixture(t);
+  const rev = driveToAssurance(fx);
+  appendAllEvidence(fx, rev);
+  completeAssurance(fx, rev, "full", fx.explorationEventId);
+  assert.equal(evaluate(fx).state, "accepted");
+  writeFileSync(join(fx.projectDir, "a.txt"), "two\n");
+  spawnSync("git", ["add", "a.txt"], { cwd: fx.projectDir });
+  spawnSync("git", ["commit", "-qm", "change"], { cwd: fx.projectDir });
+  const nextRevision = revision(fx);
+  appendAllEvidence(fx, nextRevision);
+  completeAssurance(fx, nextRevision, "recheck", "none");
+  const verdict = evaluate(fx);
+  assert.equal(verdict.state, "candidate", "recheck 无探索引用不构成有效保证");
+  assert.equal(verdict.missing.assuranceCompleted, true);
+});
+
+test("受控修复轮回执红路径：缺 incrementReceipts 或未覆盖全部增量即拒收", (t) => {
+  const fx = fixture(t);
+  const rev = driveToAssurance(fx);
+  ok(raise(fx, rev, "F-RC1"));
+  const artifact = evidenceFile(fx, "repair-rc.md");
+  const base = {
+    type: "RepairRoundRecorded", actor: "builder", acceptanceVersion: 1, revision: rev,
+    summary: "受控修复轮", round: 1, triggerFindingIds: ["F-RC1"], affectedAssertionIds: ["A1"],
+    fromRevision: rev, toRevision: rev, artifact: artifact.artifact,
+  };
+  // 缺回执字段（schema 2 受控轮必须附全量确定性测试回执；整个字段省略才走到受控轮检查——
+  // 空数组会先被事件 shape 层拦下）
+  const noReceipts = append(fx, { ...base }, "builder");
+  rejected(noReceipts);
+  assert.match(noReceipts.stderr, /缺少 incrementReceipts/);
+  // 回执只覆盖部分增量（fixture 追加第二增量 I2 后只交 I1 的回执）
+  const increments = readJson(join(fx.taskDir, "increments.json"));
+  increments.items.push({ id: "I2", title: "第二增量", requirementIds: ["R1", "R2"], testCommand: { program: "true", args: [] } });
+  writeJson(join(fx.taskDir, "increments.json"), increments);
+  const receipt = { incrementId: "I1", program: "true", args: [], exitCode: 0, logSha256: sha256("rc-log"), cwd: fx.projectDir, artifactSha256: artifact.artifactSha256 };
+  const partial = append(fx, { ...base, incrementReceipts: [receipt] }, "builder");
+  rejected(partial);
+  assert.match(partial.stderr, /未覆盖全部增量（缺 I2）/);
+});
+
+test("第十条不同 must-fix 不触发失败（边界显式断言，防 >=10 回退）", (t) => {
+  const fx = fixture(t);
+  const rev = driveToAssurance(fx);
+  for (let index = 1; index <= 10; index += 1) ok(raise(fx, rev, `F-C${index}`));
+  const tenth = evaluate(fx);
+  assert.equal(tenth.quality.uniqueMustFix, 10);
+  assert.notEqual(tenth.state, "process-failed", "第十条不同 must-fix 不得触发过程失败（判定式为 >10）");
+});
+
 test("不同 must-fix 超过 10 条进入 process-failed；reopenOf 不重复计数", (t) => {
   const fx = fixture(t);
   const rev = driveToAssurance(fx);

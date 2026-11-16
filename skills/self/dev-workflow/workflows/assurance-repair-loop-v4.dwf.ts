@@ -420,7 +420,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "4.1.3"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.1.4"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -1502,6 +1502,11 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
   }, { workflow: "assurance-repair-loop-v4", step: "fix", round: repairRound, target: `repair-planner-r${repairRound}` });
   if (!planGuard.ok || planGuard.value === null) return failAssurance(`修复聚合失败：${planGuard.error}`);
   const plan = planGuard.value;
+  // 顺序 agent 调用之间的心跳：planner→builder→reviewer 三段各自可能分钟级，仅靠阶段
+  // 边界心跳会让整个序列超过 LEASE_STALE_MS(120s) 判失联——补中间点把常见窗口缩到单次
+  // 调用。残余窗口（单次 agent 调用超 120s）的后果是有界的：异 runId 接管后本 run 的
+  // append 被代次复核拒之门外（响亮失败，不双写），重新发起即可
+  await leaseHeartbeat();
 
   const repairReportPath = `${evidenceRoot}repair-${artifactTag}-r${repairRound}.md`;
   const builder = agent(`repair-builder-r${repairRound}`, builderRoleRes.stdout);
@@ -1527,6 +1532,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
   }, { workflow: "assurance-repair-loop-v4", step: "fix", round: repairRound, target: `repair-builder-r${repairRound}` });
   if (!builderGuard.ok || builderGuard.value === null) return failAssurance(`builder 修复失败：${builderGuard.error}`);
   const built = builderGuard.value;
+  await leaseHeartbeat();
 
   // 提交按精确文件路径 --only 提交：git add 仅为让 untracked 新文件可被 commit 识别，
   // commit --only 只纳入 builder 申报路径的工作区内容——暂存区里预先存在的无关内容

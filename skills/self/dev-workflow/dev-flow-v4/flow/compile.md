@@ -40,7 +40,10 @@
   "acceptance": {                       // D3 实例化时生成（本步先空着）
     "nodes": [],                        // kind=verify（script/artifactsDir）| inspect（promptFile/artifactsRefs/deps）
     "groups": { "core": [], "nonCore": [] }   // core/haltOnCoreFail 已退役被引擎忽略（依赖可达性熔断为唯一判据，设计 §8.7）——字段保留仅为旧 exec-plan 兼容
-  }
+  },
+  "formNotApplicable": [                // 可选：反例场景不适用豁免登记（合并稿 §4.1「允许记录不适用理由」）——验收包里未进 acceptancePlan/D3 节点的场景逐条登记，带非空理由即豁免「进节点」要求；理由须说明为什么构造不出，不是偷懒不建
+    { "adversarialFormId": "AF-…", "rationale": "…" }
+  ]
 }
 ```
 
