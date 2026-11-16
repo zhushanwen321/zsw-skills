@@ -35,7 +35,15 @@
       "designRef": "§3.2",              // 设计章节锚（从 impl-plan 章节映射提取；commit 渲染时前置于 summary——老三要素保真：unit id + 设计章节 + 测试结论）
       "territory": ["packages/shared/src/..."],   // 相对该节点 cwd 所在 git 仓库根（与 files_changed / porcelain 同基准；禁绝对路径——引擎启动校验拒绝）
       "testCommand": { "program": "pnpm", "args": ["-C", "packages/shared", "test"] },
-      "promptFile": "<dev-flow 段>/<slug>[/<worktreeName>]/<name>.prompts/u-foundation.md" }
+      "promptFile": "<dev-flow 段>/<slug>[/<worktreeName>]/<name>.prompts/u-foundation.md" },
+    { "id": "review-u-foundation", "kind": "review", "deps": ["u-foundation"],   // 可选：过程审查节点（渐进式 review），挂在实现节点与后继之间——审查不过后继不解锁
+      "mechanism": "dependency-recheck",   // 可选：过程记录机制标记（machine-contract/machine-registry/machine-build/dependency-recheck；缺省 machine-check）
+      "script": "<projectRoot 相对>/check-assoc.mjs",   // 可选：机器检查（exit 0 通过 / 1 红灯入失败处理中心 / 2 分析能力不足→派 reviewer）；与 promptFile 至少其一
+      "promptFile": "<dev-flow 段>/<slug>[/<worktreeName>]/<name>.prompts/review-u-foundation.md" }   // 可选：过程 reviewer 任务书；无 script = 高风险声明驱动必审
+  ],
+  "processReviewPath": "<交付任务目录>/process-review.jsonl",   // 可选：过程审查记录落点（交付体系任务指向 taskDir 供 delivery-quality-stats 读取；缺省由 statusPath 推导 <name>.process-review.jsonl）
+  "associations": [                     // 可选：三类关联声明（从 impl-plan.json 同名字段逐字转抄；本门对账）
+    { "id": "assoc-1", "kind": "contract", "trigger": "<生产方文件，相对仓库根>", "related": ["<消费方文件>"], "action": "co-change" }
   ],
   "acceptance": {                       // D3 实例化时生成（本步先空着）
     "nodes": [],                        // kind=verify（script/artifactsDir）| inspect（promptFile/artifactsRefs/deps）
@@ -49,6 +57,9 @@
 
 - **路径占位符**：`<tech-design 段>` = `~/.agents/skill-data/tech-design/`，`<dev-flow 段>` = `~/.agents/skill-data/dev-flow/`（两者写入 exec-plan 时展开为绝对路径）；`<slug>` = 单仓形态的 project-slug 或工作区形态的 ws-slug，`<worktreeName>` 只在 workspace 形态出现。取值经寻址检测探针（projectRoot 输入）实得，不手算；算法与双形态约定见 skill-data-addressing.md
 - **wave** = 编译期展示分组（拓扑分层编号，人看进度用；**调度只看依赖边，wave 不是边界**）
+- **kind=review（过程审查节点，渐进式 review；dev 模式专用，acceptance 模式禁）**：显式审查依赖——审查不过后继保持 pending，未审代码不会先解锁后继。机器检查（script）三态：exit 0 通过（未配 promptFile 时直接 done；配了也不派 reviewer，过程记录 noop）、exit 1 机器红灯（入统一失败处理中心，机器能判的不派 reviewer）、exit 2 分析能力不足（派 reviewer 兜底；未配 promptFile 则 failed——unknown 不得当通过）。reviewer 触发三条件：无 script（高风险声明驱动必审）/ script exit 2 / 上游 dev 节点自报 deviations 非空（计划外改向，任务书自动附偏离原文）。失败处置与 disputed 反证复用统一失败处理中心（过程语义：只写 process-review.jsonl，不写交付 FindingRaised、不计修复轮）；修复 diff 波及已 done dev 节点时引擎机器重验其 testCommand，转红才重置重派（修复失效规则）。reviewer 任务书由主 agent 构造，内容 = 单元目标（designRef 设计章节行号）+ 验收基线（本单元 increments 归属断言与应转绿测试）+ 审查范围（本节点 diff + 直接调用方）+ 排除清单（后继节点才落地的已知中间态，逐条列出）+ 负例说明（什么不算问题）——排除清单缺失是中间态误报的最大来源
+- **associations（三类关联声明，可选）**：kind = contract（事件/schema/接口的生产方↔消费方）/ registry（登记源↔第二登记处）/ build-artifact（构建源↔壳与双平台产物）。action=co-change 要求 trigger 与 related 全部落在同一 dev 节点 territory 内（本门 FAIL: assoc——跨文件契约改动必须同节点覆盖，否则另一侧漏改在过程中不可见）；action=exempt 必须带非空 rationale（为什么刻意不同步、由哪个审查通道兜底）。调用/import 关系不在这里声明——由 review 节点 script 调 `check-associations.mjs recheck` 静态分析反查（exit 0 无声明外关联 / 1 有 / 2 分析能力不足，与节点三态一致）；运行期同步核对用 `check-associations.mjs check`（trigger 改了 related 没同步改 → exit 1）
+- **processReviewPath（可选）**：过程审查记录 JSONL 落点（append-only：审查结论、机制标记、裁决、disputed、修复波及重验结果；独立于交付 events.jsonl，不进 must-fix 预算与修复轮计数）。缺省由 statusPath 推导（`<name>.process-review.jsonl`）
 - **testCommand** = 每节点增量测试命令（T1 形态：program + args 拆开；含管道/&& 的复杂命令落临时脚本走 bash 通道）——从 impl-plan §4 测试计划逐单元提取
 - **cwd** = worktree 隔离单元（判据见 references/dag-authoring.md）填 worktree 绝对路径，其余 null。禁填仓库子目录：引擎启动断言 cwd 必须等于其所在 git 仓库根（projectRoot 与 worktree 根都满足），子目录直接拒绝启动
 - **territory 声明（2026-09-29 裁决范围声明降级）**：每单元登记允许改动的文件/目录清单——粒度到目录或文件族即可，运行时不再逐文件核验（改动对账由核验对账事件、终态残留核查与 D2 一致性审查承接）。声明仍承载两职责：①启动互斥断言——任意两单元声明重叠且无依赖路径会被拒绝启动（并行写冲突防线，实测曾致同文件双写、归属互污）；②DAG 编排参考。必然连带产物（pnpm-lock.yaml、被改模块的配套测试文件、授权连带修改）建议一并登记供对账归属。声明路径在磁盘不存在的目录级前缀可接受（运行中诞生的文件天然覆盖）
@@ -67,6 +78,7 @@ stdout `PASS` 才继续步骤 4（交付体系任务须带 `--task-dir`，缺传
 - `cycle` 依赖环 / `overlap` territory 重叠无依赖路径 → 回 tech-design-v4 T3 修 impl-plan 后重走本清单——手修 exec-plan 会确定性复现同类错误
 - `increments` 增量契约 / `binding` 验收绑定 → 增量归属与命令转抄问题回 tech-design-v4 T3「增量契约对齐」节修；binding 不一致（验收版本或验收包已变化、设计包绑定陈旧）回 tech-design-v4 T1 入口门（flow/write.md Step 0）重新影响审查并更新 meta.json acceptanceBinding——验收内容变化属技能①职权，不在 exec-plan 侧改
 - `quality` 质量契约 → 机制对账（criterionMechanisms）与测试绑定（verificationBindings）缺口回 tech-design-v4 T2 修设计包 s4-accept.json（两者是 T2 产物）
+- `assoc` 关联声明（trigger/related 未落任何 dev 节点 territory / 分属不同 dev 节点 / exempt 缺理由 / 枚举与路径形态）→ 回 tech-design-v4 T3 修 impl-plan.json associations（归并同节点 / 补 territory / 补 rationale）后重编译——手修 exec-plan 会在重编译时复现
 - `io:`（exec-plan 路径不存在或不可读）/ `json:`（JSON 语法错）自解释类——核对路径 / 修语法后重跑本门
 
 运行时环境断言（cwd == git rev-parse --show-toplevel、promptFile / verify script 盘上存在、projectRoot 存在）仍由 W2 引擎 setup 在派发前 fail-fast——promptFile 本清单下一步才构造，静态门不查存在性，正确计划不会恒红。

@@ -112,7 +112,7 @@ interface TestCommand {
 /** 校验归一后的执行计划节点（路径全部绝对化；按 kind 只填对应字段） */
 interface PlanNode {
   id: string;
-  kind: "dev" | "verify" | "inspect";
+  kind: "dev" | "verify" | "inspect" | "review";
   deps: string[];
   /** 设计章节锚（D0 从 impl-plan 章节映射提取；commit 渲染时前置于 summary——老三要素保真） */
   designRef: string;
@@ -123,6 +123,8 @@ interface PlanNode {
   artifactsDir: string;
   artifactsRefs: string[];
   cwd: string;
+  /** review 节点（过程审查）的过程记录机制标记（machine-contract 等）；其余 kind 恒空串 */
+  mechanism: string;
 }
 
 interface ParsedPlan {
@@ -135,6 +137,8 @@ interface ParsedPlan {
   statusPath: string;
   commitTemplate: string;
   baseline: string | null;
+  /** 过程审查记录 JSONL 落点（可选；缺省由 statusPath 推导——交付体系任务编译时指向 taskDir，供质量统计读取） */
+  processReviewPath: string | null;
   nodes: PlanNode[];
 }
 

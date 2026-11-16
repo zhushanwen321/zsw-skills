@@ -238,8 +238,8 @@ function validatePlanSchema(raw) {
     if (idSet.has(id)) add("field", `节点 id 重复：${id}`);
     idSet.add(id);
     const kind = rn.kind;
-    if (kind !== "dev" && kind !== "verify" && kind !== "inspect") {
-      add("field", `节点 ${id} 的 kind 必须是 dev/verify/inspect，实际：${JSON.stringify(kind)}`);
+    if (kind !== "dev" && kind !== "verify" && kind !== "inspect" && kind !== "review") {
+      add("field", `节点 ${id} 的 kind 必须是 dev/verify/inspect/review，实际：${JSON.stringify(kind)}`);
       continue;
     }
     if (mode === "dev" && kind === "inspect") {
@@ -247,6 +247,9 @@ function validatePlanSchema(raw) {
     }
     if (mode === "acceptance" && kind === "dev") {
       add("field", `mode=acceptance 但节点 ${id} kind=dev（dev 节点属 D1 实例化）`);
+    }
+    if (mode === "acceptance" && kind === "review") {
+      add("field", `mode=acceptance 但节点 ${id} kind=review（review 节点属 D1 过程审查；acceptance 模式仅允许 verify/inspect 验收节点）`);
     }
     if (!isStrArr(rn.deps)) {
       add("field", `节点 ${id} 的 deps 必须是字符串数组`);
@@ -264,6 +267,7 @@ function validatePlanSchema(raw) {
       artifactsDir: "",
       artifactsRefs: [],
       cwd: isStr(rn.cwd) ? joinPath(projectRoot, rn.cwd) : projectRoot,
+      mechanism: "",
     };
     if (kind === "dev") {
       if (!isStrArr(rn.territory) || rn.territory.length === 0) {
@@ -300,6 +304,13 @@ function validatePlanSchema(raw) {
       } else {
         node.artifactsDir = joinPath(projectRoot, rn.artifactsDir);
       }
+    } else if (kind === "review") {
+      if (!isStr(rn.script) && !isStr(rn.promptFile)) {
+        add("field", `review 节点 ${id} 的 script 与 promptFile 至少填一项（script = 机器检查，exit 0 通过 / 1 红灯 / 2 分析能力不足；promptFile = 过程 reviewer 任务书）`);
+      }
+      if (isStr(rn.script)) node.script = joinPath(projectRoot, rn.script);
+      if (isStr(rn.promptFile)) node.promptFile = joinPath(projectRoot, rn.promptFile);
+      node.mechanism = isStr(rn.mechanism) && rn.mechanism !== "" ? rn.mechanism : "machine-check";
     } else {
       if (!isStr(rn.promptFile)) {
         add("field", `inspect 节点 ${id} 缺少 promptFile（L4 任务书）`);
@@ -457,12 +468,12 @@ function contractExtras(raw, rawNodes) {
   for (let i = 0; i < rawNodes.length; i++) {
     const rn = rawNodes[i];
     if (!isRec(rn) || !isStr(rn.id)) continue;
-    if (rn.kind === "verify" && isStr(rn.script)) {
+    if ((rn.kind === "verify" || rn.kind === "review") && isStr(rn.script)) {
       const ext = rn.script.slice(rn.script.lastIndexOf("."));
       if (!VERIFY_SCRIPT_EXTS.has(ext)) {
         errors.push({
           category: "script",
-          message: `verify 节点 ${rn.id} 的 script 扩展名不受支持：${rn.script}（合法：${[...VERIFY_SCRIPT_EXTS].join(" / ")}；解释器分派 = .sh→bash、其余→node）`,
+          message: `${rn.kind} 节点 ${rn.id} 的 script 扩展名不受支持：${rn.script}（合法：${[...VERIFY_SCRIPT_EXTS].join(" / ")}；解释器分派 = .sh→bash、其余→node）`,
         });
       }
     }
@@ -476,11 +487,68 @@ function contractExtras(raw, rawNodes) {
   return errors;
 }
 
-/** 全量校验入口：schema 主段（W2 同源）+ 附加契约段（W3 同源 + 静态附加项） */
+/** 全量校验入口：schema 主段（W2 同源）+ 附加契约段（W3 同源 + 静态附加项 + 关联声明对账） */
 function checkPlan(raw) {
   const schema = validatePlanSchema(raw);
-  const errors = [...schema.errors, ...contractExtras(raw, schema.rawNodes)];
+  const errors = [...schema.errors, ...contractExtras(raw, schema.rawNodes), ...checkAssociations(raw, schema.rawNodes)];
   return { ok: errors.length === 0, errors };
+}
+
+// ── 三类关联声明对账（渐进式 review 编译期门；D0 独有，W2/W3 无此段）──
+// co-change = 生产方与消费方（或登记源与登记处、构建源与产物）必须同 dev 节点覆盖——跨文件
+// 契约改动拆到不同节点会让另一侧漏改在过程中不可见（gate/workflow 死锁事故的机制防线）；
+// 只核「落计划与同节点」两个结构事实，不判 rationale 是否成立（语义判断归影响面审）
+function checkAssociations(raw, rawNodes) {
+  const errors = [];
+  if (!isRec(raw) || raw.mode !== "dev" || rawNodes === null || raw.associations === undefined) return errors;
+  if (!Array.isArray(raw.associations)) {
+    errors.push({ category: "assoc", message: "associations 必须是数组（三类关联声明：contract/registry/build-artifact）" });
+    return errors;
+  }
+  const devNodes = rawNodes.filter((rn) => isRec(rn) && rn.kind === "dev" && isStrArr(rn.territory));
+  const coverNode = (file) =>
+    devNodes.find((n) => n.territory.some((t) => file === t || file.startsWith(t.endsWith("/") ? t : `${t}/`)));
+  for (const a of raw.associations) {
+    if (!isRec(a) || !isStr(a.id)) {
+      errors.push({ category: "assoc", message: "associations 每条须为对象且含非空 id" });
+      continue;
+    }
+    if (!["contract", "registry", "build-artifact"].includes(a.kind)) {
+      errors.push({ category: "assoc", message: `关联 ${a.id} 的 kind 必须是 contract/registry/build-artifact，实际：${JSON.stringify(a.kind)}` });
+    }
+    if (!isStr(a.trigger) || a.trigger.startsWith("/")) {
+      errors.push({ category: "assoc", message: `关联 ${a.id} 的 trigger 须为相对仓库根路径（生产方/登记源/构建源，单文件）` });
+    }
+    if (!isStrArr(a.related) || a.related.length === 0 || a.related.some((r) => typeof r !== "string" || r.startsWith("/"))) {
+      errors.push({ category: "assoc", message: `关联 ${a.id} 的 related 须为非空相对路径数组（消费方/登记处/产物）` });
+    }
+    if (a.action === "exempt") {
+      if (!isStr(a.rationale) || a.rationale.trim() === "") {
+        errors.push({ category: "assoc", message: `关联 ${a.id} action=exempt 必须带非空 rationale（为什么刻意不同步——空理由等于没登记豁免）` });
+      }
+      continue;
+    }
+    if (a.action !== "co-change") {
+      errors.push({ category: "assoc", message: `关联 ${a.id} 的 action 必须是 co-change/exempt，实际：${JSON.stringify(a.action)}` });
+      continue;
+    }
+    if (!isStr(a.trigger) || !isStrArr(a.related)) continue; // 形态已报，跳过对账防二次噪声
+    const files = [a.trigger, ...a.related];
+    const owners = files.map((f) => coverNode(f));
+    const uncovered = files.filter((f, i) => owners[i] === undefined);
+    if (uncovered.length > 0) {
+      errors.push({
+        category: "assoc",
+        message: `关联 ${a.id} 含未被任何 dev 节点 territory 覆盖的文件：${uncovered.join("、")}——需改项必须落进实施计划（恢复：把文件补进对应 dev 节点 territory；刻意不改的改 action=exempt 并写 rationale）`,
+      });
+    } else if (new Set(owners.map((o) => o.id)).size > 1) {
+      errors.push({
+        category: "assoc",
+        message: `关联 ${a.id} 的 trigger 与 related 分属不同 dev 节点（${[...new Set(owners.map((o) => o.id))].join("、")}）——跨文件契约改动必须同节点覆盖，否则另一侧漏改在过程中不可见（恢复：归并到同一 dev 节点；或改 action=exempt 写理由并由影响面审确认）`,
+      });
+    }
+  }
+  return errors;
 }
 
 // ── 增量契约核对段（--task-dir <交付任务目录> 时附加执行；纯确定性数据比对）──
@@ -648,7 +716,7 @@ function realpathSafe(p) {
 // 与 W2 validatePlan 逐字对账的移植侧；checkPlan = 整门判定（schema + 附加契约段）；
 // checkIncrementContract / checkAcceptanceBinding = --task-dir 附加段（差分测试不覆盖，
 // 由 CLI 行为承载）
-export { validatePlanSchema, checkPlan, checkIncrementContract, checkAcceptanceBinding };
+export { validatePlanSchema, checkPlan, checkAssociations, checkIncrementContract, checkAcceptanceBinding };
 
 // ── CLI（被差分测试 import 时跳过） ──
 

@@ -106,3 +106,75 @@ test("evidenceIntegrityFailures：无 verdict.json 时按 0 计并标注来源",
   assert.equal(report.evidenceIntegrityFailures, 0);
   assert.match(report.evidenceIntegritySource, /verdict\.json 缺失/);
 });
+
+test("过程审查记录：按机制与裁决聚合统计，--json 可解析且含 processReview", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "delivery-quality-stats-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "events.jsonl"), `${JSON.stringify({ seq: 1, type: "FindingRaised", findingId: "F-1", category: "defect", severity: "non-blocker" })}\n`);
+  const reviews = [
+    { id: "pr-1", ts: "2026-11-16T10:00:00.000Z", nodeId: "review-u1", mechanism: "machine-contract", verdict: "pass", summary: "契约一致", attempts: 1, round: 0 },
+    { id: "pr-2", ts: "2026-11-16T10:05:00.000Z", nodeId: "review-u1", mechanism: "machine-contract", verdict: "fail", summary: "契约缺字段", attempts: 1, round: 0 },
+    { id: "pr-3", ts: "2026-11-16T10:10:00.000Z", nodeId: "review-u1", mechanism: "machine-contract", verdict: "pass", summary: "修复后通过", attempts: 2, round: 1 },
+    { id: "pr-4", ts: "2026-11-16T10:15:00.000Z", nodeId: "review-r1", mechanism: "incremental-reviewer", verdict: "disputed", summary: "与审查者结论分歧", attempts: 1, round: 0 },
+    { id: "pr-5", ts: "2026-11-16T10:20:00.000Z", nodeId: "review-r2", mechanism: "machine-check", verdict: "noop", summary: "无可检查产物", attempts: 1, round: 0 },
+    { id: "pr-6", ts: "2026-11-16T10:25:00.000Z", nodeId: "review-d1", mechanism: "dependency-recheck", verdict: "pass", summary: "依赖无回归", attempts: 1, round: 0 },
+  ];
+  writeFileSync(join(dir, "process-review.jsonl"), `${reviews.map((review) => JSON.stringify(review)).join("\n")}\n`);
+  const result = spawnSync(process.execPath, [CLI, dir, "--json"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.processReview, {
+    entries: 6,
+    byMechanism: { "machine-contract": 3, "incremental-reviewer": 1, "machine-check": 1, "dependency-recheck": 1 },
+    byVerdict: { pass: 3, fail: 1, disputed: 1, noop: 1 },
+    failedFindings: 1,
+    source: "process-review.jsonl",
+  });
+  // 文本输出末尾两行
+  const text = spawnSync(process.execPath, [CLI, dir], { encoding: "utf8" });
+  assert.equal(text.status, 0, text.stderr);
+  const textLines = text.stdout.trimEnd().split("\n");
+  assert.equal(textLines.at(-2), "processReview: 6 条（fail 1）");
+  assert.equal(textLines.at(-1), "processReviewByMechanism: {\"machine-contract\":3,\"incremental-reviewer\":1,\"machine-check\":1,\"dependency-recheck\":1}（来源 process-review.jsonl）");
+});
+
+test("无 process-review.jsonl：按空数组处理，现有输出字段不受影响", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "delivery-quality-stats-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "events.jsonl"), `${JSON.stringify({ seq: 1, type: "FindingRaised", findingId: "F-1", category: "defect", severity: "blocker", origin: "design" })}\n`);
+  const result = spawnSync(process.execPath, [CLI, dir, "--json"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.processReview, { entries: 0, byMechanism: {}, byVerdict: {}, failedFindings: 0, source: "process-review.jsonl 缺失" });
+  // 现有字段与口径不变
+  assert.equal(report.uniqueMustFix, 1);
+  assert.equal(report.findings, 1);
+  assert.equal(report.repairRounds, 0);
+  assert.equal(report.processFailed, false);
+  // 文本输出末尾两行（缺失时显示缺失标注）
+  const text = spawnSync(process.execPath, [CLI, dir], { encoding: "utf8" });
+  assert.equal(text.status, 0, text.stderr);
+  const textLines = text.stdout.trimEnd().split("\n");
+  assert.equal(textLines.at(-2), "processReview: 0 条（fail 0）");
+  assert.equal(textLines.at(-1), "processReviewByMechanism: {}（来源 process-review.jsonl 缺失）");
+});
+
+test("process-review.jsonl 含坏行：告警行号并跳过，其余行正常统计且 exit 0", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "delivery-quality-stats-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "events.jsonl"), `${JSON.stringify({ seq: 1, type: "FindingRaised", findingId: "F-1", category: "defect", severity: "non-blocker" })}\n`);
+  const lines = [
+    JSON.stringify({ id: "pr-1", mechanism: "machine-registry", verdict: "pass" }),
+    '{ "id": "pr-2", "mechanism": broken',
+    JSON.stringify({ id: "pr-3", mechanism: "machine-registry", verdict: "fail" }),
+  ];
+  writeFileSync(join(dir, "process-review.jsonl"), `${lines.join("\n")}\n`);
+  const result = spawnSync(process.execPath, [CLI, dir, "--json"], { encoding: "utf8" });
+  assert.equal(result.status, 0);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.processReview.entries, 2);
+  assert.deepEqual(report.processReview.byMechanism, { "machine-registry": 2 });
+  assert.deepEqual(report.processReview.byVerdict, { pass: 1, fail: 1 });
+  assert.equal(report.processReview.failedFindings, 1);
+  assert.match(result.stderr, /process-review\.jsonl 第 2 行 JSON 解析失败/);
+});

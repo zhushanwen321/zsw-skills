@@ -24,6 +24,35 @@ try {
   console.error(`无法读取 ${eventsPath}：${error.message}。恢复动作：确认 delivery-gate init 已创建任务目录，且 events.jsonl 完整后重试`);
   process.exit(1);
 }
+// 过程审查记录（V4 渐进式 review）：实现过程中的审查结论由各审查节点独立落盘 append-only，
+// 与交付事件流分离（事件流只记 gate 裁判事实，过程层记录审查中间结论）。辅助观测：文件缺失
+// 按空数组处理，单行解析失败只告警跳过，不拖垮主统计
+const processReviewPath = resolve(taskDir, "process-review.jsonl");
+const processReviewEntries = [];
+let processReviewSource = "process-review.jsonl";
+if (existsSync(processReviewPath)) {
+  const lines = readFileSync(processReviewPath, "utf8").split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].trim() === "") continue;
+    try {
+      processReviewEntries.push(JSON.parse(lines[index]));
+    } catch {
+      console.error(`警告：${processReviewPath} 第 ${index + 1} 行 JSON 解析失败，已跳过该行（过程记录为辅助观测，不影响主统计）`);
+    }
+  }
+} else {
+  processReviewSource = "process-review.jsonl 缺失";
+}
+const processReviewByMechanism = {};
+const processReviewByVerdict = {};
+let processReviewFailedFindings = 0;
+for (const entry of processReviewEntries) {
+  const mechanism = entry.mechanism ?? "unclassified";
+  processReviewByMechanism[mechanism] = (processReviewByMechanism[mechanism] ?? 0) + 1;
+  const verdict = entry.verdict ?? "unclassified";
+  processReviewByVerdict[verdict] = (processReviewByVerdict[verdict] ?? 0) + 1;
+  if (entry.verdict === "fail") processReviewFailedFindings += 1;
+}
 const findings = new Map();
 const history = [];
 const repairs = [];
@@ -150,6 +179,13 @@ const report = {
   finalExplorations,
   evidenceIntegrityFailures,
   evidenceIntegritySource,
+  processReview: {
+    entries: processReviewEntries.length,
+    byMechanism: processReviewByMechanism,
+    byVerdict: processReviewByVerdict,
+    failedFindings: processReviewFailedFindings,
+    source: processReviewSource,
+  },
   // 卡住续跑（审查未解决仍继续交付）属 dev-flow 侧观测，事件流无信号：由调用方按
   // dev-flow 执行记录统计后经 --stuck-continuation-count 传入（缺省 0）
   stuckContinuationCount,
@@ -171,4 +207,6 @@ if (json) {
   console.log(`finalExplorations: ${report.finalExplorations}`);
   console.log(`evidenceIntegrityFailures: ${report.evidenceIntegrityFailures}（来源 ${report.evidenceIntegritySource}）`);
   console.log(`stuckContinuationCount: ${report.stuckContinuationCount}`);
+  console.log(`processReview: ${report.processReview.entries} 条（fail ${report.processReview.failedFindings}）`);
+  console.log(`processReviewByMechanism: ${JSON.stringify(report.processReview.byMechanism)}（来源 ${report.processReview.source}）`);
 }

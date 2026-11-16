@@ -173,6 +173,23 @@ const SCHEMA_InspectResult = {
   },
   required: ["verdict", "test_evidence", "deviations", "blockers"],
 };
+const SCHEMA_ReviewProblem = {
+  type: "object",
+  properties: {
+    target: { type: "string", description: "问题落点（文件:行或契约条目）" },
+    summary: { type: "string", description: "一句话问题" },
+    detail: { type: "string", description: "证据与影响（file:line + 为什么构成问题）" },
+  },
+  required: ["target", "summary", "detail"],
+};
+const SCHEMA_ReviewResult = {
+  type: "object",
+  properties: {
+    summary: { type: "string", description: "审查结论一句话" },
+    problems: { type: "array", items: SCHEMA_ReviewProblem, description: "发现的问题（无问题为空数组）" },
+  },
+  required: ["summary", "problems"],
+};
 const SCHEMA_BY_KEY = {
   NodeResult: SCHEMA_NodeResult,
   InspectResult: SCHEMA_InspectResult,
@@ -180,6 +197,7 @@ const SCHEMA_BY_KEY = {
   HealFixReport: SCHEMA_HealFixReport,
   AcceptanceAggregation: SCHEMA_AcceptanceAggregation,
   AcceptanceFixReport: SCHEMA_AcceptanceFixReport,
+  ReviewResult: SCHEMA_ReviewResult,
 };
 function wfAgent(name, persona) {
   return {

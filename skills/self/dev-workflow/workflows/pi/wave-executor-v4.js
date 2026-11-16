@@ -173,6 +173,23 @@ const SCHEMA_InspectResult = {
   },
   required: ["verdict", "test_evidence", "deviations", "blockers"],
 };
+const SCHEMA_ReviewProblem = {
+  type: "object",
+  properties: {
+    target: { type: "string", description: "问题落点（文件:行或契约条目）" },
+    summary: { type: "string", description: "一句话问题" },
+    detail: { type: "string", description: "证据与影响（file:line + 为什么构成问题）" },
+  },
+  required: ["target", "summary", "detail"],
+};
+const SCHEMA_ReviewResult = {
+  type: "object",
+  properties: {
+    summary: { type: "string", description: "审查结论一句话" },
+    problems: { type: "array", items: SCHEMA_ReviewProblem, description: "发现的问题（无问题为空数组）" },
+  },
+  required: ["summary", "problems"],
+};
 const SCHEMA_BY_KEY = {
   NodeResult: SCHEMA_NodeResult,
   InspectResult: SCHEMA_InspectResult,
@@ -180,6 +197,7 @@ const SCHEMA_BY_KEY = {
   HealFixReport: SCHEMA_HealFixReport,
   AcceptanceAggregation: SCHEMA_AcceptanceAggregation,
   AcceptanceFixReport: SCHEMA_AcceptanceFixReport,
+  ReviewResult: SCHEMA_ReviewResult,
 };
 function wfAgent(name, persona) {
   return {
@@ -513,7 +531,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "4.2.2"; // 构建注入自 dev-flow-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.3.0"; // 构建注入自 dev-flow-v4/SKILL.md frontmatter version（唯一权威）
 // ── W2 wave-executor-v4 ──
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
@@ -1014,8 +1032,8 @@ function validatePlan(raw) {
             errors.push(`节点 id 重复：${id}`);
         idSet.add(id);
         const kind = rn.kind;
-        if (kind !== "dev" && kind !== "verify" && kind !== "inspect") {
-            errors.push(`节点 ${id} 的 kind 必须是 dev/verify/inspect，实际：${JSON.stringify(kind)}`);
+        if (kind !== "dev" && kind !== "verify" && kind !== "inspect" && kind !== "review") {
+            errors.push(`节点 ${id} 的 kind 必须是 dev/verify/inspect/review，实际：${JSON.stringify(kind)}`);
             continue;
         }
         if (mode === "dev" && kind === "inspect") {
@@ -1023,6 +1041,9 @@ function validatePlan(raw) {
         }
         if (mode === "acceptance" && kind === "dev") {
             errors.push(`mode=acceptance 但节点 ${id} kind=dev（dev 节点属 D1 实例化）`);
+        }
+        if (mode === "acceptance" && kind === "review") {
+            errors.push(`mode=acceptance 但节点 ${id} kind=review（review 节点属 D1 过程审查；acceptance 模式仅允许 verify/inspect 验收节点）`);
         }
         if (!isStrArr(rn.deps)) {
             errors.push(`节点 ${id} 的 deps 必须是字符串数组`);
@@ -1040,6 +1061,7 @@ function validatePlan(raw) {
             artifactsDir: "",
             artifactsRefs: [],
             cwd: isStr(rn.cwd) ? joinPath(projectRoot, rn.cwd) : projectRoot,
+            mechanism: "",
         };
         if (kind === "dev") {
             if (!isStrArr(rn.territory) || rn.territory.length === 0) {
@@ -1085,6 +1107,18 @@ function validatePlan(raw) {
             else {
                 node.artifactsDir = joinPath(projectRoot, rn.artifactsDir);
             }
+        }
+        else if (kind === "review") {
+            // 过程审查节点：机器检查（script，exit 0 通过 / 1 红灯 / 2 分析能力不足）与过程 reviewer
+            //（promptFile）至少其一——双无时节点恒无判定内容，是编译期配置错误而非运行时空转
+            if (!isStr(rn.script) && !isStr(rn.promptFile)) {
+                errors.push(`review 节点 ${id} 的 script 与 promptFile 至少填一项（script = 机器检查，exit 0 通过 / 1 红灯 / 2 分析能力不足；promptFile = 过程 reviewer 任务书）`);
+            }
+            if (isStr(rn.script))
+                node.script = joinPath(projectRoot, rn.script);
+            if (isStr(rn.promptFile))
+                node.promptFile = joinPath(projectRoot, rn.promptFile);
+            node.mechanism = isStr(rn.mechanism) && rn.mechanism !== "" ? rn.mechanism : "machine-check";
         }
         else {
             if (!isStr(rn.promptFile)) {
@@ -1191,6 +1225,7 @@ function validatePlan(raw) {
             statusPath: joinPath(projectRoot, statusPathRel),
             commitTemplate: commitTemplate ?? "{unitId} — {summary}",
             baseline: typeof raw.baseline === "string" ? raw.baseline : null,
+            processReviewPath: isStr(raw.processReviewPath) ? joinPath(projectRoot, raw.processReviewPath) : null,
             nodes,
         },
     };
@@ -1703,6 +1738,14 @@ async function executeDevNode(node) {
         verdict = await verifyDevNode(node, result, attempts);
     }
     if (verdict.outcome === "pass") {
+        if (result.deviations.length > 0) {
+            for (const s of successorsOf(node.id)) {
+                const sn = plan.nodes.find((n) => n.id === s);
+                if (sn !== undefined && sn.kind === "review") {
+                    reviewForceReasons.set(sn.id, result.deviations.join("；"));
+                }
+            }
+        }
         // commit 三要素保真（§8.3）：unitId（模板）+ designRef（章节锚前置，summary 已含则不重复
         // 前置——冒烟实测 dev 常在 summary 自带章节号）+ summary（promptFile 契约要求末行含「测试：<命令> 绿」）
         const summary = result.summary ?? "dev 单元交付";
@@ -1841,6 +1884,112 @@ async function executeInspectNode(node) {
     }
     await finishNodeDone(node.id, 1, undefined, (result.verdict === "degraded" ? "[DEGRADED] " : "") + result.test_evidence);
     log(`Inspect 节点 ${node.id} 验收结论 ${result.verdict}${result.verdict === "degraded" ? "（降级通过，evidence 已标注）" : "（判定书锚核对一致）"}`);
+}
+// ── D1 过程审查节点（渐进式 review）：机器检查三态 + reviewer 按需触发；过程记录独立于交付事件流 ──
+const REVIEW_PERSONA = "你是过程审查 reviewer：按任务书对指定单元的增量改动做对抗审查（主干走偏 / 模块划分与实现 / 过度设计 / 设计遗漏反查），" +
+    "范围以任务书给定的 diff 与直接调用方为限，排除清单内的已知中间态不得报为缺陷；" +
+    "每条问题给 file:line 证据与影响说明，无问题返回空 problems；只读代码与文档，不改任何文件；" +
+    NO_ASK_RULE;
+function validateReviewResult(v) {
+    const o = typeof v === "object" && v !== null ? v : {};
+    const errors = [];
+    if (typeof o["summary"] !== "string" || o["summary"].trim() === "")
+        errors.push("summary 须为非空字符串");
+    if (!Array.isArray(o["problems"])) {
+        errors.push("problems 须为数组（无问题也须返回空数组）");
+    }
+    else {
+        for (const p of o["problems"]) {
+            const r = typeof p === "object" && p !== null ? p : {};
+            for (const k of ["target", "summary", "detail"]) {
+                if (typeof r[k] !== "string" || r[k].trim() === "")
+                    errors.push(`problems 每条的 ${k} 须为非空字符串`);
+            }
+        }
+    }
+    return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v };
+}
+// 过程记录落点：exec-plan.processReviewPath 优先（交付体系任务编译时指向 taskDir 供质量统计
+// 读取）；缺省由 statusPath 推导（独立设计任务也有落点，不靠交付任务目录存在）。
+// 惰性求值：plan 在 setup 段才完成校验赋值，顶层立即读会被 TS 判未赋值使用
+const processReviewPathOf = () => plan.processReviewPath ?? plan.statusPath.replace(/\.status\.json$/, ".process-review.jsonl");
+let processReviewSeq = 0;
+// 计划外改向触发：dev 节点自报 deviations 非空时，其后继 review 节点即使机器检查通过也须派
+// reviewer（主干走偏与 exec-plan 是否该修订只有 agent 能判，机器三态覆盖不了）
+const reviewForceReasons = new Map();
+/** 过程审查记录（append-only；写盘失败只告警——辅助观测不得拖垮执行主路径） */
+async function appendProcessReview(record) {
+    processReviewSeq += 1;
+    const timestamp = await obsNow();
+    const line = JSON.stringify({ id: `pr-${processReviewSeq}-${record.nodeId}`, ts: timestamp ?? "", round: failureFixRounds, ...record });
+    const err = await obsAppend(processReviewPathOf(), line);
+    if (err !== null)
+        log(`WARN: 过程审查记录写入失败（${processReviewPathOf()}）：${err}——审查结论以 status.json 与日志为准`);
+}
+async function executeReviewNode(node) {
+    await beginNode(node.id);
+    const mechanism = node.mechanism !== "" ? node.mechanism : "machine-check";
+    // 无 script 的节点 = 高风险声明驱动（编译期定必审）；有 script 时 reviewer 只在机器无法判定
+    //（exit 2）时触发——机器能判的（exit 0/1）不花 agent 成本
+    let needReviewer = node.promptFile !== "" && (node.script === "" || reviewForceReasons.has(node.id));
+    let machineOutput = "";
+    if (node.script !== "") {
+        const run = await runVerifyScript(node);
+        machineOutput = run.output;
+        if (run.exitCode === 1) {
+            await appendProcessReview({ nodeId: node.id, mechanism, verdict: "fail", summary: `机器检查红灯：${tailLines(run.output, 5).replace(/\n/g, "；")}`, attempts: 1 });
+            recordAcceptanceFailure(node, "review", "machine-check", tailLines(run.output, 5), [], "按机器检查输出同步关联两侧；刻意不同步的回设计把该关联改 exempt 并写理由", run.output);
+            await markNodeBlockedOrFailed(node.id, "failed", `过程审查机器检查红灯（${mechanism}；入统一失败处理中心）：${tailLines(run.output, 5)}`, tailLines(run.output, TAIL_LINES), 1);
+            return;
+        }
+        if (run.exitCode === 2) {
+            if (node.promptFile === "") {
+                // 分析能力不足不得自动通过（三态硬契约），无 reviewer 兜底 = 编译期配置缺口
+                await markNodeBlockedOrFailed(node.id, "failed", `过程审查脚本退出 2（分析能力不足）但节点未配 promptFile 兜底`, `恢复动作：为该 review 节点补配过程 reviewer 任务书，或回设计补齐关联声明使机器可判定。脚本输出：\n${tailLines(run.output, TAIL_LINES)}`, 1);
+                return;
+            }
+            needReviewer = true;
+        }
+        if (run.exitCode !== 0 && run.exitCode !== 1 && run.exitCode !== 2) {
+            await markNodeBlockedOrFailed(node.id, "failed", `过程审查脚本异常退出（exit ${run.exitCode}）——脚本本身故障，先修脚本再重验`, tailLines(run.output, TAIL_LINES), 1);
+            return;
+        }
+    }
+    if (!needReviewer) {
+        await appendProcessReview({
+            nodeId: node.id,
+            mechanism,
+            verdict: node.promptFile !== "" ? "noop" : "pass",
+            summary: node.promptFile !== "" ? "机器检查通过，未命中 reviewer 触发条件（未派 agent）" : "机器检查通过",
+            attempts: 1,
+        });
+        await finishNodeDone(node.id, 1, undefined, `过程审查通过（${mechanism}；机器判定，未派 reviewer）`);
+        log(`Review 节点 ${node.id} 机器检查通过（${mechanism}），未派 reviewer`);
+        return;
+    }
+    const reviewer = wfAgent(`审查-${node.id}-f${failureFixRounds}`, REVIEW_PERSONA);
+    const result = await askValidated(validateReviewResult, (p) => reviewer.ask("ReviewResult", p), [
+        `读取过程审查任务书 ${node.promptFile}（绝对路径）并完整执行（只审查，不修改代码、不产生 commit）。`,
+        node.script !== "" ? `机器检查脚本 ${node.script} 退出 2（分析能力不足），其输出：\n${tailLines(machineOutput, TAIL_LINES)}` : "",
+        reviewForceReasons.has(node.id) ? `上游实现节点自报偏离（计划外改向信号）：\n${reviewForceReasons.get(node.id)}\n——重点核对主干是否走偏、exec-plan 是否该修订。` : "",
+        '返回 JSON：{ "summary": string, "problems": [{ "target": string, "summary": string, "detail": string }] }——无问题也须返回空 problems 数组。',
+    ]
+        .filter((s) => s !== "")
+        .join("\n"));
+    if (result === null) {
+        await markNodeBlockedOrFailed(node.id, "blocked", `review 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规`, "任务书可读，接管前先核对审查范围与输入包", 1);
+        return;
+    }
+    if (result.problems.length === 0) {
+        await appendProcessReview({ nodeId: node.id, mechanism: "incremental-reviewer", verdict: "pass", summary: result.summary, attempts: 1 });
+        await finishNodeDone(node.id, 1, undefined, `过程 reviewer 通过：${result.summary}`);
+        log(`Review 节点 ${node.id} reviewer 未发现问题，通过`);
+        return;
+    }
+    const findingText = result.problems.map((p) => `- ${p.target}：${p.summary}——${p.detail}`).join("\n");
+    await appendProcessReview({ nodeId: node.id, mechanism: "incremental-reviewer", verdict: "fail", summary: `${result.problems.length} 条问题：${result.summary}`, attempts: 1 });
+    recordAcceptanceFailure(node, "review", "reviewer", findingText, [], "按问题清单逐条修复；属设计/计划遗漏的回设计侧修订，实现越界的回退多余改动", findingText);
+    await markNodeBlockedOrFailed(node.id, "failed", `过程 reviewer 发现 ${result.problems.length} 条问题（入统一失败处理中心）：${result.summary}`, findingText, 1);
 }
 // ── D3 验收失败修复循环（review-fix-loop 形态；仅 acceptance 模式）──
 /** 失败入池（verify/inspect 的 failed 分支调用；round 用当前修复轮+1 标记首见轮） */
@@ -2007,7 +2156,7 @@ function makeAcceptanceFixValidator(allowedItemIds) {
  *  裁决谁真正转绿。commit 条目修复成功即从 commitGateFailures 与 deferredCommits 同步
  *  移除（副作用），失败留池下轮（MAX_FAILURE_FIX_ROUNDS 兜底）。 */
 async function runFailureFixCycle(round) {
-    const failedNodes = plan.nodes.filter((n) => nodeState(n.id) === "failed" && (n.kind === "verify" || n.kind === "inspect") && !acceptanceDisputedIds.has(n.id));
+    const failedNodes = plan.nodes.filter((n) => nodeState(n.id) === "failed" && (n.kind === "verify" || n.kind === "inspect" || n.kind === "review") && !acceptanceDisputedIds.has(n.id));
     if (failedNodes.length === 0 && commitGateFailures.length === 0)
         return { ok: true, reason: "", resetIds: [] };
     phase("失败聚合裁决"); // 平台契约：phase 名为编译期字面量（轮次在 log 与产物目录承载）
@@ -2019,7 +2168,9 @@ async function runFailureFixCycle(round) {
             return [
                 n.kind === "verify"
                     ? `- 节点 ${n.id}（verify）剧本 ${n.script}（产物目录 ${n.artifactsDir}）`
-                    : `- 节点 ${n.id}（inspect）任务书 ${n.promptFile}`,
+                    : n.kind === "review"
+                        ? `- 节点 ${n.id}（review 过程审查，${n.mechanism}）${n.script !== "" ? `机器检查脚本 ${n.script}` : `任务书 ${n.promptFile}`}`
+                        : `- 节点 ${n.id}（inspect）任务书 ${n.promptFile}`,
                 `  最新归因：${last?.cls ?? "unknown"}——${last?.evidence ?? ""}`,
                 `  归因指向文件：${last?.failureFiles.join("、") || "（未给——按任务书与产物自判）"}`,
                 `  修复要点：${last?.fixHint || "（未给）"}`,
@@ -2073,8 +2224,13 @@ async function runFailureFixCycle(round) {
         if (it.action !== "disputed")
             continue;
         acceptanceDisputed.push({ round, itemId: it.id, by: "aggregator", evidence: it.rootCause });
-        for (const nid of it.nodeIds)
+        for (const nid of it.nodeIds) {
             acceptanceDisputedIds.add(nid);
+            const dn = plan.nodes.find((n) => n.id === nid);
+            if (dn !== undefined && dn.kind === "review") {
+                await appendProcessReview({ nodeId: nid, mechanism: dn.mechanism, verdict: "disputed", summary: `聚合判 disputed：${it.rootCause}`, attempts: 0 });
+            }
+        }
         // disputed 的 commit 条目出池（钩子拦的是真代码问题——主 agent 裁决；deferredCommits 保留呈报）
         for (let i = commitGateFailures.length - 1; i >= 0; i--) {
             if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid)))
@@ -2160,9 +2316,15 @@ async function runFailureFixCycle(round) {
         for (const dsp of rep.disputed) {
             const it = doc.items.find((x) => x.id === dsp.itemId);
             acceptanceDisputed.push({ round, itemId: dsp.itemId, by: `fixer:${doc.group.id}`, evidence: dsp.evidence });
-            if (it !== undefined)
-                for (const nid of it.nodeIds)
+            if (it !== undefined) {
+                for (const nid of it.nodeIds) {
                     acceptanceDisputedIds.add(nid);
+                    const dn = plan.nodes.find((n) => n.id === nid);
+                    if (dn !== undefined && dn.kind === "review") {
+                        await appendProcessReview({ nodeId: nid, mechanism: dn.mechanism, verdict: "disputed", summary: `fixer 判 disputed：${dsp.evidence}`, attempts: 0 });
+                    }
+                }
+            }
             // fixer 级 disputed 的 commit 条目出池（钩子拦的是真代码问题——主 agent 裁决；deferredCommits 保留呈报）
             if (it !== undefined) {
                 for (let i = commitGateFailures.length - 1; i >= 0; i--) {
@@ -2222,8 +2384,35 @@ async function runFailureFixCycle(round) {
             }
         }
     }
+    // 修复失效规则：修复 diff 波及已 done dev 节点的，机器重验其 testCommand（不重派实现）；
+    // 重验红才重置 pending——修复引入的新偏差不得留到末端（过程审查修复复审范围含直接调用方）
+    const fixedFiles = [...new Set(okResults.flatMap(({ rep }) => rep.fixes.flatMap((f) => f.files)))];
+    const extraReset = [];
+    if (fixedFiles.length > 0) {
+        const affectedDone = plan.nodes.filter((n) => n.kind === "dev" &&
+            nodeState(n.id) === "done" &&
+            n.testCommand !== null &&
+            !failedNodes.some((fn) => fn.id === n.id) &&
+            fixedFiles.some((f) => pathInTerritory(f, n.territory)));
+        for (const n of affectedDone) {
+            const tr = n.testCommand === null ? null : await runTestCommand(n.testCommand, n.cwd);
+            if (tr !== null && tr.exitCode === 0) {
+                await appendProcessReview({ nodeId: n.id, mechanism: "repair-reverify", verdict: "pass", summary: "修复波及节点机器重验通过", attempts: 0 });
+                continue;
+            }
+            await appendProcessReview({
+                nodeId: n.id,
+                mechanism: "repair-reverify",
+                verdict: "fail",
+                summary: `修复波及节点重验转红，重置重派：${tr === null ? "testCommand 执行失败" : tailLines(`${tr.stdout}\n${tr.stderr}`, 5)}`,
+                attempts: 0,
+            });
+            extraReset.push(n.id);
+            log(`节点 ${n.id} 被本轮修复 diff 波及且机器重验转红——重置重派（修复失效规则）`);
+        }
+    }
     // 重置重验：非 disputed 失败节点全部重置（修复是组级的，连带修复的节点由机器判定裁决）
-    const resetIds = failedNodes.filter((n) => !acceptanceDisputedIds.has(n.id)).map((n) => n.id);
+    const resetIds = [...new Set([...failedNodes.filter((n) => !acceptanceDisputedIds.has(n.id)).map((n) => n.id), ...extraReset])];
     return { ok: true, reason: "", resetIds };
 }
 async function executeNode(node) {
@@ -2231,6 +2420,8 @@ async function executeNode(node) {
         return executeDevNode(node);
     if (node.kind === "verify")
         return executeVerifyNode(node);
+    if (node.kind === "review")
+        return executeReviewNode(node);
     return executeInspectNode(node);
 }
 // ── 调度主循环（设计 §8.2 流式）：逐节点 settle 即重算——单节点完成立即解锁后继
@@ -2283,7 +2474,7 @@ async function runSchedulingLoop() {
             // core-failed；不卡 = 保持 failed 由收尾呈报）；commit 残留留 deferredCommits 呈报
             // 主 agent 代提交（兜底通道不变）。blocked 不进（环境/任务书/结构化问题非修复组可解）
             {
-                const failedAcc = plan.nodes.filter((n) => nodeState(n.id) === "failed" && (n.kind === "verify" || n.kind === "inspect") && !acceptanceDisputedIds.has(n.id));
+                const failedAcc = plan.nodes.filter((n) => nodeState(n.id) === "failed" && (n.kind === "verify" || n.kind === "inspect" || n.kind === "review") && !acceptanceDisputedIds.has(n.id));
                 if ((failedAcc.length > 0 || commitGateFailures.length > 0) && failureFixRounds < MAX_FAILURE_FIX_ROUNDS) {
                     failureFixRounds += 1;
                     // failed-as-return 兜底（契约见文件头）：修复环的写盘/agent 会话异常不炸 run，
@@ -2313,7 +2504,7 @@ async function runSchedulingLoop() {
                 }
                 // 可达性判定按当前失败集重算（修复环可能刚把节点 disputed 掉——用环前快照会把
                 // 已呈报人工裁决的节点误冠「未收敛」并错误触发 core-failed）
-                const failedNow = plan.nodes.filter((n) => nodeState(n.id) === "failed" && (n.kind === "verify" || n.kind === "inspect") && !acceptanceDisputedIds.has(n.id));
+                const failedNow = plan.nodes.filter((n) => nodeState(n.id) === "failed" && (n.kind === "verify" || n.kind === "inspect" || n.kind === "review") && !acceptanceDisputedIds.has(n.id));
                 if (failedNow.length > 0 && failureFixRounds >= MAX_FAILURE_FIX_ROUNDS) {
                     const stuckN = failedNow.find((n) => successorsOf(n.id).some((s) => {
                         const sst = nodeState(s);
@@ -2358,7 +2549,7 @@ async function runSchedulingLoop() {
         {
             const stuckBad = plan.nodes.find((n) => {
                 const st = nodeState(n.id);
-                if (st === "failed" && (n.kind === "verify" || n.kind === "inspect"))
+                if (st === "failed" && (n.kind === "verify" || n.kind === "inspect" || n.kind === "review"))
                     return false;
                 if (st !== "failed" && st !== "blocked")
                     return false;
@@ -2698,7 +2889,7 @@ const doneIds = plan.nodes.filter((n) => nodeState(n.id) === "done").map((n) => 
 const badNodes = plan.nodes.filter((n) => nodeState(n.id) === "blocked" || nodeState(n.id) === "failed");
 const blockedOut = badNodes.map((n) => {
     const rt = state.get(n.id);
-    const kindLabel = nodeState(n.id) === "failed" ? "验收失败" : "blocked";
+    const kindLabel = nodeState(n.id) === "failed" ? (n.kind === "review" ? "过程审查失败" : "验收失败") : "blocked";
     return { id: n.id, reason: `${kindLabel}：${rt?.reason ?? "未知"}`, attempts: rt?.attempts ?? 0 };
 });
 const skippedIds = plan.nodes.filter((n) => nodeState(n.id) === "pending").map((n) => n.id);

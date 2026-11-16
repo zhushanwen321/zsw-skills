@@ -22,6 +22,25 @@
 
 交付体系外的独立设计任务（无交付任务目录）本节不适用，单元不带 incrementId。
 
+## 三类关联声明（渐进式 review）
+
+设计含跨文件契约（事件 / schema / 接口的生产方与消费方）、第二登记处（授权记录、版本纪律等登记文件）、单源构建产物（shared 源 → 壳模板 → 双平台产物）时，必须在 impl-plan.json 登记 `associations` 数组（D0 转抄进 exec-plan，编译门对账）：
+
+```jsonc
+"associations": [
+  { "id": "assoc-1", "kind": "contract",            // contract（契约两侧）/ registry（登记处）/ build-artifact（构建产物）
+    "trigger": "<生产方/登记源/构建源，相对仓库根单文件>",
+    "related": ["<消费方/登记处/产物，相对仓库根>"],
+    "action": "co-change",                           // co-change = 必须同 dev 单元覆盖；exempt = 刻意不同步
+    "rationale": "" }                                 // action=exempt 时必填非空：为什么不同步、由哪个审查通道兜底
+]
+```
+
+- **action=co-change**：trigger 与 related 必须落在同一 dev 单元 territory 内——拆单元时把契约两侧归并进同一单元；分属不同单元 = 另一侧漏改在过程中不可见（D0 编译门 `FAIL: assoc` 打回）。确需分单元的，改 action=exempt 写理由并由影响面审确认兜底审查通道
+- **action=exempt**：rationale 必填非空；空理由 = 没登记豁免
+- 调用 / import 关系**不手工登记**（D1 review 节点由 `check-associations.mjs recheck` 静态分析反查，声明外跨单元依赖边无所遁形）；断言与测试的关联复用现有 criterionMechanisms / verificationBindings / fileMap 字段，不在本表重复登记
+- 跨文件契约、共享状态写入、异步时序的高风险单元，在 D0 编译时同步登记 review 节点（dev-flow-v4 `flow/compile.md` kind=review）：机器检查（check / recheck）+ 必要时的过程 reviewer 任务书
+
 ## 终态型设计：波次单元与跨版本交付
 
 设计分型为终态型（meta.json designType=terminal，Step D 判定，见 `flow/write.md`）时，单元拆分遵循：
@@ -93,6 +112,10 @@
       "incrementId": "<increments.items[].id——交付体系任务必填（D0 编译门核对归属与测试命令一致），独立设计任务省略>" }
   ],
   "testPlan": { "incremental": "…", "fullSuite": "…" },
+  "associations": [
+    { "id": "assoc-1", "kind": "contract", "trigger": "<生产方文件>", "related": ["<消费方文件>"], "action": "co-change" }
+    // 可选：三类关联声明（见「三类关联声明」节；无跨文件契约/登记处/构建产物时整个字段省略）
+  ],
   "acceptancePlan": [
     { "id": "A1", "item": "…", "level": "L3", "group": "core", "deps": [], "optimization": "…", "verifyAsset": "reuse:p0-counter-render", "adversarialFormRefs": ["AF-..."] }
     // verifyAsset 与表格「验证资产」列同源：reuse:<场景id> / new / inspect-only（表格列值落 json 时冒号后去空格，如「reuse: p0-x」→「reuse:p0-x」）；项目无 verification skill 时缺省 "-"（可省略字段）
@@ -138,6 +161,7 @@
 5. e2e 影响面圈定无悬空：设计「e2e 影响面评估」子节存在且非空（或含显式「无受影响项（依据）」）——缺节/空集须已交回 T1 补写，禁止空集通过自检；每项落到验收计划表或「不跑（理由）」
 6. 决策分级列无遗漏：每单元已标注其实现决策的最高审核级别（来源 = meta.json reviewNav 人工审核导航），A 级决策至少被一个单元覆盖
 7. 终态型波次覆盖（终态型设计必查）：终态-现状差距表每条差距有归属波次单元；标注目标交付版本的波次版本齐全；波次间中间态边界（s3-solution.json migrationWaves 波次内容 scope 声明的进入/退出形态）在依赖列或单元职责中可见
+8. 三类关联声明无遗漏：跨文件契约 / 登记处 / 构建产物逐项登记 associations，co-change 项的 trigger 与 related 同单元覆盖（对照 D0 门判据）；exempt 项理由非空且兜底审查通道明确
 
 仅当出现无法机械判定的歧义（范围声明必须重叠 / 设计自相矛盾）才停下问用户。
 

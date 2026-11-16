@@ -3,7 +3,7 @@ name: tech-design-v4
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 4.1.2
+version: 4.2.0
 description: >-
   Use when 在已批准目标与验收（delivery-v4 产出）的约束下三阶段推敲方案并产出完整设计包：
   写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan 双格式），用户确认后登记方案包
@@ -37,7 +37,7 @@ T1 设计文档（Step 0 问题定义 → Step D 诊断期 → Step 1-5 写作 �
 T2 审查循环（四席并行审查 → 聚合裁决独立 phase → 修复循环至收敛；方向审 rewrite 档击穿整循环终止）
    │ 确认
    ▼
-T3 实施计划（impl-plan 双格式 + 自检 + 并行度复审）
+T3 实施计划（impl-plan 双格式 + 三类关联声明 associations + 自检 + 并行度复审）
    │ 确认（A 级逐条、B 级扫清单）
    ▼
 方案包确认 → 主会话 record-design-approved（绑方案包哈希清单）→ dev-flow-v4 候选实现
