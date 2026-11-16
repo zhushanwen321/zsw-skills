@@ -25,6 +25,19 @@ for (const event of events) {
     findings.set(event.findingId, event);
     history.push(event);
   }
+  // 任务替换继承的发现按裁决器同口径计入（delivery-gate 把 inheritedFindings 折叠为
+  // finding 参与判定——blocker 继承同样推进 uniqueMustFix；这里漏计会让临界第 10→11 条
+  // 低估）。origin 标 inherited 便于区分本地发现与继承发现
+  if (event.type === "TaskSuperseded" && Array.isArray(event.inheritedFindings)) {
+    for (const inherited of event.inheritedFindings) {
+      if (inherited === null || typeof inherited !== "object" || typeof inherited.findingId !== "string") continue;
+      const merged = { ...inherited, type: "FindingRaised", origin: "inherited" };
+      if (!findings.has(inherited.findingId)) {
+        findings.set(inherited.findingId, merged);
+        history.push(merged);
+      }
+    }
+  }
   if (event.type === "RepairRoundRecorded") repairs.push(event);
 }
 function rootId(id, seen = new Set()) {

@@ -148,6 +148,9 @@ const OPTIONAL_EVENT_FIELDS = {
   EvidenceRecorded: ["assertionIds", "adversarialFormIds"],
   FindingRaised: ["consequenceRefutation", "reopenOf", "origin", "firstDetectedStage", "expectedStage", "regressionTestRef"],
   AssuranceCompleted: ["mode"],
+  // V4 代修复轮次溯源：fromRevision/toRevision = 该轮修复前后的 revision（受控修复循环
+  // 登记时携带；旧事件与上限熔断事件可缺省）
+  RepairRoundRecorded: ["fromRevision", "toRevision"],
 };
 const EVENTS_LOCK_DIRNAME = ".events.lock";
 const EVENTS_LOCK_MAX_AGE_MS = 30_000;
@@ -1885,7 +1888,9 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   for (const open of openFindings) open.riskAccepted = findingRiskById.has(open.findingId);
 
   // 保证完成：full 必须引用当前 revision 探索；recheck 可引用同验收版本的历史探索，
-  // 但必须有当前 revision 的定向覆盖报告与全量确定性测试回执。
+  // 但必须有当前 revision 的定向覆盖报告与全量确定性测试回执。full-first 门禁：recheck
+  // 只有在同 revision 下存在序号更早的有效 full 时才算有效保证——首次完整保证不可被
+  // 定向复核替代（explore-only 只产生 ExplorationCompleted，不构成保证事件）。
   const currentEvidenceIds = new Set(fold.evidence.filter(currentRevision).map((event) => event.eventId));
   const currentExplorationIds = new Set(fold.explorations.filter(currentRevision).map((event) => event.eventId));
   const allExplorationIds = new Set(fold.explorations.map((event) => event.eventId));
@@ -1893,8 +1898,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   const requiresCleanBuild =
     world.policy["revision.json"].runsFromIgnoredArtifacts === true &&
     (world.policy["revision.json"].mode ?? "auto-git") !== "content-manifest";
-  const assuranceValid = fold.assurances.filter((event) => {
-    if (!currentRevision(event)) return false;
+  const assuranceBaseValid = (event) => {
     const covered = new Set(event.incrementReceipts.map((receipt) => receipt.incrementId));
     if (!allIncrementIds.every((id) => covered.has(id))) return false;
     if (!event.incrementReceipts.every((receipt) => receipt.exitCode === 0)) return false;
@@ -1911,7 +1915,26 @@ function buildVerdict(world, revision, revisionSource = "computed") {
       if (!event.incrementReceipts.every((receipt) => receipt.buildId === event.cleanBuild.buildId)) return false;
     }
     return true;
-  });
+  };
+  const validFullAssurances = fold.assurances.filter(
+    (event) => currentRevision(event) && (event.mode ?? "full") === "full" && assuranceBaseValid(event),
+  );
+  // full-first 的「先前 full」按登记时点合格性判定（任意 revision）：receipts 全绿 +
+  // 探索引用存在于同验收版本历史——不要求其证据仍在当前 revision（修复后旧证据按
+  // currentRevision 失效是既有语义，recheck 自身补齐当前 revision 的全量证据）
+  const priorFullQualified = (event) =>
+    event.incrementReceipts.every((receipt) => receipt.exitCode === 0) &&
+    (acceptance.exploratoryReview !== "required" || allExplorationIds.has(event.explorationEventId));
+  const hasPriorValidFull = (event) =>
+    fold.assurances.some((full) => (full.mode ?? "full") === "full" && full.seq < event.seq && priorFullQualified(full));
+  const assuranceValid = fold.assurances.filter(
+    (event) => currentRevision(event) && assuranceBaseValid(event) && ((event.mode ?? "full") !== "recheck" || hasPriorValidFull(event)),
+  );
+  // recheck 因缺先前有效 full 被拒的披露（missing.assuranceFullFirst）——可操作的
+  // 恢复指引：先跑 full，recheck 只作修复后定向复核
+  const recheckWithoutFull = fold.assurances.filter(
+    (event) => currentRevision(event) && (event.mode ?? "full") === "recheck" && assuranceBaseValid(event) && !hasPriorValidFull(event),
+  );
   const assuranceCompleted = assuranceValid.length > 0;
   const explorationCompleted = fold.explorations.length > 0;
   const explorationSatisfied = acceptance.exploratoryReview !== "required" || assuranceCompleted;
@@ -2002,6 +2025,19 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   );
   const repairRounds = fold.repairs.length;
   const processFailed = uniqueMustFix.size > 10 || repairRounds > 3;
+  // 循环外实现性修复呈报（不硬拦，显式披露不静默）：同验收版本最后一次保证之后
+  // revision 前进，且其间无 RepairRoundRecorded（受控修复循环）、无新增
+  // ImplementationRecorded（candidate-build 补增量）、无 AssuranceRevisionDrift（保证
+  // 期间漂移登记）——revision 变化无任何登记通道 = 疑似绕过修复循环直接改实现（主会话
+  // 裸提交或外部写入）。主 agent 读到该披露后：属真实旁路修复 → 回 assurance-repair-loop-v4
+  // 走受控通道；属无关临时产物 → 清理后重新取证
+  const lastAssurance = fold.assurances.length > 0 ? fold.assurances[fold.assurances.length - 1] : null;
+  const offLoopRepair =
+    lastAssurance !== null &&
+    lastAssurance.revision !== revision &&
+    !fold.repairs.some((event) => event.seq > lastAssurance.seq) &&
+    !fold.implementations.some((event) => event.seq > lastAssurance.seq) &&
+    !fold.drifts.some((event) => event.seq > lastAssurance.seq);
 
   // ── 两个终态的完整判定式 ──
   const evidenceGaps = [];
@@ -2105,6 +2141,13 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     missingArtifacts: [...fold.missingArtifacts],
     assertions: missingAssertionIds,
     processFailure: processFailed ? { uniqueMustFix: uniqueMustFix.size, repairRounds } : null,
+    assuranceFullFirst:
+      recheckWithoutFull.length > 0
+        ? {
+            reassuranceCount: recheckWithoutFull.length,
+            note: "当前 revision 存在基础校验通过的 recheck 保证，但其之前无同 revision 的有效 full——首次完整保证不可被定向复核替代。恢复动作：先运行 independent-assurance-v4（mode=full）完成首次完整取证，再以 recheck 做修复后定向复核",
+          }
+        : null,
   };
 
   const nextAction = buildNextAction({
@@ -2136,7 +2179,12 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     nonRequiredFailures,
     driftChain: drift,
     evidenceManifestSha256,
-    quality: { uniqueMustFix: uniqueMustFix.size, repairRounds, processFailed },
+    quality: {
+      uniqueMustFix: uniqueMustFix.size,
+      repairRounds,
+      processFailed,
+      offLoopRepair: offLoopRepair ? { lastAssuranceRevision: lastAssurance.revision, currentRevision: revision } : null,
+    },
     missing,
     integrity: { eventCount: world.entries.length, signatureVerified: true },
     nextAction,

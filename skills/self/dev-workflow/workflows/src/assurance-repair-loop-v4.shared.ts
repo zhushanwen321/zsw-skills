@@ -1,18 +1,16 @@
-// assurance-repair-loop-v4 — delivery-v4 独立覆盖核对与探索性审查。
-// assurance 角色不得修改产品代码、验收、事件或 verdict；脚本只经 delivery-gate
-// append --credential assuranceCredentialId 追加事实（assurance 角色凭据 id；
-// 不接收 user/builder 凭据，凭据私钥本体不进参数与 prompt）。证据事件绑 artifact
-// 内容哈希；AssuranceCompleted 绑本轮证据/探索事件 id 与逐增量测试回执（防跨
-// run 拼接；回执里 logSha256=测试日志哈希、artifactSha256=被测产物指纹，两者
-// 来源不同——防「构建 A 测 B」）。coverage 与 exploration 两阶段串行：覆盖证据
-// 与冻结清单落盘后，探索者才按清单启动。策略快照 runsFromIgnoredArtifacts=true
-// 时取证前生成干净构建（HEAD 导出+工作树补丁，不含 ignored 本地产物），逐增量
-// 测试在干净目录执行并统一绑 buildId。前置门禁：state 不是 draft 且
-// missing.incrementIds 为空。setup 记录 revision，finalize evaluate 后比对——
-// 不一致显式 assurance-failed（assurance 期间项目内容变化，本轮证据失效）。
-// 任何失败出口返回前重新 evaluate 取当前裁决（evaluate 失败则 verdict=null），
-// 不返回 setup 时的旧 verdict。最终状态完全采用 evaluate 返回的 verdict，
-// 本 workflow 不手编 accepted。
+// assurance-repair-loop-v4 — delivery-v4 受控修复循环（只跑 recheck 模式）。
+// 每轮：独立 planner 聚合待修复发现（来源阶段/受影响断言/回归测试）→ builder
+// 修复产品代码与测试并按精确文件路径提交（RepairRoundRecorded 由 builder 凭据
+// 登记，含 fromRevision/toRevision）→ 独立 reviewer 受影响复核（逐项
+// resolved/unresolved）→ evaluate 判定。第 4 轮实现性修复或累计第 11 条不同
+// must-fix 时 evaluate 判 process-failed，workflow 停止派发并回主会话归因。
+// 全部 must-fix 清零后进入最终取证：coverage reviewer 逐断言×证据类型复核、
+// 逐增量确定性测试回执、AssuranceCompleted(mode=recheck) 绑历史探索引用——
+// 不重新开放探索（新的开放探索属 independent-assurance-v4 的 full 模式；
+// 候选阶段反例审查属其 explore-only 模式）。assurance 角色不修改产品代码与
+// 验收；修复提交须主会话显式 allowCommit=true。任何失败出口返回前重新
+// evaluate 取当前裁决（evaluate 失败则 verdict=null），最终状态完全采用
+// evaluate 返回的 verdict，本 workflow 不手编 accepted。
 
 interface EvidenceConclusion {
   requirementId: string;
@@ -52,13 +50,6 @@ interface CoverageOutcome {
   /** 亲自核对后确认「仍未修复」的既有 open finding（V4 代：排除自动重认领——
    * 测试全绿不等于逐条修复有效，reviewer 的逐条否定结论优先于机器信号） */
   unresolvedFindingIds: string[];
-}
-
-interface ExplorationOutcome {
-  summary: string;
-  /** 必须完整覆盖 contract.reviewDimensions */
-  dimensions: string[];
-  findings: FindingDraft[];
 }
 
 interface CommandResult {
@@ -104,7 +95,7 @@ interface RepairReviewOutcome {
 }
 
 interface AssuranceResult {
-  terminated: "assurance-completed" | "exploration-completed" | "assurance-failed" | "setup-failure";
+  terminated: "assurance-completed" | "assurance-failed" | "setup-failure";
   taskDir: string;
   revision: string;
   findingIds: string[];
@@ -126,8 +117,6 @@ const VALID_ARG_KEYS = new Set([
   "taskId",
   "executionId",
   "sampleType",
-  // full=覆盖+开放探索；recheck=定向复核+确定性测试；explore-only=候选阶段开放探索
-  "mode",
 ]);
 // NODE_PROBE_HOME 由构建器从 workflows/src/skill-data.shared.ts 寻址层注入，此处不再声明
 const NODE_CHECK_EXISTS =
@@ -299,7 +288,6 @@ if (inputProblems.length > 0) {
 const gatePath = `${homeDir}/.agents/skills/delivery-v4/scripts/delivery-gate.mjs`;
 const coverageRolePath = `${homeDir}/.agents/skills/delivery-v4/references/roles/coverage-reviewer.md`;
 const builderRolePath = `${homeDir}/.agents/skills/delivery-v4/references/roles/repair-builder.md`;
-const explorerRolePath = `${homeDir}/.agents/skills/delivery-v4/references/roles/explorer.md`;
 // 韧性登记启用（taskDir 已校验）：self-repairs.jsonl 落任务目录，终态 message 携带汇总
 initResilience(taskDir);
 const taskJsonPath = `${taskDir}/task.json`;
@@ -385,15 +373,8 @@ if (
 }
 let revision = initialVerdict.revision;
 const acceptanceVersion = initialVerdict.acceptanceVersion;
-const mode: string = typeof args.mode === "string" && args.mode.trim() !== "" ? args.mode.trim() : "recheck";
-if (mode !== "recheck") {
-  await obsCloseExecution("setup-failure");
-  const result: AssuranceResult = {
-    terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
-    message: `assurance-repair-loop-v4 只接受 mode=recheck；候选开放探索请使用 independent-assurance-v4 的 full / explore-only`,
-  };
-  return result;
-}
+// 本 workflow 恒为 recheck 语义（定向复核 + 确定性测试，不重新开放探索）；full 与
+// explore-only 模式属 independent-assurance-v4，不在此分叉
 if (initialVerdict.state === "draft" || initialVerdict.state === "acceptance-approved") {
   await obsCloseExecution("setup-failure");
   const result: AssuranceResult = {
@@ -402,26 +383,13 @@ if (initialVerdict.state === "draft" || initialVerdict.state === "acceptance-app
   };
   return result;
 }
-if (args.mode !== "explore-only" && missingIncrementIds.some((id) => typeof id === "string" && id !== "")) {
+if (missingIncrementIds.some((id) => typeof id === "string" && id !== "")) {
   await obsCloseExecution("setup-failure");
   const result: AssuranceResult = {
     terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
     message: `前置门禁拒绝：仍有增量未实现（missing.incrementIds=${JSON.stringify(missingIncrementIds.filter((id): id is string => typeof id === "string"))}），未完成实现上的证据无法覆盖交付判定。恢复动作：先完成上述增量（运行 candidate-build-v4；按 dev-flow-v4 通道执行的任务在其 D4 收尾登记实现记录后直接重新发起），再重新发起 assurance-repair-loop-v4${repairSummary()}`,
   };
   return result;
-}
-let explorerPersona = "";
-if (explorationRequired) {
-  const explorerRoleRes = await runNode([NODE_READ_FILE, explorerRolePath]);
-  if (explorerRoleRes.exitCode !== 0 || explorerRoleRes.stdout.trim() === "") {
-    await obsCloseExecution("setup-failure");
-    const result: AssuranceResult = {
-      terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
-      message: `探索性审查为 required，但角色提示词不可读：${explorerRolePath}。恢复动作：安装 delivery-v4 的 explorer.md 后重新发起${repairSummary()}`,
-    };
-    return result;
-  }
-  explorerPersona = explorerRoleRes.stdout;
 }
 // 写事务租约（可选）：传入 runId 时 setup 获取 projectRoot 级租约，append 全程带 --runId
 // 做代次复核，任何出口 release（含失败出口）——保证期写入互斥
@@ -463,6 +431,17 @@ if (eventsRes.exitCode !== 0 || eventsError !== "") {
   };
   return result;
 }
+// full-first 前置门禁（与 delivery-gate 同口径）：受控修复循环的语义前提是「最终
+// 保证（full）出现实现缺陷」——事件流无 full 时先补首次完整保证，否则本循环收尾
+// 登记的 recheck 保证会被裁决器判无效（missing.assuranceFullFirst），白跑全程
+if (!events.some((event) => event.type === "AssuranceCompleted" && (event.mode ?? "full") === "full")) {
+  await obsCloseExecution("setup-failure");
+  const result: AssuranceResult = {
+    terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
+    message: `修复循环前置门禁拒绝：同验收版本事件流中不存在任何 full 保证（AssuranceCompleted mode=full）——受控修复循环作用于「最终保证发现的实现缺陷」，无 full 即无受控修复的起点。恢复动作：先以 mode=full 运行 independent-assurance-v4 完成首次完整取证，再按其发现进入本循环${repairSummary()}`,
+  };
+  return result;
+}
 const requirementIds = new Set(requirements.map((r) => r.id));
 const openFindings = new Map<string, string>();
 for (const event of events) {
@@ -478,7 +457,6 @@ const rawAttemptTag = leaseRunId || (typeof args.executionId === "string" ? args
 const attemptTag = rawAttemptTag.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 96);
 let artifactTag = `${revisionHash(revision)}-${attemptTag}`;
 let coverageReportPath = `${evidenceRoot}coverage-${artifactTag}.md`;
-let explorationReportPath = `${evidenceRoot}exploration-${artifactTag}.md`;
 let assuranceSummaryPath = `${evidenceRoot}assurance-${artifactTag}.md`;
 const findingIds: string[] = [];
 let findingSequence = 0;
@@ -567,16 +545,6 @@ function validateCoverage(value: CoverageOutcome): string {
     if (value.resolvedFindingIds.includes(id)) return `unresolvedFindingIds 与 resolvedFindingIds 不得同时含 ${String(id)}`;
   }
   return "";
-}
-
-function validateExploration(value: ExplorationOutcome): string {
-  if (typeof value.summary !== "string" || value.summary.trim() === "") return "exploration.summary 须为非空字符串";
-  if (!Array.isArray(value.dimensions) || value.dimensions.some((d) => typeof d !== "string" || d.trim() === "")) return "dimensions 须为非空字符串数组";
-  if (new Set(value.dimensions).size !== value.dimensions.length) return "dimensions 须去重";
-  for (const dimension of reviewDimensions) {
-    if (!value.dimensions.includes(dimension)) return `探索维度未覆盖：${dimension}`;
-  }
-  return validateFindings(value.findings);
 }
 
 async function appendEvent(event: DeliveryEvent): Promise<string> {
@@ -717,6 +685,11 @@ if (currentVerdict.state === "process-failed") {
   };
 }
 const repairRoundStart = events.filter((event) => event.type === "RepairRoundRecorded").length + 1;
+// 历史探索索引：recheck 轮不产生新的 ExplorationCompleted（不重新开放探索），此快照
+// 在整个 run 内稳定；声明在修复循环之前——planner prompt 在循环内引用它
+const explorationHistory = events
+  .filter((event) => event.type === "ExplorationCompleted")
+  .map((event) => ({ eventId: event.eventId, revision: event.revision, artifact: event.artifact }));
 const actionableFindings = () => {
   const open = Array.isArray(currentVerdict?.openFindings) ? currentVerdict.openFindings as Record<string, unknown>[] : [];
   const blockers = open.filter((finding) => finding.category === "defect" && finding.severity === "blocker" && finding.riskAccepted !== true);
@@ -807,10 +780,14 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
   if (!builderGuard.ok || builderGuard.value === null) return failAssurance(`builder 修复失败：${builderGuard.error}`);
   const built = builderGuard.value;
 
+  // 提交按精确文件路径 --only 提交：git add 仅为让 untracked 新文件可被 commit 识别，
+  // commit --only 只纳入 builder 申报路径的工作区内容——暂存区里预先存在的无关内容
+  // 不会被卷进修复笔
   const commitScript = "const cp=require('child_process');const root=process.argv[1],files=JSON.parse(process.argv[2]),message=process.argv[3];" +
     "const bad=files.filter(f=>typeof f!=='string'||f.length===0||f.startsWith('/')||f.split('/').includes('..'));if(bad.length){console.error('非法文件路径 '+bad.join(','));process.exit(2)}" +
     "for(const f of files){const r=cp.spawnSync('git',['-C',root,'add','--',f],{encoding:'utf8'});if(r.status!==0){console.error(r.stderr);process.exit(r.status??1)}}" +
-    "const r=cp.spawnSync('git',['-C',root,'commit','-m',message],{encoding:'utf8'});process.stdout.write(r.stdout);process.stderr.write(r.stderr);process.exit(r.status??1)";
+    "const r=cp.spawnSync('git',['-C',root,'commit','--only','-m',message,'--'].concat(files),{encoding:'utf8'});process.stdout.write(r.stdout);process.stderr.write(r.stderr);process.exit(r.status??1)";
+  const fromRevision = revision;
   const committed = await runNode([commitScript, projectRoot, JSON.stringify(built.filesChanged), `fix(delivery): repair round ${repairRound}`]);
   if (committed.exitCode !== 0) return failAssurance(`修复提交失败：${committed.stderr.trim() || committed.stdout.trim()}。恢复动作：核对工作区归属与 pre-commit 输出后重试，不允许 git add -A`);
 
@@ -822,10 +799,18 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
     summary: `第 ${repairRound} 轮实现性修复：${built.summary}`,
     round: repairRound, triggerFindingIds,
     affectedAssertionIds: built.affectedAssertionIds.length > 0 ? built.affectedAssertionIds : plan.affectedAssertionIds,
+    fromRevision, toRevision: revision,
     artifact: repairReportPath,
   };
-  const repairAppended = await runGate(gatePath, ["append", "--task-dir", taskDir, "--event", JSON.stringify(repairEvent), "--credential", builderCredentialId]);
-  if (repairAppended.exitCode !== 0) return failAssurance(`RepairRoundRecorded 登记失败：${repairAppended.stderr.trim() || repairAppended.stdout.trim()}`);
+  const repairAppended = await retryOnSpawnFailure(
+    () => runGate(gatePath, ["append", "--task-dir", taskDir, "--event", JSON.stringify(repairEvent), "--credential", builderCredentialId]),
+    { workflow: "assurance-repair-loop-v4", step: "fix", round: repairRound, command: "append RepairRoundRecorded" },
+  );
+  if (repairAppended.exitCode !== 0) {
+    return failAssurance(
+      `RepairRoundRecorded 登记失败：${repairAppended.stderr.trim() || repairAppended.stdout.trim()}。修复代码已提交（fix(delivery): repair round ${repairRound}，fromRevision=${fromRevision}）但轮次未记账。恢复动作：二选一——用 delivery-gate append 以 builder 凭据补登记下方事件后重发本 workflow（重发会跳过已清零的修复轮）；或 git reset --soft HEAD~1 撤回该笔提交后重发（登记优先，推荐前者）：${JSON.stringify(repairEvent)}`,
+    );
+  }
   events.push(repairEvent);
 
   const reviewer = agent(`repair-reviewer-r${repairRound}`, coverageRoleRes.stdout);
@@ -835,7 +820,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
       `taskDir：${taskDir}；验收：${acceptancePath}；增量：${incrementsPath}`,
       `本轮修复计划：${JSON.stringify(plan)}`,
       `builder 自报：${JSON.stringify(built)}`,
-      "独立复核修复 diff，亲自运行相关与全量增量测试；逐项给 resolvedFindingIds/unresolvedFindingIds，漏报的旧 blocker 视为未解决。发现新问题按 FindingDraft 返回。",
+      "独立复核修复 diff，亲自运行相关与全量增量测试；逐项给 resolvedFindingIds/unresolvedFindingIds，漏报的旧 blocker 视为未解决。复核以验收包为判据锚点：逐条对照受影响断言的限定条件与预期结果，反例场景（adversarialForms）按其入口/初始状态/操作/时序逐项重演——修复不得只让触发路径沉默，须证明判据行为成立。发现新问题按 FindingDraft 返回。",
       "suggestion/info 必须附 consequenceRefutation；不得修改产品代码、验收或 Git。",
       '返回结构（严格 JSON）：{ "summary": string, "testEvidence": string, "resolvedFindingIds": string[], "unresolvedFindingIds": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
       ...(corrective === null ? [] : [corrective]),
@@ -872,60 +857,22 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
     await obsCloseExecution("assurance-failed");
     return { terminated: "assurance-failed", taskDir, revision, findingIds, verdict: currentVerdict, message: `不同 must-fix 超过 10 条，停止修复${repairSummary()}${statsTailNote()}` };
   }
-  if (revisionRes.stdout.trim() !== revision) return failAssurance("修复复核期间 revision 漂移");
+  // 修复复核期间漂移检测：复核与登记完成后以 evaluate 的 revision 对照本轮修复登记的
+  // revision——复核期间项目内容被外部改动会让本轮证据失锚
+  if (typeof currentVerdict.revision !== "string" || currentVerdict.revision !== revision) {
+    return failAssurance(
+      `修复复核期间 revision 漂移：登记时 ${revision}，复核后 evaluate 为 ${typeof currentVerdict.revision === "string" ? currentVerdict.revision : "（非法值）"}。恢复动作：排查修复复核期间的项目内容变化（reviewer 测试产物按验收口径清理，或外部写入回退）后重新发起`,
+    );
+  }
 }
 
 artifactTag = `${revisionHash(revision)}-${attemptTag}`;
 coverageReportPath = `${evidenceRoot}coverage-${artifactTag}.md`;
-explorationReportPath = `${evidenceRoot}exploration-${artifactTag}.md`;
 assuranceSummaryPath = `${evidenceRoot}assurance-${artifactTag}.md`;
 
-const explorationHistory = events
-  .filter((event) => event.type === "ExplorationCompleted")
-  .map((event) => ({ eventId: event.eventId, revision: event.revision, artifact: event.artifact }));
-
-if (args.mode === "explore-only") {
-  const candidateManifestPath = `${evidenceRoot}candidate-manifest-${artifactTag}.json`;
-  const candidateManifest = JSON.stringify({ revision, acceptanceVersion, candidateExploration: true, assertionIds: requirements.flatMap((r) => (r.assertions ?? []).map((assertion) => assertion.id)) }, null, 2);
-  const manifestWrite = await runNode([NODE_WRITE_FILE, candidateManifestPath, `${candidateManifest}
-`]);
-  if (manifestWrite.exitCode !== 0) return failAssurance(`候选探索清单写入失败：${manifestWrite.stderr.trim()}`);
-  const manifestSha = await artifactSha256Of(candidateManifestPath);
-  const explorer = agent("candidate-explorer-review", explorerPersona);
-  const guard = await askGuarded<ExplorationOutcome>(async (corrective) => {
-    const outcome = await explorer.ask<ExplorationOutcome>([
-      `cwd/projectRoot：${projectRoot}`,
-      `taskDir：${taskDir}`,
-      `用户原始意图原文：${intentPath}；原始意图与验收：${acceptancePath}`,
-      `候选探索清单：${candidateManifestPath}`,
-      `历史探索报告索引（已探索方向不得重复）：${JSON.stringify(explorationHistory)}`,
-      `报告写入路径：${explorationReportPath}`,
-      `必须覆盖的探索维度：${JSON.stringify(reviewDimensions)}`,
-      "这是候选交付前的开放探索：从原始意图、验收、反例场景与真实实现主动寻找反例，亲自运行实验并保存原始证据。",
-      "每个 must-fix 给 origin/expectedStage/regressionTestRef；suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据）。",
-      '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
-      ...(corrective === null ? [] : [corrective]),
-    ].join("\n"));
-    const reportRes = await runNode([NODE_CHECK_FILES, explorationReportPath]);
-    if (reportRes.exitCode !== 0) throw new Error(`探索报告未写入 ${explorationReportPath}`);
-    return outcome;
-  }, validateExploration, { workflow: "assurance-repair-loop-v4", step: "review", round: 2, target: "candidate-explorer-review" });
-  if (!guard.ok || guard.value === null) return failAssurance(`候选探索调用失败：${guard.error}`);
-  for (const draft of guard.value.findings) await appendFinding(draft, explorationReportPath);
-  const explorationEventId = await appendEvent({
-    type: "ExplorationCompleted", actor: "assurance", acceptanceVersion, revision,
-    summary: guard.value.summary, dimensions: guard.value.dimensions,
-    coverageManifestSha256: manifestSha, artifact: explorationReportPath,
-  });
-  const finalEvaluation = await runGate(gatePath, ["evaluate", "--task-dir", taskDir]);
-  const finalVerdict = parseObject(finalEvaluation.stdout);
-  await releaseLease();
-  await obsCloseExecution("exploration-completed");
-  return {
-    terminated: "exploration-completed", taskDir, revision, findingIds, verdict: finalVerdict,
-    message: `候选反例审查完成（ExplorationCompleted=${explorationEventId}）；本阶段不写 AssuranceCompleted，D4 前须处置 must-fix 并补回归测试${repairSummary()}${statsTailNote()}`,
-  };
-}
+// recheck 的探索引用：取同验收版本历史最后一次 ExplorationCompleted（full 或
+// explore-only 产生；delivery-gate 按同口径校验其存在性），本轮不产生新探索
+const explorationEventId = events.filter((event) => event.type === "ExplorationCompleted").at(-1)?.eventId ?? "none";
 // 两阶段串行：coverage 的证据事件与冻结清单落盘后，探索者才按本轮已冻结的覆盖集合启动——
 // 并行启动会让探索者对照到竞态中的旧集合（清单文件尚未写入）
 await obsBegin("review", 1);
@@ -942,7 +889,7 @@ const coverageGuard = await askGuarded<CoverageOutcome>(
       `本轮开始前未决发现：${JSON.stringify([...openFindings.entries()].map(([findingId, summary]) => ({ findingId, summary })))}`,
       `报告写入路径：${coverageReportPath}`,
       `逐项覆盖要求：${JSON.stringify(requirements.map((r) => ({ requirementId: r.id, evidenceKinds: r.evidenceKinds, assertions: r.assertions?.map((assertion) => ({ assertionId: assertion.id, adversarialFormRefs: assertion.adversarialFormRefs, testAssetRefs: assertion.testAssetRefs })) })))}`,
-      mode === "recheck" ? "本轮是 recheck：只复核旧发现、修复 diff 与受影响断言；全量确定性测试仍执行，不发起新的全维度开放探索。逐项确认旧 must-fix 有具体回归测试，不能用测试全绿替代逐项结论。" : "本轮是 full：完整覆盖核对并允许后续开放探索。",
+      "本轮是 recheck（定向复核）：重点复核旧发现、修复 diff 与受影响断言，逐项确认旧 must-fix 有具体回归测试，不能用测试全绿替代逐项结论；不发起新的全维度开放探索。覆盖结论仍须逐断言×证据类型全量返回（裁决器按全量组合判定）——受影响断言必须重新亲自取证，其余断言可依据全量确定性测试回执与既有证据做核对性结论。",
       "对照验收、候选代码与原始证据，亲自运行必要命令；schema 2 按断言×证据类型逐项返回 verified/partial/failed 和 evidence/ 内原始文件，每个反例场景用 adversarialFormIds 明确认领。",
       `对照 ${incrementsPath} 冻结的 testCommand 与上一轮测试产物（taskDir/evidence/ 内 increment-*.log），审查本轮测试内容是否被改弱（断言删除、范围收窄、skip 扩大）；发现改弱即按 must-fix 申报。`,
       "写覆盖报告；新发现不分配 findingId。仅当亲自确认旧发现已修复时，把其 findingId 放入 resolvedFindingIds；亲自核对后确认仍未修复的旧发现放入 unresolvedFindingIds（两者不得重叠）。",
@@ -1024,78 +971,15 @@ if (manifestSha === "") {
 }
 await obsEnd("execute", 1);
 
-// 阶段二（探索性审查为 required 时）：以冻结清单为对照集合发起探索
-let exploration: ExplorationOutcome | null = null;
-let explorationEventId = mode === "recheck"
-  ? (events.filter((event) => event.type === "ExplorationCompleted").at(-1)?.eventId ?? "none")
-  : "none";
-if (explorationRequired && args.mode === "full") {
-  await obsBegin("review", 2);
-  const explorer = agent("explorer-review", explorerPersona);
-  // 调用校验 + 报告后验：维度覆盖校验（validateExploration 口径）与报告缺失（抛异常）
-  const explorationGuard = await askGuarded<ExplorationOutcome>(
-    async (corrective) => {
-      const outcome = await explorer.ask<ExplorationOutcome>([
-        `cwd/projectRoot：${projectRoot}`,
-        `taskDir：${taskDir}`,
-        `用户原始意图原文：${intentPath}；原始意图与验收：${acceptancePath}`,
-        `本轮冻结覆盖清单（探索对照的覆盖集合，内容寻址 ${manifestSha.slice(0, 12)}…）：${manifestPath}`,
-        `历史探索报告索引（已探索方向不得重复）：${JSON.stringify(explorationHistory)}`,
-        `报告写入路径：${explorationReportPath}`,
-        `必须覆盖的探索维度：${JSON.stringify(reviewDimensions)}`,
-        "从原始意图、验收与真实实现主动寻找验收外反例；亲自运行探索命令并保存原始证据。",
-        "写探索报告，申报实际覆盖维度与新发现；不分配 findingId，不修改产品代码、验收、事件或 verdict。",
-        "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不得只按字面合规降级。",
-        '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }——dimensions 须覆盖全部必选维度且去重；must-fix 给 origin/expectedStage/regressionTestRef。',
-        ...(corrective === null ? [] : [corrective]),
-      ].join("\n"));
-      const reportRes = await runNode([NODE_CHECK_FILES, explorationReportPath]);
-      if (reportRes.exitCode !== 0) {
-        throw new Error(`探索报告未写入 ${explorationReportPath}——报告与结构化返回同为完成判据`);
-      }
-      return outcome;
-    },
-    validateExploration,
-    { workflow: "assurance-repair-loop-v4", step: "review", round: 2, target: "explorer-review" },
-  );
-  if (!explorationGuard.ok || explorationGuard.value === null) {
-    return failAssurance(`独立保证角色调用失败：${explorationGuard.error}${salvageableFindingsNote(explorationGuard.raw?.findings)}`);
-  }
-  exploration = explorationGuard.value;
-  await obsEnd("review", 2);
-}
-
 await obsBegin("execute", 2);
 try {
-  if (explorationRequired) {
-    const explorationOutcome = exploration as ExplorationOutcome;
-    const explorationError = validateExploration(explorationOutcome);
-    if (explorationError !== "") {
-      throw new Error(`探索性审查返回校验失败：${explorationError}`);
-    }
-    const explorationReportRes = await runNode([NODE_CHECK_FILES, explorationReportPath]);
-    if (explorationReportRes.exitCode !== 0) {
-      throw new Error(`探索报告缺失：${explorationReportRes.stdout.trim()}`);
-    }
-    for (const draft of explorationOutcome.findings) await appendFinding(draft, explorationReportPath);
-    explorationEventId = await appendEvent({
-      type: "ExplorationCompleted",
-      actor: "assurance",
-      acceptanceVersion,
-      revision,
-      summary: explorationOutcome.summary,
-      dimensions: explorationOutcome.dimensions,
-      coverageManifestSha256: manifestSha,
-      artifact: explorationReportPath,
-    });
-  }
   const summaryLines = [
     "# 独立保证总结",
     "",
     `acceptanceVersion：${acceptanceVersion}`,
     `revision：${revision}`,
     `覆盖核对：${coverage.summary}`,
-    `探索审查：${mode === "recheck" ? `recheck 定向复核，引用历史 ExplorationCompleted=${explorationEventId}` : exploration === null ? "按验收不要求，未执行" : exploration.summary}`,
+    `探索审查：recheck 定向复核，引用历史 ExplorationCompleted=${explorationEventId}（本轮不重新开放探索）`,
     `本轮新发现：${findingIds.length > 0 ? findingIds.join("、") : "无"}`,
     `本轮解决旧发现：${coverage.resolvedFindingIds.length > 0 ? coverage.resolvedFindingIds.join("、") : "无"}`,
     `本轮确认仍未修复（排除自动重认领）：${coverage.unresolvedFindingIds.length > 0 ? coverage.unresolvedFindingIds.join("、") : "无"}`,
@@ -1183,7 +1067,7 @@ try {
   await appendEvent({
     type: "AssuranceCompleted",
     actor: "assurance",
-    mode,
+    mode: "recheck",
     acceptanceVersion,
     revision,
     summary: "覆盖核对与验收要求的探索性审查均已完成，结果见总结和逐项事实",

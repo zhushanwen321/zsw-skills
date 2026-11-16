@@ -1,0 +1,291 @@
+// workflow-v4-repair-loop.test.mjs — assurance-repair-loop-v4 主路径执行级冒烟
+//
+// 覆盖（对应实现：workflows/src/assurance-repair-loop-v4.shared.ts）：
+//   1. 修复轮主链真实执行：planner 聚合 → builder 修复并按精确路径提交（真实 git 仓库）
+//      → RepairRoundRecorded 登记（含 fromRevision/toRevision）→ reviewer 复核 →
+//      FindingResolved → 退出循环；regression 锚点 = explorationHistory TDZ（修复前
+//      planner prompt 构造抛 ReferenceError，整轮 assurance-failed）
+//   2. 最终取证链：coverage 逐断言结论 → EvidenceRecorded → 增量测试回执（真实执行
+//      testCommand）→ AssuranceCompleted(mode=recheck) 引用历史 ExplorationCompleted
+//   3. full-first 前置门禁：事件流无 full 保证时 setup-failure（先跑 full 才可修复）
+//   4. 双平台对拍：zcode 产物（transpile + vm）与 pi 产物（vm + require 注入）主路径
+//      终态一致
+//
+// 运行：node --test scripts/tests/workflow-v4-repair-loop.test.mjs
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import vm from "node:vm";
+import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const WF = join(ROOT, "skills/self/dev-workflow/workflows");
+const ts = require("typescript");
+
+const transpile = (code) =>
+  ts.transpileModule(code, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText;
+
+const tmpHome = () => mkdtempSync(join(tmpdir(), "v4-repair-loop-"));
+
+/** 修复循环脚手架：真实 git 项目 + 任务目录 + 预置事件（full 保证 + 历史探索 + blocker）
+ *  + 桩 delivery-gate（evaluate 按 verdicts 队列出参；append 校验凭据与 actor 匹配后
+ *  落盘并返回递增 eventId；revision 返回修复后 revision）+ 技能角色文件 */
+function makeScaffold(home, { withFull = true } = {}) {
+  const projectRoot = join(home, "proj");
+  mkdirSync(projectRoot, { recursive: true });
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectRoot });
+  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectRoot });
+  spawnSync("git", ["config", "user.name", "t"], { cwd: projectRoot });
+  writeFileSync(join(projectRoot, "a.txt"), "one\n");
+  spawnSync("git", ["add", "."], { cwd: projectRoot });
+  spawnSync("git", ["commit", "-qm", "init"], { cwd: projectRoot });
+
+  const taskDir = join(home, "task");
+  mkdirSync(join(taskDir, "evidence"), { recursive: true });
+  writeFileSync(join(taskDir, "task.json"), JSON.stringify({ schemaVersion: 2, taskId: "repair-loop-test", projectRoot }));
+  writeFileSync(join(taskDir, "intent.md"), "# 原始意图\n");
+  writeFileSync(join(taskDir, "acceptance.json"), JSON.stringify({
+    schemaVersion: 2,
+    acceptanceVersion: 1,
+    taskId: "repair-loop-test",
+    projectRoot,
+    requirements: [{
+      id: "R1",
+      statement: "外部可观察行为",
+      required: true,
+      riskAcceptable: false,
+      evidenceKinds: ["command"],
+      assertions: [{ id: "A1", statement: "行为断言", qualifiers: ["含在途"], given: "初始", when: "操作", then: "预期", adversarialFormRefs: ["AF1"], testAssetRefs: [] }],
+    }],
+    adversarialForms: [{ id: "AF1", assertionId: "A1", qualifier: "含在途", entryPoint: "auto", initialState: "开启", operation: "等待中关闭", timing: "等待窗口", expected: "不写", testAssetRefs: [], rationale: "在途反例" }],
+    exploratoryReview: "required",
+    reviewDimensions: ["smoke"],
+  }));
+  writeFileSync(join(taskDir, "increments.json"), JSON.stringify({
+    schemaVersion: 2,
+    acceptanceVersion: 1,
+    items: [{ id: "I1", title: "首个增量", requirementIds: ["R1"], testCommand: { program: "node", args: ["-e", "process.exit(0)"], timeoutMs: 30000 } }],
+  }));
+  writeFileSync(join(taskDir, "policy-snapshot.json"), JSON.stringify({ "revision.json": {} }));
+
+  const preEvents = [];
+  if (withFull) {
+    preEvents.push(
+      { type: "AssuranceCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", mode: "full", summary: "首次完整保证", eventId: "evt-pre-full" },
+      { type: "ExplorationCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", summary: "历史探索", dimensions: ["smoke"], eventId: "evt-pre-exp" },
+      { type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", summary: "blocker：反例场景未拦截", findingId: "F-A1", category: "defect", severity: "blocker", requirementIds: ["R1"], eventId: "evt-pre-finding" },
+    );
+  }
+  writeFileSync(join(taskDir, "events.jsonl"), preEvents.map((e) => JSON.stringify(e)).join("\n") + (preEvents.length ? "\n" : ""));
+
+  const roles = join(home, ".agents/skills/delivery-v4/references/roles");
+  const scripts = join(home, ".agents/skills/delivery-v4/scripts");
+  mkdirSync(roles, { recursive: true });
+  mkdirSync(scripts, { recursive: true });
+  for (const r of ["coverage-reviewer", "repair-builder"]) writeFileSync(join(roles, `${r}.md`), `# ${r} 桩角色\n`);
+
+  const verdictQueue = [
+    {
+      state: "implementing", revision: "rev-initial", acceptanceVersion: 1,
+      missing: { incrementIds: [] },
+      openFindings: [{ findingId: "F-A1", category: "defect", severity: "blocker", requirementIds: ["R1"], riskAccepted: false }],
+    },
+    { state: "candidate", revision: "rev-after-fix", acceptanceVersion: 1, missing: { incrementIds: [] }, openFindings: [] },
+  ];
+  writeFileSync(join(scripts, "delivery-gate.mjs"), [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "const cmd = process.argv[2];",
+    "const argv = process.argv.slice(3);",
+    "const opt = (n) => { const i = argv.indexOf('--' + n); return i >= 0 ? argv[i + 1] : undefined; };",
+    "if (cmd === 'evaluate') {",
+    "  const p = path.join(path.dirname(process.argv[1]), 'gate-verdicts.json');",
+    "  const list = JSON.parse(fs.readFileSync(p, 'utf8'));",
+    "  const verdict = list.length > 1 ? list.shift() : list[0];",
+    "  fs.writeFileSync(p, JSON.stringify(list));",
+    "  process.stdout.write(JSON.stringify(verdict));",
+    "  process.exit(0);",
+    "}",
+    "if (cmd === 'revision') { process.stdout.write('rev-after-fix'); process.exit(0); }",
+    "if (cmd === 'append') {",
+    "  const credential = opt('credential');",
+    "  if (typeof credential !== 'string' || credential === '') { process.stderr.write('append 需要 --credential'); process.exit(2); }",
+    "  const event = JSON.parse(opt('event'));",
+    "  const expected = { builder: 'stub-builder-cred', assurance: 'stub-assurance-cred' }[event.actor];",
+    "  if (expected && credential !== expected) { process.stderr.write('凭据角色与 actor 不匹配：' + event.actor); process.exit(2); }",
+    "  const eventsPath = path.join(opt('task-dir'), 'events.jsonl');",
+    "  const seq = fs.existsSync(eventsPath) ? fs.readFileSync(eventsPath, 'utf8').trim().split('\\n').filter(Boolean).length + 1 : 1;",
+    "  const record = { seq, recordedAt: '2026-01-01T00:00:00.000Z', eventId: 'evt-' + seq, signature: 'stub', ...event };",
+    "  fs.appendFileSync(eventsPath, JSON.stringify(record) + '\\n');",
+    "  process.stdout.write(JSON.stringify({ eventId: record.eventId }));",
+    "  process.exit(0);",
+    "}",
+    "process.stderr.write('stub gate: 未知命令 ' + cmd);",
+    "process.exit(2);",
+  ].join("\n"));
+  writeFileSync(join(scripts, "gate-verdicts.json"), JSON.stringify(verdictQueue));
+
+  return { projectRoot, taskDir };
+}
+
+/** 桩 agent 表（zcode 形态）：按实例名前缀分发；「写入路径：X」行自动落盘桩产物；
+ *  builder 桩同时改 proj/a.txt（让 git commit 有真实改动可提交） */
+function repairAgentStub(s) {
+  const apply = (hit, instructions) => {
+    const value = typeof hit === "function" ? hit(instructions) : hit;
+    for (const m of instructions.matchAll(/写入路径：(\S+)/g)) writeFileSync(m[1], `# 桩产物（${m[1]}）\n`);
+    return value;
+  };
+  return (...a) => {
+    const name = typeof a[0] === "string" ? a[0] : String(a[0]?.description ?? "");
+    const hit = {
+      "repair-planner": () => ({
+        summary: "聚合完成：1 条实现级缺陷",
+        affectedAssertionIds: ["A1"],
+        items: [{ findingId: "F-A1", guidance: "修 a.txt", origin: "implementation", expectedStage: "D2", regressionTestRef: "test-A1" }],
+      }),
+      "repair-builder": () => {
+        writeFileSync(join(s.projectRoot, "a.txt"), "fixed\n");
+        return { summary: "已修复", filesChanged: ["a.txt"], testEvidence: "node -e exit 0", affectedAssertionIds: ["A1"] };
+      },
+      "repair-reviewer": () => ({ summary: "复核通过", testEvidence: "全绿", resolvedFindingIds: ["F-A1"], unresolvedFindingIds: [], findings: [] }),
+      "coverage-review": () => {
+        const artifact = join(s.taskDir, "evidence", "cov-A1-command.md");
+        writeFileSync(artifact, "原始核对记录（桩）\n");
+        return {
+          summary: "逐断言复核完成",
+          evidence: [{ requirementId: "R1", kind: "command", result: "verified", assertionIds: ["A1"], adversarialFormIds: ["AF1"], artifact }],
+          findings: [], resolvedFindingIds: [], unresolvedFindingIds: [],
+        };
+      },
+    }[name.replace(/-r\d+$/, "")];
+    assert.ok(hit !== undefined, `未预期的 agent 实例：${name}`);
+    if (typeof a[0] === "string") return { ask: async (...askArgs) => apply(hit, String(askArgs[askArgs.length - 1])) };
+    return Promise.resolve(apply(hit, String(a[0].prompt)));
+  };
+}
+
+async function runZcode(home, argsValue, agentImpl) {
+  const raw = readFileSync(join(WF, "assurance-repair-loop-v4.dwf.ts"), "utf8");
+  const js = transpile(raw);
+  const logs = [];
+  const world = {
+    run: async (cmd, a, opts) => {
+      const r = spawnSync(cmd, a ?? [], {
+        encoding: "utf8", cwd: home, env: { ...process.env, HOME: home },
+        timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000,
+      });
+      return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+    },
+  };
+  const fn = new vm.Script(`(async function __main__(args, world, log, phase, report, artifact, agent) {\n${js}\n})`).runInNewContext({});
+  const result = await fn(
+    argsValue, world, (m) => logs.push(String(m)), () => {}, () => {},
+    { chart: () => {}, board: () => {}, markdown: async () => ({}), file: async () => ({}) },
+    agentImpl,
+  );
+  return { result, logs };
+}
+
+async function runPi(home, argsValue, agentImpl) {
+  const raw = readFileSync(join(WF, "pi", "assurance-repair-loop-v4.js"), "utf8");
+  const logs = [];
+  const world = {
+    run: async (cmd, a, opts) => {
+      const r = spawnSync(cmd, a ?? [], {
+        encoding: "utf8", cwd: home, env: { ...process.env, HOME: home },
+        timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000,
+      });
+      return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+    },
+  };
+  const context = {
+    require,
+    console: { log: (...m) => logs.push(m.map(String).join(" ")), error: () => {}, warn: () => {} },
+    process: { ...process, env: { ...process.env, HOME: home }, cwd: () => home },
+    $ARGS: { ...argsValue },
+    $WORKSPACE: home,
+    world,
+    agent: agentImpl,
+    log: (m) => logs.push(String(m)),
+    phase: () => {},
+    report: () => {},
+    artifact: { chart: () => {}, board: () => {}, markdown: async () => ({}), file: async () => ({}) },
+  };
+  context.globalThis = context;
+  const fn = new vm.Script(`(async function __main__() {\nconst args = $ARGS;\n${raw}\n})`).runInNewContext(context);
+  return { result: await fn(), logs };
+}
+
+const baseArgs = (s) => ({
+  projectRoot: s.projectRoot,
+  taskDir: s.taskDir,
+  assuranceCredentialId: "stub-assurance-cred",
+  builderCredentialId: "stub-builder-cred",
+  allowCommit: true,
+});
+
+const readEvents = (taskDir) =>
+  readFileSync(join(taskDir, "events.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+
+test("zcode 主路径：修复轮提交 + RepairRoundRecorded 溯源 + recheck 最终取证（TDZ 回归）", async () => {
+  const home = tmpHome();
+  try {
+    const s = makeScaffold(home);
+    const { result, logs } = await runZcode(home, baseArgs(s), repairAgentStub(s));
+    assert.equal(result.terminated, "assurance-completed", `主路径应走通（logs: ${logs.join(" | ")}, message: ${result.message}）`);
+    const events = readEvents(s.taskDir);
+    const repair = events.find((e) => e.type === "RepairRoundRecorded");
+    assert.ok(repair !== undefined, "应登记 RepairRoundRecorded");
+    assert.equal(repair.round, 1);
+    assert.equal(repair.fromRevision, "rev-initial");
+    assert.equal(repair.toRevision, "rev-after-fix");
+    const resolved = events.find((e) => e.type === "FindingResolved");
+    assert.ok(resolved !== undefined, "复核确认后应登记 FindingResolved");
+    const assurance = events.filter((e) => e.type === "AssuranceCompleted").at(-1);
+    assert.equal(assurance.mode, "recheck");
+    assert.equal(assurance.explorationEventId, "evt-pre-exp", "recheck 引用历史 ExplorationCompleted");
+    assert.ok(events.some((e) => e.type === "EvidenceRecorded" && e.assertionIds?.includes("A1")), "应有断言级证据事件");
+    const commitLog = spawnSync("git", ["log", "--name-only", "--format=%s"], { cwd: s.projectDir ?? s.projectRoot, encoding: "utf8" }).stdout;
+    assert.ok(commitLog.includes("fix(delivery): repair round 1"), "修复应产生提交");
+    assert.ok(commitLog.slice(commitLog.indexOf("fix(delivery)")).includes("a.txt"), "提交只含 builder 申报文件");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("pi 主路径：与 zcode 终态一致（双平台对拍）", async () => {
+  const home = tmpHome();
+  const prevHome = process.env.HOME;
+  process.env.HOME = home; // pi 壳探针与 spawnSync 继承进程 env
+  try {
+    const s = makeScaffold(home);
+    const { result } = await runPi(home, baseArgs(s), repairAgentStub(s));
+    assert.equal(result.terminated, "assurance-completed", `pi 主路径应走通（message: ${result.message}）`);
+    const events = readEvents(s.taskDir);
+    assert.ok(events.some((e) => e.type === "RepairRoundRecorded" && e.fromRevision === "rev-initial" && e.toRevision === "rev-after-fix"));
+  } finally {
+    process.env.HOME = prevHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("full-first 前置：事件流无 full 保证时 setup-failure", async () => {
+  const home = tmpHome();
+  try {
+    const s = makeScaffold(home, { withFull: false });
+    const { result } = await runZcode(home, baseArgs(s), repairAgentStub(s));
+    assert.equal(result.terminated, "setup-failure");
+    assert.ok(result.message.includes("full"), "失败消息应指向先跑 full 的恢复动作");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

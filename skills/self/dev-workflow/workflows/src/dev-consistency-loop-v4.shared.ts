@@ -53,7 +53,7 @@ const maxRounds = typeof args.maxRounds === "number" && args.maxRounds >= 1 ? Ma
 const attempt = typeof args.attempt === "number" && args.attempt >= 1 ? Math.floor(args.attempt) : 1;
 // reviewer 模板默认路径用 ~ 占位形态（运行时由 node 侧 os.homedir() 展开——家目录
 // 绝对路径不入脚本字面量）；args.reviewerTemplate 可覆盖。
-const DEFAULT_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-v4/agents/consistency-reviewer.md";
+const DEFAULT_REVIEWER_TEMPLATE = "~/.agents/skills/dev-flow-v4/agents/consistency-reviewer-v4.md";
 const reviewerTemplate =
   typeof args.reviewerTemplate === "string" && args.reviewerTemplate.trim() !== ""
     ? args.reviewerTemplate.trim()
@@ -252,17 +252,22 @@ const NODE_PREP = [
   "if (!fs.existsSync(designAbs)) die('设计文档不存在: ' + designAbs);",
   "if (!fs.existsSync(planAbs)) die('impl-plan 不存在: ' + planAbs);",
   // V4 交付任务：设计目录 meta.acceptanceBinding.taskDir → 验收包路径（D2 三方对账输入）。
-  // 独立设计任务无 binding = null，reviewer 仍按设计↔实现两方对账。
-  "var acceptancePath = null;",
+  // 三态披露：bound=推导成功；no-binding=独立设计任务（两方对账，正常形态）；
+  // invalid=meta.json 声明了 binding 但验收包不可读（异常——reviewer prompt 显式登记，
+  // 不静默降级两方对账）
+  "var acceptancePath = null, accStatus = 'no-binding';",
   "try {",
   "  var metaPath = path.join(path.dirname(designAbs), 'meta.json');",
   "  if (fs.existsSync(metaPath)) {",
   "    var meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));",
   "    var binding = meta && meta.acceptanceBinding && typeof meta.acceptanceBinding.taskDir === 'string' ? meta.acceptanceBinding : null;",
-  "    var accCandidate = binding ? path.join(binding.taskDir, 'acceptance.json') : null;",
-  "    if (accCandidate && fs.existsSync(accCandidate)) acceptancePath = accCandidate;",
+  "    if (binding) {",
+  "      var accCandidate = path.join(binding.taskDir, 'acceptance.json');",
+  "      if (fs.existsSync(accCandidate)) { acceptancePath = accCandidate; accStatus = 'bound'; }",
+  "      else accStatus = 'invalid';",
+  "    }",
   "  }",
-  "} catch (e) { acceptancePath = null; }",
+  "} catch (e) { accStatus = 'invalid'; }",
   "var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);",
   "if (!fs.existsSync(tplAbs)) die('reviewer 模板不存在: ' + tplAbs + '（恢复：安装 dev-flow-v4 skill 或经 args.reviewerTemplate 指定有效路径）');",
   "var git = function (a) { return cp.execFileSync('git', a, { cwd: projectRoot, encoding: 'utf8', maxBuffer: 67108864, stdio: ['pipe', 'pipe', 'pipe'] }); };",
@@ -330,7 +335,7 @@ const NODE_PREP = [
   "  preExisting = pe.split('\\n').filter(function (l) { return l.length > 3 && l.slice(0, 2) !== '??'; }).map(function (l) { return l.slice(3); });",
   "} catch (e) { /* porcelain 失败不阻断启动：settle 退化为无排除集（与旧行为一致） */ }",
   "console.log(JSON.stringify({",
-  "  projectRoot: projectRoot, baseline: bl, designDocPath: designAbs, planPath: planAbs, planMdPath: planMd, acceptancePath: acceptancePath,",
+  "  projectRoot: projectRoot, baseline: bl, designDocPath: designAbs, planPath: planAbs, planMdPath: planMd, acceptancePath: acceptancePath, acceptanceBindingStatus: accStatus,",
   "  statusPath: statusAbs, runlogDir: runlogDir, ledgerPath: ledgerPath,",
   "  gateALog: gateALog, reviewerTemplate: tplAbs, partitions: partitions,",
   "  diffChurn: churn, diffFileCount: files.length, unitCount: unitCount,",
@@ -1068,6 +1073,11 @@ const ctxBlock = [
     ? [
         `- 交付验收包（V4 三方对账输入：requirements[].assertions + adversarialForms）：${info.acceptancePath}`,
         "- 对照 s4-accept.json 的 criterionMechanisms / verificationBindings，逐反例场景核对测试实际构造的入口、初始状态、故障、时序与断言位置；只有标题或认领、未构造判据条件 = unreasonable。涉及等价性的发现必须实跑相关局部实验。",
+      ]
+    : []),
+  ...(info.acceptanceBindingStatus === "invalid"
+    ? [
+        "- WARN 验收绑定异常：设计目录 meta.json 声明了交付绑定（acceptanceBinding.taskDir）但对应 acceptance.json 不可读——本次对账退回设计↔实现两方口径，交付判据（断言限定条件与反例场景）对照缺失；该事实必须写入审查报告（每份报告开头登记一行），终态由主 agent 呈报用户修复绑定后重跑受影响审查。",
       ]
     : []),
 ].join("\n");

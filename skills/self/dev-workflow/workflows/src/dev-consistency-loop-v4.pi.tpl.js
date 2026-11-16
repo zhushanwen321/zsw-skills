@@ -17,7 +17,7 @@ parameters:
       description: "修复→定向复审循环轮次上限（R1 全面审不计入）"
     reviewerTemplate:
       type: string
-      default: "~/.agents/skills/dev-flow-v4/agents/consistency-reviewer.md"
+      default: "~/.agents/skills/dev-flow-v4/agents/consistency-reviewer-v4.md"
       description: "一致性审查 agent 模板路径（缺省用 dev-flow-v4 skill 内置模板）"
     attempt:
       type: number

@@ -237,6 +237,51 @@ test("schema 2 非 blocker 必须给行为后果否决论证", (t) => {
   ok(raise(fx, rev, "F-S1", { severity: "non-blocker", consequenceRefutation: "该行为用户不可观察：仅内部计数变化，无消息流与存储变化" }));
 });
 
+test("recheck 不能替代首次 full（full-first 门禁）", (t) => {
+  const fx = fixture(t);
+  const rev = driveToAssurance(fx);
+  // 绕过形态：explore-only 产生历史探索后直接 recheck 取证，全程无 full
+  const explorationEventId = explore(fx, rev);
+  appendAllEvidence(fx, rev);
+  completeAssurance(fx, rev, "recheck", explorationEventId);
+  let verdict = evaluate(fx);
+  assert.equal(verdict.state, "candidate", "无先前 full 时 recheck 不构成有效保证");
+  assert.ok(verdict.missing.assuranceCompleted, "保证完成应缺失");
+  assert.ok(verdict.missing.assuranceFullFirst !== null, "应披露 full-first 缺口与恢复动作");
+  assert.ok(verdict.missing.assuranceFullFirst.note.includes("full"), "恢复动作应指向先跑 full");
+  // 补 full 后同一 recheck 转为有效（先前 full 按登记时点合格性判定）
+  completeAssurance(fx, rev, "full", explorationEventId);
+  verdict = evaluate(fx);
+  assert.equal(verdict.state, "accepted", "补 full 后 recheck 不再单独承重，整体可达 accepted");
+});
+
+test("循环外实现性修复呈报：revision 无登记通道前进时披露，登记修复轮后消除", (t) => {
+  const fx = fixture(t);
+  const rev = driveToAssurance(fx);
+  ok(raise(fx, rev, "F-O1"));
+  appendAllEvidence(fx, rev);
+  completeAssurance(fx, rev, "full", fx.explorationEventId);
+  // 旁路形态：直接 commit 改实现——无 RepairRoundRecorded / 无新增实现登记 / 无漂移登记
+  writeFileSync(join(fx.projectDir, "a.txt"), "two\n");
+  spawnSync("git", ["add", "a.txt"], { cwd: fx.projectDir });
+  spawnSync("git", ["commit", "-qm", "bypass"], { cwd: fx.projectDir });
+  const nextRevision = revision(fx);
+  assert.notEqual(nextRevision, rev);
+  let verdict = evaluate(fx);
+  assert.ok(verdict.quality.offLoopRepair !== null, "应显式呈报疑似循环外修复");
+  assert.equal(verdict.quality.offLoopRepair.lastAssuranceRevision, rev);
+  assert.equal(verdict.quality.offLoopRepair.currentRevision, nextRevision);
+  // 走受控通道补登记修复轮后呈报消除
+  const artifact = evidenceFile(fx, "repair-1.md");
+  ok(append(fx, {
+    type: "RepairRoundRecorded", actor: "builder", acceptanceVersion: 1, revision: nextRevision,
+    summary: "第 1 轮实现性修复", round: 1, triggerFindingIds: ["F-O1"], affectedAssertionIds: ["A1"],
+    fromRevision: rev, toRevision: nextRevision, artifact: artifact.artifact,
+  }, "builder"));
+  verdict = evaluate(fx);
+  assert.equal(verdict.quality.offLoopRepair, null, "登记修复轮后不再呈报");
+});
+
 test("限定条件缺反例场景时验收校验拒绝", (t) => {
   const fx = fixture(t);
   const acceptance = readJson(join(fx.taskDir, "acceptance.json"));

@@ -32,7 +32,7 @@ args:
   reviewers:
     type: json
     description: 自定义 reviewer 模板绝对路径数组，按文件 basename 覆盖同名维度
-      （tech-design-direction-review.md / tech-design-review.md /
+      （tech-design-direction-review.md / tech-design-review-v4.md /
       tech-design-impact-review.md / tech-design-simplicity-review.md）；
       未匹配任何维度的条目忽略并告警
   attempt:

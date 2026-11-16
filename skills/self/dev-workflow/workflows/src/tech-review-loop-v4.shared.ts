@@ -619,7 +619,7 @@ if (obsCtx !== null) obsCtx.attempt = attempt;
 // 默认 reviewer 模板（脚本内字面量，~ 运行时展开）；args.reviewers 按 basename 覆盖同名维度
 const TEMPLATE_BASENAMES: { dim: string; file: string }[] = [
   { dim: "direction", file: "tech-design-direction-review.md" },
-  { dim: "main", file: "tech-design-review.md" },
+  { dim: "main", file: "tech-design-review-v4.md" },
   { dim: "impact", file: "tech-design-impact-review.md" },
   { dim: "simplicity", file: "tech-design-simplicity-review.md" },
 ];
@@ -657,6 +657,36 @@ const renderCliAbs = expandTilde(RENDER_TILDE);
 const checkCliAbs = expandTilde(CHECK_CLI_TILDE);
 // 渲染视图路径（方向审 / 三审的审查对象；渲染脚本按目录 basename + .rendered.md 命名）
 const renderedMd = `${designDoc}/${docBase}.rendered.md`;
+
+// V4 交付任务：设计目录 meta.acceptanceBinding.taskDir → 验收包路径。主审/方向审对照
+// requirements[].assertions、adversarialForms、criterionMechanisms 的判据锚点由它提供
+//（机制是否暗中改变判据自然语义——没有验收包输入则该审查无据可依）。独立设计任务
+// 无 binding = 不注入；binding 声明了但验收包不可读 = 显式披露给四席在报告中登记
+const ACCEPTANCE_PROBE =
+  "var fs=require('fs'),pt=require('path');" +
+  "try{var meta=JSON.parse(fs.readFileSync(pt.join(process.argv[1],'meta.json'),'utf8'));" +
+  "var b=meta&&meta.acceptanceBinding&&typeof meta.acceptanceBinding.taskDir==='string'?meta.acceptanceBinding:null;" +
+  "if(!b){process.stdout.write(JSON.stringify({status:'no-binding'}))}else{" +
+  "var a=pt.join(b.taskDir,'acceptance.json');" +
+  "if(fs.existsSync(a))process.stdout.write(JSON.stringify({status:'bound',acceptancePath:a}));" +
+  "else process.stdout.write(JSON.stringify({status:'invalid',reason:'binding 指向的 acceptance.json 不存在：'+a}))}}" +
+  "catch(e){process.stdout.write(JSON.stringify({status:'invalid',reason:'meta.json 读取或解析失败：'+(e&&e.message||e)}))}";
+const acceptanceProbe = await world.run("node", ["-e", ACCEPTANCE_PROBE, designDoc]);
+let acceptanceBinding: { status: string; acceptancePath?: string; reason?: string } | null = null;
+try {
+  const probed = JSON.parse(acceptanceProbe.stdout) as Record<string, unknown>;
+  if (probed !== null && typeof probed === "object" && typeof probed.status === "string") {
+    acceptanceBinding = probed as { status: string; acceptancePath?: string; reason?: string };
+  }
+} catch {
+  acceptanceBinding = null; // 探针自身失败按无绑定处理（meta.json 缺失属独立设计任务常态）
+}
+if (acceptanceBinding === null) {
+  log(`WARN: 验收绑定探针输出不可解析（stdout=${acceptanceProbe.stdout.trim().slice(0, 120)}）——按独立设计任务处理，验收判据对照不可用`);
+}
+if (acceptanceBinding !== null && acceptanceBinding.status === "invalid") {
+  log(`WARN: 验收绑定异常——${acceptanceBinding.reason}；四席将在报告中登记「判据锚点缺失」`);
+}
 
 // 审查维度（固定四席并行 = 方向审席 + 三审；报告名确定性，落当轮轮次目录）
 const TRIALS: { dim: "direction" | "main" | "impact" | "simplicity"; label: string; reportName: string }[] = [
@@ -950,6 +980,12 @@ for (let round = 1; round <= maxRounds; round++) {
       `审查对象（渲染视图——读它）：${renderedMd}`,
       `章节 JSON（需核对断言-红灯表等结构化字段原文时读，如 s4-accept.json 的 assertionRedlights）：设计目录 ${designDoc}（字段规格见 ${schemaPath}）。`,
       `项目上下文（存在则读，作产品与规范基准）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
+      ...(acceptanceBinding !== null && acceptanceBinding.status === "bound"
+        ? [`交付验收包（判据权威源，必读）：${acceptanceBinding.acceptancePath}——对照 requirements[].assertions 的限定条件与预期结果、adversarialForms 反例场景、criterionMechanisms/verificationBindings 机制对账；设计机制不得暗中改变判据的自然语义，发现改变即打 must-fix 并给出断言锚点。`]
+        : []),
+      ...(acceptanceBinding !== null && acceptanceBinding.status === "invalid"
+        ? [`WARN 验收绑定异常（${acceptanceBinding.reason}）：设计目录声明了交付绑定但验收包不可读——在报告开头登记该事实；涉及验收判据的审查项标注「判据锚点缺失」，不得凭设计文档自述替代判据对照。`]
+        : []),
       "只读评审：禁止修改设计文档与项目内任何文件。",
       round === 1 ? "本轮为首轮全面审：按模板 checklist 全项覆盖。" : "",
       focusBlock,
@@ -1129,6 +1165,14 @@ for (let round = 1; round <= maxRounds; round++) {
   const criticalItems = aggregatedItems !== null ? aggregatedItems.filter((it) => it.impact !== "minor") : [];
   const criticalRefs = new Set(criticalItems.flatMap((it) => it.refs));
   const roundMustFix = criticalItems.length;
+  // 覆盖校验输入（critical-only）：与修复者的问题清单（problemsBlock）同源。全量
+  // problems.json 仍是人读与断点恢复锚点，但 minor 项不要求本轮处置——若把全量清单
+  // 传给 check-dispositions，覆盖校验会强制修复者逐条处置 minor、把分级机制拖回全量循环
+  const criticalProblems = roundProblems.filter((p) => criticalRefs.has(p.ref));
+  const critWrite = await world.run("node", ["-e", NODE_WRITE_FILE, `${roundAbs}/problems-critical.json`, JSON.stringify({ round, problems: criticalProblems }, null, 2)]);
+  if (critWrite.exitCode !== 0) {
+    return await finish("review-failure", round, `critical 问题清单落盘失败（${roundAbs}/problems-critical.json，exit ${critWrite.exitCode}）：${critWrite.stderr.trim() || critWrite.stdout.trim()}。恢复动作：args.attempt 递增重新发起`);
+  }
   trajectory.push(roundMustFix);
   report({ round, mustFix: roundMustFix, minorCollected: minorFindings.length }, "trajectory");
 
@@ -1198,7 +1242,6 @@ for (let round = 1; round <= maxRounds; round++) {
   // 本轮问题清单内联：处置表 source 引用的唯一合法锚点集（覆盖校验按此集合判定）。
   // V4 代只内联 critical 项的 ref——minor 项不要求本轮处置（已进收集清单），
   // 注入反而会被覆盖校验强制逐条处置、把 minor 拖回循环
-  const criticalProblems = roundProblems.filter((p) => criticalRefs.has(p.ref));
   const problemsBlock =
     criticalProblems.length > 0
       ? [
@@ -1316,7 +1359,7 @@ for (let round = 1; round <= maxRounds; round++) {
     const checkInput = `${roundAbs}/.dispositions-check.json`;
     const wIn = await world.run("node", ["-e", NODE_WRITE_FILE, checkInput, JSON.stringify({ dispositions })]);
     const chk =
-      wIn.exitCode === 0 ? await world.run("node", [checkCliAbs, checkInput, "--problems", `${roundAbs}/problems.json`]) : null;
+      wIn.exitCode === 0 ? await world.run("node", [checkCliAbs, checkInput, "--problems", `${roundAbs}/problems-critical.json`]) : null;
     if (chk === null || chk.exitCode >= 2) {
       return await finish(
         "fix-failure",
@@ -1334,7 +1377,7 @@ for (let round = 1; round <= maxRounds; round++) {
       return await finish(
         "fix-failure",
         round,
-        `校验器输出无法解析（stdout 前 200 字符：${JSON.stringify(chk.stdout.slice(0, 200))}）。恢复动作：人工跑 ${CHECK_CLI_TILDE} ${checkInput} --problems ${roundAbs}/problems.json 核对后 args.attempt 递增重新发起`,
+        `校验器输出无法解析（stdout 前 200 字符：${JSON.stringify(chk.stdout.slice(0, 200))}）。恢复动作：人工跑 ${CHECK_CLI_TILDE} ${checkInput} --problems ${roundAbs}/problems-critical.json 核对后 args.attempt 递增重新发起`,
       );
     }
     for (const w of check.warnings) log(`WARN: ${w}`);

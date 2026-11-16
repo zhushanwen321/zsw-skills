@@ -131,32 +131,22 @@ const SCHEMA_CoverageOutcome = {
   required: ["summary", "evidence", "findings", "resolvedFindingIds", "unresolvedFindingIds"],
 };
 
-// explorer（explorer.md 角色）结构化返回：探索审查结论——dimensions 必须完整覆盖
-// contract.reviewDimensions
-const SCHEMA_ExplorationOutcome = {
+// FindingDraft（三档分级发现申报）——复核/覆盖结论里 findings 条目的字段契约
+//（repair 循环不产出 ExplorationOutcome：recheck 不重新开放探索）
+const SCHEMA_FindingDraft = {
   type: "object",
   properties: {
-    summary: { type: "string", description: "探索审查范围与依据摘要（从哪些角度找了什么反例）" },
-    dimensions: {
-      type: "array",
-      items: { type: "string" },
-      description: "实际覆盖的探索维度（必须完整覆盖 contract.reviewDimensions，去重）",
-    },
-    findings: {
-      type: "array",
-      description: "契约外反例等新发现（无则空数组；findingId 由引擎统一分配，不在此申报）",
-      items: {
-        type: "object",
-        properties: {
-          summary: { type: "string", description: "缺陷现象与影响" },
-          requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
-          tier: { type: "string", enum: ["must-fix", "suggestion", "info"], description: "V4 代三档分级：must-fix=违反验收判据（立即修复档）；suggestion=建议改进但不违反判据（攒批档）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 按 must-fix" },
-        },
-        required: ["summary", "requirementIds", "tier"],
-      },
-    },
+    summary: { type: "string", description: "缺陷现象与影响" },
+    requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
+    tier: { type: "string", enum: ["must-fix", "suggestion", "info"], description: "V4 代三档分级：must-fix=违反验收判据（立即修复档）；suggestion=建议改进但不违反判据（攒批档）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 按 must-fix" },
+    consequenceRefutation: { type: "string", description: "非 must-fix 必填：不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据" },
+    reopenOf: { type: "string", description: "重开申报：指向此前被解决过的 findingId（不重复计数）" },
+    origin: { type: "string", enum: ["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"], description: "来源阶段（must-fix 建议填写）" },
+    firstDetectedStage: { type: "string", description: "实际发现该问题的阶段（must-fix 建议填写）" },
+    expectedStage: { type: "string", description: "该问题本应在哪个阶段被拦截（must-fix 建议填写）" },
+    regressionTestRef: { type: "string", description: "回归测试标识（must-fix 建议填写）" },
   },
-  required: ["summary", "dimensions", "findings"],
+  required: ["summary", "requirementIds", "tier"],
 };
 
 const SCHEMA_RepairPlan = {
@@ -198,7 +188,7 @@ const SCHEMA_RepairReviewOutcome = {
     testEvidence: { type: "string" },
     resolvedFindingIds: { type: "array", items: { type: "string" } },
     unresolvedFindingIds: { type: "array", items: { type: "string" } },
-    findings: SCHEMA_ExplorationOutcome.properties.findings,
+    findings: { type: "array", items: SCHEMA_FindingDraft },
   },
   required: ["summary", "testEvidence", "resolvedFindingIds", "unresolvedFindingIds", "findings"],
 };
@@ -208,7 +198,7 @@ const SCHEMA_RepairReviewOutcome = {
 // persona 拼 prompt 头（pi agent() 无 system 通道）；每次调用都是新 agent（pi 无续聊）。
 const SCHEMA_BY_KEY = {
   CoverageOutcome: SCHEMA_CoverageOutcome,
-  ExplorationOutcome: SCHEMA_ExplorationOutcome,
+  FindingDraft: SCHEMA_FindingDraft,
   RepairPlan: SCHEMA_RepairPlan,
   RepairBuilderOutcome: SCHEMA_RepairBuilderOutcome,
   RepairReviewOutcome: SCHEMA_RepairReviewOutcome,

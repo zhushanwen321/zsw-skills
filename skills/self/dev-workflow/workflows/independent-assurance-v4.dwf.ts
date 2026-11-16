@@ -419,7 +419,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "4.0.0"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.0.1"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -1076,6 +1076,17 @@ if (eventsRes.exitCode !== 0 || eventsError !== "") {
   };
   return result;
 }
+// full-first 前置门禁（与 delivery-gate 同口径）：recheck 是修复后的定向复核，同验收
+// 版本历史必须存在过 full 保证——否则跑完全程也会被裁决器判无效（missing.assuranceFullFirst），
+// 在 setup 即拦下省一轮成本。explore-only 只产生 ExplorationCompleted，不构成 full
+if (mode === "recheck" && !events.some((event) => event.type === "AssuranceCompleted" && (event.mode ?? "full") === "full")) {
+  await obsCloseExecution("setup-failure");
+  const result: AssuranceResult = {
+    terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
+    message: `recheck 前置门禁拒绝：同验收版本事件流中不存在任何 full 保证（AssuranceCompleted mode=full）——首次完整保证不可被定向复核替代。恢复动作：先以 mode=full 发起本 workflow 完成首次完整取证（或经 candidate-build-v4 的候选探索补 explore-only 后再 full），修复后再以 recheck 定向复核${repairSummary()}`,
+  };
+  return result;
+}
 const requirementIds = new Set(requirements.map((r) => r.id));
 const openFindings = new Map<string, string>();
 for (const event of events) {
@@ -1382,7 +1393,9 @@ const coverageGuard = await askGuarded<CoverageOutcome>(
       `本轮开始前未决发现：${JSON.stringify([...openFindings.entries()].map(([findingId, summary]) => ({ findingId, summary })))}`,
       `报告写入路径：${coverageReportPath}`,
       `逐项覆盖要求：${JSON.stringify(requirements.map((r) => ({ requirementId: r.id, evidenceKinds: r.evidenceKinds, assertions: r.assertions?.map((assertion) => ({ assertionId: assertion.id, adversarialFormRefs: assertion.adversarialFormRefs, testAssetRefs: assertion.testAssetRefs })) })))}`,
-      mode === "recheck" ? "本轮是 recheck：只复核旧发现、修复 diff 与受影响断言；全量确定性测试仍执行，不发起新的全维度开放探索。逐项确认旧 must-fix 有具体回归测试，不能用测试全绿替代逐项结论。" : "本轮是 full：完整覆盖核对并允许后续开放探索。",
+      mode === "recheck"
+        ? "本轮是 recheck（定向复核）：重点复核旧发现、修复 diff 与受影响断言，逐项确认旧 must-fix 有具体回归测试，不能用测试全绿替代逐项结论；不发起新的全维度开放探索。覆盖结论仍须逐断言×证据类型全量返回（裁决器按全量组合判定）——受影响断言必须重新亲自取证，其余断言可依据全量确定性测试回执与既有证据做核对性结论。"
+        : "本轮是 full：完整覆盖核对并允许后续开放探索。",
       "对照验收、候选代码与原始证据，亲自运行必要命令；schema 2 按断言×证据类型逐项返回 verified/partial/failed 和 evidence/ 内原始文件，每个反例场景用 adversarialFormIds 明确认领。",
       `对照 ${incrementsPath} 冻结的 testCommand 与上一轮测试产物（taskDir/evidence/ 内 increment-*.log），审查本轮测试内容是否被改弱（断言删除、范围收窄、skip 扩大）；发现改弱即按 must-fix 申报。`,
       "写覆盖报告；新发现不分配 findingId。仅当亲自确认旧发现已修复时，把其 findingId 放入 resolvedFindingIds；亲自核对后确认仍未修复的旧发现放入 unresolvedFindingIds（两者不得重叠）。",
