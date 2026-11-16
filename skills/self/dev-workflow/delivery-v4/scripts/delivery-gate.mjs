@@ -1671,6 +1671,11 @@ function foldEvents(world, entries) {
               reaffirmations: [],
               inherited: true,
             });
+            // 继承发现与本地 FindingRaised 同语义（state-and-events.md）——同步登记
+            // raisedFindings，否则 FindingResolved / ResolutionReaffirmed / reopenOf /
+            // RepairRoundRecorded.triggerFindingIds 的存在性校验会拒绝继承 id，
+            // 继承 blocker 除用户接受风险外无任何机器合法出口（修复死路）
+            raisedFindings.set(inherited.findingId, event.acceptanceVersion);
           }
         } else {
           if (fold.supersedeCommitted !== null) {
@@ -1889,8 +1894,9 @@ function buildVerdict(world, revision, revisionSource = "computed") {
 
   // 保证完成：full 必须引用当前 revision 探索；recheck 可引用同验收版本的历史探索，
   // 但必须有当前 revision 的定向覆盖报告与全量确定性测试回执。full-first 门禁：recheck
-  // 只有在同 revision 下存在序号更早的有效 full 时才算有效保证——首次完整保证不可被
-  // 定向复核替代（explore-only 只产生 ExplorationCompleted，不构成保证事件）。
+  // 只有在同验收版本（fold.assurances 只收当前版本）存在序号更早、登记时点合格的 full
+  // 时才算有效保证——首次完整保证不可被定向复核替代（explore-only 只产生
+  // ExplorationCompleted，不构成保证事件）。
   const currentEvidenceIds = new Set(fold.evidence.filter(currentRevision).map((event) => event.eventId));
   const currentExplorationIds = new Set(fold.explorations.filter(currentRevision).map((event) => event.eventId));
   const allExplorationIds = new Set(fold.explorations.map((event) => event.eventId));
@@ -1916,15 +1922,20 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     }
     return true;
   };
-  const validFullAssurances = fold.assurances.filter(
-    (event) => currentRevision(event) && (event.mode ?? "full") === "full" && assuranceBaseValid(event),
-  );
-  // full-first 的「先前 full」按登记时点合格性判定（任意 revision）：receipts 全绿 +
-  // 探索引用存在于同验收版本历史——不要求其证据仍在当前 revision（修复后旧证据按
-  // currentRevision 失效是既有语义，recheck 自身补齐当前 revision 的全量证据）
-  const priorFullQualified = (event) =>
-    event.incrementReceipts.every((receipt) => receipt.exitCode === 0) &&
-    (acceptance.exploratoryReview !== "required" || allExplorationIds.has(event.explorationEventId));
+  // full-first 的「先前 full」按登记时点完整性判定（同验收版本内任意 revision）：
+  // receipts 覆盖全部增量 + 证据事件可解析（artifact 失效的不算）+ 探索引用存在——
+  // 不查回执红绿（红 = full 发现了缺陷，属正常修复链起点，绿留给验收判定与 recheck
+  // 自身的全量回执）；也不要求其证据仍在当前 revision（修复后旧证据按 currentRevision
+  // 失效是既有语义，recheck 自身补齐当前 revision 的全量证据）
+  const knownEvidenceIds = new Set(fold.evidence.map((event) => event.eventId));
+  const priorFullQualified = (event) => {
+    const covered = new Set(event.incrementReceipts.map((receipt) => receipt.incrementId));
+    return (
+      allIncrementIds.every((id) => covered.has(id)) &&
+      event.evidenceEventIds.every((id) => id === "none" || knownEvidenceIds.has(id)) &&
+      (acceptance.exploratoryReview !== "required" || allExplorationIds.has(event.explorationEventId))
+    );
+  };
   const hasPriorValidFull = (event) =>
     fold.assurances.some((full) => (full.mode ?? "full") === "full" && full.seq < event.seq && priorFullQualified(full));
   const assuranceValid = fold.assurances.filter(
@@ -2145,7 +2156,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
       recheckWithoutFull.length > 0
         ? {
             reassuranceCount: recheckWithoutFull.length,
-            note: "当前 revision 存在基础校验通过的 recheck 保证，但其之前无同 revision 的有效 full——首次完整保证不可被定向复核替代。恢复动作：先运行 independent-assurance-v4（mode=full）完成首次完整取证，再以 recheck 做修复后定向复核",
+            note: "当前 revision 存在基础校验通过的 recheck 保证，但其之前无登记时点完整的 full（同验收版本、receipts 覆盖全部增量、证据可解析、探索引用存在——任意 revision）——首次完整保证不可被定向复核替代。恢复动作：先运行 independent-assurance-v4（mode=full）完成首次完整取证，再以 recheck 做修复后定向复核",
           }
         : null,
   };

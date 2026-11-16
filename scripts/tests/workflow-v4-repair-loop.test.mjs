@@ -38,7 +38,7 @@ const tmpHome = () => mkdtempSync(join(tmpdir(), "v4-repair-loop-"));
 /** 修复循环脚手架：真实 git 项目 + 任务目录 + 预置事件（full 保证 + 历史探索 + blocker）
  *  + 桩 delivery-gate（evaluate 按 verdicts 队列出参；append 校验凭据与 actor 匹配后
  *  落盘并返回递增 eventId；revision 返回修复后 revision）+ 技能角色文件 */
-function makeScaffold(home, { withFull = true } = {}) {
+function makeScaffold(home, { withFull = true, withForeignVersionFull = false, withStagedNoise = false } = {}) {
   const projectRoot = join(home, "proj");
   mkdirSync(projectRoot, { recursive: true });
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectRoot });
@@ -47,6 +47,11 @@ function makeScaffold(home, { withFull = true } = {}) {
   writeFileSync(join(projectRoot, "a.txt"), "one\n");
   spawnSync("git", ["add", "."], { cwd: projectRoot });
   spawnSync("git", ["commit", "-qm", "init"], { cwd: projectRoot });
+  if (withStagedNoise) {
+    // 预置一笔与修复无关的暂存改动：修复提交必须排除它（commit --only 鉴别锚点）
+    writeFileSync(join(projectRoot, "unrelated.txt"), "noise\n");
+    spawnSync("git", ["add", "unrelated.txt"], { cwd: projectRoot });
+  }
 
   const taskDir = join(home, "task");
   mkdirSync(join(taskDir, "evidence"), { recursive: true });
@@ -77,9 +82,14 @@ function makeScaffold(home, { withFull = true } = {}) {
   writeFileSync(join(taskDir, "policy-snapshot.json"), JSON.stringify({ "revision.json": {} }));
 
   const preEvents = [];
+  if (withForeignVersionFull) {
+    // 旧验收版本的 full：不能给当前版本的 recheck 背书（裁决器 fold.assurances 只收
+    // 当前版本；workflow 前置门禁必须同口径过滤，否则白跑全程）
+    preEvents.push({ type: "AssuranceCompleted", actor: "assurance", acceptanceVersion: 0, revision: "rev-old", mode: "full", summary: "旧版本 full", eventId: "evt-pre-full-v0" });
+  }
   if (withFull) {
     preEvents.push(
-      { type: "AssuranceCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", mode: "full", summary: "首次完整保证", eventId: "evt-pre-full" },
+      { type: "AssuranceCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", mode: "full", summary: "首次完整保证", evidenceEventIds: ["none"], explorationEventId: "evt-pre-exp", incrementReceipts: [{ incrementId: "I1", program: "node", args: ["-e", "process.exit(0)"], exitCode: 1, logSha256: "x", cwd: projectRoot, artifactSha256: "y" }], eventId: "evt-pre-full" },
       { type: "ExplorationCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", summary: "历史探索", dimensions: ["smoke"], eventId: "evt-pre-exp" },
       { type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", summary: "blocker：反例场景未拦截", findingId: "F-A1", category: "defect", severity: "blocker", requirementIds: ["R1"], eventId: "evt-pre-finding" },
     );
@@ -239,7 +249,7 @@ const readEvents = (taskDir) =>
 test("zcode 主路径：修复轮提交 + RepairRoundRecorded 溯源 + recheck 最终取证（TDZ 回归）", async () => {
   const home = tmpHome();
   try {
-    const s = makeScaffold(home);
+    const s = makeScaffold(home, { withStagedNoise: true });
     const { result, logs } = await runZcode(home, baseArgs(s), repairAgentStub(s));
     assert.equal(result.terminated, "assurance-completed", `主路径应走通（logs: ${logs.join(" | ")}, message: ${result.message}）`);
     const events = readEvents(s.taskDir);
@@ -254,9 +264,13 @@ test("zcode 主路径：修复轮提交 + RepairRoundRecorded 溯源 + recheck �
     assert.equal(assurance.mode, "recheck");
     assert.equal(assurance.explorationEventId, "evt-pre-exp", "recheck 引用历史 ExplorationCompleted");
     assert.ok(events.some((e) => e.type === "EvidenceRecorded" && e.assertionIds?.includes("A1")), "应有断言级证据事件");
-    const commitLog = spawnSync("git", ["log", "--name-only", "--format=%s"], { cwd: s.projectDir ?? s.projectRoot, encoding: "utf8" }).stdout;
+    const commitLog = spawnSync("git", ["log", "--name-only", "--format=%s"], { cwd: s.projectRoot, encoding: "utf8" }).stdout;
     assert.ok(commitLog.includes("fix(delivery): repair round 1"), "修复应产生提交");
     assert.ok(commitLog.slice(commitLog.indexOf("fix(delivery)")).includes("a.txt"), "提交只含 builder 申报文件");
+    const repairCommitFiles = commitLog.slice(commitLog.indexOf("fix(delivery)"), commitLog.indexOf("fix(delivery)") + 200);
+    assert.ok(!repairCommitFiles.includes("unrelated.txt"), "修复提交必须排除预先存在的无关暂存改动（--only 鉴别）");
+    const staged = spawnSync("git", ["diff", "--cached", "--name-only"], { cwd: s.projectRoot, encoding: "utf8" }).stdout.trim();
+    assert.equal(staged, "unrelated.txt", "无关暂存改动应保持 staged 不被消费");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -285,6 +299,18 @@ test("full-first 前置：事件流无 full 保证时 setup-failure", async () =
     const { result } = await runZcode(home, baseArgs(s), repairAgentStub(s));
     assert.equal(result.terminated, "setup-failure");
     assert.ok(result.message.includes("full"), "失败消息应指向先跑 full 的恢复动作");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("full-first 前置：旧验收版本的 full 不能给当前版本背书（版本过滤）", async () => {
+  const home = tmpHome();
+  try {
+    const s = makeScaffold(home, { withFull: false, withForeignVersionFull: true });
+    const { result } = await runZcode(home, baseArgs(s), repairAgentStub(s));
+    assert.equal(result.terminated, "setup-failure");
+    assert.ok(result.message.includes("full"), "失败消息应指向先跑当前版本 full 的恢复动作");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

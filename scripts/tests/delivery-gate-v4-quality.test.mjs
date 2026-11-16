@@ -249,10 +249,11 @@ test("recheck 不能替代首次 full（full-first 门禁）", (t) => {
   assert.ok(verdict.missing.assuranceCompleted, "保证完成应缺失");
   assert.ok(verdict.missing.assuranceFullFirst !== null, "应披露 full-first 缺口与恢复动作");
   assert.ok(verdict.missing.assuranceFullFirst.note.includes("full"), "恢复动作应指向先跑 full");
-  // 补 full 后同一 recheck 转为有效（先前 full 按登记时点合格性判定）
+  // 补 full 后 accepted：后补 full 自身成为当前 revision 的有效保证（时点序上它无法
+  // 追溯背书先前的 recheck——hasPriorValidFull 要求 full.seq < recheck.seq）
   completeAssurance(fx, rev, "full", explorationEventId);
   verdict = evaluate(fx);
-  assert.equal(verdict.state, "accepted", "补 full 后 recheck 不再单独承重，整体可达 accepted");
+  assert.equal(verdict.state, "accepted", "补 full 后由 full 自身承重，整体可达 accepted");
 });
 
 test("循环外实现性修复呈报：revision 无登记通道前进时披露，登记修复轮后消除", (t) => {

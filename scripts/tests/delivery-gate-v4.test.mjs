@@ -649,6 +649,29 @@ test("任务替换：prepare 占用 → 二次 prepare 拒 → commit 前任 sup
     succVerdict.openFindings.some((finding) => finding.findingId === "F-KEEP" && finding.inherited),
     "继承发现 F-KEEP 应出现在后继 openFindings",
   );
+  // 继承发现与本地 FindingRaised 同语义：FindingResolved 与 reopenOf 都必须接受继承
+  // id——否则继承 blocker 除用户接受风险外无任何机器合法出口（修复死路）
+  const resolveArtifact = evidenceFile(successorDir, "inherited-resolved.md");
+  assertOk(fx.gate(
+    "append", "--task-dir", successorDir,
+    "--event", JSON.stringify({
+      type: "FindingResolved", actor: "assurance", acceptanceVersion: succVerdict.acceptanceVersion,
+      revision: succVerdict.revision, summary: "修复继承发现", findingId: "F-KEEP", artifact: resolveArtifact.artifact,
+    }),
+    "--credential", `${fx.slug}/task-succ/assurance`,
+  ));
+  const reopenArtifact = evidenceFile(successorDir, "inherited-reopen.md");
+  assertOk(fx.gate(
+    "append", "--task-dir", successorDir,
+    "--event", JSON.stringify({
+      type: "FindingRaised", actor: "assurance", acceptanceVersion: succVerdict.acceptanceVersion,
+      revision: succVerdict.revision, summary: "继承问题复发", findingId: "F-KEEP-RE", category: "defect",
+      severity: "blocker", requirementIds: ["R1"], reopenOf: "F-KEEP", artifact: reopenArtifact.artifact,
+    }),
+    "--credential", `${fx.slug}/task-succ/assurance`,
+  ));
+  const reopenedVerdict = JSON.parse(parseStdout(fx.gate("evaluate", "--task-dir", successorDir)));
+  assert.equal(reopenedVerdict.quality.uniqueMustFix, 1, "继承问题经 reopenOf 重开不重复计数（根 id 折叠）");
 });
 
 // ── 8. 写事务租约 ──

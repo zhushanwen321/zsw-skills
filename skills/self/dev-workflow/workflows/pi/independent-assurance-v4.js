@@ -110,6 +110,12 @@ const SCHEMA_CoverageOutcome = {
           summary: { type: "string", description: "缺陷现象与影响" },
           requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
           tier: { type: "string", enum: ["must-fix", "suggestion", "info"], description: "V4 代三档分级：must-fix=违反验收判据（立即修复档）；suggestion=建议改进但不违反判据（攒批档）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 按 must-fix" },
+          consequenceRefutation: { type: "string", description: "非 must-fix 必填：不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据" },
+          reopenOf: { type: "string", description: "重开申报：指向此前被解决过的 findingId（同题不重复计数）" },
+          origin: { type: "string", enum: ["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"], description: "来源阶段（must-fix 建议填写）" },
+          firstDetectedStage: { type: "string", description: "实际发现该问题的阶段（must-fix 建议填写）" },
+          expectedStage: { type: "string", description: "该问题本应在哪个阶段被拦截（must-fix 建议填写）" },
+          regressionTestRef: { type: "string", description: "回归测试标识（must-fix 建议填写）" },
         },
         required: ["summary", "requirementIds", "tier"],
       },
@@ -148,6 +154,12 @@ const SCHEMA_ExplorationOutcome = {
           summary: { type: "string", description: "缺陷现象与影响" },
           requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
           tier: { type: "string", enum: ["must-fix", "suggestion", "info"], description: "V4 代三档分级：must-fix=违反验收判据（立即修复档）；suggestion=建议改进但不违反判据（攒批档）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 按 must-fix" },
+          consequenceRefutation: { type: "string", description: "非 must-fix 必填：不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据" },
+          reopenOf: { type: "string", description: "重开申报：指向此前被解决过的 findingId（同题不重复计数）" },
+          origin: { type: "string", enum: ["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"], description: "来源阶段（must-fix 建议填写）" },
+          firstDetectedStage: { type: "string", description: "实际发现该问题的阶段（must-fix 建议填写）" },
+          expectedStage: { type: "string", description: "该问题本应在哪个阶段被拦截（must-fix 建议填写）" },
+          regressionTestRef: { type: "string", description: "回归测试标识（must-fix 建议填写）" },
         },
         required: ["summary", "requirementIds", "tier"],
       },
@@ -486,7 +498,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "4.0.1"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.0.2"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -934,6 +946,7 @@ for (const line of eventsRes.stdout.split("\n").filter((l) => l.trim() !== "")) 
     }
 }
 if (eventsRes.exitCode !== 0 || eventsError !== "") {
+    await releaseLease();
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
@@ -941,14 +954,33 @@ if (eventsRes.exitCode !== 0 || eventsError !== "") {
     };
     return result;
 }
-// full-first 前置门禁（与 delivery-gate 同口径）：recheck 是修复后的定向复核，同验收
-// 版本历史必须存在过 full 保证——否则跑完全程也会被裁决器判无效（missing.assuranceFullFirst），
-// 在 setup 即拦下省一轮成本。explore-only 只产生 ExplorationCompleted，不构成 full
-if (mode === "recheck" && !events.some((event) => event.type === "AssuranceCompleted" && (event.mode ?? "full") === "full")) {
+// full-first 前置门禁（与 delivery-gate 同口径，登记时点完整性：同验收版本 + 回执覆盖
+// 全部增量（不查红绿——红 = full 发现缺陷，正是修复循环的输入）+ 探索引用存在）：
+// recheck 是修复后的定向复核，首次完整保证不可被其替代——否则跑完全程也会被裁决器
+// 判无效（missing.assuranceFullFirst），在 setup 即拦下省一轮成本。explore-only 只产生
+// ExplorationCompleted，不构成 full
+const qualifiedPriorFull = (event) => {
+    if (event.type !== "AssuranceCompleted" || (event.mode ?? "full") !== "full")
+        return false;
+    if (event.acceptanceVersion !== acceptanceVersion)
+        return false;
+    const receipts = Array.isArray(event.incrementReceipts) ? event.incrementReceipts : [];
+    const coveredIncrementIds = new Set(receipts.map((receipt) => String(receipt.incrementId)));
+    if (!incrementItems.every((item) => coveredIncrementIds.has(item.id)))
+        return false;
+    if (explorationRequired && !events.some((candidate) => candidate.type === "ExplorationCompleted" && candidate.eventId === event.explorationEventId))
+        return false;
+    return true;
+};
+if (mode === "recheck" && !events.some(qualifiedPriorFull)) {
+    const anyPriorFull = events.some((event) => event.type === "AssuranceCompleted" && (event.mode ?? "full") === "full" && event.acceptanceVersion === acceptanceVersion);
+    await releaseLease();
     await obsCloseExecution("setup-failure");
     const result = {
         terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
-        message: `recheck 前置门禁拒绝：同验收版本事件流中不存在任何 full 保证（AssuranceCompleted mode=full）——首次完整保证不可被定向复核替代。恢复动作：先以 mode=full 发起本 workflow 完成首次完整取证（或经 candidate-build-v4 的候选探索补 explore-only 后再 full），修复后再以 recheck 定向复核${repairSummary()}`,
+        message: anyPriorFull
+            ? `recheck 前置门禁拒绝：同验收版本存在 full 保证但登记时点不完整（回执未覆盖全部增量或探索引用缺失）——不完整的 full 不能给 recheck 背书。恢复动作：先以 mode=full 重跑本 workflow 取得完整首次保证，再以 recheck 定向复核${repairSummary()}`
+            : `recheck 前置门禁拒绝：同验收版本事件流中不存在任何 full 保证（AssuranceCompleted mode=full）——首次完整保证不可被定向复核替代。恢复动作：先以 mode=full 发起本 workflow 完成首次完整取证（或经 candidate-build-v4 的候选探索补 explore-only 后再 full），修复后再以 recheck 定向复核${repairSummary()}`,
     };
     return result;
 }
@@ -1228,7 +1260,8 @@ if (mode === "explore-only") {
             `必须覆盖的探索维度：${JSON.stringify(reviewDimensions)}`,
             "这是候选交付前的开放探索：从原始意图、验收、反例场景与真实实现主动寻找反例，亲自运行实验并保存原始证据。",
             "每个 must-fix 给 origin/expectedStage/regressionTestRef；suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据）。",
-            '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
+            "重报此前已登记过的同类问题（修复回退/回归/同根因复发）时附 reopenOf=<旧 findingId>——同题判定责任在审查者，沿用旧 id 使计数不重复；不确定是否同题时不填（宁可多计不可漏计）。",
+            '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
             ...(corrective === null ? [] : [corrective]),
         ].join("\n"));
         const reportRes = await runNode([NODE_CHECK_FILES, explorationReportPath]);
@@ -1277,7 +1310,7 @@ const coverageGuard = await askGuarded(async (corrective) => {
         "写覆盖报告；新发现不分配 findingId。仅当亲自确认旧发现已修复时，把其 findingId 放入 resolvedFindingIds；亲自核对后确认仍未修复的旧发现放入 unresolvedFindingIds（两者不得重叠）。",
         "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不得只按字面合规降级。",
         "不得修改产品代码、验收、事件或 verdict；builder 的测试输出不能未经独立核对直接记为 verified。",
-        '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "assertionIds": string[], "adversarialFormIds": string[], "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }], "resolvedFindingIds": string[], "unresolvedFindingIds": string[] }——schema 2 须逐断言×kind 覆盖，artifact 为 evidence/ 内绝对路径。',
+        '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "assertionIds": string[], "adversarialFormIds": string[], "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }], "resolvedFindingIds": string[], "unresolvedFindingIds": string[] }——schema 2 须逐断言×kind 覆盖，artifact 为 evidence/ 内绝对路径。',
         ...(corrective === null ? [] : [corrective]),
     ].join("\n"));
     const requiredArtifacts = [coverageReportPath, ...outcome.evidence.map((e) => e.artifact)];
@@ -1354,7 +1387,7 @@ await obsEnd("execute", 1);
 // 阶段二（探索性审查为 required 时）：以冻结清单为对照集合发起探索
 let exploration = null;
 let explorationEventId = mode === "recheck"
-    ? (events.filter((event) => event.type === "ExplorationCompleted").at(-1)?.eventId ?? "none")
+    ? (events.filter((event) => event.type === "ExplorationCompleted" && event.acceptanceVersion === acceptanceVersion).at(-1)?.eventId ?? "none")
     : "none";
 if (explorationRequired && mode === "full") {
     await obsBegin("review", 2);
@@ -1371,8 +1404,8 @@ if (explorationRequired && mode === "full") {
             `必须覆盖的探索维度：${JSON.stringify(reviewDimensions)}`,
             "从原始意图、验收与真实实现主动寻找验收外反例；亲自运行探索命令并保存原始证据。",
             "写探索报告，申报实际覆盖维度与新发现；不分配 findingId，不修改产品代码、验收、事件或 verdict。",
-            "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不得只按字面合规降级。",
-            '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }——dimensions 须覆盖全部必选维度且去重；must-fix 给 origin/expectedStage/regressionTestRef。',
+            "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不得只按字面合规降级。重报此前已登记过的同类问题（修复回退/回归/同根因复发）时附 reopenOf=<旧 findingId>——同题判定责任在审查者，沿用旧 id 使计数不重复；不确定是否同题时不填。",
+            '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }——dimensions 须覆盖全部必选维度且去重；must-fix 给 origin/expectedStage/regressionTestRef。',
             ...(corrective === null ? [] : [corrective]),
         ].join("\n"));
         const reportRes = await runNode([NODE_CHECK_FILES, explorationReportPath]);
