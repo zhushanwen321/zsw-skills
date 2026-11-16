@@ -223,6 +223,8 @@ interface PrepInfo {
   designDocPath: string;
   planPath: string;
   planMdPath: string | null;
+  /** 交付任务验收包绝对路径（设计目录 meta.acceptanceBinding.taskDir 推导；独立设计任务 = null） */
+  acceptancePath: string | null;
   /** statusPath 绝对路径（终态 events 回写目标——§4.5 W3 回写义务） */
   statusPath: string;
   /** agent 过程记录目录（statusPath 同目录 <name>.runlog/——任务 prompt 注入的防丢失记录落点） */

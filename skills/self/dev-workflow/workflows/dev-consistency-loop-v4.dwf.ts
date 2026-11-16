@@ -223,6 +223,8 @@ interface PrepInfo {
   designDocPath: string;
   planPath: string;
   planMdPath: string | null;
+  /** 交付任务验收包绝对路径（设计目录 meta.acceptanceBinding.taskDir 推导；独立设计任务 = null） */
+  acceptancePath: string | null;
   /** statusPath 绝对路径（终态 events 回写目标——§4.5 W3 回写义务） */
   statusPath: string;
   /** agent 过程记录目录（statusPath 同目录 <name>.runlog/——任务 prompt 注入的防丢失记录落点） */
@@ -646,7 +648,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "4.0.0"; // 构建注入自 dev-flow-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.0.1"; // 构建注入自 dev-flow-v4/SKILL.md frontmatter version（唯一权威）
 // W3 dev-consistency-loop-v4 — dev-flow-v4 D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：
@@ -900,6 +902,18 @@ const NODE_PREP = [
   "var statusAbs = path.resolve(projectRoot, ep.statusPath);",
   "if (!fs.existsSync(designAbs)) die('设计文档不存在: ' + designAbs);",
   "if (!fs.existsSync(planAbs)) die('impl-plan 不存在: ' + planAbs);",
+  // V4 交付任务：设计目录 meta.acceptanceBinding.taskDir → 验收包路径（D2 三方对账输入）。
+  // 独立设计任务无 binding = null，reviewer 仍按设计↔实现两方对账。
+  "var acceptancePath = null;",
+  "try {",
+  "  var metaPath = path.join(path.dirname(designAbs), 'meta.json');",
+  "  if (fs.existsSync(metaPath)) {",
+  "    var meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));",
+  "    var binding = meta && meta.acceptanceBinding && typeof meta.acceptanceBinding.taskDir === 'string' ? meta.acceptanceBinding : null;",
+  "    var accCandidate = binding ? path.join(binding.taskDir, 'acceptance.json') : null;",
+  "    if (accCandidate && fs.existsSync(accCandidate)) acceptancePath = accCandidate;",
+  "  }",
+  "} catch (e) { acceptancePath = null; }",
   "var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);",
   "if (!fs.existsSync(tplAbs)) die('reviewer 模板不存在: ' + tplAbs + '（恢复：安装 dev-flow-v4 skill 或经 args.reviewerTemplate 指定有效路径）');",
   "var git = function (a) { return cp.execFileSync('git', a, { cwd: projectRoot, encoding: 'utf8', maxBuffer: 67108864, stdio: ['pipe', 'pipe', 'pipe'] }); };",
@@ -967,7 +981,7 @@ const NODE_PREP = [
   "  preExisting = pe.split('\\n').filter(function (l) { return l.length > 3 && l.slice(0, 2) !== '??'; }).map(function (l) { return l.slice(3); });",
   "} catch (e) { /* porcelain 失败不阻断启动：settle 退化为无排除集（与旧行为一致） */ }",
   "console.log(JSON.stringify({",
-  "  projectRoot: projectRoot, baseline: bl, designDocPath: designAbs, planPath: planAbs, planMdPath: planMd,",
+  "  projectRoot: projectRoot, baseline: bl, designDocPath: designAbs, planPath: planAbs, planMdPath: planMd, acceptancePath: acceptancePath,",
   "  statusPath: statusAbs, runlogDir: runlogDir, ledgerPath: ledgerPath,",
   "  gateALog: gateALog, reviewerTemplate: tplAbs, partitions: partitions,",
   "  diffChurn: churn, diffFileCount: files.length, unitCount: unitCount,",
@@ -1701,6 +1715,12 @@ const ctxBlock = [
   `- 变更区间：git diff ${info.baseline}..HEAD`,
   `- 设计文档：${info.designDocPath}`,
   `- impl-plan（「0 章节映射」在其中的章节映射数据）：${info.planPath}${info.planMdPath ? `；人读版：${info.planMdPath}` : ""}`,
+  ...(info.acceptancePath !== null
+    ? [
+        `- 交付验收包（V4 三方对账输入：requirements[].assertions + adversarialForms）：${info.acceptancePath}`,
+        "- 对照 s4-accept.json 的 criterionMechanisms / verificationBindings，逐反例场景核对测试实际构造的入口、初始状态、故障、时序与断言位置；只有标题或认领、未构造判据条件 = unreasonable。涉及等价性的发现必须实跑相关局部实验。",
+      ]
+    : []),
 ].join("\n");
 
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
