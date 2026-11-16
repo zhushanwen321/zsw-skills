@@ -104,16 +104,29 @@ function evaluate(fx) {
   ok(result);
   return JSON.parse(parseStdout(result));
 }
-function driveToAssurance(fx) {
-  ok(runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home));
-  ok(runGate(["snapshot-policy", "--task-dir", fx.taskDir], fx.home));
-  evidenceFile(fx, "acceptance-review-v1.md");
+function driveToApproval(fx, version = 1) {
+  if (version === 1) {
+    ok(runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home));
+    ok(runGate(["snapshot-policy", "--task-dir", fx.taskDir], fx.home));
+  } else {
+    const acceptance = readJson(join(fx.taskDir, "acceptance.json"));
+    acceptance.acceptanceVersion = version;
+    writeJson(join(fx.taskDir, "acceptance.json"), acceptance);
+    const increments = readJson(join(fx.taskDir, "increments.json"));
+    increments.acceptanceVersion = version;
+    writeJson(join(fx.taskDir, "increments.json"), increments);
+    ok(runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home));
+  }
+  evidenceFile(fx, `acceptance-review-v${version}.md`);
   ok(runGate(["record-review", "--task-dir", fx.taskDir, "--conclusion", "pass", "--summary", "通过", "--credential", fx.creds.assurance], fx.home));
   ok(runGate(["approve-acceptance", "--task-dir", fx.taskDir, "--confirmation", "user-explicit", "--summary", "批准", "--credential", fx.creds.user], fx.home));
   const manifest = evidenceFile(fx, "solution.md");
   writeJson(join(fx.taskDir, "evidence", "package.json"), [{ name: "solution.md", sha256: manifest.artifactSha256 }]);
   ok(runGate(["record-design-approved", "--task-dir", fx.taskDir, "--summary", "方案", "--package-file", join(fx.taskDir, "evidence", "package.json"), "--credential", fx.creds.user], fx.home));
-  const rev = revision(fx);
+  return revision(fx);
+}
+function driveToAssurance(fx) {
+  const rev = driveToApproval(fx);
   fx.explorationEventId = explore(fx, rev);
   const artifact = evidenceFile(fx, "implementation.md");
   ok(append(fx, {
@@ -123,52 +136,71 @@ function driveToAssurance(fx) {
   }, "builder"));
   return rev;
 }
-function appendEvidence(fx, rev, assertionId, kind, formId) {
+function appendEvidence(fx, rev, assertionId, kind, formId, version = 1) {
   const requirementId = assertionId === "A3" ? "R2" : "R1";
-  const artifact = evidenceFile(fx, `${assertionId}-${kind}.md`);
+  const artifact = evidenceFile(fx, `${assertionId}-${kind}-v${version}.md`);
   ok(append(fx, {
-    type: "EvidenceRecorded", actor: "assurance", acceptanceVersion: 1, revision: rev,
+    type: "EvidenceRecorded", actor: "assurance", acceptanceVersion: version, revision: rev,
     summary: `${assertionId}/${kind}`, requirementId, kind, result: "verified",
     assertionIds: [assertionId], adversarialFormIds: [formId], artifact: artifact.artifact, artifactSha256: artifact.artifactSha256,
   }, "assurance"));
 }
-function appendAllEvidence(fx, rev) {
-  appendEvidence(fx, rev, "A1", "command", "AF1");
-  appendEvidence(fx, rev, "A1", "inspection", "AF1");
-  appendEvidence(fx, rev, "A2", "command", "AF2");
-  appendEvidence(fx, rev, "A2", "inspection", "AF2");
-  appendEvidence(fx, rev, "A3", "command", "AF3");
+function appendAllEvidence(fx, rev, version = 1) {
+  appendEvidence(fx, rev, "A1", "command", "AF1", version);
+  appendEvidence(fx, rev, "A1", "inspection", "AF1", version);
+  appendEvidence(fx, rev, "A2", "command", "AF2", version);
+  appendEvidence(fx, rev, "A2", "inspection", "AF2", version);
+  appendEvidence(fx, rev, "A3", "command", "AF3", version);
 }
-function completeAssurance(fx, rev, mode, explorationEventId) {
+function completeAssurance(fx, rev, mode, explorationEventId, version = 1) {
   const events = readFileSync(join(fx.taskDir, "events.jsonl"), "utf8").split("\n").filter(Boolean).map(JSON.parse);
-  const evidenceEventIds = events.filter((event) => event.type === "EvidenceRecorded" && event.revision === rev).map((event) => event.eventId);
-  const receipt = evidenceFile(fx, `receipt-${mode}.md`);
-  const final = evidenceFile(fx, `assurance-${mode}.md`);
+  const evidenceEventIds = events.filter((event) => event.type === "EvidenceRecorded" && event.revision === rev && event.acceptanceVersion === version).map((event) => event.eventId);
+  const receipt = evidenceFile(fx, `receipt-${mode}-v${version}.md`);
+  const final = evidenceFile(fx, `assurance-${mode}-v${version}.md`);
   ok(append(fx, {
-    type: "AssuranceCompleted", actor: "assurance", acceptanceVersion: 1, revision: rev, mode,
+    type: "AssuranceCompleted", actor: "assurance", acceptanceVersion: version, revision: rev, mode,
     summary: `${mode} 完成`, evidenceEventIds, coverageManifestSha256: receipt.artifactSha256,
     explorationEventId,
-    incrementReceipts: [{ incrementId: "I1", program: "true", args: [], exitCode: 0, logSha256: sha256("ok"), cwd: fx.projectDir, artifactSha256: receipt.artifactSha256 }],
+    incrementReceipts: [{ incrementId: "I1", program: "true", args: [], exitCode: 0, logSha256: sha256(`ok-${mode}-${version}`), cwd: fx.projectDir, artifactSha256: receipt.artifactSha256 }],
     cleanBuild: null, artifact: final.artifact,
   }, "assurance"));
 }
-function explore(fx, rev) {
-  const artifact = evidenceFile(fx, "exploration.md");
+function explore(fx, rev, version = 1) {
+  const artifact = evidenceFile(fx, `exploration-v${version}.md`);
   const result = append(fx, {
-    type: "ExplorationCompleted", actor: "assurance", acceptanceVersion: 1, revision: rev,
+    type: "ExplorationCompleted", actor: "assurance", acceptanceVersion: version, revision: rev,
     summary: "探索", dimensions: ["smoke"], coverageManifestSha256: artifact.artifactSha256, artifact: artifact.artifact,
   }, "assurance");
   ok(result);
   return JSON.parse(parseStdout(result)).eventId;
 }
-function raise(fx, rev, id, { reopenOf, severity = "blocker", consequenceRefutation } = {}) {
+function repairRound(fx, rev, round, { nature, version = 1 } = {}) {
+  const artifact = evidenceFile(fx, `repair-round-${round}.md`);
+  const event = {
+    type: "RepairRoundRecorded", actor: "builder", acceptanceVersion: version, revision: rev,
+    summary: `第 ${round} 轮`, round, triggerFindingIds: ["F-A1"], affectedAssertionIds: ["A1"],
+    fromRevision: rev, toRevision: rev,
+    incrementReceipts: [{ incrementId: "I1", program: "true", args: [], exitCode: 0, logSha256: sha256(`repair-log-${round}`), cwd: fx.projectDir, artifactSha256: artifact.artifactSha256 }],
+    artifact: artifact.artifact,
+  };
+  if (nature) event.nature = nature;
+  return append(fx, event, "builder");
+}
+function raise(fx, rev, id, { reopenOf, severity = "blocker", consequenceRefutation, origin, firstDetectedStage, expectedStage, regressionTestRef } = {}) {
   const artifact = evidenceFile(fx, `finding-${id}.md`);
   const event = {
     type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision: rev,
     summary: id, findingId: id, category: "defect", severity, requirementIds: ["R1"], artifact: artifact.artifact,
   };
   if (reopenOf) event.reopenOf = reopenOf;
-  if (consequenceRefutation) event.consequenceRefutation = consequenceRefutation;
+  if (consequenceRefutation) {
+    event.consequenceRefutation = consequenceRefutation;
+    event.consequenceRefutationType = "not-observable";
+  }
+  if (origin) event.origin = origin;
+  if (firstDetectedStage) event.firstDetectedStage = firstDetectedStage;
+  if (expectedStage) event.expectedStage = expectedStage;
+  if (regressionTestRef) event.regressionTestRef = regressionTestRef;
   return append(fx, event, "assurance");
 }
 
@@ -272,12 +304,14 @@ test("循环外实现性修复呈报：revision 无登记通道前进时披露�
   assert.ok(verdict.quality.offLoopRepair !== null, "应显式呈报疑似循环外修复");
   assert.equal(verdict.quality.offLoopRepair.lastAssuranceRevision, rev);
   assert.equal(verdict.quality.offLoopRepair.currentRevision, nextRevision);
-  // 走受控通道补登记修复轮后呈报消除
+  // 走受控通道补登记修复轮后呈报消除（受控轮带 from/toRevision，须附全量回执）
   const artifact = evidenceFile(fx, "repair-1.md");
   ok(append(fx, {
     type: "RepairRoundRecorded", actor: "builder", acceptanceVersion: 1, revision: nextRevision,
     summary: "第 1 轮实现性修复", round: 1, triggerFindingIds: ["F-O1"], affectedAssertionIds: ["A1"],
-    fromRevision: rev, toRevision: nextRevision, artifact: artifact.artifact,
+    fromRevision: rev, toRevision: nextRevision,
+    incrementReceipts: [{ incrementId: "I1", program: "true", args: [], exitCode: 0, logSha256: sha256("ok"), cwd: fx.projectDir, artifactSha256: artifact.artifactSha256 }],
+    artifact: artifact.artifact,
   }, "builder"));
   verdict = evaluate(fx);
   assert.equal(verdict.quality.offLoopRepair, null, "登记修复轮后不再呈报");
@@ -291,4 +325,158 @@ test("限定条件缺反例场景时验收校验拒绝", (t) => {
   const result = runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home);
   rejected(result);
   assert.match(result.stderr, /限定条件/);
+});
+
+test("限定条件带不适用理由（qualifierNotApplicable）时豁免反例场景要求；空理由被拒", (t) => {
+  const fx = fixture(t);
+  const acceptance = readJson(join(fx.taskDir, "acceptance.json"));
+  const assertion = acceptance.requirements[0].assertions[0];
+  assertion.qualifiers.push("并发期间");
+  assertion.qualifierNotApplicable = [{ qualifier: "并发期间", rationale: "本任务单线程执行，无并发入口" }];
+  writeJson(join(fx.taskDir, "acceptance.json"), acceptance);
+  ok(runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home));
+  // 空理由 / 未知限定条件 / 不在本断言 qualifiers 内 → 拒
+  const emptyReason = readJson(join(fx.taskDir, "acceptance.json"));
+  emptyReason.requirements[0].assertions[0].qualifierNotApplicable = [{ qualifier: "并发期间", rationale: "" }];
+  writeJson(join(fx.taskDir, "acceptance.json"), emptyReason);
+  rejected(runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home));
+  const unknownQualifier = readJson(join(fx.taskDir, "acceptance.json"));
+  unknownQualifier.requirements[0].assertions[0].qualifierNotApplicable = [{ qualifier: "不存在的限定", rationale: "理由" }];
+  writeJson(join(fx.taskDir, "acceptance.json"), unknownQualifier);
+  rejected(runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home));
+});
+
+test("断言 dependsOn 依赖声明：非法增量引用被拒，合法形态通过", (t) => {
+  const fx = fixture(t);
+  const acceptance = readJson(join(fx.taskDir, "acceptance.json"));
+  acceptance.requirements[1].assertions[0].dependsOn = { incrementIds: ["I-UNKNOWN"], mechanismRefs: [], testAssetRefs: [] };
+  writeJson(join(fx.taskDir, "acceptance.json"), acceptance);
+  rejected(runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home));
+  const valid = readJson(join(fx.taskDir, "acceptance.json"));
+  valid.requirements[1].assertions[0].dependsOn = { incrementIds: ["I1"], mechanismRefs: ["D1.choice"], testAssetRefs: ["test-A3"] };
+  writeJson(join(fx.taskDir, "acceptance.json"), valid);
+  ok(runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home));
+});
+
+test("场景未认领时 verdict.missing.adversarialForms 披露未覆盖反例场景", (t) => {
+  const fx = fixture(t);
+  const rev = driveToAssurance(fx);
+  appendEvidence(fx, rev, "A1", "command", "AF1");
+  const verdict = evaluate(fx);
+  assert.deepEqual(verdict.missing.adversarialForms.sort(), ["AF2", "AF3"], "AF1 已认领，AF2/AF3 未认领应披露");
+  appendAllEvidence(fx, rev);
+  const covered = evaluate(fx);
+  assert.deepEqual(covered.missing.adversarialForms, [], "全部场景认领后清单清空");
+});
+
+test("schema 2 非 blocker 必须声明 consequenceRefutationType 三类之一", (t) => {
+  const fx = fixture(t);
+  const rev = driveToAssurance(fx);
+  // 缺 type：gate fold 层拒绝（shape 层只验枚举，语义层要求 non-blocker 带 type）
+  const artifact = evidenceFile(fx, "finding-notype.md");
+  rejected(append(fx, {
+    type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision: rev,
+    summary: "无类型论证", findingId: "F-NT1", category: "defect", severity: "non-blocker",
+    requirementIds: ["R1"], consequenceRefutation: "该行为用户不可观察", artifact: artifact.artifact,
+  }, "assurance"));
+  // 非法枚举值：shape 层拒绝
+  const artifact2 = evidenceFile(fx, "finding-badtype.md");
+  rejected(append(fx, {
+    type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision: rev,
+    summary: "非法类型", findingId: "F-NT2", category: "defect", severity: "non-blocker",
+    requirementIds: ["R1"], consequenceRefutation: "x", consequenceRefutationType: "vibes", artifact: artifact2.artifact,
+  }, "assurance"));
+  // 合法类型：通过（raise() helper 带 not-observable）
+  ok(raise(fx, rev, "F-NT3", { severity: "non-blocker", consequenceRefutation: "仅内部计数变化" }));
+});
+
+test("保证后方案/验收修订并入计轮：nature=environment 不计，合计超 3 进 process-failed", (t) => {
+  const fx = fixture(t);
+  const rev = driveToAssurance(fx);
+  ok(raise(fx, rev, "F-A1"));
+  appendAllEvidence(fx, rev);
+  completeAssurance(fx, rev, "full", fx.explorationEventId);
+  // 首次保证后递增验收版本并重新批准/确认方案：AcceptanceApproved 与 DesignApproved
+  // 各按一轮 off-loop 计轮（driveToApproval(v2) 重新登记两者）
+  const rev2 = driveToApproval(fx, 2);
+  ok(repairRound(fx, rev2, 1, { version: 2 }));
+  ok(repairRound(fx, rev2, 2, { version: 2, nature: "environment" }));
+  let verdict = evaluate(fx);
+  assert.equal(verdict.quality.repairRounds, 3, "behavior 1 轮 + 验收递增 1 + 方案确认 1，environment 轮不计");
+  assert.equal(verdict.quality.repairRoundsBreakdown.behaviorRepairRounds, 1);
+  assert.equal(verdict.quality.repairRoundsBreakdown.acceptanceRevisionsAfterAssurance, 1);
+  assert.equal(verdict.quality.repairRoundsBreakdown.designRevisionsAfterAssurance, 1);
+  assert.notEqual(verdict.state, "process-failed");
+  ok(repairRound(fx, rev2, 3, { version: 2 }));
+  verdict = evaluate(fx);
+  assert.equal(verdict.state, "process-failed");
+  assert.equal(verdict.quality.repairRounds, 4);
+  assert.match(verdict.nextAction, /含修复轮与保证后的方案\/验收修订/);
+});
+
+test("防覆盖对账覆盖非 EvidenceRecorded 事件：ExplorationCompleted 同路径改哈希重登记被拒", (t) => {
+  const fx = fixture(t);
+  const rev = driveToAssurance(fx);
+  ok(raise(fx, rev, "F-HR0"));
+  // 换新路径做带哈希登记
+  const artifact = evidenceFile(fx, "exploration-hash.md", "# v1 探索\n");
+  ok(append(fx, {
+    type: "ExplorationCompleted", actor: "assurance", acceptanceVersion: 1, revision: rev,
+    summary: "带哈希探索", dimensions: ["smoke"], coverageManifestSha256: artifact.artifactSha256,
+    artifactSha256: artifact.artifactSha256, artifact: artifact.artifact,
+  }, "assurance"));
+  // 磁盘改写后以新哈希重登记同一路径 → 不同内容哈希登记，拒绝
+  writeFileSync(join(fx.taskDir, "evidence", "exploration-hash.md"), "# 被覆盖的探索\n");
+  const overwrittenSha = sha256("# 被覆盖的探索\n");
+  rejected(append(fx, {
+    type: "ExplorationCompleted", actor: "assurance", acceptanceVersion: 1, revision: rev,
+    summary: "改哈希重登记", dimensions: ["smoke"], coverageManifestSha256: overwrittenSha,
+    artifactSha256: overwrittenSha, artifact: artifact.artifact,
+  }, "assurance"));
+  // 已登记路径的不带哈希再引用 → 拒绝（防绕过哈希绑定）
+  rejected(append(fx, {
+    type: "FindingResolved", actor: "assurance", acceptanceVersion: 1, revision: rev,
+    summary: "无哈希引用已登记路径", findingId: "F-HR0", artifact: artifact.artifact,
+  }, "assurance"));
+});
+
+test("中低风险 schema 2 任务的候选探索不可跳过（exploratoryReview=not-required 不再豁免探索门控）", (t) => {
+  const fx = fixture(t);
+  const acceptance = readJson(join(fx.taskDir, "acceptance.json"));
+  acceptance.riskLevel = "medium";
+  acceptance.exploratoryReview = "not-required";
+  writeJson(join(fx.taskDir, "acceptance.json"), acceptance);
+  const rev = driveToApproval(fx);
+  const artifact = evidenceFile(fx, "implementation.md");
+  // 无当前 revision 探索 → ImplementationRecorded 被拒（原 not-required 豁免已被移除）
+  rejected(append(fx, {
+    type: "ImplementationRecorded", actor: "builder", acceptanceVersion: 1, revision: rev,
+    summary: "实现", incrementId: "I1", artifact: artifact.artifact,
+    mergeReceipt: { fromRevision: rev, toRevision: rev, patchSha256: sha256("patch") },
+  }, "builder"));
+  fx.explorationEventId = explore(fx, rev);
+  ok(append(fx, {
+    type: "ImplementationRecorded", actor: "builder", acceptanceVersion: 1, revision: rev,
+    summary: "实现", incrementId: "I1", artifact: artifact.artifact,
+    mergeReceipt: { fromRevision: rev, toRevision: rev, patchSha256: sha256("patch") },
+  }, "builder"));
+});
+
+test("验收版本递增后 full 引用旧探索无效，重新探索后有效（full 探索 due 判定）", (t) => {
+  const fx = fixture(t);
+  const rev = driveToAssurance(fx);
+  appendAllEvidence(fx, rev);
+  completeAssurance(fx, rev, "full", fx.explorationEventId);
+  let verdict = evaluate(fx);
+  assert.ok(!verdict.missing.assuranceCompleted, "版本递增前 full 有效");
+  // 递增验收版本并重新批准 → 验收变化，旧探索不再覆盖新判据
+  const rev2 = driveToApproval(fx, 2);
+  appendAllEvidence(fx, rev2, 2);
+  completeAssurance(fx, rev2, "full", fx.explorationEventId, 2);
+  verdict = evaluate(fx);
+  assert.ok(verdict.missing.assuranceCompleted, "验收变化后引用旧探索（同 revision）的 full 应无效");
+  const newExploration = explore(fx, rev2, 2);
+  completeAssurance(fx, rev2, "full", newExploration, 2);
+  verdict = evaluate(fx);
+  assert.ok(!verdict.missing.assuranceCompleted, "变化后重新探索的 full 有效");
 });

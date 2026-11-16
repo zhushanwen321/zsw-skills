@@ -9,9 +9,9 @@ acceptance.json 回答「这个任务要做到什么、做到什么样算做对�
 - `required=false` 的需求不阻终态，但 failed 会在 verdict 中披露。
 - `riskAcceptable=false` 表示该条不满足时不允许「用户接受风险后照样交付」——只能修复或递增版本改验收。
 - `evidenceKinds` 声明该条需要哪几类证据（command / scenario / inspection；词表可经策略包扩展）。每类证据独立判定，全部 verified 才算通过。
-- schema 2 的每个 requirement 必须有 assertions[]：每条断言写 id/statement/qualifiers/given/when/then/adversarialFormRefs/testAssetRefs，只描述一个可观察行为。顶层 adversarialForms[] 逐条写 assertionId/qualifier/entryPoint/initialState/operation/timing/expected/testAssetRefs/rationale。每个限定条件至少一个可实际构造的反例场景，断言与场景双向引用一致；全局不变量覆盖全部相关写入入口和等待点。schema 1 存量任务保持需求级判定。
+- schema 2 的每个 requirement 必须有 assertions[]：每条断言写 id/statement/qualifiers/given/when/then/adversarialFormRefs/testAssetRefs，只描述一个可观察行为；可选 qualifierNotApplicable[]（每条 { qualifier, rationale }）为无法构造反例的限定条件登记不适用理由，带理由的限定条件豁免「每个限定条件有反例场景」要求；可选 dependsOn（{ incrementIds, mechanismRefs, testAssetRefs }）声明该断言依赖的实现增量与机制条款，供修复轮机器推导受影响断言。顶层 adversarialForms[] 逐条写 assertionId/qualifier/entryPoint/initialState/operation/timing/expected/testAssetRefs/rationale。每个限定条件有反例场景或不适用理由，断言与场景双向引用一致；全局不变量覆盖全部相关写入入口和等待点（允许记录不适用理由）。schema 1 存量任务保持需求级判定。
 - `nonGoals` 与需求同等重要：防止验收范围被悄悄扩大或缩小。
-- 高风险（riskLevel=high）必须要求探索性审查（exploratoryReview=required）且至少一个 reviewDimensions。
+- 高风险（riskLevel=high）必须标注探索性审查（exploratoryReview=required）且至少一个 reviewDimensions。该字段是披露要求而非探索门控：schema 2 的候选反例审查与 full 开放式探索对全部任务可达——full 探索按「缺少候选探索证据、验收或关键设计变化」触发，中低风险任务不因此跳过探索路径。
 - 修订已有验收必须递增 acceptanceVersion 并重新审查与批准；旧版本上的批准与证据自动失效（保留审计）。
 
 ## increments.json

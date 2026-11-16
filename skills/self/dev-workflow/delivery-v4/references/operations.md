@@ -75,6 +75,7 @@ zcode：`CreateWorkflow saved: independent-assurance-v4`，args `{ projectRoot, 
 实现缺陷统一走 `assurance-repair-loop-v4`，args `{ projectRoot, taskDir, assuranceCredentialId, builderCredentialId, allowCommit, fixSuggestions?, runId?, taskId?, executionId?, sampleType? }`。聚合节点给出来源阶段、受影响断言和回归测试，builder 修复并提交，独立 reviewer 做受影响一致性复核，最后以 recheck 完成当前版本取证。`allowCommit` 必须由主会话在确认 worktree 归属后显式传 true；禁止主会话裸补丁直提。第 4 轮实现性修复或第 11 条不同 must-fix 进入 `process-failed`，不再继续补丁。
 
 - 设计冲突回 tech-design-v4，场景缺失回 T3，验收遗漏递增 acceptanceVersion 并重新审查批准。
+- 测试与场景不一致（测试未构造判据条件或断言更弱）：回 D2 三方对账 / 修测试，修复时必须证明该测试能在缺陷版本失败（回归测试口径同 `references/roles/repair-builder.md` 第 4 条）。
 - 证据不足回 independent-assurance-v4；具体风险交用户逐项决定。
 - 环境与证据采集重试不计实现性修复轮次；同一问题 reopenOf 不重复计数。
 

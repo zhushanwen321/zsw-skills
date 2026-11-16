@@ -545,7 +545,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "4.0.1"; // 构建注入自 tech-design-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.1.0"; // 构建注入自 tech-design-v4/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // tech-review-loop-v4 — tech-design-v4 技能 W1 审查循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
@@ -1429,7 +1429,7 @@ for (let round = 1; round <= maxRounds; round++) {
         `章节 JSON（需核对断言-红灯表等结构化字段原文时读，如 s4-accept.json 的 assertionRedlights）：设计目录 ${designDoc}（字段规格见 ${schemaPath}）。`,
         `项目上下文（存在则读，作产品与规范基准）：${projectRoot}/AGENTS.md、${projectRoot}/docs/PRODUCT.md。`,
         ...(acceptanceBinding !== null && acceptanceBinding.status === "bound"
-            ? [`交付验收包（判据权威源，必读）：${acceptanceBinding.acceptancePath}——对照 requirements[].assertions 的限定条件与预期结果、adversarialForms 反例场景、criterionMechanisms/verificationBindings 机制对账；设计机制不得暗中改变判据的自然语义，发现改变即打 must-fix 并给出断言锚点。`]
+            ? [`交付验收包（判据权威源，必读）：${acceptanceBinding.acceptancePath}——对照 requirements[].assertions 的限定条件与预期结果、adversarialForms 反例场景（逐断言核对：该断言涉及的全部写入入口、共享状态与异步等待点是否都有场景行覆盖，缺行 = must-fix）、criterionMechanisms/verificationBindings 机制对账；设计机制不得暗中改变判据的自然语义，发现改变即打 must-fix 并给出断言锚点。`]
             : []),
         ...(acceptanceBinding !== null && acceptanceBinding.status === "invalid"
             ? [`WARN 验收绑定异常（${acceptanceBinding.reason}）：设计目录声明了交付绑定但验收包不可读——在报告开头登记该事实；涉及验收判据的审查项标注「判据锚点缺失」，不得凭设计文档自述替代判据对照。`]

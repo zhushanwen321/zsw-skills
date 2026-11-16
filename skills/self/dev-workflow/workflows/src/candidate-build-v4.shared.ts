@@ -24,6 +24,8 @@ interface FindingDraft {
   /** 发现分类：defect=违反判据；boundary=设计边界申报（builder 自分类并给理由，争议按 defect） */
   category?: "defect" | "boundary";
   consequenceRefutation?: string;
+  /** 行为后果否决论证类型（合并稿 §9 三择一，先标类型再给依据） */
+  consequenceRefutationType?: "will-not-occur" | "not-observable" | "accepted-by-acceptance";
   origin?: "acceptance" | "design" | "planning" | "implementation" | "testing" | "evidence" | "environment";
   expectedStage?: string;
   regressionTestRef?: string;
@@ -96,8 +98,12 @@ const VALID_ARG_KEYS = new Set([
 const NODE_CHECK_EXISTS =
   "const fs=require('fs');const missing=process.argv.slice(1).filter(p=>!fs.existsSync(p));if(missing.length){process.stdout.write(missing.join(' | '));process.exit(1)}";
 const NODE_READ_FILE = "process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8'))";
+// 排他创建（与 independent-assurance / assurance-repair-loop 对齐，合并稿 §10.3 证据不可覆盖）：
+// 已存在路径拒绝覆盖写并给出含路径与递增序号建议的恢复指引
 const NODE_WRITE_FILE =
-  "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2])";
+  "const fs=require('fs'),pt=require('path');const p=process.argv[1];fs.mkdirSync(pt.dirname(p),{recursive:true});" +
+  "try{fs.writeFileSync(p,process.argv[2],{flag:'wx'})}catch(e){if(e.code==='EEXIST'){" +
+  "process.stderr.write('文件已存在（排他创建拒绝覆盖）：'+p+'；恢复动作：换新文件名（递增序号，如 '+p.replace(/(\\.[^.]*)?$/,m=>'-2'+m)+'）后重试');process.exit(1)}throw e}";
 const NODE_APPEND_FILE = "require('fs').appendFileSync(process.argv[1],process.argv[2])";
 // 超时入参（第 5 参）来自 increments 契约的 testCommand.timeoutMs（CLI validate-acceptance
 // 已校验 1000..3600000 整数）；非法或缺省回退 300000，与 CLI 缺省值一致——防长测试任务
@@ -380,8 +386,13 @@ function validateBuilderOutcome(value: BuilderOutcome): string {
     if (typeof finding.summary !== "string" || finding.summary.trim() === "") return "finding.summary 须为非空字符串";
     if (finding.severity !== "blocker" && finding.severity !== "non-blocker") return "finding.severity 非法";
     if (finding.origin !== undefined && !["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"].includes(finding.origin)) return "finding.origin 非法";
-    if (acceptanceDoc?.schemaVersion === 2 && finding.severity === "non-blocker" && (typeof finding.consequenceRefutation !== "string" || finding.consequenceRefutation.trim() === "")) {
-      return "schema 2 非 blocker 必须附 consequenceRefutation";
+    if (acceptanceDoc?.schemaVersion === 2 && finding.severity === "non-blocker") {
+      if (typeof finding.consequenceRefutation !== "string" || finding.consequenceRefutation.trim() === "") {
+        return "schema 2 非 blocker 必须附 consequenceRefutation";
+      }
+      if (finding.consequenceRefutationType !== "will-not-occur" && finding.consequenceRefutationType !== "not-observable" && finding.consequenceRefutationType !== "accepted-by-acceptance") {
+        return "schema 2 非 blocker 必须声明 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）";
+      }
     }
     if (!Array.isArray(finding.requirementIds) || finding.requirementIds.some((id) => typeof id !== "string" || !requirementIds.has(id))) {
       return "finding.requirementIds 必须引用契约条目或为空数组";
@@ -419,6 +430,28 @@ function statsTailNote(): string {
   return obsCtx !== null && obsCtx.filePath !== ""
     ? `；耗时与 token 统计：node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --skill delivery-v4（阶段窗口来自观测文件 ${obsCtx.filePath}）`
     : "";
+}
+
+/** 排他写证据文件：路径已存在（EEXIST）时按 -2/-3 递增文件名重试，全部失败返回空串
+ * （调用方把写入失败并入 message——failBuild 的发现登记失败已有包装，不静默吞） */
+async function writeEvidenceExclusive(path: string, content: string): Promise<string> {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const candidate = attempt === 1 ? path : path.replace(/(\.[^.]*)?$/, (ext) => `-${attempt}${ext}`);
+    const res = await runNode([NODE_WRITE_FILE, candidate, content]);
+    if (res.exitCode === 0) return candidate;
+    if (!res.stderr.includes("EEXIST") && !res.stdout.includes("EEXIST")) return "";
+  }
+  return "";
+}
+
+/** 证据文件内容哈希（evidence/ 内绝对路径） */
+async function artifactSha256Of(artifactPath: string): Promise<string> {
+  const script = "const c=require('crypto'),f=process.argv[1];process.stdout.write(c.createHash('sha256').update(require('fs').readFileSync(f)).digest('hex'))";
+  const res = await runNode([script, artifactPath]);
+  if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {
+    throw new Error(`证据文件哈希计算失败：${artifactPath}（${res.stderr.trim() || res.stdout.trim()}）`);
+  }
+  return res.stdout.trim();
 }
 
 /** 基础设施失败出口：不登记 FindingRaised（builder 已申报的产品发现除外），
@@ -513,7 +546,7 @@ for (let index = 0; index < increments.length; index += 1) {
           ? "不修改任何产品代码与测试；禁止修改 acceptance.json、increments.json、events.jsonl、verdict.json，禁止 Git 写操作与派新 agent。"
           : "只实现当前增量的产品代码与测试；禁止修改 acceptance.json、increments.json、events.jsonl、verdict.json，禁止 Git 写操作与派新 agent。",
         "builder 的测试输出不是 verified 证据；不要写 EvidenceRecorded 或宣告 accepted。",
-        '返回结构（严格 JSON）：{ "summary": string, "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }——无发现也须返回空 findings 数组；schema 2 非 blocker 必须附 consequenceRefutation。',
+        '返回结构（严格 JSON）：{ "summary": string, "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }——无发现也须返回空 findings 数组；schema 2 非 blocker 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据。',
         ...(corrective === null ? [] : [corrective]),
       ].join("\n"));
       const reportCheck = await runNode([NODE_CHECK_EXISTS, reportPath]);
@@ -527,7 +560,7 @@ for (let index = 0; index < increments.length; index += 1) {
   );
   if (!builderGuard.ok || builderGuard.value === null) {
     const message = `builder 实现增量 ${item.id} 时调用失败：${builderGuard.error}`;
-    await runNode([NODE_WRITE_FILE, failurePath, `# 构建失败\n\n${message}\n`]);
+    const writtenFailurePath = await writeEvidenceExclusive(failurePath, `# 构建失败\n\n${message}\n`);
     // 耗尽不丢弃已申报发现：最后一次尝试返回的 findings 按 validateBuilderOutcome 单条
     // 口径过滤出可挽救条目，随 failure 产物经 failBuild 登记（防真实缺陷静默蒸发）
     const rawFindings = builderGuard.raw !== null && Array.isArray(builderGuard.raw.findings) ? builderGuard.raw.findings : [];
@@ -535,7 +568,7 @@ for (let index = 0; index < increments.length; index += 1) {
       typeof d?.summary === "string" && d.summary.trim() !== "" &&
       (d.severity === "blocker" || d.severity === "non-blocker") &&
       Array.isArray(d.requirementIds) && d.requirementIds.every((id) => typeof id === "string" && requirementIds.has(id)));
-    return failBuild(message, failurePath, salvageable);
+    return failBuild(message, writtenFailurePath === "" ? failurePath : writtenFailurePath, salvageable);
   }
   const outcome = builderGuard.value;
 
@@ -566,8 +599,8 @@ for (let index = 0; index < increments.length; index += 1) {
       (typeof testMeta.spawnError === "string" && testMeta.spawnError !== "")
     ) {
       const message = `增量 ${item.id} 的 testCommand 无法执行或日志不可读：${testRes.stderr.trim() || testRes.stdout.trim()}`;
-      await runNode([NODE_WRITE_FILE, failurePath, `# 构建失败\n\n${message}\n`]);
-      return failBuild(message, failurePath, outcome.findings);
+      const cmdFailurePath = await writeEvidenceExclusive(failurePath, `# 构建失败\n\n${message}\n`);
+      return failBuild(message, cmdFailurePath === "" ? failurePath : cmdFailurePath, outcome.findings);
     }
     testExitCode = testMeta.exitCode;
     testSummary = `testCommand exit=${testExitCode}，原始日志=${testLogPath}`;
@@ -578,8 +611,8 @@ for (let index = 0; index < increments.length; index += 1) {
     try {
       await appendFinding({ summary: message, requirementIds: item.requirementIds, severity: "blocker" }, testLogPath);
     } catch (e) {
-      await runNode([NODE_WRITE_FILE, failurePath, `# 构建失败\n\n${message}\n${errorText(e)}\n`]);
-      return failBuild(`${message}；失败发现登记失败：${errorText(e)}`, testLogPath, outcome.findings);
+      const redFailurePath = await writeEvidenceExclusive(failurePath, `# 构建失败\n\n${message}\n${errorText(e)}\n`);
+      return failBuild(`${message}；失败发现登记失败：${errorText(e)}`, redFailurePath === "" ? testLogPath : redFailurePath, outcome.findings);
     }
     return failBuild(message, testLogPath, outcome.findings);
   }
@@ -611,7 +644,9 @@ for (let index = 0; index < increments.length; index += 1) {
     toRevision: postRevision,
     patchSha256,
   };
-  if (acceptanceDoc?.schemaVersion === 2 && acceptanceDoc?.exploratoryReview === "required") {
+  // 候选反例审查对全部 schema 2 任务执行（合并稿 §2.1/§5.3：D3 后 D4 前无风险门控；
+  // 探索维度按验收包 reviewDimensions 派生，可为空数组）
+  if (acceptanceDoc?.schemaVersion === 2) {
     const explorationReportPath = `${taskDir}/evidence/candidate-exploration-${item.id}-${revisionHash(postRevision)}.md`;
     const dimensions = Array.isArray(acceptanceDoc.reviewDimensions) ? acceptanceDoc.reviewDimensions as string[] : [];
     const explorer = agent(`candidate-explorer-${item.id}`, explorerRoleRes.stdout);
@@ -624,8 +659,8 @@ for (let index = 0; index < increments.length; index += 1) {
         `历史探索索引（不得重复已排除方向）：${JSON.stringify(history)}`,
         `探索报告写入路径：${explorationReportPath}`,
         `必须覆盖维度：${JSON.stringify(dimensions)}`,
-        "从原始意图、验收与真实实现构造反例并亲自运行实验。每条 must-fix 给 origin/expectedStage/regressionTestRef；非 blocker 必须附 consequenceRefutation。",
-        '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
+        "从原始意图、验收与真实实现构造反例并亲自运行实验。每条 must-fix 给 origin/expectedStage/regressionTestRef；非 blocker 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据。",
+        '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
         ...(corrective === null ? [] : [corrective]),
       ].join("\n"));
       const reportCheck = await runNode([NODE_CHECK_EXISTS, explorationReportPath]);
@@ -645,6 +680,7 @@ for (let index = 0; index < increments.length; index += 1) {
         summary: draft.summary, findingId: `F-X${findingSequence + 1}`, category: draft.category ?? "defect",
         severity: draft.severity, requirementIds: draft.requirementIds,
         ...(draft.consequenceRefutation === undefined ? {} : { consequenceRefutation: draft.consequenceRefutation }),
+        ...(draft.consequenceRefutationType === undefined ? {} : { consequenceRefutationType: draft.consequenceRefutationType }),
         ...(draft.origin === undefined ? {} : { origin: draft.origin }),
         ...(draft.expectedStage === undefined ? {} : { expectedStage: draft.expectedStage }),
         ...(draft.regressionTestRef === undefined ? {} : { regressionTestRef: draft.regressionTestRef }),
@@ -660,12 +696,17 @@ for (let index = 0; index < increments.length; index += 1) {
       events.push(event);
       findingIds.push(event.findingId);
     }
-    const hashRes = await runNode(["const c=require('crypto'),f=process.argv[1];process.stdout.write(c.createHash('sha256').update(require('fs').readFileSync(f)).digest('hex'))", explorationReportPath]);
-    if (hashRes.exitCode !== 0) return failBuild(`候选探索证据哈希失败：${hashRes.stderr.trim()}`, explorationReportPath);
+    // 探索报告哈希（coverageManifestSha256 与 artifactSha256 同源同值：同一文件的内容寻址）
+    let explorationReportSha = "";
+    try {
+      explorationReportSha = await artifactSha256Of(explorationReportPath);
+    } catch (e) {
+      return failBuild(`候选探索证据哈希失败：${errorText(e)}`, explorationReportPath);
+    }
     const explorationEvent = {
       type: "ExplorationCompleted", actor: "assurance", acceptanceVersion, revision: postRevision,
       summary: exploration.summary, dimensions: exploration.dimensions,
-      coverageManifestSha256: hashRes.stdout.trim(), artifact: explorationReportPath,
+      coverageManifestSha256: explorationReportSha, artifactSha256: explorationReportSha, artifact: explorationReportPath,
     };
     const explorationAppended = await runGate(gatePath, ["append", "--task-dir", taskDir, "--event", JSON.stringify(explorationEvent), "--credential", assuranceCredentialId]);
     if (explorationAppended.exitCode !== 0) return failBuild(`ExplorationCompleted 登记失败：${explorationAppended.stderr.trim()}`, explorationReportPath);
@@ -688,6 +729,14 @@ for (let index = 0; index < increments.length; index += 1) {
   if (patchShaUnavailable) {
     await runNode([NODE_APPEND_FILE, reportPath, `\n\n> 注：本增量 patchSha256 不可得（git diff 不可用），已置全零占位；回执防伪主绑定为 from/to revision 指纹。\n`]);
   }
+  // 实现报告内容哈希（追加测试摘要之后计算，事件与磁盘同哈希绑定）
+  let implementationReportSha = "";
+  try {
+    implementationReportSha = await artifactSha256Of(reportPath);
+  } catch (e) {
+    return failBuild(`实现报告哈希计算失败：${errorText(e)}`, reportPath);
+  }
+  implementationEvent.artifactSha256 = implementationReportSha;
   const appendError = await appendEvent(implementationEvent);
   if (appendError !== null) {
     return failBuild(`增量 ${item.id} 的 ImplementationRecorded 追加失败：${appendError}`, reportPath);
@@ -712,8 +761,8 @@ const finalVerdict = parseObject(finalEvaluation.stdout);
 if (finalEvaluation.exitCode !== 0 || finalVerdict === null) {
   const failurePath = `${taskDir}/evidence/build-evaluate-${revisionHash(revision)}.md`;
   const message = `全部增量处理后 evaluate 失败：${finalEvaluation.stderr.trim() || finalEvaluation.stdout.trim()}`;
-  await runNode([NODE_WRITE_FILE, failurePath, `# 构建裁决失败\n\n${message}\n`]);
-  return failBuild(message, failurePath);
+  const evalFailurePath = await writeEvidenceExclusive(failurePath, `# 构建裁决失败\n\n${message}\n`);
+  return failBuild(message, evalFailurePath === "" ? failurePath : evalFailurePath);
 }
 await obsEnd("finalize", null);
 await releaseLease();

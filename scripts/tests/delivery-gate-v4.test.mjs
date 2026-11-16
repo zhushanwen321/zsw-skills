@@ -710,6 +710,54 @@ test("租约：acquire/heartbeat/release；append --run-id 非持有者被拒", 
   assertOk(fx.gate("lease-release", "--project-root", fx.projectDir, "--run-id", "run-1"));
 });
 
+test("租约持租互斥：心跳新鲜期间异 runId acquire 被拒（活性由心跳承重，不因登记进程退出而被接管）", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  assertOk(fx.gate("lease-acquire", "--project-root", fx.projectDir, "--run-id", "run-holder"));
+  // 登记租约的 CLI 进程已退出（短命进程）——但心跳刚写入、仍在新鲜窗口内：
+  // 异 runId 的 acquire 必须被拒（持租 workflow 的周期心跳是活性信号）
+  const foreignAcquire = fx.gate("lease-acquire", "--project-root", fx.projectDir, "--run-id", "run-other");
+  assertFailure(foreignAcquire);
+  assert.match(foreignAcquire.stderr, /仍存活/);
+  // 同 runId 重复 acquire 幂等续租
+  assertOk(fx.gate("lease-acquire", "--project-root", fx.projectDir, "--run-id", "run-holder"));
+  assertOk(fx.gate("lease-release", "--project-root", fx.projectDir, "--run-id", "run-holder"));
+});
+
+test("verdict.openFindings 透传归因字段（origin/firstDetectedStage/expectedStage/regressionTestRef，未填输出 null）", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  const revision = driveToAssuranceStage(fx);
+  const artifact = evidenceFile(fx.taskDir, "finding-attrib.md");
+  assertOk(appendEvent(fx, {
+    type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision,
+    summary: "带归因的发现", findingId: "F-ATTR", category: "defect", severity: "blocker",
+    requirementIds: ["R1"], origin: "design", firstDetectedStage: "assuring", expectedStage: "design",
+    regressionTestRef: "test-attr-1", artifact: artifact.artifact,
+  }, "assurance"));
+  const verdict = evaluate(fx);
+  const attributed = verdict.openFindings.find((finding) => finding.findingId === "F-ATTR");
+  assert.ok(attributed !== undefined, "F-ATTR 应在 openFindings");
+  assert.equal(attributed.origin, "design");
+  assert.equal(attributed.firstDetectedStage, "assuring");
+  assert.equal(attributed.expectedStage, "design");
+  assert.equal(attributed.regressionTestRef, "test-attr-1");
+  // 未填归因字段的发现输出 null（主 agent 读 verdict 时字段恒存在、可判空）
+  const artifact2 = evidenceFile(fx.taskDir, "finding-noattrib.md");
+  assertOk(appendEvent(fx, {
+    type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision,
+    summary: "无归因的发现", findingId: "F-NOATTR", category: "boundary", severity: "non-blocker",
+    requirementIds: [], artifact: artifact2.artifact,
+  }, "assurance"));
+  const next = evaluate(fx);
+  const plain = next.openFindings.find((finding) => finding.findingId === "F-NOATTR");
+  assert.ok(plain !== undefined);
+  assert.equal(plain.origin, null);
+  assert.equal(plain.firstDetectedStage, null);
+  assert.equal(plain.expectedStage, null);
+  assert.equal(plain.regressionTestRef, null);
+});
+
 // ── 9. 幂等与 verdict 字段 ──
 
 test("append 完全相同事件幂等；verdict 含缺口 gapId 与非必需失败披露", (t) => {

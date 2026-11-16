@@ -54,22 +54,23 @@
 
 ```bash
 node ~/.agents/skills/dev-flow-v4/scripts/check-exec-plan.mjs <exec-plan 绝对路径>   # 独立设计任务
-node ~/.agents/skills/dev-flow-v4/scripts/check-exec-plan.mjs <exec-plan 绝对路径> --task-dir <交付任务目录>   # 交付体系任务（验收任务门通过的必选形态：附加两段核对——①增量契约核对：读交付任务目录 increments.json，逐增量核 dev 节点 incrementId 归属全覆盖、引用存在、testCommand 逐字一致（判据同 tech-design-v4 flow/plan.md「增量契约对齐」节）；②验收绑定核对：读设计包 meta.json（从 exec-plan designDocPath 推导）与交付任务目录 acceptance.json，核 acceptanceBinding 与当前批准一致——acceptanceVersion 相等 + 验收包联合哈希（acceptance.json + increments.json 解析内容规范 JSON 的联合 sha256，与 delivery-gate acceptancePackageSha256 同源）复算比对 + taskDir 同一目录（入口门判据 1 的机器载体；判据同 tech-design-v4 flow/plan.md 入口自检第 4 条））
+node ~/.agents/skills/dev-flow-v4/scripts/check-exec-plan.mjs <exec-plan 绝对路径> --task-dir <交付任务目录>   # 交付体系任务（验收任务门通过的必选形态：附加三段核对——①增量契约核对：读交付任务目录 increments.json，逐增量核 dev 节点 incrementId 归属全覆盖、引用存在、testCommand 逐字一致（判据同 tech-design-v4 flow/plan.md「增量契约对齐」节）；②验收绑定核对：读设计包 meta.json（从 exec-plan designDocPath 推导）与交付任务目录 acceptance.json，核 acceptanceBinding 与当前批准一致——acceptanceVersion 相等 + 验收包联合哈希（acceptance.json + increments.json 解析内容规范 JSON 的联合 sha256，与 delivery-gate acceptancePackageSha256 同源）复算比对 + taskDir 同一目录（入口门判据 1 的机器载体；判据同 tech-design-v4 flow/plan.md 入口自检第 4 条）；③质量契约核对：主校验与①②全过后调 delivery-v4 check-quality-contract 并追加传 --design-dir（设计目录，从 designDocPath 推导），覆盖机制对账（s4-accept.json criterionMechanisms）与测试绑定（verificationBindings）一致性——判据同 tech-design-v4 T2 质量契约门）
 ```
 
-stdout `PASS` 才继续步骤 4（交付体系任务须带 `--task-dir`，缺传即跳过增量与验收绑定两段核对 = 入口门判据 1 与 3 未执行）。校验集与 W2 引擎的 validatePlan 及 W3 启动契约（testPlan / 必填字段 / 白名单）同源，错误文案逐字一致，漂移由差分测试机器对账拦截（`node --test scripts/tests/check-exec-plan-parity.test.mjs`，zsw-skills 检出内执行）。FAIL 逐行输出 `FAIL: <分类>: <明细>`（全部报完再退出），按分类路由处置：
+stdout `PASS` 才继续步骤 4（交付体系任务须带 `--task-dir`，缺传即跳过增量、验收绑定与质量契约三段核对 = 入口门判据 1 与 3 未执行）。校验集与 W2 引擎的 validatePlan 及 W3 启动契约（testPlan / 必填字段 / 白名单）同源，错误文案逐字一致，漂移由差分测试机器对账拦截（`node --test scripts/tests/check-exec-plan-parity.test.mjs`，zsw-skills 检出内执行）。FAIL 逐行输出 `FAIL: <分类>: <明细>`（全部报完再退出），按分类路由处置：
 
 - 单字段错误（`territory` 形态 / `ref` 引用名 / `whitelist`、`noop` 命令形态 / `cwd`、`script`、`testPlan` / 路径层级与占位符类 `field`）→ 手修 exec-plan 对应字段后重跑本门；值转抄自 impl-plan 的字段（testCommand / deps / 单元 id）同步修 impl-plan 上游，否则重编译复现
 - 结构性缺漏（`schema`、缺数组缺必填的 `field`）→ 回步骤 2 重编译（尚无节点执行过时；已有进度改手修 + ledger 登记，重初始化会重置 status.json / runlog / ledger）
 - `cycle` 依赖环 / `overlap` territory 重叠无依赖路径 → 回 tech-design-v4 T3 修 impl-plan 后重走本清单——手修 exec-plan 会确定性复现同类错误
 - `increments` 增量契约 / `binding` 验收绑定 → 增量归属与命令转抄问题回 tech-design-v4 T3「增量契约对齐」节修；binding 不一致（验收版本或验收包已变化、设计包绑定陈旧）回 tech-design-v4 T1 入口门（flow/write.md Step 0）重新影响审查并更新 meta.json acceptanceBinding——验收内容变化属技能①职权，不在 exec-plan 侧改
+- `quality` 质量契约 → 机制对账（criterionMechanisms）与测试绑定（verificationBindings）缺口回 tech-design-v4 T2 修设计包 s4-accept.json（两者是 T2 产物）
 - `io:`（exec-plan 路径不存在或不可读）/ `json:`（JSON 语法错）自解释类——核对路径 / 修语法后重跑本门
 
 运行时环境断言（cwd == git rev-parse --show-toplevel、promptFile / verify script 盘上存在、projectRoot 存在）仍由 W2 引擎 setup 在派发前 fail-fast——promptFile 本清单下一步才构造，静态门不查存在性，正确计划不会恒红。
 
 ### 4. 逐节点 promptFile 构造
 
-每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·范围声明·验收条款/设计文档对应节摘录/编号域约定——本设计包的编号（场景/单元/裁决/验收项等 id）在文档与注释中裸用，引用其他设计包（历史代次或并行包）的同形编号一律带域前缀标注（形态 `<包域>·<编号>`，存量形态「V1·D6」），防止跨包同号撞号——同形编号并存会让终态同步审查逐条误报/漏判归属/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：测试 = 仅跑 testCommand 及其触及的测试文件，明写禁止包级全量套件与跨包扫描——全量回归由 D2 Gate A 统一承担，testCommand 覆盖不了改动行为时在 deviations 申报、不自行扩跑；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组；宿主无 structured-output 工具时在回复中用 json 代码块返回同构对象，解析失败视同本次汇报无效打回重报）/ 约束（范围声明清单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报/过程记录义务：临时待办·需裁决事项·复盘观察随时 append 到 `<name>.runlog/<unitId>.md`（任务书内写绝对路径；一行一条 `[HH:MM] 类型: 一句话事实`，不替代 JSON 返回契约——SKILL「运行记录」节））。
+每单元一个 `.prompts/<unitId>.md`，内容 = 三段式任务书全文：背景（项目根/计划路径/章节映射坐标/本单元职责·范围声明·验收条款/设计文档对应节摘录/编号域约定——本设计包的编号（场景/单元/裁决/验收项等 id）在文档与注释中裸用，引用其他设计包（历史代次或并行包）的同形编号一律带域前缀标注（形态 `<包域>·<编号>`，存量形态「V1·D6」），防止跨包同号撞号——同形编号并存会让终态同步审查逐条误报/漏判归属/项目 AGENTS.md 与测试策略文档路径）/ 目标（含测试要求：测试 = 仅跑 testCommand 及其触及的测试文件，明写禁止包级全量套件与跨包扫描——全量回归由 D2 Gate A 统一承担，testCommand 覆盖不了改动行为时在 deviations 申报、不自行扩跑，且申报条目必须二选一闭环：更新设计包 s4-accept.json verificationBindings / impl-plan acceptancePlan 的测试绑定，或申报由 D3 独立验收节点承接（写明节点与场景 id）——只申报缺口不闭环视同未完成，D2 入口对账逐条打回；验收条款逐条达成；契约类单元的契约测试含 error envelope 与边界用例）/ 验收（返回契约 JSON：`{status, files_changed:[精确路径], test_evidence, deviations:[], blockers:[], summary?}`——summary = commit message 摘要（末行「测试：<命令> 绿」承载老三要素的测试结论，§2 commitTemplate 契约依赖它），deviations 强制字段无偏离填空数组；宿主无 structured-output 工具时在回复中用 json 代码块返回同构对象，解析失败视同本次汇报无效打回重报）/ 约束（范围声明清单/禁 git 写/临时脚本清理/开工前校验章节映射指向的节实际存在，对不上停工上报/过程记录义务：临时待办·需裁决事项·复盘观察随时 append 到 `<name>.runlog/<unitId>.md`（任务书内写绝对路径；一行一条 `[HH:MM] 类型: 一句话事实`，不替代 JSON 返回契约——SKILL「运行记录」节））。
 
 ### 5. 初始 status.json + 运行档案初始化
 

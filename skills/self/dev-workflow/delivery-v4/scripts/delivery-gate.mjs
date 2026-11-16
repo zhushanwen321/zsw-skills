@@ -146,11 +146,19 @@ const CONDITIONAL_EVENT_FIELDS = {
 };
 const OPTIONAL_EVENT_FIELDS = {
   EvidenceRecorded: ["assertionIds", "adversarialFormIds"],
-  FindingRaised: ["consequenceRefutation", "reopenOf", "origin", "firstDetectedStage", "expectedStage", "regressionTestRef"],
-  AssuranceCompleted: ["mode"],
+  // consequenceRefutationType = 行为后果否决论证的三类声明（合并稿 §9：不会发生 /
+  // 用户不可观察 / 验收明确允许），正文存 consequenceRefutation，机器只认枚举
+  FindingRaised: ["consequenceRefutation", "consequenceRefutationType", "reopenOf", "origin", "firstDetectedStage", "expectedStage", "regressionTestRef"],
+  AssuranceCompleted: ["mode", "artifactSha256"],
+  // 哈希绑定扩展到全部携带 artifact 的证据/回执事件（合并稿 §10.3 证据不可覆盖）：
+  // OPTIONAL 起步兼容旧事件流，workflow 侧新登记必填
+  ImplementationRecorded: ["artifactSha256"],
+  ExplorationCompleted: ["artifactSha256"],
   // V4 代修复轮次溯源：fromRevision/toRevision = 该轮修复前后的 revision（受控修复循环
-  // 登记时携带；旧事件与上限熔断事件可缺省）
-  RepairRoundRecorded: ["fromRevision", "toRevision"],
+  // 登记时携带；旧事件与上限熔断事件可缺省）；incrementReceipts = 每轮修复的全量确定性
+  // 测试回执（合并稿 §11.1，与 AssuranceCompleted 回执同款双哈希）；nature = 轮次性质
+  //（behavior 计轮；environment/evidence 重试不计轮——合并稿 §7.1）
+  RepairRoundRecorded: ["fromRevision", "toRevision", "artifactSha256", "incrementReceipts", "nature"],
 };
 const EVENTS_LOCK_DIRNAME = ".events.lock";
 const EVENTS_LOCK_MAX_AGE_MS = 30_000;
@@ -768,7 +776,15 @@ function validateAcceptance(acceptance, task) {
         const assertion = requirement.assertions[assertionIndex];
         const assertionLabel = `${label}.assertions[${assertionIndex}]`;
         requireRecord(assertion, assertionLabel);
-        requireExactKeys(assertion, ["id", "statement", "qualifiers", "given", "when", "then", "adversarialFormRefs", "testAssetRefs"], assertionLabel);
+        // 可选键（合并稿 §4.1「允许记录不适用理由」+ §10.2 断言依赖声明）：
+        // qualifierNotApplicable = 限定条件不适用登记（带非空理由，豁免该限定条件的反例场景要求）；
+        // dependsOn = 断言声明依赖的实现增量/机制条款/测试资产（修复轮影响范围机器推导的输入）
+        requireEventKeys(
+          assertion,
+          ["id", "statement", "qualifiers", "given", "when", "then", "adversarialFormRefs", "testAssetRefs", "qualifierNotApplicable", "dependsOn"],
+          ["qualifierNotApplicable", "dependsOn"],
+          assertionLabel,
+        );
         requireNonEmptyString(assertion.id, `${assertionLabel}.id`);
         if (assertionIds.has(assertion.id)) fail(`验收包含重复断言 id ${assertion.id}。`, "为每条断言分配全验收包唯一 id，并同步修正反例场景与证据引用后重试。");
         assertionIds.add(assertion.id);
@@ -779,8 +795,43 @@ function validateAcceptance(acceptance, task) {
         requireNonEmptyString(assertion.then, `${assertionLabel}.then`);
         requireStringArray(assertion.adversarialFormRefs, `${assertionLabel}.adversarialFormRefs`, { nonEmptyItems: true, unique: true });
         requireStringArray(assertion.testAssetRefs, `${assertionLabel}.testAssetRefs`, { nonEmptyItems: true, unique: true });
-        if (assertion.adversarialFormRefs.length === 0 || assertion.testAssetRefs.length === 0) {
-          fail(`${assertionLabel} 必须至少引用一个反例场景和一个测试资产。`, "补齐 adversarialFormRefs 与 testAssetRefs 后重试 validate-acceptance。");
+        if (assertion.adversarialFormRefs.length === 0 && !Object.hasOwn(assertion, "qualifierNotApplicable")) {
+          fail(`${assertionLabel} 必须至少引用一个反例场景（或为不适用的限定条件登记 qualifierNotApplicable 理由）。`, "补齐 adversarialFormRefs，或为无法构造反例的限定条件逐条登记不适用理由后重试 validate-acceptance。");
+        }
+        if (assertion.testAssetRefs.length === 0) {
+          fail(`${assertionLabel} 必须至少引用一个测试资产。`, `为 ${assertionLabel} 补齐 testAssetRefs 后重试 validate-acceptance。`);
+        }
+        // 限定条件不适用登记（合并稿 §4.1）：每条须落在本断言 qualifiers 内且理由非空，
+        // 豁免该限定条件的「每个限定条件有反例场景」要求
+        if (Object.hasOwn(assertion, "qualifierNotApplicable")) {
+          if (!Array.isArray(assertion.qualifierNotApplicable) || assertion.qualifierNotApplicable.length === 0) {
+            fail(`${assertionLabel}.qualifierNotApplicable 必须是非空数组。`, `逐条登记 { qualifier, rationale }（限定条件 + 不适用理由），或删除该键并补齐反例场景。`);
+          }
+          const exemptSeen = new Set();
+          for (let exemptIndex = 0; exemptIndex < assertion.qualifierNotApplicable.length; exemptIndex += 1) {
+            const exempt = assertion.qualifierNotApplicable[exemptIndex];
+            const exemptLabel = `${assertionLabel}.qualifierNotApplicable[${exemptIndex}]`;
+            requireRecord(exempt, exemptLabel);
+            requireExactKeys(exempt, ["qualifier", "rationale"], exemptLabel);
+            requireNonEmptyString(exempt.qualifier, `${exemptLabel}.qualifier`);
+            requireNonEmptyString(exempt.rationale, `${exemptLabel}.rationale`);
+            if (!assertion.qualifiers.includes(exempt.qualifier)) {
+              fail(`${exemptLabel}.qualifier=${exempt.qualifier} 不在本断言 qualifiers 内。`, "不适用登记只能指向本断言已声明的限定条件后重试。");
+            }
+            if (exemptSeen.has(exempt.qualifier)) fail(`${exemptLabel}.qualifier 重复登记。`, "同一限定条件只登记一条不适用理由。");
+            exemptSeen.add(exempt.qualifier);
+          }
+        }
+        // 依赖声明（合并稿 §10.2）：机器可推导的影响范围输入；incrementIds 的存在性在
+        // validateIncrements（increments 读取后）对账
+        if (Object.hasOwn(assertion, "dependsOn")) {
+          const dependsOn = assertion.dependsOn;
+          const dependsOnLabel = `${assertionLabel}.dependsOn`;
+          requireRecord(dependsOn, dependsOnLabel);
+          requireExactKeys(dependsOn, ["incrementIds", "mechanismRefs", "testAssetRefs"], dependsOnLabel);
+          requireStringArray(dependsOn.incrementIds, `${dependsOnLabel}.incrementIds`, { nonEmptyItems: true, unique: true });
+          requireStringArray(dependsOn.mechanismRefs, `${dependsOnLabel}.mechanismRefs`, { nonEmptyItems: true, unique: true });
+          requireStringArray(dependsOn.testAssetRefs, `${dependsOnLabel}.testAssetRefs`, { nonEmptyItems: true, unique: true });
         }
       }
     }
@@ -814,8 +865,12 @@ function validateAcceptance(acceptance, task) {
           fail(`断言 ${assertion.id} 的反例场景数量与 adversarialFormRefs 不一致。`, "确保该断言的每个反例场景都列入 adversarialFormRefs，且没有未登记引用后重试。");
         }
         const coveredQualifiers = new Set(forms.map((form) => form.qualifier));
+        // 不适用登记的限定条件豁免「每个限定条件有反例场景」（合并稿 §4.1/§11.1）
+        const exemptQualifiers = new Set((assertion.qualifierNotApplicable ?? []).map((row) => row.qualifier));
         for (const qualifier of assertion.qualifiers) {
-          if (!coveredQualifiers.has(qualifier)) fail(`断言 ${assertion.id} 的限定条件 ${qualifier} 没有反例场景。`, "为该限定条件补充 adversarialForms 条目并加入 assertion.adversarialFormRefs 后重试。");
+          if (!coveredQualifiers.has(qualifier) && !exemptQualifiers.has(qualifier)) {
+            fail(`断言 ${assertion.id} 的限定条件 ${qualifier} 没有反例场景。`, `为该限定条件补充 adversarialForms 条目并加入 assertion.adversarialFormRefs，或在 assertion.qualifierNotApplicable 登记带理由的不适用声明后重试。`);
+          }
         }
       }
     }
@@ -881,6 +936,19 @@ function validateIncrements(increments, acceptance) {
       const timeoutMs = item.testCommand.timeoutMs;
       if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 3_600_000) {
         fail(`${label}.testCommand.timeoutMs 必须是 1000..3600000 的整数。`, `把 ${label}.testCommand.timeoutMs 改为该区间的整数（缺省 300000）后重试。`);
+      }
+    }
+  }
+  // 断言依赖声明对账（合并稿 §10.2）：dependsOn.incrementIds 必须指向已声明的增量
+  if (acceptance.schemaVersion === 2) {
+    for (const requirement of acceptance.requirements) {
+      for (const assertion of requirement.assertions) {
+        if (!Object.hasOwn(assertion, "dependsOn")) continue;
+        for (const incrementId of assertion.dependsOn.incrementIds) {
+          if (!incrementIds.has(incrementId)) {
+            fail(`断言 ${assertion.id} 的 dependsOn.incrementIds 引用未知增量 ${incrementId}。`, "把该引用改为 increments.items 已声明的 id，或先补增量定义后重试。");
+          }
+        }
       }
     }
   }
@@ -1023,6 +1091,9 @@ function validateEventShape(event, { record = false } = {}) {
   requireNonEmptyString(event.summary, "event.summary");
 
   if (Object.hasOwn(event, "artifact")) requireNonEmptyString(event.artifact, "event.artifact");
+  // 哈希绑定扩展（合并稿 §10.3）：任何携带 artifact 的事件均可带 artifactSha256，
+  // 内容哈希不匹配磁盘时由防覆盖对账拦截（append 侧）
+  if (Object.hasOwn(event, "artifactSha256")) requireSha256(event.artifactSha256, "event.artifactSha256");
   switch (event.type) {
     case "AcceptanceReviewed":
       requireSha256(event.acceptancePackageSha256, "event.acceptancePackageSha256");
@@ -1063,6 +1134,10 @@ function validateEventShape(event, { record = false } = {}) {
       // 无关联需求的发现允许空数组（blocker 时触发全量增量修复）
       requireStringArray(event.requirementIds, "event.requirementIds", { unique: true });
       if (Object.hasOwn(event, "consequenceRefutation")) requireNonEmptyString(event.consequenceRefutation, "event.consequenceRefutation");
+      // 三类论证居其一（合并稿 §9）：机器只认枚举，论证正文存 consequenceRefutation
+      if (Object.hasOwn(event, "consequenceRefutationType")) {
+        requireEnum(event.consequenceRefutationType, ["will-not-occur", "not-observable", "accepted-by-acceptance"], "event.consequenceRefutationType");
+      }
       if (Object.hasOwn(event, "reopenOf")) requireFindingId(event.reopenOf, "event.reopenOf");
       if (Object.hasOwn(event, "origin")) requireEnum(event.origin, ["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"], "event.origin");
       if (Object.hasOwn(event, "firstDetectedStage")) requireNonEmptyString(event.firstDetectedStage, "event.firstDetectedStage");
@@ -1110,6 +1185,23 @@ function validateEventShape(event, { record = false } = {}) {
       requirePositiveInteger(event.round, "event.round");
       requireStringArray(event.triggerFindingIds, "event.triggerFindingIds", { nonEmptyItems: true, unique: true });
       requireStringArray(event.affectedAssertionIds, "event.affectedAssertionIds", { nonEmptyItems: true, unique: true });
+      // 轮次性质（合并稿 §7.1）：behavior=实现性修复计轮；environment/evidence=重试不计轮
+      if (Object.hasOwn(event, "nature")) requireEnum(event.nature, ["behavior", "environment", "evidence"], "event.nature");
+      // 每轮修复的全量确定性测试回执（合并稿 §11.1）：与 AssuranceCompleted 回执同款形态
+      if (Object.hasOwn(event, "incrementReceipts")) {
+        if (!Array.isArray(event.incrementReceipts) || event.incrementReceipts.length === 0) {
+          fail("event.incrementReceipts 必须是非空数组（逐增量测试回执）。", "由修复循环引擎重跑全部增量 testCommand 后逐条登记回执；上限熔断轮可省略该字段。");
+        }
+        const seenIncrement = new Set();
+        for (let index = 0; index < event.incrementReceipts.length; index += 1) {
+          const receipt = event.incrementReceipts[index];
+          requireIncrementReceiptShape(receipt, `event.incrementReceipts[${index}]`);
+          if (seenIncrement.has(receipt.incrementId)) {
+            fail(`event.incrementReceipts 含重复增量 ${receipt.incrementId}。`, "每个增量一条回执，去重后重试。");
+          }
+          seenIncrement.add(receipt.incrementId);
+        }
+      }
       break;
     case "RiskAccepted":
       requireEnum(event.targetType, ["requirement", "finding"], "event.targetType");
@@ -1251,21 +1343,38 @@ function validateArtifact(taskDir, artifact) {
 }
 
 // 已登记 artifact 禁止覆盖写：同名写入即失败，新证据用新文件名（追加前校验）。
-// 两道对账：① 既有事件已以不同内容哈希登记同一路径 → 覆盖写，直接拒绝（预防性）；
-// ② 本次事件声明的哈希与磁盘现状不一致 → 拒绝（防止把已覆盖的文件再登记进事件流）
-function validateArtifactNotOverwritten(world, artifact, artifactSha256) {
+// 对账范围（合并稿 §10.3 证据不可覆盖）：全部携带 artifact 的事件，不再只限带
+// artifactSha256 的 EvidenceRecorded——四类证据/回执事件（ImplementationRecorded /
+// ExplorationCompleted / AssuranceCompleted / RepairRoundRecorded）同样受保护。
+// 三道对账：① 既有事件已以不同内容哈希登记同一路径 → 覆盖写，直接拒绝（预防性）；
+// ② 既有事件以内容哈希登记过同一路径，本次事件不带哈希 → 拒绝（已登记路径的
+// 再引用必须携带一致哈希，防绕过哈希绑定）；③ 本次事件声明的哈希与磁盘现状不一致 →
+// 拒绝（防止把已覆盖的文件再登记进事件流）。双方均无哈希的旧形态引用只做磁盘可读
+// 校验（validateArtifact 已覆盖），无内容对账依据时放行以兼容旧事件流。
+function validateArtifactNotOverwritten(world, event) {
+  const artifact = event.artifact;
+  const artifactSha256 = Object.hasOwn(event, "artifactSha256") ? event.artifactSha256 : null;
   const filePath = isAbsolute(artifact) ? resolve(artifact) : resolve(world.taskDir, artifact);
   for (const entry of world.entries) {
     const prior = entry.record;
-    if (!Object.hasOwn(prior, "artifact") || !Object.hasOwn(prior, "artifactSha256")) continue;
+    if (!Object.hasOwn(prior, "artifact")) continue;
     const priorPath = isAbsolute(prior.artifact) ? resolve(prior.artifact) : resolve(world.taskDir, prior.artifact);
-    if (priorPath === filePath && prior.artifactSha256 !== artifactSha256) {
+    if (priorPath !== filePath) continue;
+    if (!Object.hasOwn(prior, "artifactSha256")) continue;
+    if (artifactSha256 === null) {
+      fail(
+        `artifact ${artifact} 已被事件 seq=${prior.seq} 以内容哈希登记，本事件引用同一路径必须携带一致的 artifactSha256。`,
+        `重新计算 ${basename(filePath)} 的 sha256 后随事件携带再重试；新证据用新文件名追加新事件。`,
+      );
+    }
+    if (prior.artifactSha256 !== artifactSha256) {
       fail(
         `artifact ${artifact} 已被事件 seq=${prior.seq} 以不同内容哈希登记，拒绝覆盖写（登记 ${prior.artifactSha256.slice(0, 12)}…，本次 ${artifactSha256.slice(0, 12)}…）。`,
         `已登记证据禁止覆盖写——新证据用新文件名（如 ${basename(filePath)} 递增序号）追加新事件后重试。`,
       );
     }
   }
+  if (artifactSha256 === null) return;
   const currentSha = sha256File(filePath, `artifact ${artifact}`);
   if (currentSha !== artifactSha256) {
     fail(
@@ -1581,6 +1690,10 @@ function foldEvents(world, entries) {
         }
         if (current && world.acceptance.schemaVersion === 2 && event.severity === "non-blocker") {
           requireNonEmptyString(event.consequenceRefutation, `${lineLabel}.consequenceRefutation`);
+          // 三类论证居其一（合并稿 §9）：不只非空，必须显式声明类型（shape 层已限枚举）
+          if (!Object.hasOwn(event, "consequenceRefutationType")) {
+            fail(`${lineLabel} 缺少 consequenceRefutationType（行为后果否决论证必须声明三类之一）。`, `为该 non-blocker 附 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）后重试。`);
+          }
         }
         raisedFindings.set(event.findingId, event.acceptanceVersion);
         fold.findingHistory.push(event);
@@ -1622,6 +1735,28 @@ function foldEvents(world, entries) {
           const knownAssertions = new Set(world.acceptance.requirements.flatMap((requirement) => requirement.assertions.map((assertion) => assertion.id)));
           for (const id of event.affectedAssertionIds) {
             if (!knownAssertions.has(id)) fail(`${lineLabel} 的 affectedAssertionIds 含未知断言 ${id}。`, "只填写当前验收包已声明的断言 id 后重试。");
+          }
+          // 每轮修复的全量确定性测试回执（合并稿 §11.1）：受控修复轮（带 fromRevision/
+          // toRevision 溯源）在 schema 2 下必须附带且回执覆盖全部增量；上限熔断轮
+          //（无修复发生）与旧事件流不要求
+          const controlledRepairRound = Object.hasOwn(event, "fromRevision") && Object.hasOwn(event, "toRevision");
+          if (controlledRepairRound) {
+            if (!Array.isArray(event.incrementReceipts) || event.incrementReceipts.length === 0) {
+              fail(
+                `${lineLabel} 缺少 incrementReceipts（schema 2 受控修复轮必须附带全量确定性测试回执）。`,
+                "由 assurance-repair-loop-v4 引擎在修复提交后重跑全部增量 testCommand，随 RepairRoundRecorded 逐条登记回执后重试。",
+              );
+            }
+            const receiptIncrementIds = new Set(event.incrementReceipts.map((receipt) => receipt.incrementId));
+            const missingReceipts = currentIncrementIds.size > 0
+              ? [...currentIncrementIds].filter((id) => !receiptIncrementIds.has(id))
+              : [];
+            if (missingReceipts.length > 0) {
+              fail(
+                `${lineLabel} 的 incrementReceipts 未覆盖全部增量（缺 ${missingReceipts.join(", ")}）。`,
+                "重跑全部增量 testCommand 并逐条登记回执后重试；修复轮回执必须与 AssuranceCompleted 同口径覆盖全部增量。",
+              );
+            }
           }
         }
         fold.repairs.push(event);
@@ -1873,6 +2008,12 @@ function buildVerdict(world, revision, revisionSource = "computed") {
       requirementIds: [...finding.raised.requirementIds],
       inherited: finding.inherited,
       artifact: finding.raised.artifact,
+      // 归因透传（nextAction process-failed 指引按 origin/expectedStage 回阶段归因，
+      // 主 agent 只读 verdict 时必须能拿到被指引使用的数据；未填输出 null）
+      origin: finding.raised.origin ?? null,
+      firstDetectedStage: finding.raised.firstDetectedStage ?? null,
+      expectedStage: finding.raised.expectedStage ?? null,
+      regressionTestRef: finding.raised.regressionTestRef ?? null,
       riskAccepted: false,
     }));
   const reaffirmableFindings = openFindingEntries
@@ -1904,15 +2045,43 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   const requiresCleanBuild =
     world.policy["revision.json"].runsFromIgnoredArtifacts === true &&
     (world.policy["revision.json"].mode ?? "auto-git") !== "content-manifest";
+  // 探索需求判定（合并稿 §6）：schema 2 的 full 探索按「缺少候选探索证据、验收或关键
+  // 设计变化」触发，不再由 exploratoryReview 风险字段门控（候选反例审查与 full 开放式
+  // 探索对全部 schema 2 任务可达；该词表仅保留为高风险披露要求）；schema 1 保持原词表语义
+  const lastChangeSeqBefore = (seq) => Math.max(
+    0,
+    ...fold.approvals.filter((event) => event.seq < seq).map((event) => event.seq),
+    ...fold.designApprovals.filter((event) => event.seq < seq).map((event) => event.seq),
+  );
+  const explorationDueAt = (seq) => {
+    const explorationsBefore = fold.explorations.filter((event) => event.seq < seq);
+    if (explorationsBefore.length === 0) return true;
+    return lastChangeSeqBefore(seq) > Math.max(...explorationsBefore.map((event) => event.seq));
+  };
   const assuranceBaseValid = (event) => {
     const covered = new Set(event.incrementReceipts.map((receipt) => receipt.incrementId));
     if (!allIncrementIds.every((id) => covered.has(id))) return false;
     if (!event.incrementReceipts.every((receipt) => receipt.exitCode === 0)) return false;
     if (!event.evidenceEventIds.every((id) => currentEvidenceIds.has(id))) return false;
     const mode = event.mode ?? "full";
-    if (acceptance.exploratoryReview === "required") {
-      if (mode === "full" && !currentExplorationIds.has(event.explorationEventId)) return false;
-      if (mode === "recheck" && !allExplorationIds.has(event.explorationEventId)) return false;
+    if (mode === "full") {
+      const needsFreshExploration = usesAssertions ? explorationDueAt(event.seq) : acceptance.exploratoryReview === "required";
+      if (needsFreshExploration) {
+        // 验收或关键设计变化后缺少新探索：full 必须引用晚于最后一次变化登记的当前
+        // revision 探索（版本递增不改 revision——同 revision 的旧探索不覆盖新判据）
+        const changeSeq = lastChangeSeqBefore(event.seq);
+        const freshExplorationIds = new Set(
+          fold.explorations
+            .filter((exploration) => exploration.seq < event.seq && exploration.seq > changeSeq && currentRevision(exploration))
+            .map((exploration) => exploration.eventId),
+        );
+        if (!freshExplorationIds.has(event.explorationEventId)) return false;
+      } else if (usesAssertions) {
+        // 候选探索已存在且验收/设计未变化：full 引用既有探索作为证据来源（不允许 none）
+        if (!allExplorationIds.has(event.explorationEventId)) return false;
+      } else if (event.explorationEventId !== "none" && !allExplorationIds.has(event.explorationEventId)) {
+        return false;
+      }
     } else if (event.explorationEventId !== "none" && !allExplorationIds.has(event.explorationEventId)) {
       return false;
     }
@@ -1930,10 +2099,13 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   const knownEvidenceIds = new Set(fold.evidence.map((event) => event.eventId));
   const priorFullQualified = (event) => {
     const covered = new Set(event.incrementReceipts.map((receipt) => receipt.incrementId));
+    const explorationRefOk = usesAssertions
+      ? allExplorationIds.has(event.explorationEventId)
+      : (acceptance.exploratoryReview !== "required" || allExplorationIds.has(event.explorationEventId));
     return (
       allIncrementIds.every((id) => covered.has(id)) &&
       event.evidenceEventIds.every((id) => id === "none" || knownEvidenceIds.has(id)) &&
-      (acceptance.exploratoryReview !== "required" || allExplorationIds.has(event.explorationEventId))
+      explorationRefOk
     );
   };
   const hasPriorValidFull = (event) =>
@@ -1948,7 +2120,11 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   );
   const assuranceCompleted = assuranceValid.length > 0;
   const explorationCompleted = fold.explorations.length > 0;
-  const explorationSatisfied = acceptance.exploratoryReview !== "required" || assuranceCompleted;
+  // schema 2：有效保证成立即满足（full 的探索引用已在 assuranceBaseValid 按 due 判定校验）；
+  // schema 1：保持 exploratoryReview 词表语义（required 时须有探索）
+  const explorationSatisfied = usesAssertions
+    ? assuranceCompleted
+    : acceptance.exploratoryReview !== "required" || assuranceCompleted;
 
   const requirementRiskByGap = new Map(
     fold.risks
@@ -2034,7 +2210,20 @@ function buildVerdict(world, revision, revisionSource = "computed") {
       .filter((event) => event.category === "defect" && event.severity === "blocker")
       .map((event) => rootFindingId(event.findingId)),
   );
-  const repairRounds = fold.repairs.length;
+  // 计轮口径（合并稿 §7.1）：behavior 性质的 RepairRoundRecorded + 同任务内首次
+  // AssuranceCompleted 之后出现的 DesignApproved（方案修订消除冲突）与 AcceptanceApproved
+  //（验收版本递增重新批准）各按一轮并入——否则方案/验收修订路径绕过 3 轮上限
+  //（nature=environment/evidence 的重试轮不计，见 §7.1 不计轮三类）
+  const countedRepairs = fold.repairs.filter((event) => (event.nature ?? "behavior") === "behavior");
+  const firstAssuranceEntry = world.entries.find((entry) => entry.record.type === "AssuranceCompleted");
+  const firstAssuranceSeq = firstAssuranceEntry !== undefined ? firstAssuranceEntry.record.seq : null;
+  const postAssuranceDesignRevisions = firstAssuranceSeq === null ? 0 : world.entries.filter(
+    (entry) => entry.record.seq > firstAssuranceSeq && entry.record.type === "DesignApproved",
+  ).length;
+  const postAssuranceAcceptanceRevisions = firstAssuranceSeq === null ? 0 : world.entries.filter(
+    (entry) => entry.record.seq > firstAssuranceSeq && entry.record.type === "AcceptanceApproved",
+  ).length;
+  const repairRounds = countedRepairs.length + postAssuranceDesignRevisions + postAssuranceAcceptanceRevisions;
   const processFailed = uniqueMustFix.size > 10 || repairRounds > 3;
   // 循环外实现性修复呈报（不硬拦，显式披露不静默）：同验收版本最后一次保证之后
   // revision 前进，且其间无 RepairRoundRecorded（受控修复循环）、无新增
@@ -2135,6 +2324,17 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     .filter((requirement) => !requirement.required && requirement.evidence.some((item) => item.result === "failed"))
     .map((requirement) => requirement.id);
 
+  // 未覆盖反例场景清单（合并稿 §4.4：verdict 输出断言级缺口和未覆盖反例场景）：
+  // schema 2 下逐 form 检查当前 revision 是否存在 verified 且 adversarialFormIds 认领
+  // 该场景的 EvidenceRecorded，未认领的场景 id 进 missing（新增场景无人认领时可操作）
+  const missingAdversarialFormIds = usesAssertions
+    ? acceptance.adversarialForms
+        .filter((form) => !fold.evidence.some(
+          (event) => event.revision === revision && event.result === "verified" && (event.adversarialFormIds ?? []).includes(form.id),
+        ))
+        .map((form) => form.id)
+    : [];
+
   const missing = {
     acceptanceApproval: !approved,
     approvalBindings: approvalBindingGaps(world, approved),
@@ -2142,7 +2342,8 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     incrementIds: missingIncrementIds,
     evidence: evidenceGaps,
     assuranceCompleted: !assuranceCompleted,
-    explorationCompleted: acceptance.exploratoryReview === "required" && !explorationCompleted,
+    explorationCompleted: (usesAssertions ? fold.explorations.length === 0 : acceptance.exploratoryReview === "required") && !explorationCompleted,
+    adversarialForms: missingAdversarialFormIds,
     riskAcceptances: [
       ...unacceptedEvidenceGaps.map((gap) => ({ targetType: "requirement", targetId: gap.requirementId, gapId: gap.gapId })),
       ...unacceptedDefects.map((finding) => ({ targetType: "finding", targetId: finding.findingId, gapId: finding.findingId })),
@@ -2166,6 +2367,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     taskDir: world.taskDir,
     revision,
     world,
+    repairRounds,
     missingIncrementIds,
     unacceptedFailed: unacceptedFailed.map((requirement) => requirement.id),
     unacceptedBlockers: unacceptedBlockers.map((finding) => finding.findingId),
@@ -2193,6 +2395,11 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     quality: {
       uniqueMustFix: uniqueMustFix.size,
       repairRounds,
+      repairRoundsBreakdown: {
+        behaviorRepairRounds: countedRepairs.length,
+        designRevisionsAfterAssurance: postAssuranceDesignRevisions,
+        acceptanceRevisionsAfterAssurance: postAssuranceAcceptanceRevisions,
+      },
       processFailed,
       offLoopRepair: offLoopRepair ? { lastAssuranceRevision: lastAssurance.revision, currentRevision: revision } : null,
     },
@@ -2222,6 +2429,7 @@ function buildNextAction({
   taskDir,
   revision,
   world,
+  repairRounds = 0,
   missingIncrementIds,
   unacceptedFailed,
   unacceptedBlockers,
@@ -2250,7 +2458,7 @@ function buildNextAction({
     return `连续漂移超上限：人工排查项目写入源后由用户执行 ${GATE_COMMAND} confirm-baseline --task-dir ${taskArg} --reason "排查结论" --credential ${JSON.stringify(userCredential)} --revision ${revisionArg} 确认新基线。`;
   }
   if (state === "process-failed") {
-    return `正常修复路径已超限（rounds=${world.fold.repairs.length}，uniqueMustFix>10 或 rounds>3）：停止继续补丁，按 finding 的 origin 与 expectedStage 回验收、设计或实现阶段重做；如需另开交付，使用任务替换并完整披露本任务失败原因。`;
+    return `正常修复路径已超限（rounds=${repairRounds}，含修复轮与保证后的方案/验收修订，uniqueMustFix>10 或 rounds>3）：停止继续补丁，按 finding 的 origin 与 expectedStage 回验收、设计或实现阶段重做；如需另开交付，使用任务替换并完整披露本任务失败原因。`;
   }
   if (unacceptedFailed.length > 0) {
     return `修复需求 ${unacceptedFailed.join(", ")} 的 failed 证据并运行 delivery-v4/candidate-build-v4 + independent-assurance-v4（taskDir=${taskArg}）；仅对允许风险的缺口执行 accept-risk，然后执行 ${evaluate}。`;
@@ -2465,8 +2673,8 @@ function withEventsLock(taskDirValue, run) {
 function appendEvent(world, event, privateKey, options = {}) {
   validateEventShape(event);
   if (Object.hasOwn(event, "artifact")) validateArtifact(world.taskDir, event.artifact);
-  // 带内容哈希的证据事件（EvidenceRecorded）追加前做覆盖写对账（redesign 3.7 证据内容寻址）
-  if (Object.hasOwn(event, "artifactSha256")) validateArtifactNotOverwritten(world, event.artifact, event.artifactSha256);
+  // 覆盖写对账（合并稿 §10.3）：全部携带 artifact 的事件（不再只限带哈希的 EvidenceRecorded）
+  if (Object.hasOwn(event, "artifact")) validateArtifactNotOverwritten(world, event);
   const eventId = computeEventId(event);
   const contentKey = canonicalJson(event);
   for (const entry of world.entries) {
@@ -2529,14 +2737,13 @@ function appendEvent(world, event, privateKey, options = {}) {
     }
   }
   if (event.type === "ImplementationRecorded" && world.acceptance?.schemaVersion === 2) {
-    if (world.acceptance.exploratoryReview === "required") {
-      const explored = world.fold.explorations.some((item) => item.revision === event.revision);
-      if (!explored) {
-        fail(
-          "schema 2 候选登记前必须完成当前 revision 的反例审查。",
-          "先运行 independent-assurance-v4 --mode explore-only，处置 must-fix 并补回归测试；代码变化后在新的 revision 重新探索，再登记 ImplementationRecorded。",
-        );
-      }
+    // 候选反例审查对全部 schema 2 任务执行（合并稿 §2.1/§5.3：D3 后 D4 前无风险门控）
+    const explored = world.fold.explorations.some((item) => item.revision === event.revision);
+    if (!explored) {
+      fail(
+        "schema 2 候选登记前必须完成当前 revision 的反例审查。",
+        "先运行 independent-assurance-v4 --mode explore-only（或 candidate-build-v4 内置候选探索），处置 must-fix 并补回归测试；代码变化后在新的 revision 重新探索，再登记 ImplementationRecorded。",
+      );
     }
     const blockers = [...world.fold.findings.values()].filter((finding) =>
       finding.raised.category === "defect" && finding.raised.severity === "blocker" &&
@@ -3943,7 +4150,10 @@ function commandLeaseAcquire(args) {
   const now = Date.now();
   if (existing !== null) {
     const heartbeatAge = now - Date.parse(existing.heartbeatAt);
-    const alive = isPidAlive(existing.pid) && heartbeatAge <= LEASE_STALE_MS;
+    // 活性由心跳时长单独承重：租约 pid 是登记 lease-acquire 的 CLI 进程（短命），持租
+    // 互斥的真实信号是 workflow 长阶段的周期 lease-heartbeat——心跳新鲜即视为持租运行
+    // 中，异 runId 不得接管；心跳陈旧按失联接管（terminateProcessGroup 已容错死 pid）
+    const alive = heartbeatAge <= LEASE_STALE_MS;
     if (alive && existing.runId === options["run-id"]) {
       writeLease(projectRoot, { ...existing, heartbeatAt: new Date().toISOString() });
       printJson({ projectRoot, runId: existing.runId, generation: existing.generation, reused: true });

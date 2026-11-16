@@ -1,7 +1,7 @@
 ---
 name: delivery-v4
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 4.0.2
+version: 4.1.3
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -44,9 +44,10 @@ dev-flow-v4（技能③执行）在本体系内协作：②在已批准目标与
 3. 呈报关键目标、非目标、风险与相对原始意图的覆盖对照；用户明确批准后 `approve-acceptance`（批准绑验收包哈希、intent 哈希、策略快照哈希与通过审查的事件 id）。全托管授权用 `standing-authorization`。
 4. tech-design-v4（技能②）产出完整方案包，用户确认后 `record-design-approved` 绑方案包哈希清单。
 5. 候选实现两通道任选其一：内置 `candidate-build-v4`（入口门校验验收批准；非 `--verification-only` 任务还要求 DesignApproved——state=design 直接拒绝并指向 `record-design-approved`），或 dev-flow-v4（技能③）执行并在其 D4 收尾按 increments 逐增量以 builder 凭据登记 `ImplementationRecorded`（衔接定义见 dev-flow-v4 文档）；两通道的实现记录与合并回执口径一致。
-6. 发起 `independent-assurance-v4`：schema 2 逐「断言×证据类型」取证并重跑全部增量测试。`full` 执行完整覆盖与开放探索；`recheck` 只复核旧发现、修复 diff 与受影响断言，重跑全量确定性测试并引用历史探索；`explore-only` 在 D3 后、D4 前攻击候选实现。证据路径按运行隔离且禁止覆盖，setup/finalize 比对 revision，漂移按既有规则处理。
-7. 实现性修复统一发起 `assurance-repair-loop-v4`：独立聚合给出来源阶段、受影响断言和回归测试，builder 修复，独立 reviewer 做受影响一致性复核，最后以 recheck 完成当前版本取证。主会话确认 worktree 归属后显式传 `allowCommit=true`，禁止裸补丁直提。需要第 4 轮实现性修复或出现第 11 条不同 must-fix 时，裁决器进入 `process-failed`；同一问题 `reopenOf` 不重复计数，环境与证据采集重试不计轮。
+6. 发起 `independent-assurance-v4`：schema 2 逐「断言×证据类型」取证并重跑全部增量测试。`full` 执行完整覆盖与开放探索——开放探索按「缺少候选探索证据、验收或关键设计变化」触发（与 `exploratoryReview` 风险字段解耦：该字段仅作为高风险披露要求，候选反例审查与 full 探索对全部 schema 2 任务可达，已有合格候选探索且验收/设计未变化时 full 直接引用既有探索）；`recheck` 只复核旧发现、修复 diff 与受影响断言，重跑全量确定性测试并引用历史探索；`explore-only` 在 D3 后、D4 前攻击候选实现（schema 2 任务在登记 `ImplementationRecorded` 前必须有当前 revision 的探索事件）。证据路径按运行隔离且禁止覆盖（全部携带 artifact 的事件可带 `artifactSha256` 哈希绑定，防覆盖对账覆盖 EvidenceRecorded 与 ImplementationRecorded/ExplorationCompleted/AssuranceCompleted/RepairRoundRecorded 五类），setup/finalize 比对 revision，漂移按既有规则处理。
+7. 实现性修复统一发起 `assurance-repair-loop-v4`：独立聚合给出来源阶段、受影响断言和回归测试（引擎按断言 `dependsOn` 声明先推导机器候选集，planner 只增补），builder 修复，独立 reviewer 做受影响一致性复核，每轮修复随 `RepairRoundRecorded` 登记全量确定性测试回执（incrementReceipts），最后以 recheck 完成当前版本取证。主会话确认 worktree 归属后显式传 `allowCommit=true`，禁止裸补丁直提。需要第 4 轮实现性修复或出现第 11 条不同 must-fix 时，裁决器进入 `process-failed`；同一问题 `reopenOf` 不重复计数，环境与证据采集重试不计轮（登记 `RepairRoundRecorded` 时带 `nature=environment|evidence`；缺省 nature=behavior 计轮）；首次保证之后的方案修订（DesignApproved）与验收版本递增（AcceptanceApproved）各按一轮并入计轮——修订路径不能绕过 3 轮上限。
 8. `evaluate`：按 state/missing/nextAction 决定补证据、回设计、回实现、接受具体风险或停止过程失败。最后一批建议级修复后以 recheck 完成当前版本取证，不重新开放探索。只有 `accepted` 或 `accepted_with_risk` 才能按对应口径交付；`process-failed` 不得作为成功交付。
+9. 收尾质量指标：交付终态（accepted / accepted_with_risk / process-failed）确定后运行 `node ~/.agents/skills/delivery-v4/scripts/delivery-quality-stats.mjs <taskDir> --json` 输出合并稿 §13 的 11 项交付质量指标（uniqueMustFix、repairRounds、findings、reopenedFindings、expectedStageAccuracy、escapedByStage、assuranceMustFixFirstRun、targetedReviewRate、finalExplorations、evidenceIntegrityFailures、stuckContinuationCount），呈报用户并存档；卡住续跑次数由主会话按 dev-flow 执行记录统计后经 `--stuck-continuation-count N` 传入。
 
 ## 任务目录、血统与凭据
 

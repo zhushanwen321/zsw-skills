@@ -1,12 +1,19 @@
 #!/usr/bin/env node
-// V4 交付质量监控：不同 must-fix、实现性修复轮次、来源阶段与重新打开情况。
-import { readFileSync } from "node:fs";
+// V4 交付质量监控（合并稿 §13 全部 11 项指标）：不同 must-fix、实现性修复轮次（含保证后
+// 方案/验收修订的 off-loop 计轮与 nature 过滤）、来源阶段与重新打开情况、逃逸分布、
+// 期望阶段命中精度、首轮保证 must-fix 数、定向复核比例、最终阶段探索、证据完整性失败、
+// 卡住续跑计数（dev-flow 侧观测经 --stuck-continuation-count 传入，事件流无此信号）。
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const taskDir = process.argv[2];
-const json = process.argv.includes("--json");
-if (!taskDir) {
-  console.error("用法：node delivery-quality-stats.mjs <taskDir> [--json]——读取该任务的 events.jsonl，输出不同 must-fix、修复轮次与来源阶段");
+const USAGE = "用法：node delivery-quality-stats.mjs <taskDir> [--json] [--stuck-continuation-count N]——读取该任务的 events.jsonl（与 verdict.json，若存在），输出合并稿 §13 的交付质量指标";
+const args = process.argv.slice(2);
+const taskDir = args.find((value, index) => index % 2 === 0 && !value.startsWith("--"));
+const json = args.includes("--json");
+const stuckIndex = args.indexOf("--stuck-continuation-count");
+const stuckContinuationCount = stuckIndex >= 0 && /^\d+$/.test(args[stuckIndex + 1] ?? "") ? Number(args[stuckIndex + 1]) : 0;
+if (!taskDir || args.some((value, index) => index % 2 === 0 && value.startsWith("--") && value !== "--json" && value !== "--stuck-continuation-count")) {
+  console.error(USAGE);
   process.exit(2);
 }
 const eventsPath = resolve(taskDir, "events.jsonl");
@@ -56,25 +63,112 @@ for (const event of history) {
   const stage = event.firstDetectedStage ?? "unclassified";
   stages[stage] = (stages[stage] ?? 0) + 1;
 }
+// 计轮口径（与 delivery-gate 同步，合并稿 §7.1）：behavior 性质修复轮 + 首次保证之后的
+// DesignApproved（方案修订）/ AcceptanceApproved（验收版本递增）各按一轮；nature=
+// environment/evidence 的重试轮不计
+const behaviorRepairs = repairs.filter((event) => (event.nature ?? "behavior") === "behavior");
+const firstAssurance = events.find((event) => event.type === "AssuranceCompleted");
+const postAssuranceRevisions = firstAssurance === undefined
+  ? 0
+  : events.filter((event) => (event.seq ?? 0) > (firstAssurance.seq ?? 0) && (event.type === "DesignApproved" || event.type === "AcceptanceApproved")).length;
+const repairRounds = behaviorRepairs.length + postAssuranceRevisions;
+// escapedByStage：机器无阶段全序，按 (expectedStage -> firstDetectedStage) 不等对分布汇总
+//（相等即在最早应发现阶段发现；未配齐两字段不计入）
+const escapedPairs = {};
+let stagePairTotal = 0;
+let stagePairMatched = 0;
+for (const event of history) {
+  if (typeof event.expectedStage !== "string" || typeof event.firstDetectedStage !== "string") continue;
+  stagePairTotal += 1;
+  if (event.expectedStage === event.firstDetectedStage) {
+    stagePairMatched += 1;
+    continue;
+  }
+  const key = `${event.expectedStage}->${event.firstDetectedStage}`;
+  escapedPairs[key] = (escapedPairs[key] ?? 0) + 1;
+}
+// assuranceMustFixFirstRun：首条 AssuranceCompleted(mode=full) 时点未解决 blocker 数
+//（按事件流序：该事件之前 FindingRaised 的 defect blocker 中尚无 FindingResolved 的不同根数）
+const firstFull = events.find((event) => event.type === "AssuranceCompleted" && (event.mode ?? "full") === "full");
+let assuranceMustFixFirstRun = 0;
+if (firstFull !== undefined) {
+  const cutoff = firstFull.seq ?? 0;
+  const resolvedBefore = new Set(events.filter((event) => event.type === "FindingResolved" && (event.seq ?? 0) < cutoff).map((event) => event.findingId));
+  const unresolvedRoots = new Set();
+  for (const event of events) {
+    if ((event.seq ?? 0) >= cutoff) break;
+    if (event.type === "FindingRaised" && event.category === "defect" && event.severity === "blocker" && !resolvedBefore.has(event.findingId)) {
+      unresolvedRoots.add(rootId(event.findingId));
+    }
+  }
+  assuranceMustFixFirstRun = unresolvedRoots.size;
+}
+// targetedReviewRate：recheck 数 /（full + recheck 总数）——修复后只执行定向复核的比例
+const assuranceEvents = events.filter((event) => event.type === "AssuranceCompleted");
+const recheckCount = assuranceEvents.filter((event) => event.mode === "recheck").length;
+const fullCount = assuranceEvents.filter((event) => (event.mode ?? "full") === "full").length;
+const targetedReviewRate = fullCount + recheckCount > 0 ? recheckCount / (fullCount + recheckCount) : 0;
+// finalExplorations：末次 AssuranceCompleted 之后再登记的 ExplorationCompleted 数
+//（>0 = 最终阶段仍重新开放探索；0 = 最终取证只走定向复核）
+const lastAssuranceSeq = assuranceEvents.length > 0 ? Math.max(...assuranceEvents.map((event) => event.seq ?? 0)) : 0;
+const finalExplorations = events.filter((event) => event.type === "ExplorationCompleted" && (event.seq ?? 0) > lastAssuranceSeq).length;
+// evidenceIntegrityFailures：裁决器 evaluate 输出的 missing.missingArtifacts（含
+// hash-mismatch）计数——读 verdict.json（由 evaluate 生成；无 verdict 时输出 0 并标注来源缺失）
+let evidenceIntegrityFailures = 0;
+let evidenceIntegritySource = "verdict.json";
+const verdictPath = resolve(taskDir, "verdict.json");
+if (existsSync(verdictPath)) {
+  try {
+    const verdict = JSON.parse(readFileSync(verdictPath, "utf8"));
+    evidenceIntegrityFailures = Array.isArray(verdict.missing?.missingArtifacts) ? verdict.missing.missingArtifacts.length : 0;
+  } catch {
+    evidenceIntegritySource = "verdict.json 不可读（按 0 计）";
+  }
+} else {
+  evidenceIntegritySource = "verdict.json 缺失（按 0 计；先运行 delivery-gate evaluate）";
+}
 const report = {
   taskDir: resolve(taskDir),
   uniqueMustFix: uniqueMustFix.size,
-  repairRounds: repairs.length,
-  processFailed: uniqueMustFix.size > 10 || repairs.length > 3,
+  repairRounds,
+  repairRoundsBreakdown: {
+    behaviorRepairRounds: behaviorRepairs.length,
+    designRevisionsAfterAssurance: postAssuranceRevisions > 0 ? events.filter((event) => (event.seq ?? 0) > (firstAssurance.seq ?? 0) && event.type === "DesignApproved").length : 0,
+    acceptanceRevisionsAfterAssurance: postAssuranceRevisions > 0 ? events.filter((event) => (event.seq ?? 0) > (firstAssurance.seq ?? 0) && event.type === "AcceptanceApproved").length : 0,
+  },
+  processFailed: uniqueMustFix.size > 10 || repairRounds > 3,
   findings: history.length,
   reopenedFindings: history.filter((event) => event.reopenOf !== undefined).length,
   origins,
   firstDetectedStages: stages,
   latestRepairRound: repairs.at(-1)?.round ?? 0,
+  // ── 合并稿 §13 补齐指标 ──
+  expectedStageAccuracy: stagePairTotal > 0 ? stagePairMatched / stagePairTotal : null,
+  escapedByStage: escapedPairs,
+  assuranceMustFixFirstRun,
+  targetedReviewRate,
+  finalExplorations,
+  evidenceIntegrityFailures,
+  evidenceIntegritySource,
+  // 卡住续跑（审查未解决仍继续交付）属 dev-flow 侧观测，事件流无信号：由调用方按
+  // dev-flow 执行记录统计后经 --stuck-continuation-count 传入（缺省 0）
+  stuckContinuationCount,
 };
 if (json) {
   console.log(JSON.stringify(report, null, 2));
 } else {
   console.log(`taskDir: ${report.taskDir}`);
   console.log(`uniqueMustFix: ${report.uniqueMustFix} / 10`);
-  console.log(`repairRounds: ${report.repairRounds} / 3`);
+  console.log(`repairRounds: ${report.repairRounds} / 3（behavior ${behaviorRepairs.length} + 保证后方案/验收修订 ${postAssuranceRevisions}）`);
   console.log(`processFailed: ${report.processFailed}`);
   console.log(`findings: ${report.findings}（reopened ${report.reopenedFindings}）`);
   console.log(`origins: ${JSON.stringify(report.origins)}`);
   console.log(`firstDetectedStages: ${JSON.stringify(report.firstDetectedStages)}`);
+  console.log(`expectedStageAccuracy: ${report.expectedStageAccuracy === null ? "无配对样本" : report.expectedStageAccuracy}`);
+  console.log(`escapedByStage: ${JSON.stringify(report.escapedByStage)}`);
+  console.log(`assuranceMustFixFirstRun: ${report.assuranceMustFixFirstRun}`);
+  console.log(`targetedReviewRate: ${report.targetedReviewRate}（recheck ${recheckCount} / full+recheck ${fullCount + recheckCount}）`);
+  console.log(`finalExplorations: ${report.finalExplorations}`);
+  console.log(`evidenceIntegrityFailures: ${report.evidenceIntegrityFailures}（来源 ${report.evidenceIntegritySource}）`);
+  console.log(`stuckContinuationCount: ${report.stuckContinuationCount}`);
 }

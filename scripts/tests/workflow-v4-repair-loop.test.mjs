@@ -38,7 +38,7 @@ const tmpHome = () => mkdtempSync(join(tmpdir(), "v4-repair-loop-"));
 /** 修复循环脚手架：真实 git 项目 + 任务目录 + 预置事件（full 保证 + 历史探索 + blocker）
  *  + 桩 delivery-gate（evaluate 按 verdicts 队列出参；append 校验凭据与 actor 匹配后
  *  落盘并返回递增 eventId；revision 返回修复后 revision）+ 技能角色文件 */
-function makeScaffold(home, { withFull = true, withForeignVersionFull = false, withStagedNoise = false } = {}) {
+function makeScaffold(home, { withFull = true, withForeignVersionFull = false, withStagedNoise = false, withUnresolvableEvidenceFull = false } = {}) {
   const projectRoot = join(home, "proj");
   mkdirSync(projectRoot, { recursive: true });
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectRoot });
@@ -88,8 +88,11 @@ function makeScaffold(home, { withFull = true, withForeignVersionFull = false, w
     preEvents.push({ type: "AssuranceCompleted", actor: "assurance", acceptanceVersion: 0, revision: "rev-old", mode: "full", summary: "旧版本 full", eventId: "evt-pre-full-v0" });
   }
   if (withFull) {
+    // full 自身 artifact 可用性是前置门禁的一臂（workflow 侧与 gate fold 同口径）——预置文件
+    const preFullArtifact = join(taskDir, "evidence", "pre-full-summary.md");
+    writeFileSync(preFullArtifact, "# 首次完整保证总结（预置）\n");
     preEvents.push(
-      { type: "AssuranceCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", mode: "full", summary: "首次完整保证", evidenceEventIds: ["none"], explorationEventId: "evt-pre-exp", incrementReceipts: [{ incrementId: "I1", program: "node", args: ["-e", "process.exit(0)"], exitCode: 1, logSha256: "x", cwd: projectRoot, artifactSha256: "y" }], eventId: "evt-pre-full" },
+      { type: "AssuranceCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", mode: "full", summary: "首次完整保证", evidenceEventIds: withUnresolvableEvidenceFull ? ["evt-unknown-evidence"] : ["none"], explorationEventId: "evt-pre-exp", incrementReceipts: [{ incrementId: "I1", program: "node", args: ["-e", "process.exit(0)"], exitCode: 1, logSha256: "x", cwd: projectRoot, artifactSha256: "y" }], artifact: preFullArtifact, eventId: "evt-pre-full" },
       { type: "ExplorationCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", summary: "历史探索", dimensions: ["smoke"], eventId: "evt-pre-exp" },
       { type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", summary: "blocker：反例场景未拦截", findingId: "F-A1", category: "defect", severity: "blocker", requirementIds: ["R1"], eventId: "evt-pre-finding" },
     );
@@ -311,6 +314,18 @@ test("full-first 前置：旧验收版本的 full 不能给当前版本背书（
     const { result } = await runZcode(home, baseArgs(s), repairAgentStub(s));
     assert.equal(result.terminated, "setup-failure");
     assert.ok(result.message.includes("full"), "失败消息应指向先跑当前版本 full 的恢复动作");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("full-first 前置：full 引用不可解析证据事件时登记时点不完整（两臂之一）", async () => {
+  const home = tmpHome();
+  try {
+    const s = makeScaffold(home, { withUnresolvableEvidenceFull: true });
+    const { result } = await runZcode(home, baseArgs(s), repairAgentStub(s));
+    assert.equal(result.terminated, "setup-failure");
+    assert.ok(result.message.includes("登记时点不完整") || result.message.includes("full"), "失败消息应指向 full 完整性缺口");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

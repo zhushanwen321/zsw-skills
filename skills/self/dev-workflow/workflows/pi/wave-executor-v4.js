@@ -513,7 +513,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "4.0.2"; // 构建注入自 dev-flow-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.2.0"; // 构建注入自 dev-flow-v4/SKILL.md frontmatter version（唯一权威）
 // ── W2 wave-executor-v4 ──
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
@@ -615,7 +615,9 @@ const DEV_PERSONA = "你是开发单元执行者：严格按任务书改码，�
     "禁止触碰其他并行单元声明范围内的文件（并行写冲突会互相覆盖丢改动）；" +
     "测试范围 = 任务书 testCommand 指定的命令及其触及的测试文件，跑通后再交付——禁止跑包级全量套件或跨包扫描" +
     "（全量回归由后续全量测试门统一承担，单元级全量是重复劳动）；testCommand 覆盖不了你的改动行为时在 " +
-    "deviations 申报，不要自行扩跑；" +
+    "deviations 申报，不要自行扩跑，且申报必须二选一闭环：更新设计包 s4-accept.json verificationBindings / " +
+    "impl-plan acceptancePlan 的测试绑定，或申报由 D3 独立验收节点承接（写明节点与场景 id）——" +
+    "只申报缺口不闭环视同未完成；" +
     "不要自行 git add / git commit——引擎核验通过后统一提交，自行提交会破坏状态对账与并行调度；" +
     "引擎会确定性重跑测试并对改动做对账登记（范围外改动如实申报即可），伪造 files_changed 或测试证据必被抓住；" +
     "任务书与现实冲突、环境缺失时如实填报 blockers/deviations，不要硬编绕过。" +

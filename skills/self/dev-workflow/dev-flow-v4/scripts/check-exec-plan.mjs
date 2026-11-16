@@ -27,11 +27,14 @@
 // 用法：node check-exec-plan.mjs <exec-plan.json 绝对路径> [--task-dir <交付任务目录>]
 // 输出契约（--check 风格）：全部通过 → stdout `PASS`，exit 0；失败 → 每条错误一行
 //   `FAIL: <分类>: <明细>`（全部报完再退出），exit 1；用法错误 exit 2（含恢复动作）。
-// --task-dir（交付体系任务必传，独立设计任务不传）：附加执行两段核对——①增量契约核对：
+// --task-dir（交付体系任务必传，独立设计任务不传）：附加执行三段核对——①增量契约核对：
 //   读交付任务目录 increments.json，核 exec-plan dev 节点的增量归属与测试命令（判据见下方
 //   checkIncrementContract 段）；②验收绑定核对：读设计包 meta.json（路径从 exec-plan
 //   designDocPath 推导）与交付任务目录 acceptance.json，核 acceptanceBinding 与当前批准
-//   一致（判据见下方 checkAcceptanceBinding 段）。不传时两段跳过，主校验行为不变。
+//   一致（判据见下方 checkAcceptanceBinding 段）；③质量契约核对：主校验与①②全过后调
+//   delivery-v4 check-quality-contract（--task-dir + --exec-plan；designDocPath 可解析时
+//   追加 --design-dir 设计目录——机制对账 criterionMechanisms 与测试绑定 verificationBindings
+//   只在该分支核对，缺传则漏检）。不传时三段跳过，主校验行为不变。
 //
 // 分类 → 处置路由（与 W2 启动校验失败的恢复指引同语义）：
 //   field/territory/ref/whitelist/noop/cwd/script/testPlan → 单字段手修 exec-plan 后
@@ -42,7 +45,9 @@
 //     增量的增删改属技能①职权，须回 delivery-v4 递增验收版本重批，不在 impl-plan 侧改；
 //   binding（验收绑定）→ 回 tech-design-v4 T1 入口门（flow/write.md Step 0）重新影响审查
 //     并更新 meta.json acceptanceBinding——验收版本/验收包内容变化属交付体系变更（技能①
-//     裁决域），不在 exec-plan 侧改。
+//     裁决域），不在 exec-plan 侧改；
+//   quality（质量契约）→ check-quality-contract 的机制对账/测试绑定缺口，回 tech-design-v4
+//     T2 修设计包 s4-accept.json（criterionMechanisms / verificationBindings 是 T2 产物）。
 //
 // 验收绑定段的 canonicalJson / acceptancePackageSha256 与 delivery-v4 裁决器 delivery-gate.mjs
 // 逐字同源（该脚本是直跑 CLI、无 export，故此处复刻）——改任一侧必须同步另一侧；哈希口径
@@ -618,12 +623,17 @@ function checkAcceptanceBinding(raw, meta, acceptance, increments, taskDir) {
   return errors;
 }
 
-/** exec-plan.designDocPath（渲染视图 <name>.rendered.md 或设计目录本身）→ 设计目录内 meta.json 路径 */
-function designMetaPath(designDocPath) {
+/** exec-plan.designDocPath（渲染视图 <name>.rendered.md 或设计目录本身）→ 设计目录路径 */
+function designDirFromDocPath(designDocPath) {
   if (designDocPath.endsWith(".rendered.md")) {
-    return join(dirname(designDocPath), basename(designDocPath, ".rendered.md"), "meta.json");
+    return join(dirname(designDocPath), basename(designDocPath, ".rendered.md"));
   }
-  return join(designDocPath, "meta.json");
+  return designDocPath;
+}
+
+/** exec-plan.designDocPath → 设计目录内 meta.json 路径 */
+function designMetaPath(designDocPath) {
+  return join(designDirFromDocPath(designDocPath), "meta.json");
 }
 
 /** realpath 归一（symlink 形态统一，如 macOS /var 与 /private/var），失败回退原串参与比对 */
@@ -730,7 +740,13 @@ function main() {
   }
   if (result.ok && incErrors.length === 0 && taskDir !== null) {
     const checker = join(dirname(fileURLToPath(import.meta.url)), "../../delivery-v4/scripts/check-quality-contract.mjs");
-    const checked = spawnSync(process.execPath, [checker, "--task-dir", taskDir, "--exec-plan", planPath], { encoding: "utf8" });
+    // --design-dir：designDocPath 可解析时追加传设计目录，使 D0 门同时覆盖 check-quality-contract
+    // 的机制对账（criterionMechanisms）与测试绑定（verificationBindings）核对——该两段只在
+    // --design-dir 分支执行，缺传则交付体系任务在 D0 漏检机制/绑定一致性（缺口只会在下游
+    // 阶段以更晚、更贵的形态爆出）。目录推导与 designMetaPath 同源
+    const checkerArgs = [checker, "--task-dir", taskDir, "--exec-plan", planPath];
+    if (isStr(raw.designDocPath)) checkerArgs.push("--design-dir", designDirFromDocPath(raw.designDocPath));
+    const checked = spawnSync(process.execPath, checkerArgs, { encoding: "utf8" });
     if (checked.status !== 0) {
       incErrors.push({ category: "quality", message: String(checked.stdout || checked.stderr).trim() });
     }

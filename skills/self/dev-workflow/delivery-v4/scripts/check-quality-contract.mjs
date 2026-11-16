@@ -62,6 +62,17 @@ function main() {
   const assertionIds = new Set(assertions.map((assertion) => assertion.id));
   const forms = acceptance.adversarialForms;
   const formIds = new Set(forms.map((form) => form.id));
+  // 场景不适用豁免登记（合并稿 §4.1「允许记录不适用理由」）：execPlan.formNotApplicable
+  // 逐条 { adversarialFormId, rationale }——带非空理由的场景豁免「进 acceptancePlan / D3 节点」要求
+  const execPlan = execPlanPath ? readJson(execPlanPath, "执行计划") : null;
+  const formNotApplicable = new Map();
+  if (execPlan !== null && Array.isArray(execPlan.formNotApplicable)) {
+    for (const entry of execPlan.formNotApplicable) {
+      if (!formIds.has(entry.adversarialFormId)) errors.push(`formNotApplicable 引用未知反例场景 ${entry.adversarialFormId}`);
+      if (!nonEmpty(entry.rationale)) errors.push(`formNotApplicable 场景 ${entry.adversarialFormId} 缺不适用理由`);
+      formNotApplicable.set(entry.adversarialFormId, entry.rationale);
+    }
+  }
 
   if (designDir) {
     const s3 = readJson(resolve(designDir, "s3-solution.json"), "方案章节");
@@ -77,7 +88,17 @@ function main() {
         if (!decisionIds.has(id)) errors.push(`断言 ${row.assertionId} 引用未知设计决策 ${id}`);
       }
       if (!nonEmptyStrings(row.mechanismRefs)) errors.push(`断言 ${row.assertionId} 缺机制条款位置`);
-      if (row.consistency !== "pass") errors.push(`断言 ${row.assertionId} 与机制未通过一致性检查（consistency=${row.consistency}）`);
+      // consistency 三值词表（设计二 §5.3）：pass=一致；not-applicable=机制不适用，须在
+      // counterexample 写明不适用理由/检查过程；conflict=冲突，须给 resolution 处置结果
+      //（T2 完成口径不变：全部 pass 或带 resolution 的 conflict 清零——机器只拦截
+      // 空理由/无 resolution 的形态，最终清零由流程侧判定）
+      if (row.consistency === "not-applicable") {
+        if (!nonEmpty(row.counterexample)) errors.push(`断言 ${row.assertionId} 标记 consistency=not-applicable 但缺不适用理由（counterexample）`);
+      } else if (row.consistency === "conflict") {
+        if (!nonEmpty(row.resolution)) errors.push(`断言 ${row.assertionId} 机制冲突未给处置结果（consistency=${row.consistency} 缺 resolution）`);
+      } else if (row.consistency !== "pass") {
+        errors.push(`断言 ${row.assertionId} 的 consistency 非法（${row.consistency}，词表：pass / conflict / not-applicable）`);
+      }
       if (!nonEmpty(row.counterexample)) errors.push(`断言 ${row.assertionId} 缺反例检查过程或未反例说明`);
       if (!mechanismByAssertion.has(row.assertionId)) mechanismByAssertion.set(row.assertionId, []);
       mechanismByAssertion.get(row.assertionId).push(row);
@@ -106,7 +127,6 @@ function main() {
   }
 
   if (execPlanPath) {
-    const execPlan = readJson(execPlanPath, "执行计划");
     const implPlan = readJson(resolve(execPlan.planPath), "实施计划");
     const acceptancePlan = Array.isArray(implPlan.acceptancePlan) ? implPlan.acceptancePlan : [];
     const covered = new Set();
@@ -117,7 +137,9 @@ function main() {
       }
     }
     for (const id of formIds) {
-      if (!covered.has(id)) errors.push(`反例场景 ${id} 未进入 impl-plan.acceptancePlan`);
+      if (!covered.has(id) && !formNotApplicable.has(id)) {
+        errors.push(`反例场景 ${id} 未进入 impl-plan.acceptancePlan（未进节点的场景须在 exec-plan.formNotApplicable 登记带理由的不适用声明）`);
+      }
     }
     if (execPlan.mode === "acceptance") {
       const nodeCoverage = new Set();
@@ -125,7 +147,9 @@ function main() {
         for (const id of node.adversarialFormRefs ?? []) nodeCoverage.add(id);
       }
       for (const id of formIds) {
-        if (!nodeCoverage.has(id)) errors.push(`反例场景 ${id} 未进入 D3 acceptance.nodes`);
+        if (!nodeCoverage.has(id) && !formNotApplicable.has(id)) {
+          errors.push(`反例场景 ${id} 未进入 D3 acceptance.nodes（未进节点的场景须在 exec-plan.formNotApplicable 登记带理由的不适用声明）`);
+        }
       }
     }
   }

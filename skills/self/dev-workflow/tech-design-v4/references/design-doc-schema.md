@@ -262,7 +262,7 @@ P7 上游约束原则的产物表（触发条件：设计依赖非本项目代�
 | scenarios | object 数组 | 必填 | 验证场景：真实依赖、真实数据、真实路径，不用 mock / 桩 / 假数据；按改动大小匹配投入（小改动一句话，大改动多场景）；关键负面行为也要有反向验证场景 |
 | assertionRedlights | object 数组 | 条件触发 | 断言-红灯映射表（P6 产物）：设计含运行时行为断言（自清理 / 在 X 之前执行 / 不丢 / 有界）时必填；未触发写空数组 |
 | e2eImpact | object | 必填 | e2e 影响面评估：受影响的既有 e2e / 真实进程测试资产清单与开发阶段需跑子集；无受影响项时 items 为空数组且 noneReason 填依据（禁止留空或省略） |
-| criterionMechanisms | object 数组 | V4 交付任务必填 | 判据与机制对账：每条 `assertionId / decisionIds / mechanismRefs / consistency / counterexample / resolution`；每条验收断言至少一行，decisionIds 指向 s3 decisions，consistency=pass 才允许完成 T2 |
+| criterionMechanisms | object 数组 | V4 交付任务必填 | 判据与机制对账：每条 `assertionId / decisionIds / mechanismRefs / consistency / counterexample / resolution`；每条验收断言至少一行，decisionIds 指向 s3 decisions；consistency 三值词表 = `pass`（一致）/ `conflict`（机制与判据冲突，须给非空 resolution 处置结果）/ `not-applicable`（机制不适用本断言，须在 counterexample 写明不适用理由或检查过程）。T2 完成口径：全部行最终 pass，或带 resolution 的 conflict 清零（机器检查拦截空理由的 not-applicable 与无 resolution 的 conflict） |
 | verificationBindings | object 数组 | V4 交付任务必填 | 反例场景测试绑定：每条 `adversarialFormId / testRef / preconditions / actions / assertions`；每个 adversarialForm 至少一行，写明实际前置条件、操作步骤和断言位置，不得只写场景标题 |
 
 **scenarios 行内字段**：`id`（必填，建议 `V` 前缀）、`scene`（场景：谁、在什么真实上下文、做什么）、`steps`（步骤：写清三要素的操作序列）、`criteria`（通过标准：可证伪的具体结果，不写「功能正常」）、`goalRefs`（必填，引用 s1-context.json goals[].id——每个场景回溯目标；无法回溯的场景是多余的，有目标无对应场景是遗漏）。

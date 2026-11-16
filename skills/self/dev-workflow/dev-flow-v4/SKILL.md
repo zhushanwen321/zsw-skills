@@ -3,7 +3,7 @@ name: dev-flow-v4
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 4.0.2
+version: 4.2.0
 description: >-
   Use when 一份完整设计包（tech-design-v4 产出：设计文档 + 双格式 impl-plan + 审查终态）
   需要落地为已验收代码。纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 →
@@ -90,7 +90,7 @@ process.exitCode = run.status === 0 ? 0 : 1;
 5. **git 单点**：subagent 禁止一切 git 写；workflow 形态下 commit 由引擎 world.run 执行（精确路径 add，禁 -A），手工形态下由主 agent 执行；文档类同步改动禁止单独成笔——随触发它的单元同笔提交（files_changed 含文档路径即同笔）；确因验收结论后置的攒批成一笔，禁止一文档一笔
 6. **基线先行**：exec-plan.json 落盘即基线（产物在 `~/.agents/skill-data/`，HOME 下天然不入 git）；执行态事实源 = `<name>.status.json`
 7. **单波次交付**：一个设计包 = 一次实施流程，实际执行只有一个波次；未经用户明确指示，禁止按「波次/批次」把一个 impl-plan 拆成多次独立实施（每波各自走 D1-D6 完整流程）。允许的拆分 = impl-plan 内部的单元分组与 DAG 并行（多 subagent / 多组执行，W2 一次承接全部单元）；分期交付仅随用户明确指示出现
-8. **独立保证与有限修复（V4 代）**：候选反例审查在 D3 后、D4 前完成。最终保证分 full 与 recheck：full = 覆盖核对 + 全量断言取证 + 开放探索；recheck = 旧发现与修复 diff 复核 + 受影响断言 + 全量确定性测试 + 历史探索引用，不默认重新开放探索。实现性修复统一走 `assurance-repair-loop-v4`（builder 凭据 + 受影响一致性复核 + 显式 allowCommit 授权），第 4 轮修复或第 11 条不同 must-fix 进入 process-failed；同一问题 reopenOf 不重复计数，环境与证据采集重试不计轮。最后一批建议级修复后以 recheck 完成当前版本取证，不为攒批项重新开放探索。
+8. **独立保证与有限修复（V4 代）**：候选反例审查在 D3 后、D4 前完成（全部 schema 2 任务，与风险字段无关）。最终保证分 full 与 recheck：full = 覆盖核对 + 全量断言取证 + 开放探索（开放探索按「缺少候选探索证据、验收或关键设计变化」触发，已有合格候选探索时引用既有探索）；recheck = 旧发现与修复 diff 复核 + 受影响断言 + 全量确定性测试 + 历史探索引用，不默认重新开放探索。实现性修复统一走 `assurance-repair-loop-v4`（builder 凭据 + 受影响一致性复核 + 显式 allowCommit 授权），第 4 轮修复或第 11 条不同 must-fix 进入 process-failed；同一问题 reopenOf 不重复计数，环境与证据采集重试不计轮（登记 RepairRoundRecorded 带 nature=environment|evidence，缺省 nature=behavior 计轮），保证后的方案修订与验收版本递增各按一轮并入计轮。最后一批建议级修复后以 recheck 完成当前版本取证，不为攒批项重新开放探索。
 
 ## 运行记录（防丢失）[MANDATORY]
 

@@ -110,7 +110,9 @@ const DEV_PERSONA =
   "禁止触碰其他并行单元声明范围内的文件（并行写冲突会互相覆盖丢改动）；" +
   "测试范围 = 任务书 testCommand 指定的命令及其触及的测试文件，跑通后再交付——禁止跑包级全量套件或跨包扫描" +
   "（全量回归由后续全量测试门统一承担，单元级全量是重复劳动）；testCommand 覆盖不了你的改动行为时在 " +
-  "deviations 申报，不要自行扩跑；" +
+  "deviations 申报，不要自行扩跑，且申报必须二选一闭环：更新设计包 s4-accept.json verificationBindings / " +
+  "impl-plan acceptancePlan 的测试绑定，或申报由 D3 独立验收节点承接（写明节点与场景 id）——" +
+  "只申报缺口不闭环视同未完成；" +
   "不要自行 git add / git commit——引擎核验通过后统一提交，自行提交会破坏状态对账与并行调度；" +
   "引擎会确定性重跑测试并对改动做对账登记（范围外改动如实申报即可），伪造 files_changed 或测试证据必被抓住；" +
   "任务书与现实冲突、环境缺失时如实填报 blockers/deviations，不要硬编绕过。" +

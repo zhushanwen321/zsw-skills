@@ -82,6 +82,26 @@ const artifact = { chart: () => {}, board: () => {}, markdown: async () => {}, f
 // ── 结果 schema 常量（ask 结构化返回契约；与 shared 的 interface 顶层字段/required 对齐——
 //    check-workflow-parity 维度 4 按字段名核对） ──
 
+// FindingDraft（三档分级发现申报）——复核/覆盖结论里 findings 条目的字段契约。
+// findings.items 一律复用本常量，不内联副本（内联副本会与 FindingDraft 契约分叉漏字段）
+//（repair 循环不产出 ExplorationOutcome：recheck 不重新开放探索）
+const SCHEMA_FindingDraft = {
+  type: "object",
+  properties: {
+    summary: { type: "string", description: "缺陷现象与影响" },
+    requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
+    tier: { type: "string", enum: ["must-fix", "suggestion", "info"], description: "V4 代三档分级：must-fix=违反验收判据（立即修复档）；suggestion=建议改进但不违反判据（攒批档）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 按 must-fix" },
+    consequenceRefutation: { type: "string", description: "非 must-fix 必填：否定其用户可观察后果的依据；禁止只按字面合规降级" },
+    consequenceRefutationType: { type: "string", enum: ["will-not-occur", "not-observable", "accepted-by-acceptance"], description: "非 must-fix 必填：论证类型三择一（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许），先标类型再给依据" },
+    reopenOf: { type: "string", description: "重开申报：指向此前被解决过的 findingId（不重复计数）" },
+    origin: { type: "string", enum: ["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"], description: "来源阶段（must-fix 建议填写）" },
+    firstDetectedStage: { type: "string", description: "实际发现该问题的阶段（must-fix 建议填写）" },
+    expectedStage: { type: "string", description: "该问题本应在哪个阶段被拦截（must-fix 建议填写）" },
+    regressionTestRef: { type: "string", description: "回归测试标识（must-fix 建议填写）" },
+  },
+  required: ["summary", "requirementIds", "tier"],
+};
+
 // coverage reviewer（coverage-reviewer.md 角色）结构化返回：逐项覆盖结论——每
 // requirement×evidenceKind 恰一项，artifact 须为 evidence/ 内原始文件
 const SCHEMA_CoverageOutcome = {
@@ -107,15 +127,7 @@ const SCHEMA_CoverageOutcome = {
     findings: {
       type: "array",
       description: "新发现清单（无则空数组；findingId 由引擎统一分配，不在此申报）",
-      items: {
-        type: "object",
-        properties: {
-          summary: { type: "string", description: "缺陷现象与影响" },
-          requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
-          tier: { type: "string", enum: ["must-fix", "suggestion", "info"], description: "V4 代三档分级：must-fix=违反验收判据（立即修复档）；suggestion=建议改进但不违反判据（攒批档）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 按 must-fix" },
-        },
-        required: ["summary", "requirementIds", "tier"],
-      },
+      items: SCHEMA_FindingDraft,
     },
     resolvedFindingIds: {
       type: "array",
@@ -129,24 +141,6 @@ const SCHEMA_CoverageOutcome = {
     },
   },
   required: ["summary", "evidence", "findings", "resolvedFindingIds", "unresolvedFindingIds"],
-};
-
-// FindingDraft（三档分级发现申报）——复核/覆盖结论里 findings 条目的字段契约
-//（repair 循环不产出 ExplorationOutcome：recheck 不重新开放探索）
-const SCHEMA_FindingDraft = {
-  type: "object",
-  properties: {
-    summary: { type: "string", description: "缺陷现象与影响" },
-    requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
-    tier: { type: "string", enum: ["must-fix", "suggestion", "info"], description: "V4 代三档分级：must-fix=违反验收判据（立即修复档）；suggestion=建议改进但不违反判据（攒批档）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 按 must-fix" },
-    consequenceRefutation: { type: "string", description: "非 must-fix 必填：不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据" },
-    reopenOf: { type: "string", description: "重开申报：指向此前被解决过的 findingId（不重复计数）" },
-    origin: { type: "string", enum: ["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"], description: "来源阶段（must-fix 建议填写）" },
-    firstDetectedStage: { type: "string", description: "实际发现该问题的阶段（must-fix 建议填写）" },
-    expectedStage: { type: "string", description: "该问题本应在哪个阶段被拦截（must-fix 建议填写）" },
-    regressionTestRef: { type: "string", description: "回归测试标识（must-fix 建议填写）" },
-  },
-  required: ["summary", "requirementIds", "tier"],
 };
 
 const SCHEMA_RepairPlan = {

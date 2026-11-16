@@ -420,7 +420,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "4.0.2"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.1.3"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -680,6 +680,8 @@ interface FindingDraft {
   tier: "must-fix" | "suggestion" | "info";
   /** 非 must-fix 必须否定其用户可观察后果；禁止只按字面合规降级 */
   consequenceRefutation?: string;
+  /** 行为后果否决论证类型（合并稿 §9 三择一，先标类型再给依据） */
+  consequenceRefutationType?: "will-not-occur" | "not-observable" | "accepted-by-acceptance";
   reopenOf?: string;
   origin?: "acceptance" | "design" | "planning" | "implementation" | "testing" | "evidence" | "environment";
   firstDetectedStage?: string;
@@ -964,6 +966,7 @@ const incrementsDoc = parseObject(incrementsRes.stdout);
 // 逐增量测试回执的数据源：increments.items（id + testCommand）
 const incrementItems = Array.isArray(incrementsDoc?.items) ? incrementsDoc.items as {
   id: string;
+  requirementIds: string[];
   testCommand?: { program: string; args: string[]; timeoutMs?: number };
 }[] : [];
 // 策略快照的 revision 策略：runsFromIgnoredArtifacts=true 时取证必须来自干净构建
@@ -978,7 +981,7 @@ const revisionMode = revisionPolicy !== null && revisionPolicy.mode === "content
 const requirements = Array.isArray(acceptanceDoc?.requirements) ? acceptanceDoc.requirements as {
   id: string;
   evidenceKinds: ("command" | "scenario" | "inspection")[];
-  assertions?: { id: string; adversarialFormRefs: string[]; testAssetRefs: string[] }[];
+  assertions?: { id: string; adversarialFormRefs: string[]; testAssetRefs: string[]; dependsOn?: { incrementIds: string[]; mechanismRefs: string[]; testAssetRefs: string[] } }[];
 }[] : [];
 const adversarialForms = Array.isArray(acceptanceDoc?.adversarialForms) ? acceptanceDoc.adversarialForms as {
   id: string;
@@ -1038,13 +1041,21 @@ if (missingIncrementIds.some((id) => typeof id === "string" && id !== "")) {
   };
   return result;
 }
-// 写事务租约（可选）：传入 runId 时 setup 获取 projectRoot 级租约，append 全程带 --runId
-// 做代次复核，任何出口 release（含失败出口）——保证期写入互斥
+// 写事务租约（可选）：传入 runId 时 setup 获取 projectRoot 级租约，长阶段周期心跳续租
+//（修复轮 agent 调用与逐增量测试都是长耗时段——不心跳则租约活性判定按陈旧心跳判失联、
+// 异 runId 可即时接管，持租互斥名存实亡），append 全程带 --runId 做代次复核，任何出口
+// release（含失败出口）——保证期写入互斥
 let leaseHeld = false;
 async function releaseLease(): Promise<void> {
   if (leaseHeld && leaseRunId !== "") {
     leaseHeld = false;
     await runGate(gatePath, ["lease-release", "--project-root", projectRoot, "--run-id", leaseRunId]).catch(() => undefined);
+  }
+}
+/** 心跳续租（失败不中断：租约被接管时后续 append --run-id 会被拒并走失败出口） */
+async function leaseHeartbeat(): Promise<void> {
+  if (leaseHeld) {
+    await runGate(gatePath, ["lease-heartbeat", "--project-root", projectRoot, "--run-id", leaseRunId]).catch(() => undefined);
   }
 }
 if (leaseRunId !== "") {
@@ -1080,16 +1091,35 @@ if (eventsRes.exitCode !== 0 || eventsError !== "") {
   return result;
 }
 // full-first 前置门禁（与 delivery-gate 同口径，登记时点完整性：同验收版本 + 回执覆盖
-// 全部增量（不查红绿——红 = full 发现缺陷，正是本循环的输入）+ 探索引用存在）：
+// 全部增量（不查红绿——红 = full 发现缺陷，正是本循环的输入）+ 证据事件可解析 +
+// full 自身 artifact 可用 + 探索引用存在）：
 // 受控修复循环的语义前提是「最终保证（full）完整发生过」——否则本循环收尾登记的
 // recheck 保证会被裁决器判无效（missing.assuranceFullFirst），白跑全程
+const knownEvidenceEventIds = new Set(events.filter((e) => e.type === "EvidenceRecorded").map((e) => String(e.eventId)));
+const priorFullEvents = events.filter((e) => e.type === "AssuranceCompleted" && (e.mode ?? "full") === "full" && e.acceptanceVersion === acceptanceVersion);
+// full 自身 artifact 可用性（gate fold.assurances 只收 artifactUsable 的保证——artifact
+// 失效的 full 不能给 recheck 背书，此形态下跑完全程仍会被判 missing.assuranceFullFirst）
+const priorFullArtifactCheck = await runNode([NODE_CHECK_FILES, ...priorFullEvents.map((e) => String(e.artifact))]);
+const unusableFullArtifactEventIds = new Set(
+  priorFullArtifactCheck.exitCode === 0
+    ? []
+    : priorFullEvents
+        .filter((e) => priorFullArtifactCheck.stdout.trim().split(" | ").includes(String(e.artifact)))
+        .map((e) => String(e.eventId)),
+);
 const qualifiedPriorFull = (event: DeliveryEvent): boolean => {
   if (event.type !== "AssuranceCompleted" || (event.mode ?? "full") !== "full") return false;
   if (event.acceptanceVersion !== acceptanceVersion) return false;
+  if (unusableFullArtifactEventIds.has(String(event.eventId))) return false;
   const receipts = Array.isArray(event.incrementReceipts) ? event.incrementReceipts as { incrementId?: unknown }[] : [];
   const coveredIncrementIds = new Set(receipts.map((receipt) => String(receipt.incrementId)));
   if (!incrementItems.every((item) => coveredIncrementIds.has(item.id))) return false;
-  if (explorationRequired && !events.some((candidate) => candidate.type === "ExplorationCompleted" && candidate.eventId === event.explorationEventId)) return false;
+  if (!Array.isArray(event.evidenceEventIds) || !event.evidenceEventIds.every((id) => id === "none" || knownEvidenceEventIds.has(id))) return false;
+  // 探索引用存在性（与 gate priorFullQualified 同口径：schema 2 无条件校验，schema 1 保持词表语义）
+  const explorationRefOk = assertionMode
+    ? events.some((candidate) => candidate.type === "ExplorationCompleted" && candidate.eventId === event.explorationEventId)
+    : (!explorationRequired || events.some((candidate) => candidate.type === "ExplorationCompleted" && candidate.eventId === event.explorationEventId));
+  if (!explorationRefOk) return false;
   return true;
 };
 if (!events.some(qualifiedPriorFull)) {
@@ -1140,8 +1170,13 @@ function validateFindings(findings: FindingDraft[]): string {
     if (!Array.isArray(finding.requirementIds) || finding.requirementIds.some((id) => typeof id !== "string" || !requirementIds.has(id))) {
       return "finding.requirementIds 必须引用验收条目或为空数组";
     }
-    if (finding.tier !== "must-fix" && (typeof finding.consequenceRefutation !== "string" || finding.consequenceRefutation.trim() === "")) {
-      return "suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据）";
+    if (finding.tier !== "must-fix") {
+      if (typeof finding.consequenceRefutation !== "string" || finding.consequenceRefutation.trim() === "") {
+        return "suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据）";
+      }
+      if (finding.consequenceRefutationType !== "will-not-occur" && finding.consequenceRefutationType !== "not-observable" && finding.consequenceRefutationType !== "accepted-by-acceptance") {
+        return "suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给依据";
+      }
     }
     if (finding.origin !== undefined && !["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"].includes(finding.origin)) {
       return "finding.origin 非法";
@@ -1294,6 +1329,7 @@ async function appendFinding(draft: FindingDraft, artifact: string): Promise<str
     requirementIds: draft.requirementIds,
     severity: tierToEvent.severity,
     ...(draft.consequenceRefutation === undefined ? {} : { consequenceRefutation: draft.consequenceRefutation }),
+    ...(draft.consequenceRefutationType === undefined ? {} : { consequenceRefutationType: draft.consequenceRefutationType }),
     ...(draft.reopenOf === undefined ? {} : { reopenOf: draft.reopenOf }),
     ...(draft.origin === undefined ? {} : { origin: draft.origin }),
     ...(draft.firstDetectedStage === undefined ? {} : { firstDetectedStage: draft.firstDetectedStage }),
@@ -1349,7 +1385,20 @@ if (currentVerdict.state === "process-failed") {
     message: `交付已处于 process-failed，停止新的修复派发；先完成阶段归因与任务替换裁决${repairSummary()}${statsTailNote()}`,
   };
 }
-const repairRoundStart = events.filter((event) => event.type === "RepairRoundRecorded").length + 1;
+// 计轮口径（与 delivery-gate 同步，合并稿 §7.1）：behavior 性质修复轮 + 首次保证后的
+// 方案/验收修订合计判定 3 轮上限；nature=environment/evidence 的重试轮不占上限。
+// 轮次编号沿用事件流最大 round 递增（非 behavior 轮也占编号但计数只看 behavior）
+const seqOf = (e: DeliveryEvent): number => (typeof e.seq === "number" ? e.seq : 0);
+const behaviorRepairRounds = () => events.filter((e) => e.type === "RepairRoundRecorded" && (e.nature ?? "behavior") === "behavior").length;
+const firstAssuranceSeq = events.filter((e) => e.type === "AssuranceCompleted").map(seqOf)
+  .reduce((min, seq) => Math.min(min, seq), Number.POSITIVE_INFINITY);
+const offLoopRevisions = () => firstAssuranceSeq === Number.POSITIVE_INFINITY
+  ? 0
+  : events.filter((e) => seqOf(e) > firstAssuranceSeq && (e.type === "DesignApproved" || e.type === "AcceptanceApproved")).length;
+const repairRoundStart = events.reduce(
+  (max, e) => (e.type === "RepairRoundRecorded" && typeof e.round === "number" ? Math.max(max, e.round) : max),
+  0,
+) + 1;
 // 历史探索索引：recheck 轮不产生新的 ExplorationCompleted（不重新开放探索），此快照
 // 在整个 run 内稳定；声明在修复循环之前——planner prompt 在循环内引用它
 const explorationHistory = events
@@ -1363,10 +1412,29 @@ const actionableFindings = () => {
   return [];
 };
 
+/** 受影响断言机器候选集（合并稿 §10.2）：按断言 dependsOn 声明与需求关联推导——
+ * 触发发现关联需求的全部断言 + 声明依赖这些需求所辖增量的其他断言（跨需求依赖
+ * 传播）；无关联需求的发现触发全部断言（与 candidate-build 全量复查口径一致）。
+ * planner 的 affectedAssertionIds 必须 ⊇ 该集合（引擎先算机器候选集，planner 只增补） */
+function machineAffectedAssertionIds(triggerRequirementIds: Set<string>, hasUnlinkedFinding: boolean): string[] {
+  if (hasUnlinkedFinding) return requirements.flatMap((r) => (r.assertions ?? []).map((a) => a.id));
+  const triggerIncrementIds = new Set(
+    incrementItems.filter((i) => i.requirementIds.some((r) => triggerRequirementIds.has(r))).map((i) => i.id),
+  );
+  const result: string[] = [];
+  for (const r of requirements) {
+    for (const a of r.assertions ?? []) {
+      if (triggerRequirementIds.has(r.id) || (a.dependsOn?.incrementIds ?? []).some((id) => triggerIncrementIds.has(id))) result.push(a.id);
+    }
+  }
+  return result;
+}
+
 for (let repairRound = repairRoundStart; actionableFindings().length > 0; repairRound += 1) {
   const actionable = actionableFindings();
   const triggerFindingIds = actionable.map((finding) => String(finding.findingId));
-  if (repairRound > 3) {
+  // 停止预判（gate 同口径合计）：下一轮会使 behavior 轮 + off-loop 修订合计超过 3
+  if (behaviorRepairRounds() + offLoopRevisions() + 1 > 3) {
     const artifact = `${evidenceRoot}repair-limit-${artifactTag}.md`;
     await runNode([NODE_WRITE_FILE, artifact, `# 修复上限
 需要第 ${repairRound} 轮实现性修复，未继续派发。
@@ -1393,6 +1461,16 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
   }
 
   await obsBegin("fix", repairRound);
+  await leaseHeartbeat();
+  // 机器候选集（合并稿 §10.2）：先按声明推导，planner 只在其上增补——受影响断言不再
+  // 由 agent 临场判读独占
+  const triggerRequirementIds = new Set(actionable.flatMap((finding) =>
+    Array.isArray(finding.requirementIds) ? finding.requirementIds.filter((id): id is string => typeof id === "string") : [],
+  ));
+  const machineCandidates = machineAffectedAssertionIds(
+    triggerRequirementIds,
+    actionable.some((finding) => !Array.isArray(finding.requirementIds) || finding.requirementIds.length === 0),
+  );
   const planner = agent(`repair-planner-r${repairRound}`, coverageRoleRes.stdout);
   const planGuard = await askGuarded<RepairPlan>(async (corrective) => {
     const outcome = await planner.ask<RepairPlan>([
@@ -1400,6 +1478,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
       `taskDir：${taskDir}；验收：${acceptancePath}；增量：${incrementsPath}`,
       `待修复发现：${JSON.stringify(actionable)}`,
       `历史发现与探索索引：${JSON.stringify(explorationHistory)}`,
+      `机器推导的受影响断言候选集（你的 affectedAssertionIds 必须完整包含它，可按实际改动增补）：${JSON.stringify(machineCandidates)}`,
       "你是独立聚合裁决者：逐条读原始报告和代码，给出修复指导、来源阶段、受影响断言和回归测试标识。不得修改代码。",
       "设计矛盾标 origin=design，计划遗漏标 planning，实现偏离标 implementation，证据/环境分开；每条 blocker 都必须列入 items。",
       '返回结构（严格 JSON）：{ "summary": string, "affectedAssertionIds": string[], "items": [{ "findingId": string, "guidance": string, "origin": "acceptance"|"design"|"planning"|"implementation"|"testing"|"evidence"|"environment", "expectedStage": string, "regressionTestRef": string }] }',
@@ -1412,6 +1491,10 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
     const ids = new Set(value.items.map((item) => item.findingId));
     for (const id of triggerFindingIds) if (!ids.has(id)) return `修复计划漏掉 ${id}`;
     if (!Array.isArray(value.affectedAssertionIds)) return "affectedAssertionIds 必须为数组";
+    // 机器候选集覆盖性（合并稿 §10.2：依赖关系先算机器候选集，reviewer 只补充遗漏）
+    for (const id of machineCandidates) {
+      if (!value.affectedAssertionIds.includes(id)) return `修复计划的受影响断言漏掉机器推导的 ${id}`;
+    }
     for (const item of value.items) {
       if (!item.guidance || !item.expectedStage || !item.regressionTestRef) return `${item.findingId} 缺 guidance/expectedStage/regressionTestRef`;
     }
@@ -1459,12 +1542,63 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
   const revisionRes = await runGate(gatePath, ["revision", "--project-root", projectRoot]);
   if (revisionRes.exitCode !== 0 || revisionRes.stdout.trim() === "") return failAssurance(`修复后 revision 获取失败：${revisionRes.stderr.trim()}`);
   revision = revisionRes.stdout.trim();
+  // 每轮修复的全量确定性测试回执（合并稿 §11.1）：与最终取证同款 NODE_RUN_TEST 重跑全部
+  // 增量 testCommand（wx 排他写 + logSha256/artifactSha256 双哈希），随 RepairRoundRecorded
+  // 登记。回执红不阻断——红正是下一轮修复的输入信号；无法执行才走失败出口
+  const repairLogTag = `${revisionHash(revision)}-${attemptTag}-r${repairRound}`;
+  const repairTreeSha256 = await trackedTreeSha256(projectRoot, revisionMode).catch(() => "");
+  const repairReceipts: unknown[] = [];
+  for (const item of incrementItems) {
+    if (!item.testCommand) continue;
+    await leaseHeartbeat();
+    const logPath = `${evidenceRoot}increment-${item.id}-${repairLogTag}.log`;
+    const declaredTimeout = item.testCommand.timeoutMs;
+    const effectiveTimeout =
+      typeof declaredTimeout === "number" && Number.isInteger(declaredTimeout) && declaredTimeout >= 1000 && declaredTimeout <= 3600000
+        ? declaredTimeout
+        : 300000;
+    const testRes = await runNode([
+      NODE_RUN_TEST,
+      projectRoot,
+      logPath,
+      item.testCommand.program,
+      JSON.stringify(item.testCommand.args),
+      String(item.testCommand.timeoutMs ?? 300000),
+    ], effectiveTimeout + 30000);
+    const testMeta = parseObject(testRes.stdout);
+    if (
+      testRes.exitCode !== 0 || testMeta === null || typeof testMeta.exitCode !== "number" ||
+      (typeof testMeta.spawnError === "string" && testMeta.spawnError !== "")
+    ) {
+      return failAssurance(`修复轮 ${repairRound} 重跑增量 ${item.id} 测试无法执行或日志不可读：${testRes.stderr.trim() || testRes.stdout.trim()}`);
+    }
+    const logSha256 = await artifactSha256Of(logPath);
+    if (repairTreeSha256 === "") {
+      return failAssurance(`修复轮 ${repairRound} 被测产物指纹计算失败：${projectRoot}`);
+    }
+    repairReceipts.push({
+      incrementId: item.id,
+      program: item.testCommand.program,
+      args: item.testCommand.args,
+      exitCode: testMeta.exitCode,
+      logSha256,
+      cwd: projectRoot,
+      artifactSha256: repairTreeSha256,
+    });
+  }
+  if (repairReceipts.length === 0) {
+    return failAssurance("修复轮回执为空：increments.items 全部未声明 testCommand——RepairRoundRecorded 的回执必须覆盖全部增量。恢复动作：为每个增量声明 testCommand 后重新发起");
+  }
+  const repairReportSha = await artifactSha256Of(repairReportPath).catch(() => "");
+  if (repairReportSha === "") return failAssurance(`修复报告哈希计算失败：${repairReportPath}`);
   const repairEvent = {
     type: "RepairRoundRecorded", actor: "builder", acceptanceVersion, revision,
     summary: `第 ${repairRound} 轮实现性修复：${built.summary}`,
     round: repairRound, triggerFindingIds,
     affectedAssertionIds: built.affectedAssertionIds.length > 0 ? built.affectedAssertionIds : plan.affectedAssertionIds,
     fromRevision, toRevision: revision,
+    incrementReceipts: repairReceipts,
+    artifactSha256: repairReportSha,
     artifact: repairReportPath,
   };
   const repairAppended = await retryOnSpawnFailure(
@@ -1486,9 +1620,9 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
       `本轮修复计划：${JSON.stringify(plan)}`,
       `builder 自报：${JSON.stringify(built)}`,
       "独立复核修复 diff，亲自运行相关与全量增量测试；逐项给 resolvedFindingIds/unresolvedFindingIds，漏报的旧 blocker 视为未解决。复核以验收包为判据锚点：逐条对照受影响断言的限定条件与预期结果，反例场景（adversarialForms）按其入口/初始状态/操作/时序逐项重演——修复不得只让触发路径沉默，须证明判据行为成立。发现新问题按 FindingDraft 返回。",
-      "suggestion/info 必须附 consequenceRefutation；不得修改产品代码、验收或 Git。",
+      "suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据；不得修改产品代码、验收或 Git。",
       "重报此前已登记过的同类问题（修复回退/回归/同根因复发）时附 reopenOf=<旧 findingId>——同题判定责任在复核者，沿用旧 id 使计数不重复；不确定是否同题时不填（宁可多计不可漏计）。",
-      '返回结构（严格 JSON）：{ "summary": string, "testEvidence": string, "resolvedFindingIds": string[], "unresolvedFindingIds": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
+      '返回结构（严格 JSON）：{ "summary": string, "testEvidence": string, "resolvedFindingIds": string[], "unresolvedFindingIds": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
       ...(corrective === null ? [] : [corrective]),
     ].join("\n"));
     return outcome;
@@ -1544,6 +1678,7 @@ const explorationEventId = events.filter((event) => event.type === "ExplorationC
 // 两阶段串行：coverage 的证据事件与冻结清单落盘后，探索者才按本轮已冻结的覆盖集合启动——
 // 并行启动会让探索者对照到竞态中的旧集合（清单文件尚未写入）
 await obsBegin("review", 1);
+await leaseHeartbeat();
 const coverageReviewer = agent("coverage-review", coverageRoleRes.stdout);
 // 调用校验 + 文件后验：返回结构非法（validateCoverage 口径）或报告/原始证据缺失
 //（抛异常）都触发一次修正重问（完整 prompt + 修正提示，自包含）；耗尽才走终态
@@ -1561,9 +1696,9 @@ const coverageGuard = await askGuarded<CoverageOutcome>(
       "对照验收、候选代码与原始证据，亲自运行必要命令；schema 2 按断言×证据类型逐项返回 verified/partial/failed 和 evidence/ 内原始文件，每个反例场景用 adversarialFormIds 明确认领。",
       `对照 ${incrementsPath} 冻结的 testCommand 与上一轮测试产物（taskDir/evidence/ 内 increment-*.log），审查本轮测试内容是否被改弱（断言删除、范围收窄、skip 扩大）；发现改弱即按 must-fix 申报。`,
       "写覆盖报告；新发现不分配 findingId。仅当亲自确认旧发现已修复时，把其 findingId 放入 resolvedFindingIds；亲自核对后确认仍未修复的旧发现放入 unresolvedFindingIds（两者不得重叠）。",
-      "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不得只按字面合规降级。",
+      "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据，不得只按字面合规降级。",
       "不得修改产品代码、验收、事件或 verdict；builder 的测试输出不能未经独立核对直接记为 verified。",
-      '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "assertionIds": string[], "adversarialFormIds": string[], "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }], "resolvedFindingIds": string[], "unresolvedFindingIds": string[] }——schema 2 须逐断言×kind 覆盖，artifact 为 evidence/ 内绝对路径。',
+      '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "assertionIds": string[], "adversarialFormIds": string[], "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }], "resolvedFindingIds": string[], "unresolvedFindingIds": string[] }——schema 2 须逐断言×kind 覆盖，artifact 为 evidence/ 内绝对路径。',
       ...(corrective === null ? [] : [corrective]),
     ].join("\n"));
     const requiredArtifacts = [coverageReportPath, ...outcome.evidence.map((e) => e.artifact)];
@@ -1583,6 +1718,7 @@ const coverage = coverageGuard.value;
 await obsEnd("review", 1);
 
 await obsBegin("execute", 1);
+await leaseHeartbeat();
 const evidenceEventIds: string[] = [];
 try {
   for (const conclusion of coverage.evidence) {
@@ -1640,6 +1776,7 @@ if (manifestSha === "") {
 await obsEnd("execute", 1);
 
 await obsBegin("execute", 2);
+await leaseHeartbeat();
 try {
   const summaryLines = [
     "# 独立保证总结",
@@ -1692,6 +1829,8 @@ try {
   const incrementReceipts: unknown[] = [];
   for (const item of incrementItems) {
     if (!item.testCommand) continue;
+    // 逐增量测试是长耗时段：逐增量心跳续租，持租互斥不因心跳陈旧被接管
+    await leaseHeartbeat();
     const logPath = `${evidenceRoot}increment-${item.id}-${artifactTag}.log`;
     // 外层 wrapper 超时 = clamp 后生效值 +30s 缓冲（与 candidate-build-v4 同款），
     // 防 world.run 先于内层 spawnSync 截断长测试；第 5 参原样传声明值，clamp 在脚本内做
@@ -1732,6 +1871,9 @@ try {
   if (incrementReceipts.length === 0) {
     throw new Error("逐增量测试回执为空：increments.items 全部未声明 testCommand——AssuranceCompleted 要求至少一条回执。恢复动作：为每个增量声明 testCommand 后重新发起（increments 契约见 delivery-v4 references）");
   }
+  // 保证总结内容哈希（事件与磁盘同哈希绑定，防覆盖对账覆盖本事件）
+  const assuranceSummarySha = await artifactSha256Of(assuranceSummaryPath).catch(() => "");
+  if (assuranceSummarySha === "") throw new Error(`保证总结哈希计算失败：${assuranceSummaryPath}`);
   await appendEvent({
     type: "AssuranceCompleted",
     actor: "assurance",
@@ -1744,6 +1886,7 @@ try {
     explorationEventId,
     incrementReceipts,
     cleanBuild,
+    artifactSha256: assuranceSummarySha,
     artifact: assuranceSummaryPath,
   });
   // 旧发现只接受 coverage reviewer 的逐项 FindingResolved；不凭全量测试绿自动重认领。
