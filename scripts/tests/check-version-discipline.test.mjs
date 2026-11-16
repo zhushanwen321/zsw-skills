@@ -36,6 +36,11 @@ const SKILL_DIRS = {
   "dev-flow-dev": "skills/self/dev-workflow/dev-flow-dev",
   "delivery-dev": "skills/self/dev-workflow/delivery-dev",
 };
+for (const version of ["v3", "v4"]) {
+  for (const family of ["tech-design", "dev-flow", "delivery"]) {
+    SKILL_DIRS[`${family}-${version}`] = `skills/self/dev-workflow/${family}-${version}`;
+  }
+}
 // 与检查器 PRODUCT_SKILL 同域的产物清单（新增产物时两处同步）
 const PRODUCTS = [
   "tech-review-loop.dwf.ts",
@@ -79,6 +84,12 @@ const PRODUCTS = [
   "independent-assurance-dev.dwf.ts",
   "pi/independent-assurance-dev.js",
 ];
+for (const version of ["v3", "v4"]) {
+  for (const name of ["tech-review-loop", "wave-executor", "dev-consistency-loop", "acceptance-design", "candidate-build", "independent-assurance"]) {
+    PRODUCTS.push(`${name}-${version}.dwf.ts`, `pi/${name}-${version}.js`);
+  }
+}
+PRODUCTS.push("assurance-repair-loop-v4.dwf.ts", "pi/assurance-repair-loop-v4.js");
 
 const skillMd = (name, version) => `---\nname: ${name}\nversion: ${version}\ndescription: fixture\n---\n\n# ${name}\n`;
 const product = (version) => `// fixture 产物\nconst SKILL_VERSION = "${version}"; // 构建注入\n`;
@@ -229,6 +240,11 @@ test("共享源 + 产物变 + 全部技能联动 bump → 放行", (t) => {
   setSkillVersion(root, "tech-design-dev", "0.1.1");
   setSkillVersion(root, "dev-flow-dev", "0.1.1");
   setSkillVersion(root, "delivery-dev", "0.1.1");
+  for (const version of ["v3", "v4"]) {
+    for (const family of ["tech-design", "dev-flow", "delivery"]) {
+      setSkillVersion(root, `${family}-${version}`, "0.1.1");
+    }
+  }
   for (const rel of PRODUCTS) {
     appendLine(root, `${WORKFLOWS}/${rel}`, "// 产物随共享源变化");
     setStamp(root, rel, "0.1.1");

@@ -63,7 +63,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSyn
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SKILLS = ["tech-design-v1", "dev-flow-v1", "delivery-v1", "tech-design-v2", "dev-flow-v2", "delivery-v2", "tech-design-dev", "dev-flow-dev", "delivery-dev", "dev-merge", "pr-cr-fix"];
+const SKILLS = ["tech-design-v1", "dev-flow-v1", "delivery-v1", "tech-design-v2", "dev-flow-v2", "delivery-v2", "tech-design-dev", "dev-flow-dev", "delivery-dev", "tech-design-v3", "dev-flow-v3", "delivery-v3", "tech-design-v4", "dev-flow-v4", "delivery-v4", "dev-merge", "pr-cr-fix"];
 // 观测事件 skill 字段历史上写过 workflow 引擎名（与 opts.skills 的技能名不同源）——
 // 统计侧归一到 canonical 技能名；生产事件源已改 canonical，此处兼容存量事件
 const SKILL_ALIASES = {
@@ -89,6 +89,19 @@ const SKILL_ALIASES = {
   "acceptance-design-dev": "delivery-dev",
   "candidate-build-dev": "delivery-dev",
   "independent-assurance-dev": "delivery-dev",
+  "tech-review-loop-v3": "tech-design-v3",
+  "wave-executor-v3": "dev-flow-v3",
+  "dev-consistency-loop-v3": "dev-flow-v3",
+  "acceptance-design-v3": "delivery-v3",
+  "candidate-build-v3": "delivery-v3",
+  "independent-assurance-v3": "delivery-v3",
+  "tech-review-loop-v4": "tech-design-v4",
+  "wave-executor-v4": "dev-flow-v4",
+  "dev-consistency-loop-v4": "dev-flow-v4",
+  "acceptance-design-v4": "delivery-v4",
+  "candidate-build-v4": "delivery-v4",
+  "independent-assurance-v4": "delivery-v4",
+  "assurance-repair-loop-v4": "delivery-v4",
   "dev-merge-gates": "dev-merge",
   "pr-lifecycle": "pr-cr-fix",
 };
@@ -449,24 +462,25 @@ function classifyLegacy(name, args) {
   const reviewersStr = Array.isArray(a.reviewers) ? a.reviewers.join(" ") : "";
   const hasV = (k) => a[k] !== null && a[k] !== undefined && a[k] !== "";
 
-  // 0. DEV 加固线 workflow 名 → dev 技能（estimated 兜底归类；带 executionId 的 run 走
-  // observed 前分支，不经此处）。design-code-sync 两引擎跨代共用，不属 dev 技能
-  if (/^(tech-review-loop-dev|wave-executor-dev|dev-consistency-loop-dev|acceptance-design-dev|candidate-build-dev|independent-assurance-dev)$/.test(name)) {
-    // wave-executor 按 exec-plan mode 分 D1/D3，mode 不在 run args 无法区分，不估阶段防 D1 虚高
-    const isWaveExecutor = /^wave-executor-dev$/.test(name);
+  // 0. dev/v3/v4 workflow 名 → 对应技能（estimated 兜底归类；带 executionId 的 run 走 observed）
+  const versioned = name.match(/^(tech-review-loop|wave-executor|dev-consistency-loop|acceptance-design|candidate-build|independent-assurance|assurance-repair-loop)-(dev|v3|v4)$/);
+  if (versioned) {
+    const [, base, version] = versioned;
+    const isWaveExecutor = base === "wave-executor";
     const stage =
-      /^acceptance-design-dev$/.test(name) ? "DESIGN" :
-      /^candidate-build-dev$/.test(name) ? "BUILD" :
-      /^independent-assurance-dev$/.test(name) ? "ASSURE" :
-      /^tech-review-loop-dev$/.test(name) ? "T2" :
+      base === "acceptance-design" ? "DESIGN" :
+      base === "candidate-build" ? "BUILD" :
+      base === "independent-assurance" || base === "assurance-repair-loop" ? "ASSURE" :
+      base === "tech-review-loop" ? "T2" :
       isWaveExecutor ? null :
-      matchDevFlowStage(name) ?? (/wave/i.test(name) ? "D1" : "D2");
+      matchDevFlowStage(name) ?? "D2";
+    const skillBase = /^(acceptance-design|candidate-build|independent-assurance|assurance-repair-loop)$/.test(base) ? "delivery" : base === "tech-review-loop" ? "tech-design" : "dev-flow";
     return {
-      skill: /^(acceptance|candidate|independent)-/.test(name) ? "delivery-dev" : /^tech-review/.test(name) ? "tech-design-dev" : "dev-flow-dev",
+      skill: `${skillBase}-${version}`,
       stage,
       reason: isWaveExecutor
-        ? "DEV workflow 名(wave-executor-dev)：按 exec-plan mode 分 D1/D3，mode 不在 run args 无法区分，不估阶段防 D1 虚高"
-        : `DEV workflow 名(${name})`,
+        ? `${version} workflow 名(${name})：按 exec-plan mode 分 D1/D3，mode 不在 run args 无法区分，不估阶段防 D1 虚高`
+        : `${version} workflow 名(${name})`,
     };
   }
   // 1. delivery-wf：taskDir 是三个 workflow 的共同硬特征；阶段按 workflow 名判定

@@ -36,6 +36,12 @@ scripts/           Dual-platform workflow build and validation scripts
 | tech-design-dev | DEV hardening line forked from the v2 trio: design semantics identical to tech-design-v2; workflow execution resilience added (agent-call structure validation with corrective re-ask, CLI failure correction hints, self-repair journal with end-of-run reporting) |
 | dev-flow-dev | DEV hardening line forked from the v2 trio: execution semantics identical to dev-flow-v2; W2/W3 workflow resilience added; the W4 conformance engine is shared across generations with v2 |
 | delivery-dev | DEV hardening line forked from the v2 trio: verdict semantics fully compatible with delivery-v2 (events and verdicts interoperate); three workflows gain execution resilience plus a self-repair journal (self-repairs.jsonl) surfaced in the final report |
+| tech-design-v3 | Baseline copy of tech-design-dev: preserves DEV design and review semantics for comparison and rollback; no V4 mechanisms |
+| dev-flow-v3 | Baseline copy of dev-flow-dev: preserves DEV execution and consistency-review semantics for comparison and rollback; no V4 mechanisms |
+| delivery-v3 | Baseline copy of delivery-dev: preserves DEV acceptance, verdict, and assurance semantics for comparison and rollback; no V4 mechanisms |
+| tech-design-v4 | Adds quality transfer to the V3 baseline: assertion-to-mechanism reconciliation, adversarial-form test bindings, zero-conflict T2 completion, and complete T3 reference checks |
+| dev-flow-v4 | Adds three-way consistency review, candidate adversarial review after D3, current-revision exploration and zero-must-fix gates before D4, and controlled repair paths |
+| delivery-v4 | Adds schema-2 acceptance assertions and adversarial forms, assertion-level verdicts, full/recheck modes, a unified repair loop, and process-failed on repair round 4 or unique must-fix 11 |
 | symbol-watchlist | Symbol watchlist generation and self-check tool (extract-backticks.mjs): shared contract carrier for tech-design-v2 T3 watchlist production and dev-flow-v2 D5 pre-launch self-check |
 | design-code-sync | Keep code implementation and design documents in sync |
 | architecture-clean-domain-design | Domain modeling and architecture analysis with DDD and hexagonal architecture as analysis lenses: ubiquitous language, bounded contexts, aggregate invariants, ring-nature mapping; records and maps only — never outputs structural transformation designs |

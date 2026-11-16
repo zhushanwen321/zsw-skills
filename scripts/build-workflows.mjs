@@ -64,6 +64,20 @@ const NAMES = [
   "acceptance-design-dev",
   "candidate-build-dev",
   "independent-assurance-dev",
+  // V3 基线与 V4 质量传递线
+  "tech-review-loop-v3",
+  "wave-executor-v3",
+  "dev-consistency-loop-v3",
+  "acceptance-design-v3",
+  "candidate-build-v3",
+  "independent-assurance-v3",
+  "tech-review-loop-v4",
+  "wave-executor-v4",
+  "dev-consistency-loop-v4",
+  "acceptance-design-v4",
+  "candidate-build-v4",
+  "independent-assurance-v4",
+  "assurance-repair-loop-v4",
 ];
 // 观测门禁豁免名单：shared 源无 initObservation 调用点且登记在此的 workflow 跳过观测
 // 契约检查（跳过时打一行说明，不静默）。豁免是显式决定不是默认沉默——登记格式 = 双引号
@@ -89,6 +103,13 @@ const RESILIENCE_WORKFLOWS = new Set([
   "acceptance-design-dev",
   "candidate-build-dev",
   "independent-assurance-dev",
+  "acceptance-design-v3",
+  "candidate-build-v3",
+  "independent-assurance-v3",
+  "acceptance-design-v4",
+  "candidate-build-v4",
+  "independent-assurance-v4",
+  "assurance-repair-loop-v4",
 ]);
 // 业务源合法消费的韧性层符号词表——两个方向的对账断言共用同一份正则，防双份漂移
 const RESILIENCE_SYMBOL_RE = /\b(askGuarded|recordRepair|retryOnSpawnFailure|repairSummary|initResilience)\b/;
@@ -121,6 +142,21 @@ const SKILL_VERSION_SOURCES = {
   "acceptance-design-dev": join(ROOT, "skills/self/dev-workflow/delivery-dev/SKILL.md"),
   "candidate-build-dev": join(ROOT, "skills/self/dev-workflow/delivery-dev/SKILL.md"),
   "independent-assurance-dev": join(ROOT, "skills/self/dev-workflow/delivery-dev/SKILL.md"),
+  // V3 基线
+  "tech-review-loop-v3": join(ROOT, "skills/self/dev-workflow/tech-design-v3/SKILL.md"),
+  "wave-executor-v3": join(ROOT, "skills/self/dev-workflow/dev-flow-v3/SKILL.md"),
+  "dev-consistency-loop-v3": join(ROOT, "skills/self/dev-workflow/dev-flow-v3/SKILL.md"),
+  "acceptance-design-v3": join(ROOT, "skills/self/dev-workflow/delivery-v3/SKILL.md"),
+  "candidate-build-v3": join(ROOT, "skills/self/dev-workflow/delivery-v3/SKILL.md"),
+  "independent-assurance-v3": join(ROOT, "skills/self/dev-workflow/delivery-v3/SKILL.md"),
+  // V4 质量传递线
+  "tech-review-loop-v4": join(ROOT, "skills/self/dev-workflow/tech-design-v4/SKILL.md"),
+  "wave-executor-v4": join(ROOT, "skills/self/dev-workflow/dev-flow-v4/SKILL.md"),
+  "dev-consistency-loop-v4": join(ROOT, "skills/self/dev-workflow/dev-flow-v4/SKILL.md"),
+  "acceptance-design-v4": join(ROOT, "skills/self/dev-workflow/delivery-v4/SKILL.md"),
+  "candidate-build-v4": join(ROOT, "skills/self/dev-workflow/delivery-v4/SKILL.md"),
+  "independent-assurance-v4": join(ROOT, "skills/self/dev-workflow/delivery-v4/SKILL.md"),
+  "assurance-repair-loop-v4": join(ROOT, "skills/self/dev-workflow/delivery-v4/SKILL.md"),
 };
 
 function readSkillVersion(skillMdPath, wfName) {
@@ -161,6 +197,8 @@ const OBS_SKILLS = new Set([
   "tech-design-v1", "dev-flow-v1", "delivery-v1",
   "tech-design-v2", "dev-flow-v2", "delivery-v2",
   "tech-design-dev", "dev-flow-dev", "delivery-dev",
+  "tech-design-v3", "dev-flow-v3", "delivery-v3",
+  "tech-design-v4", "dev-flow-v4", "delivery-v4",
 ]);
 
 /** 观测契约核对：shared 已接入观测（initObservation 在场）时校验——stage/step 词表、
@@ -255,7 +293,7 @@ const ts = createRequire(import.meta.url)("typescript");
 const STITCH = /^\s*@@STITCH@@\s*$/;
 
 // ── 拼接：标记行替换为 shared 全文（保持标记行缩进） ──
-function stitch(template, shared) {
+function stitch(template, shared, normalizeTrailingNewline = false) {
   const out = [];
   let replaced = 0;
   for (const line of template.split("\n")) {
@@ -268,7 +306,11 @@ function stitch(template, shared) {
     }
   }
   if (replaced !== 1) throw new Error(`模板应有恰好 1 个 @@STITCH@@ 标记行，实际 ${replaced}`);
-  return out.join("\n");
+  const joined = out.join("\n");
+  // 新版本产物逐行去行尾空白并统一单个末尾换行；旧版本产物保持逐字节不变
+  return normalizeTrailingNewline
+    ? joined.split("\n").map((line) => line.replace(/[ \t]+$/g, "")).join("\n").replace(/(?:\r?\n)+$/, "\n")
+    : joined;
 }
 
 // ── 词法扫描（与 check-workflow-parity.mjs 的提取器同一套状态机设计；两处需同步维护）──
@@ -493,8 +535,8 @@ for (const name of names) {
     throw new Error(`${name}: 拼接层（观测/寻址）中出现 agent( 调用点（不应发生——两层均不派 agent）`);
   }
   const piShared = stripTs(`${provPi}\n${rewrittenFull.text}`);
-  const zcOut = stitch(zcTpl, `${provZc}\n${sharedFull}`);
-  const piOut = stitch(piTpl, piShared);
+  const zcOut = stitch(zcTpl, `${provZc}\n${sharedFull}`, /-v[34]$/.test(name));
+  const piOut = stitch(piTpl, piShared, /-v[34]$/.test(name));
 
   // 观测契约核对（构建期门禁：stage/step 词表、事件字段、终态统一补记出口、两侧调用点一致）
   const obsErrors = [];

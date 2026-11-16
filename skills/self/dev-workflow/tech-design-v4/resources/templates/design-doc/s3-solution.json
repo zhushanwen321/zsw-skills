@@ -1,0 +1,51 @@
+{
+  "options": [
+    {
+      "id": "OPT1",
+      "name": "<方案名（演进型 ≥2 候选；终态型候选换成迁移路径，至少覆盖一次到位与分波次两型）>",
+      "longTerm": "<长期架构合理性评估>",
+      "shortTerm": "<短期实现成本>",
+      "risk": "<风险>",
+      "recommended": true,
+      "costNote": "<成本说明（终态型成本只呈现，不作推荐依据）>"
+    },
+    {
+      "id": "OPT2",
+      "name": "<方案名>",
+      "longTerm": "<长期架构合理性评估>",
+      "shortTerm": "<短期实现成本>",
+      "risk": "<风险>",
+      "recommended": false,
+      "costNote": "<成本说明>"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "D1",
+      "title": "<决策标题，与 meta.json reviewNav 同名>",
+      "stage": "<大流程 → 环节名（与 s2 flowDiagram 同一坐标系）>",
+      "level": "A",
+      "choice": "<采用：选了什么、怎么工作>",
+      "rejected": "<不采用：不选什么、为什么不行（自然句：若用 X，现状例子会变成什么样）>",
+      "evidence": "<证据：符号名 + 设计时坐标 / 先例 / 探针编号，带核实状态>",
+      "gapRefs": [],
+      "unitRefs": ["U1"],
+      "axiomRefs": [],
+      "impact": {
+        "architecture": "",
+        "function": "",
+        "complexity": "",
+        "performance": "",
+        "resource": "",
+        "redline": ""
+      },
+      "guards": [
+        {
+          "id": "G1",
+          "text": "<守护全文：正则 / 命令 / CI 步骤等可执行内容（示意正则：^[a-z][a-z0-9-]+$），单一登记于此>",
+          "note": "<一句用途与触发场景：这个守护防什么、什么场景触发>"
+        }
+      ]
+    }
+  ]
+}

@@ -36,6 +36,12 @@ scripts/           workflow 双平台构建与校验脚本
 | tech-design-dev | delivery-v2 体系的 DEV 加固线（v2 分叉）：设计语义与 tech-design-v2 一致，workflow 执行韧性增强（agent 调用结构校验与修正重问、CLI 失败修正提示、自修复记录与终态上报） |
 | dev-flow-dev | delivery-v2 体系的 DEV 加固线（v2 分叉）：执行语义与 dev-flow-v2 一致，W2/W3 workflow 执行韧性增强（同上）；W4 对账引擎与 v2 跨代共用 |
 | delivery-dev | delivery-v2 体系的 DEV 加固线（v2 分叉）：裁决语义与 delivery-v2 完全一致（事件与 verdict 双向兼容），三个 workflow 执行韧性增强 + 自修复记录（self-repairs.jsonl）终态上报 |
+| tech-design-v3 | tech-design-dev 的 V3 基线复制版：保留 DEV 设计与审查语义，供对照与回溯，不承载 V4 新机制 |
+| dev-flow-v3 | dev-flow-dev 的 V3 基线复制版：保留 DEV 执行与一致性审查语义，供对照与回溯，不承载 V4 新机制 |
+| delivery-v3 | delivery-dev 的 V3 基线复制版：保留 DEV 验收、裁决与保证语义，供对照与回溯，不承载 V4 新机制 |
+| tech-design-v4 | 在 V3 基线上增加质量传递：验收断言与方案机制对账、反例场景测试绑定、T2 冲突清零与 T3 引用完备检查 |
+| dev-flow-v4 | 在 V3 基线上增加三方一致性审查、D3 后候选反例审查、D4 当前版本探索与 must-fix 清零门，以及受控修复路径 |
+| delivery-v4 | 在 V3 基线上增加 schema 2 验收断言与反例场景、断言级裁决、full/recheck 双模式、统一修复循环，以及第 4 轮修复或第 11 条不同 must-fix 的 process-failed |
 | symbol-watchlist | 符号词表生成与自验工具（extract-backticks.mjs）：tech-design-v2 T3 产词表、dev-flow-v2 D5 发起前自验的共享契约载体 |
 | design-code-sync | 校准代码实现与设计文档的一致性 |
 | architecture-clean-domain-design | 以 DDD 与六边形架构为分析视角的领域建模与架构分析：统一语言、限界上下文、聚合不变量、圈层性质判定；只做映射与登记，不输出结构改造设计 |
