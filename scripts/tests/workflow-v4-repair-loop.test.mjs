@@ -7,6 +7,8 @@
 //      planner prompt 构造抛 ReferenceError，整轮 assurance-failed）
 //   2. 最终取证链：coverage 逐断言结论 → EvidenceRecorded → 增量测试回执（真实执行
 //      testCommand）→ AssuranceCompleted(mode=recheck) 引用历史 ExplorationCompleted
+//      （引用落在 gate「可用探索集」内：同版本 + artifact 在盘 + 哈希一致；同版本最后
+//      一条探索 artifact 失效时 recheck 引用最后一条可用探索，不取原始事件流 .at(-1)）
 //   3. full-first 前置门禁：事件流无 full 保证时 setup-failure（先跑 full 才可修复）
 //   4. 双平台对拍：zcode 产物（transpile + vm）与 pi 产物（vm + require 注入）主路径
 //      终态一致
@@ -18,6 +20,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import vm from "node:vm";
@@ -38,7 +41,7 @@ const tmpHome = () => mkdtempSync(join(tmpdir(), "v4-repair-loop-"));
 /** 修复循环脚手架：真实 git 项目 + 任务目录 + 预置事件（full 保证 + 历史探索 + blocker）
  *  + 桩 delivery-gate（evaluate 按 verdicts 队列出参；append 校验凭据与 actor 匹配后
  *  落盘并返回递增 eventId；revision 返回修复后 revision）+ 技能角色文件 */
-function makeScaffold(home, { withFull = true, withForeignVersionFull = false, withStagedNoise = false, withUnresolvableEvidenceFull = false } = {}) {
+function makeScaffold(home, { withFull = true, withForeignVersionFull = false, withStagedNoise = false, withUnresolvableEvidenceFull = false, withBrokenLatestExploration = false } = {}) {
   const projectRoot = join(home, "proj");
   mkdirSync(projectRoot, { recursive: true });
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectRoot });
@@ -91,11 +94,24 @@ function makeScaffold(home, { withFull = true, withForeignVersionFull = false, w
     // full 自身 artifact 可用性是前置门禁的一臂（workflow 侧与 gate fold 同口径）——预置文件
     const preFullArtifact = join(taskDir, "evidence", "pre-full-summary.md");
     writeFileSync(preFullArtifact, "# 首次完整保证总结（预置）\n");
+    // 预置探索事件带 artifact + 哈希绑定（可用探索集三条件：同版本 + artifact 在盘 +
+    // 哈希一致）——不带 artifact 的探索不进可用集，full-first 预检会拒绝
+    const preExplorationArtifact = join(taskDir, "evidence", "pre-exploration.md");
+    writeFileSync(preExplorationArtifact, "# 历史探索报告（预置）\n");
+    const preExplorationSha = createHash("sha256").update(readFileSync(preExplorationArtifact, "utf8")).digest("hex");
     preEvents.push(
       { type: "AssuranceCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", mode: "full", summary: "首次完整保证", evidenceEventIds: withUnresolvableEvidenceFull ? ["evt-unknown-evidence"] : ["none"], explorationEventId: "evt-pre-exp", incrementReceipts: [{ incrementId: "I1", program: "node", args: ["-e", "process.exit(0)"], exitCode: 1, logSha256: "x", cwd: projectRoot, artifactSha256: "y" }], artifact: preFullArtifact, eventId: "evt-pre-full" },
-      { type: "ExplorationCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", summary: "历史探索", dimensions: ["smoke"], eventId: "evt-pre-exp" },
+      { type: "ExplorationCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", summary: "历史探索", dimensions: ["smoke"], coverageManifestSha256: preExplorationSha, artifact: preExplorationArtifact, artifactSha256: preExplorationSha, eventId: "evt-pre-exp" },
       { type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", summary: "blocker：反例场景未拦截", findingId: "F-A1", category: "defect", severity: "blocker", requirementIds: ["R1"], eventId: "evt-pre-finding" },
     );
+    if (withBrokenLatestExploration) {
+      // 同版本最后一条探索 artifact 失效（文件从未落盘）：原始事件流 .at(-1) 会引用它，
+      // 裁决器判无效 → 任务停 candidate；可用探索集口径下 recheck 必须改引用 evt-pre-exp
+      const brokenExplorationArtifact = join(taskDir, "evidence", "missing-exploration.md");
+      preEvents.push(
+        { type: "ExplorationCompleted", actor: "assurance", acceptanceVersion: 1, revision: "rev-initial", summary: "失效探索（artifact 缺失）", dimensions: ["smoke"], coverageManifestSha256: preExplorationSha, artifact: brokenExplorationArtifact, artifactSha256: preExplorationSha, eventId: "evt-pre-exp-broken" },
+      );
+    }
   }
   writeFileSync(join(taskDir, "events.jsonl"), preEvents.map((e) => JSON.stringify(e)).join("\n") + (preEvents.length ? "\n" : ""));
 
@@ -327,6 +343,23 @@ test("full-first 前置：full 引用不可解析证据事件时登记时点不�
     const { result } = await runZcode(home, baseArgs(s), repairAgentStub(s));
     assert.equal(result.terminated, "setup-failure");
     assert.ok(result.message.includes("登记时点不完整") || result.message.includes("full"), "失败消息应指向 full 完整性缺口");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("同版本最后一条探索 artifact 失效时 recheck 引用最后一条可用探索（可用探索集口径）", async () => {
+  const home = tmpHome();
+  try {
+    const s = makeScaffold(home, { withBrokenLatestExploration: true });
+    const { result, logs } = await runZcode(home, baseArgs(s), repairAgentStub(s));
+    assert.equal(result.terminated, "assurance-completed", `主路径应走通（logs: ${logs.join(" | ")}，message: ${result.message}）`);
+    const events = readEvents(s.taskDir);
+    const assurance = events.filter((e) => e.type === "AssuranceCompleted").at(-1);
+    assert.equal(assurance.mode, "recheck");
+    // 原始事件流最后一条探索是 evt-pre-exp-broken（artifact 缺失）：引用它会被裁决器判
+    // 无效（missingExplorationIds）→ 任务停 candidate；必须改引用最后一条可用探索
+    assert.equal(assurance.explorationEventId, "evt-pre-exp", "recheck 须引用最后一条可用探索，而非原始事件流最后一条");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

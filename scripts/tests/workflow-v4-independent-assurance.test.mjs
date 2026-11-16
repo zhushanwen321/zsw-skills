@@ -6,6 +6,8 @@
 //      以 assurance-failed 终态停回（message 指向归因，不指引「重新发起」）
 //   2. 探索 due 主路径（合并稿 §6）：无候选探索证据 → full 派开放探索并登记
 //      ExplorationCompleted（带 artifactSha256）与 AssuranceCompleted（带 artifactSha256）
+//   3. 探索未 due：已有候选探索证据时不派 explorer，AssuranceCompleted 引用既有探索
+//      事件而非 "none"（none 会被裁决器判无效，任务停 candidate 无可达终态）
 //
 // 运行：node --test scripts/tests/workflow-v4-independent-assurance.test.mjs
 

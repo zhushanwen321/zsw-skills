@@ -2045,9 +2045,8 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   const requiresCleanBuild =
     world.policy["revision.json"].runsFromIgnoredArtifacts === true &&
     (world.policy["revision.json"].mode ?? "auto-git") !== "content-manifest";
-  // 探索需求判定（合并稿 §6）：schema 2 的 full 探索按「缺少候选探索证据、验收或关键
-  // 设计变化」触发，不再由 exploratoryReview 风险字段门控（候选反例审查与 full 开放式
-  // 探索对全部 schema 2 任务可达；该词表仅保留为高风险披露要求）；schema 1 保持原词表语义
+  // 探索需求判定（合并稿 §6）：schema 2 按「缺候选探索证据/验收或关键设计变化」触发，
+  // 不由 exploratoryReview 风险字段门控（该词表仅保留为高风险披露要求）；schema 1 保持原语义
   const lastChangeSeqBefore = (seq) => Math.max(
     0,
     ...fold.approvals.filter((event) => event.seq < seq).map((event) => event.seq),

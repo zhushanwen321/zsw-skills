@@ -419,7 +419,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "4.1.4"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.1.5"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -1025,8 +1025,7 @@ if (mode !== "explore-only" && missingIncrementIds.some((id) => typeof id === "s
   };
   return result;
 }
-// explorerPersona 无条件读取：full 探索按「缺少候选探索证据/验收或关键设计变化」触发
-//（不再由 exploratoryReview 风险字段门控），任何 schema 2 任务都可能进入探索阶段
+// 无条件读取：schema 2 的探索由 due 判定触发，与 exploratoryReview 风险字段解耦（合并稿 §6）
 let explorerPersona = "";
 {
   const explorerRoleRes = await runNode([NODE_READ_FILE, explorerRolePath]);
@@ -1040,10 +1039,8 @@ let explorerPersona = "";
   }
   explorerPersona = explorerRoleRes.stdout;
 }
-// 写事务租约（可选）：传入 runId 时 setup 获取 projectRoot 级租约，长阶段周期心跳续租
-//（agent 复核/探索与逐增量测试都是长耗时段——不心跳则租约活性判定按陈旧心跳判失联、
-// 异 runId 可即时接管，持租互斥名存实亡），append 全程带 --runId 做代次复核，任何出口
-// release（含失败出口）——保证期写入互斥
+// 写事务租约（可选）：传入 runId 时 setup 获取、周期心跳续租、任何出口 release（含失败
+// 出口）——保证期写入互斥；append 全程带 --runId 做代次复核
 let leaseHeld = false;
 async function releaseLease(): Promise<void> {
   if (leaseHeld && leaseRunId !== "") {
@@ -1089,22 +1086,17 @@ if (eventsRes.exitCode !== 0 || eventsError !== "") {
   };
   return result;
 }
-// full-first 前置门禁（与 delivery-gate 同口径，登记时点完整性：同验收版本 + 回执覆盖
-// 全部增量（不查红绿——红 = full 发现缺陷，正是修复循环的输入）+ 证据事件可解析 +
-// full 自身 artifact 可用 + 探索引用存在）：
-// recheck 是修复后的定向复核，首次完整保证不可被其替代——否则跑完全程也会被裁决器
-// 判无效（missing.assuranceFullFirst），在 setup 即拦下省一轮成本。explore-only 只产生
-// ExplorationCompleted，不构成 full
+// full-first 前置门禁（与 delivery-gate 同口径，登记时点完整性）：recheck 是修复后的定向
+// 复核，首次完整保证不可被其替代，否则跑完全程也会被判 missing.assuranceFullFirst——
+// setup 即拦下省一轮成本。不查回执红绿：红 = full 发现缺陷，正是修复循环的输入
 const knownEvidenceEventIds = new Set(events.filter((e) => e.type === "EvidenceRecorded").map((e) => String(e.eventId)));
-// artifact 路径解析（与 gate probeArtifact 同口径：绝对路径原样用，相对路径按 taskDir 解析）
 const artifactAbs = (artifact: unknown): string => {
   const raw = String(artifact ?? "");
   return raw === "" ? "" : raw.startsWith("/") ? raw : `${taskDir}/${raw}`;
 };
-// 可用探索集（与 gate fold.explorations 同口径：同验收版本 + artifact 在盘 + 哈希一致）——
-// 探索 due 判定、full/recheck 的 explorationEventId 引用与 full-first 预检的探索引用三处
-// 共用；任何一处用原始事件而不用可用集都会与裁决器漂移（引用失效探索 → 保证被判无效，
-// 任务停在 candidate 无可达终态）
+// 可用探索集（与 gate fold.explorations 同口径：同验收版本 + artifact 在盘 + 哈希一致）。
+// due 判定与 full/recheck 的探索引用必须用它而非原始事件流——引用失效探索会被裁决器
+// 判无效，任务停在 candidate 无可达终态
 const sameVersionExplorations = events.filter(
   (event) => event.type === "ExplorationCompleted" && event.acceptanceVersion === acceptanceVersion,
 );
@@ -1126,12 +1118,9 @@ for (const event of sameVersionExplorations) {
   usableExplorations.push(event);
 }
 const usableExplorationIds = new Set(usableExplorations.map((event) => String(event.eventId)));
-// full 探索未 due（已有候选探索证据且验收/关键设计未变化）与 recheck 都引用最后一次可用
-// 探索——full 派了新探索时该值被新事件覆盖；取不到才留 "none"（schema 1 无探索语义）
 const latestUsableExplorationId = usableExplorations.at(-1)?.eventId ?? "none";
 const priorFullEvents = events.filter((e) => e.type === "AssuranceCompleted" && (e.mode ?? "full") === "full" && e.acceptanceVersion === acceptanceVersion);
-// full 自身 artifact 可用性（gate fold.assurances 只收 artifactUsable 的保证——artifact
-// 失效的 full 不能给 recheck 背书）
+// full 自身 artifact 可用性：gate fold.assurances 只收 artifactUsable 的保证
 const priorFullArtifactCheck = await runNode([NODE_CHECK_FILES, ...priorFullEvents.map((e) => artifactAbs(e.artifact)).filter((path) => path !== "")]);
 const unusableFullArtifactEventIds = new Set(
   priorFullArtifactCheck.exitCode === 0
@@ -1148,8 +1137,7 @@ const qualifiedPriorFull = (event: DeliveryEvent): boolean => {
   const coveredIncrementIds = new Set(receipts.map((receipt) => String(receipt.incrementId)));
   if (!incrementItems.every((item) => coveredIncrementIds.has(item.id))) return false;
   if (!Array.isArray(event.evidenceEventIds) || !event.evidenceEventIds.every((id) => id === "none" || knownEvidenceEventIds.has(id))) return false;
-  // 探索引用存在性（与 gate priorFullQualified 同口径：引用必须落在可用探索集内——schema 2
-  // 无条件校验，schema 1 保持词表语义）
+  // schema 2 无条件校验探索引用；schema 1 保持 exploratoryReview 词表语义
   const explorationRefOk = assertionMode
     ? usableExplorationIds.has(String(event.explorationEventId))
     : (!explorationRequired || usableExplorationIds.has(String(event.explorationEventId)));
@@ -1168,11 +1156,8 @@ if (mode === "recheck" && !events.some(qualifiedPriorFull)) {
   };
   return result;
 }
-// 探索需求判定（合并稿 §6，与 gate explorationDueAt 同口径）：schema 2 的 full 探索
-// 只在「缺少可用候选探索证据（可用集为空）、验收或关键设计变化（最后一次
-// AcceptanceApproved/DesignApproved 晚于最后一次可用探索）」时执行，否则引用既有候选
-// 探索作为证据来源；schema 1 保持 exploratoryReview 词表语义。可用集与 gate
-// fold.explorations 同口径——artifact 失效的探索不构成证据来源
+// 探索需求判定（与 gate explorationDueAt 同口径）：可用探索为空、或最后一次
+// 验收/方案批准晚于最后一次可用探索时 due；schema 1 保持 exploratoryReview 词表语义
 const seqOf = (e: DeliveryEvent): number => (typeof e.seq === "number" ? e.seq : 0);
 const usableExplorationSeqs = usableExplorations.map(seqOf);
 const lastChangeSeq = events
@@ -1429,9 +1414,8 @@ async function failAssurance(message: string): Promise<AssuranceResult> {
   };
 }
 
-/** 阶段间 process-failed 早停检查（合并稿 §7.2：第 11 条不同 must-fix 出现时立即停止，
- * 不等待剩余探索）：coverage 发现登记落盘后与探索发现登记后各查一次 evaluate，
- * state=process-failed 即释放租约、跳过后续探索/测试/AssuranceCompleted，停回主会话归因 */
+/** 第 11 条不同 must-fix 出现即停（合并稿 §7.2），不等待剩余探索——coverage/探索发现
+ * 登记后各查一次 evaluate，process-failed 即停回主会话归因 */
 async function stopIfProcessFailed(): Promise<AssuranceResult | null> {
   const check = await retryOnSpawnFailure(
     () => runGate(gatePath, ["evaluate", "--task-dir", taskDir]),
@@ -1543,9 +1527,8 @@ if (!coverageGuard.ok || coverageGuard.value === null) {
 }
 const coverage = coverageGuard.value;
 await obsEnd("review", 1);
-// coverage reviewer 与 explorer 是两个顺序长调用（各自可能分钟级）：中间补心跳点，
-// 把常见租约窗口缩到单次调用。残余窗口（单次 agent 调用超 LEASE_STALE_MS=120s）的
-// 后果有界——异 runId 接管后本 run 的 append 被代次复核拒之门外（响亮失败，不双写）
+// 中间心跳点：coverage 与 explorer 两个顺序长调用只靠阶段边界心跳会超 LEASE_STALE_MS；
+// 残余窗口（单次调用超 120s）后果有界——接管后 append 被代次复核拒，响亮失败不双写
 await leaseHeartbeat();
 
 await obsBegin("execute", 1);
@@ -1606,18 +1589,12 @@ if (manifestSha === "") {
 }
 await obsEnd("execute", 1);
 
-// 覆盖发现登记落盘后的 process-failed 早停（合并稿 §7.2：第 11 条出现即停，不再派探索）
 const processFailedAfterCoverage = await stopIfProcessFailed();
 if (processFailedAfterCoverage !== null) return processFailedAfterCoverage;
 
-// 阶段二（探索 due 时）：以冻结清单为对照集合发起探索。due 判定见 setup 段
-// explorationDue——缺少候选探索证据或验收/关键设计变化（合并稿 §6），与
-// exploratoryReview 风险字段解耦
 let exploration: ExplorationOutcome | null = null;
-// recheck 与「full 探索未 due」都引用最后一次可用探索（合并稿 §6：recheck 引用已有探索
-// 结果；full 在已有合格候选探索且验收/关键设计未变化时同样以既有探索为证据来源，不重复
-// 开放探索）——取不到才留 "none"（schema 1 无探索语义时合法）。full 派了新探索时该值
-// 在下方被新 ExplorationCompleted 事件覆盖
+// recheck 与「探索未 due 的 full」都引用最后一次可用探索；full 派新探索后被新事件覆盖，
+// 取不到才留 "none"（schema 1 无探索语义）
 let explorationEventId = latestUsableExplorationId;
 if (explorationDue && mode === "full") {
   await obsBegin("review", 2);
@@ -1684,7 +1661,6 @@ try {
       artifactSha256: explorationReportSha,
       artifact: explorationReportPath,
     });
-    // 探索发现登记后的 process-failed 早停（不再跑测试与 AssuranceCompleted）
     const processFailedAfterExploration = await stopIfProcessFailed();
     if (processFailedAfterExploration !== null) return processFailedAfterExploration;
   }

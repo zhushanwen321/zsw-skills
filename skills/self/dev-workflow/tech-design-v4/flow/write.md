@@ -229,10 +229,11 @@ Step 6 完成后进 Step 7 业务用例走查（T1 确认点前的最后一环�
 验收：
   - 返回 structured-output { reportFile, verdicts[], problems[] }
   - verdicts = 分给你的每条用例 { id, verdict: "pass"|"gap", note }
-  - problems = 逐条缺口 { ref, level: "must-fix"|"suggestion", useCases[], title, consequenceRefutation? }
+  - problems = 逐条缺口 { ref, level: "must-fix"|"suggestion", useCases[], title, consequenceRefutation?, consequenceRefutationType?: "will-not-occur"|"not-observable"|"accepted-by-acceptance" }
     （ref = 报告条目锚点 walkthrough-<组名>#N，锚的是报告里该缺口的条目序号；useCases 为
-    受影响用例 id；条数合计须等于 must-fix + suggestion。suggestion 必须附
-    consequenceRefutation：不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据；
+    受影响用例 id；条数合计须等于 must-fix + suggestion。suggestion 必须先标
+    consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 /
+    accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据；
     已推演出用户可观察的不正确行为时，不得只按判据字面合规降级）
 ```
 

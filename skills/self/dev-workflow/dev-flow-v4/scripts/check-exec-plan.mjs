@@ -631,7 +631,6 @@ function designDirFromDocPath(designDocPath) {
   return designDocPath;
 }
 
-/** exec-plan.designDocPath → 设计目录内 meta.json 路径 */
 function designMetaPath(designDocPath) {
   return join(designDirFromDocPath(designDocPath), "meta.json");
 }
@@ -740,10 +739,7 @@ function main() {
   }
   if (result.ok && incErrors.length === 0 && taskDir !== null) {
     const checker = join(dirname(fileURLToPath(import.meta.url)), "../../delivery-v4/scripts/check-quality-contract.mjs");
-    // --design-dir：designDocPath 可解析时追加传设计目录，使 D0 门同时覆盖 check-quality-contract
-    // 的机制对账（criterionMechanisms）与测试绑定（verificationBindings）核对——该两段只在
-    // --design-dir 分支执行，缺传则交付体系任务在 D0 漏检机制/绑定一致性（缺口只会在下游
-    // 阶段以更晚、更贵的形态爆出）。目录推导与 designMetaPath 同源
+    // 追加 --design-dir：机制对账/测试绑定核对只在带该参的分支执行，缺传则 D0 漏检
     const checkerArgs = [checker, "--task-dir", taskDir, "--exec-plan", planPath];
     if (isStr(raw.designDocPath)) checkerArgs.push("--design-dir", designDirFromDocPath(raw.designDocPath));
     const checked = spawnSync(process.execPath, checkerArgs, { encoding: "utf8" });

@@ -449,6 +449,34 @@ if (eventsRes.exitCode !== 0 || eventsError !== "") {
 // 受控修复循环的语义前提是「最终保证（full）完整发生过」——否则本循环收尾登记的
 // recheck 保证会被裁决器判无效（missing.assuranceFullFirst），白跑全程
 const knownEvidenceEventIds = new Set(events.filter((e) => e.type === "EvidenceRecorded").map((e) => String(e.eventId)));
+const artifactAbs = (artifact: unknown): string => {
+  const raw = String(artifact ?? "");
+  return raw === "" ? "" : raw.startsWith("/") ? raw : `${taskDir}/${raw}`;
+};
+// 可用探索集（与 gate fold.explorations 同口径：同验收版本 + artifact 在盘 + 哈希一致）。
+// full-first 预检与收尾 recheck 的探索引用必须用它而非原始事件流——引用失效探索会被
+// 裁决器判无效，整轮修复取证白跑
+const sameVersionExplorations = events.filter(
+  (event) => event.type === "ExplorationCompleted" && event.acceptanceVersion === acceptanceVersion,
+);
+const explorationArtifactCheck = await runNode([
+  NODE_CHECK_FILES,
+  ...sameVersionExplorations.map((event) => artifactAbs(event.artifact)).filter((path) => path !== ""),
+]);
+const missingExplorationArtifacts = new Set(
+  explorationArtifactCheck.exitCode === 0 ? [] : explorationArtifactCheck.stdout.trim().split(" | ").filter((part) => part !== ""),
+);
+const usableExplorations: DeliveryEvent[] = [];
+for (const event of sameVersionExplorations) {
+  const absPath = artifactAbs(event.artifact);
+  if (absPath === "" || missingExplorationArtifacts.has(absPath)) continue;
+  if (typeof event.artifactSha256 === "string" && event.artifactSha256 !== "") {
+    const diskSha = await artifactSha256Of(absPath).catch(() => "");
+    if (diskSha !== event.artifactSha256) continue;
+  }
+  usableExplorations.push(event);
+}
+const usableExplorationIds = new Set(usableExplorations.map((event) => String(event.eventId)));
 const priorFullEvents = events.filter((e) => e.type === "AssuranceCompleted" && (e.mode ?? "full") === "full" && e.acceptanceVersion === acceptanceVersion);
 // full 自身 artifact 可用性（gate fold.assurances 只收 artifactUsable 的保证——artifact
 // 失效的 full 不能给 recheck 背书，此形态下跑完全程仍会被判 missing.assuranceFullFirst）
@@ -468,10 +496,10 @@ const qualifiedPriorFull = (event: DeliveryEvent): boolean => {
   const coveredIncrementIds = new Set(receipts.map((receipt) => String(receipt.incrementId)));
   if (!incrementItems.every((item) => coveredIncrementIds.has(item.id))) return false;
   if (!Array.isArray(event.evidenceEventIds) || !event.evidenceEventIds.every((id) => id === "none" || knownEvidenceEventIds.has(id))) return false;
-  // 探索引用存在性（与 gate priorFullQualified 同口径：schema 2 无条件校验，schema 1 保持词表语义）
+  // schema 2 无条件校验探索引用；schema 1 保持 exploratoryReview 词表语义
   const explorationRefOk = assertionMode
-    ? events.some((candidate) => candidate.type === "ExplorationCompleted" && candidate.eventId === event.explorationEventId)
-    : (!explorationRequired || events.some((candidate) => candidate.type === "ExplorationCompleted" && candidate.eventId === event.explorationEventId));
+    ? usableExplorationIds.has(String(event.explorationEventId))
+    : (!explorationRequired || usableExplorationIds.has(String(event.explorationEventId)));
   if (!explorationRefOk) return false;
   return true;
 };
@@ -855,10 +883,8 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
   }, { workflow: "assurance-repair-loop-v4", step: "fix", round: repairRound, target: `repair-planner-r${repairRound}` });
   if (!planGuard.ok || planGuard.value === null) return failAssurance(`修复聚合失败：${planGuard.error}`);
   const plan = planGuard.value;
-  // 顺序 agent 调用之间的心跳：planner→builder→reviewer 三段各自可能分钟级，仅靠阶段
-  // 边界心跳会让整个序列超过 LEASE_STALE_MS(120s) 判失联——补中间点把常见窗口缩到单次
-  // 调用。残余窗口（单次 agent 调用超 120s）的后果是有界的：异 runId 接管后本 run 的
-  // append 被代次复核拒之门外（响亮失败，不双写），重新发起即可
+  // planner→builder→reviewer 只靠阶段边界心跳会超 LEASE_STALE_MS 判失联，补中间点；
+  // 残余窗口（单次调用超 120s）后果有界——接管后 append 被代次复核拒，响亮失败不双写
   await leaseHeartbeat();
 
   const repairReportPath = `${evidenceRoot}repair-${artifactTag}-r${repairRound}.md`;
@@ -1030,10 +1056,9 @@ artifactTag = `${revisionHash(revision)}-${attemptTag}`;
 coverageReportPath = `${evidenceRoot}coverage-${artifactTag}.md`;
 assuranceSummaryPath = `${evidenceRoot}assurance-${artifactTag}.md`;
 
-// recheck 的探索引用：取同验收版本历史最后一次 ExplorationCompleted（full 或
-// explore-only 产生；delivery-gate 的 allExplorationIds 只含当前版本，跨版本 id 会让
-// 整条 recheck 无效——须按版本过滤），本轮不产生新探索
-const explorationEventId = events.filter((event) => event.type === "ExplorationCompleted" && event.acceptanceVersion === acceptanceVersion).at(-1)?.eventId ?? "none";
+// recheck 引用同验收版本最后一次可用探索（gate 的 allExplorationIds 只含当前版本，
+// 跨版本 id 会让整条 recheck 无效）
+const explorationEventId = usableExplorations.at(-1)?.eventId ?? "none";
 // 两阶段串行：coverage 的证据事件与冻结清单落盘后，探索者才按本轮已冻结的覆盖集合启动——
 // 并行启动会让探索者对照到竞态中的旧集合（清单文件尚未写入）
 await obsBegin("review", 1);

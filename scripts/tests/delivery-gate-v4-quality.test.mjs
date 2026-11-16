@@ -237,9 +237,8 @@ test("full 探索未 due 时不得以 none 登记：引用既有探索才构成�
   const fx = fixture(t);
   const rev = driveToAssurance(fx);
   appendAllEvidence(fx, rev);
-  // 候选探索已存在且验收/关键设计未变化（探索晚于批准登记，explorationDue=false）：full
-  // 未派新探索。若以 "none" 登记即与裁决器互斥——保证永无效、任务停在 candidate
-  // 无可达终态（第 1 轮修复只改了 gate 侧要求、漏改 workflow 侧登记值）
+  // 探索未 due（探索晚于批准登记）：full 未派新探索时若以 "none" 登记，与裁决器
+  // 「full 须引用既有探索」互斥——保证永无效，任务停 candidate 无可达终态
   completeAssurance(fx, rev, "full", "none");
   let verdict = evaluate(fx);
   assert.equal(verdict.state, "candidate", "full 未引用既有探索不构成有效保证");
@@ -277,8 +276,7 @@ test("受控修复轮回执红路径：缺 incrementReceipts 或未覆盖全部�
     summary: "受控修复轮", round: 1, triggerFindingIds: ["F-RC1"], affectedAssertionIds: ["A1"],
     fromRevision: rev, toRevision: rev, artifact: artifact.artifact,
   };
-  // 缺回执字段（schema 2 受控轮必须附全量确定性测试回执；整个字段省略才走到受控轮检查——
-  // 空数组会先被事件 shape 层拦下）
+  // 缺回执字段：整个字段省略才走到受控轮检查——空数组会先被事件 shape 层拦下
   const noReceipts = append(fx, { ...base }, "builder");
   rejected(noReceipts);
   assert.match(noReceipts.stderr, /缺少 incrementReceipts/);

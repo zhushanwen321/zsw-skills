@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// V4 交付质量监控（合并稿 §13 全部 11 项指标）：不同 must-fix、实现性修复轮次（含保证后
-// 方案/验收修订的 off-loop 计轮与 nature 过滤）、来源阶段与重新打开情况、逃逸分布、
-// 期望阶段命中精度、首轮保证 must-fix 数、定向复核比例、最终阶段探索、证据完整性失败、
-// 卡住续跑计数（dev-flow 侧观测经 --stuck-continuation-count 传入，事件流无此信号）。
+// V4 交付质量监控：输出合并稿 §13 的 11 项交付质量指标（逐项口径见各指标处注释）。
+// 计轮口径与 delivery-gate 同步（合并稿 §7.1）：behavior 修复轮 + 保证后方案/验收修订
+// 各计一轮；nature=environment/evidence 重试不计。卡住续跑事件流无信号，由调用方经
+// --stuck-continuation-count 传入。
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -109,7 +109,7 @@ const recheckCount = assuranceEvents.filter((event) => event.mode === "recheck")
 const fullCount = assuranceEvents.filter((event) => (event.mode ?? "full") === "full").length;
 const targetedReviewRate = fullCount + recheckCount > 0 ? recheckCount / (fullCount + recheckCount) : 0;
 // finalExplorations：末次 AssuranceCompleted 之后再登记的 ExplorationCompleted 数
-//（>0 = 最终阶段仍重新开放探索；0 = 最终取证只走定向复核）
+//（= 合并稿 §13 finalExplorationRate 的单任务计数形态，0 = 未重开探索）
 const lastAssuranceSeq = assuranceEvents.length > 0 ? Math.max(...assuranceEvents.map((event) => event.seq ?? 0)) : 0;
 const finalExplorations = events.filter((event) => event.type === "ExplorationCompleted" && (event.seq ?? 0) > lastAssuranceSeq).length;
 // evidenceIntegrityFailures：裁决器 evaluate 输出的 missing.missingArtifacts（含
