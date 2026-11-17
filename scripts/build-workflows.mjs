@@ -78,6 +78,14 @@ const NAMES = [
   "candidate-build-v4",
   "independent-assurance-v4",
   "assurance-repair-loop-v4",
+  // V5 内核线（delivery-core 状态机收编）
+  "tech-review-loop-v5",
+  "wave-executor-v5",
+  "dev-consistency-loop-v5",
+  "acceptance-design-v5",
+  "candidate-build-v5",
+  "independent-assurance-v5",
+  "assurance-repair-loop-v5",
 ];
 // 观测门禁豁免名单：shared 源无 initObservation 调用点且登记在此的 workflow 跳过观测
 // 契约检查（跳过时打一行说明，不静默）。豁免是显式决定不是默认沉默——登记格式 = 双引号
@@ -110,6 +118,10 @@ const RESILIENCE_WORKFLOWS = new Set([
   "candidate-build-v4",
   "independent-assurance-v4",
   "assurance-repair-loop-v4",
+  "acceptance-design-v5",
+  "candidate-build-v5",
+  "independent-assurance-v5",
+  "assurance-repair-loop-v5",
 ]);
 // 业务源合法消费的韧性层符号词表——两个方向的对账断言共用同一份正则，防双份漂移
 const RESILIENCE_SYMBOL_RE = /\b(askGuarded|recordRepair|retryOnSpawnFailure|repairSummary|initResilience)\b/;
@@ -157,6 +169,14 @@ const SKILL_VERSION_SOURCES = {
   "candidate-build-v4": join(ROOT, "skills/self/dev-workflow/delivery-v4/SKILL.md"),
   "independent-assurance-v4": join(ROOT, "skills/self/dev-workflow/delivery-v4/SKILL.md"),
   "assurance-repair-loop-v4": join(ROOT, "skills/self/dev-workflow/delivery-v4/SKILL.md"),
+  // V5 内核线
+  "tech-review-loop-v5": join(ROOT, "skills/self/dev-workflow/tech-design-v5/SKILL.md"),
+  "wave-executor-v5": join(ROOT, "skills/self/dev-workflow/dev-flow-v5/SKILL.md"),
+  "dev-consistency-loop-v5": join(ROOT, "skills/self/dev-workflow/dev-flow-v5/SKILL.md"),
+  "acceptance-design-v5": join(ROOT, "skills/self/dev-workflow/delivery-v5/SKILL.md"),
+  "candidate-build-v5": join(ROOT, "skills/self/dev-workflow/delivery-v5/SKILL.md"),
+  "independent-assurance-v5": join(ROOT, "skills/self/dev-workflow/delivery-v5/SKILL.md"),
+  "assurance-repair-loop-v5": join(ROOT, "skills/self/dev-workflow/delivery-v5/SKILL.md"),
 };
 
 function readSkillVersion(skillMdPath, wfName) {
@@ -199,6 +219,7 @@ const OBS_SKILLS = new Set([
   "tech-design-dev", "dev-flow-dev", "delivery-dev",
   "tech-design-v3", "dev-flow-v3", "delivery-v3",
   "tech-design-v4", "dev-flow-v4", "delivery-v4",
+  "tech-design-v5", "dev-flow-v5", "delivery-v5",
 ]);
 
 /** 观测契约核对：shared 已接入观测（initObservation 在场）时校验——stage/step 词表、

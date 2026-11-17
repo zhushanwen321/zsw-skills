@@ -1,0 +1,58 @@
+# D1 开发循环 — W2 wave-executor-v5 契约与手工降级路径
+
+> 输入：D0 编译产物齐备（exec-plan + prompts + 初始 status.json）。不变量：subagent 零 git；每单元双锁——改动对账一致（自报 files_changed 与工作区 diff 相符，超声明范围的登记对账呈报、不打回）+ 测试真实跑绿；**调度只看依赖边（wave 仅展示标签，不是边界）——并发 ≤5，逐节点完成即重算（单节点 settle 立即解锁后继补派，不等批内其他节点）**；**每单元核验通过瞬间独立 commit**（不等批、不等 wave、不等尾）。
+
+## W2 workflow 契约（zcode 环境默认动作）
+
+```
+CreateWorkflow saved: wave-executor-v5
+args: { execPlan: "~/.agents/skill-data/dev-flow/<project-slug>/<name>.exec-plan.json",
+        taskId: "<D0 分配的任务标识>", executionId: "D1-<发起时点短时间戳>" }   // 观测参数可选——两参同时传即启用阶段事件观测（SKILL「阶段事件观测」节）；不传业务照常
+```
+
+引擎内循环（每节点四节拍，全部确定性代码 + 一次 agent 会话）：
+
+1. 就绪集 = deps 全 done 的节点，批内并行（≤5），完成即重算（谁先提交谁的后继先开跑）
+2. `agent(node-<unitId>)` 读 promptFile 全文执行（prompt 编译期已构造，引擎零拼接）
+3. world.run 核验：`git status --porcelain` + 改动对账（自报 files_changed 与工作区 diff 相符，超出 territory 声明范围的路径登记对账事件不打回 + 重跑 testCommand 断言退出码；全工作区清单外残留只登记不拦截——并行单元运行中新建的文件天然不在静态声明里，别人的改动与本节点无关，收尾统一呈报处置）
+4. 核验过 → world.run commit（`git add -- <files_changed>` + commitTemplate 渲染；空改动幂等通过，commit 被仓库钩子拒不 blocked 转待办）→ status.json 回写 → 解锁下游
+
+打回（核验不过）：原节点 agent 会话续聊定向修（贴 diff/失败输出/违反条款），≤2 轮；agent 不可用 → 接替程序（新 agent + 前任证据包：状态表该单元最后一轮 files_changed/test_evidence/deviations + 当前 `git diff --stat`，令其先核验现状再续作）；接替者亦异常 → 节点 blocked（引擎层，其他节点照常推进）。超 2 轮 → 节点 blocked，后继自动挂起（deps 不满足），无依赖节点照常推进 → 全场无可调度且存在 blocked → 终态 `blocked`（+清单+已试方案）→ 主 agent 升级用户。全节点 done → 终态 `completed` → 进 D2。
+
+worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 worktree 内执行；集成性质下游单元在其合并节点完成后才就绪——合并由 D0 显式排布（合并节点/手工段，见 `flow/compile.md` worktree 合并排布节），引擎不做合并检测。
+
+## 手工降级路径（workflow 未就绪/失败时，语义等价）
+
+八步循环：
+
+1. **算就绪集**：read status.json，前驱全 done 的节点为就绪
+2. **分批派发**：就绪节点并发 ≤5 全部后台异步派发（声明互斥由 T3 DAG 自检保证）；worktree 单元单独派发（cwd = worktree 目录）
+3. **派发**：task = 该节点 promptFile 全文（三段式，模型按全局路由表编码档、thinking max）
+4. **完成通知到达即硬核验**（每节点，防假完成唯一闸口；先到先验不等同批）：`git status --short` + `git diff --stat` 与自报 files_changed 逐路径对账（超声明范围的路径列出判断合理性、登记呈报不打回；工作区内其他并行单元的改动不算本节点疑点）；重跑核心测试比对输出；测试不绿或有真实疑点才打回重验
+5. **流转 commit**：核验过 → 按 files_changed 精确 add → commit（英文 message 含 unit id、对应设计章节、测试结论一行）→ status.json 回写（state=done + 证据指针）
+6. **失败打回**：续聊定向修或接替程序；轮次 +1；超 2 轮冻结该单元升级用户（附已尝试方案）；打回前后都重算就绪集——修单元不阻塞其他就绪节点
+7. **流式推进**：任一 done 即重算就绪集，解锁后继在并发余量内立即补派
+8. **循环至全 done** → 转 `flow/consistency-review.md`
+
+## 中断恢复
+
+回到第 1 步；以 git log 与工作区实物校准 status.json（冲突以 git 为准）。引擎重启时自动双向对账：标 done 无 commit → 回 pending；有 commit 未记 done → 按 git log 匹配单元 id 补写 done。人工手改 status.json 无必要——字段见 compile.md §5（status/attempts）。
+
+## 终态处置表
+
+| 终态 | 主 agent 动作 |
+|------|--------------|
+| completed | 全节点 done——D1 完成转 D2（consistency-review.md）；D3 完成转 D4 收尾（含交付体系任务的增量实现登记 ImplementationRecorded，`flow/acceptance.md` 收尾节第 3 步） |
+| blocked | 读 blocked 清单逐条处置：打回超限类 → 人工裁决（采纳修复方案/放弃该单元）；引擎层异常 → ResumeWorkflowRun 或修复 exec-plan 后重发 |
+| core-failed | 读 coreFailure 归因。verify/inspect 验收失败（D1 与 D3 一律）与 commit 门禁被拒已经统一失败处理中心轮内修（失败池 → 聚合裁决 phase → 修复组 phase → 机器重验，≤3 轮）——此终态 = 修复环已耗尽仍不收敛。聚合清单与全部失败归因在 acceptanceFix.fixesDir，按归因逐条人工裁决（采纳修复方案重验 / 放弃节点）；主 agent 只裁决与重发起，不亲编码 |
+
+**统一失败处理中心（终态 result 携带 acceptanceFix 时必读）**：`{ rounds（实际修复轮数）, disputed（聚合裁决员与 fixer 的误报反证清单——对应节点保持 failed 未修）, fixesDir（逐轮聚合清单 aggregated.md 与 per-fixer 任务文档） }`。disputed 条目是「验收断言本不该成立/归因误报/钩子拦的是真代码问题」的反证申报，人工裁决：反证成立 → 修验收资产或 waive 该节点后重发；不成立 → 按原归因修复后重发。**修复后重发优先整 run 重发**（引擎增量对账自动跳过 done 节点）——不要手工编辑 status.json 写结果（实测手工写坏 JSON 会触发引擎「状态不可信」全量重验）。
+
+**commit-deferred 与清单外残留（终态 result 携带，status.json events 有 commit-deferred-list / residual-files 同名事件）**：
+
+- `deferredCommits`：节点核验已过、编码成果有效，仅 commit 被仓库钩子拒——引擎统一失败处理中心已先轮内修过（聚合裁决 → 门禁合规修复 fixer → 原 message 重试 commit，≤3 轮；恢复的条目 status.json 记 commit-recovered 事件且不出现在本清单）。终态仍在此清单的 = 轮内修不动（钩子拦的是真代码问题，fixer 已带反证申报）或修复环耗尽——主 agent 收尾逐条代提交：`git commit <message> -- <files>`（message/files 在 result 里给全，钩子照常执行；钩子红则当场修复后重试）。处置完重发 run，启动对账按 git log 补 done 自动续跑
+- `residualFiles`：全工作区清单外残留（并行单元运行中新建的文件 + 未申报改动）——主 agent 判归属：属某单元成果 → 补提交（commit subject 埋单元 id，供下次对账反查）；无主/临时 → 清理；判不了 → 呈报用户，禁静默丢弃
+
+**处置记录义务**：终态处置表任一行的处置动作与结果（含用户裁决），append 一笔到 `<name>.ledger.md`（时间 + 终态 + 动作 + 理由 + 结果）——引擎终态已写入未决清单一笔，主 agent 在其下追加处置记录形成完整时间线；主会话中断后接手者按 ledger 恢复「裁决到哪一步」。手工路径全程同理（派发时任务书已含 runlog 义务句，主 agent 自身的调度判断与打回理由也记 ledger）。
+
+**主 agent 降级边界**：恢复调度时主 agent 只做三类事——代提交 deferredCommits、处置 residualFiles、重发 run；不替 agent 修半成品代码（那是 W2 修复节点形态 / 重派单元的职责——曾发生主 agent 从恢复调度滑到亲手修测试，边界失守）。

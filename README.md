@@ -42,6 +42,9 @@ scripts/           workflow 双平台构建与校验脚本
 | tech-design-v4 | 在 V3 基线上增加质量传递：验收断言与方案机制对账、反例场景测试绑定、T2 冲突清零与 T3 引用完备检查 |
 | dev-flow-v4 | 在 V3 基线上增加三方一致性审查、D3 后候选反例审查、D4 当前版本探索与 must-fix 清零门，以及受控修复路径 |
 | delivery-v4 | 在 V3 基线上增加 schema 2 验收断言与反例场景、断言级裁决、full/recheck 双模式、统一修复循环，以及第 4 轮修复或第 11 条不同 must-fix 的 process-failed |
+| tech-design-v5 | 在 V4 基线上接入 delivery-core 内核：T2 方向审重写回边至多 2 次（超限停回用户），验收复审轮预算 ≤6 |
+| dev-flow-v5 | 在 V4 基线上接入 delivery-core 内核：W2 节点状态六写入点收敛为单一转移入口（attempts 修复——派发即计数、重派不清零）、D2 条目回流上限 ≤2、人工处置显式转移（node-transition manual-disposition） |
+| delivery-v5 | 在 V4 基线上落地交付事务内核 delivery-core：五域转移表与静态校验、判定单源库（open 集/探索集/due/修复轮预算唯一实现）、验收包写入防护（冻结 + open-revision + 篡改检测）、FindingRaised 定级护栏、循环预算三档（新增跨 run 保证 ≤6）、pending-actions 待办实体 |
 | symbol-watchlist | 符号词表生成与自验工具（extract-backticks.mjs）：tech-design-v2 T3 产词表、dev-flow-v2 D5 发起前自验的共享契约载体 |
 | design-code-sync | 校准代码实现与设计文档的一致性 |
 | architecture-clean-domain-design | 以 DDD 与六边形架构为分析视角的领域建模与架构分析：统一语言、限界上下文、聚合不变量、圈层性质判定；只做映射与登记，不输出结构改造设计 |
