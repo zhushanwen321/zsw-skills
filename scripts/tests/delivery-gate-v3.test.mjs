@@ -23,8 +23,12 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const GATE = join(ROOT, "archived", "delivery-v3", "scripts", "delivery-gate.mjs");
-const POLICY_DIR = join(ROOT, "archived", "delivery-v3", "policies");
+const GATE = join(ROOT, ".archived", "delivery-v3", "scripts", "delivery-gate.mjs");
+// 载体 = 归档裁决器（.archived/ 不入版本库，仅本机保留）。不在盘时整文件跳过，
+// 跳过不是静默的——node --test 输出逐条打印 skip 原因
+const GATE_READY = existsSync(GATE);
+const ARCHIVE_SKIP = GATE_READY ? false : "归档裁决器不在盘（.archived/ 不入版本库，仅本机保留）——本组用例跳过";
+const POLICY_DIR = join(ROOT, ".archived", "delivery-v3", "policies");
 
 function sha256(text) {
   return createHash("sha256").update(text, "utf8").digest("hex");

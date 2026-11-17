@@ -3,7 +3,7 @@ name: dev-flow-v4
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 4.4.0
+version: 4.4.1
 description: >-
   Use when 一份完整设计包（tech-design-v4 产出：设计文档 + 双格式 impl-plan + 审查终态）
   需要落地为已验收代码。纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 →
@@ -198,7 +198,7 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 
 ## 与归档代（v1 / v2 / v3）及 dev 线的关系
 
-本技能是纯执行重构形态（impl-plan 上移 tech-design-v4 T3；编排收归 workflow；状态载体 JSON 化；design-code-sync 升级内嵌 D5）。v1 / v2 / v3 已归档（仓库根 `archived/`），不再作为正式技能；dev 为加固线（v2 分叉）。v4 增加判据、方案、代码与测试的三方对账、D3 后候选反例审查、D4 当前 revision 探索与 must-fix 清零门，以及最终保证后的受控修复循环。W2/W3 执行韧性沿用 dev；W4 对账引擎继续跨代共用，避免状态双写。
+本技能是纯执行重构形态（impl-plan 上移 tech-design-v4 T3；编排收归 workflow；状态载体 JSON 化；design-code-sync 升级内嵌 D5）。v1 / v2 / v3 已归档（仓库根 `.archived/`，不入版本库），不再作为正式技能；dev 为加固线（v2 分叉）。v4 增加判据、方案、代码与测试的三方对账、D3 后候选反例审查、D4 当前 revision 探索与 must-fix 清零门，以及最终保证后的受控修复循环。W2/W3 执行韧性沿用 dev；W4 对账引擎继续跨代共用，避免状态双写。
 
 ## 标记说明
 

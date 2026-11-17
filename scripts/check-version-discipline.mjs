@@ -85,7 +85,7 @@ if (repoCheck.status !== 0 || repoCheck.stdout.toString("utf8").trim() !== "true
 
 // ── 技能 ↔ 自有文件目录 / 产物 ↔ 技能 映射 ──
 // 登记范围 = 现行代技能（DEV 加固线 / V4 / V5）。V1-V3 代技能已归档（仓库根
-// archived/<技能名>/），不参与版本纪律；design-code-sync 两引擎跨代共用，产物归属
+// .archived/<技能名>/，不入版本库），不参与版本纪律；design-code-sync 两引擎跨代共用，产物归属
 // dev-flow-v5（见 PRODUCT_SKILL）。归档代复活时在此重新登记
 const SKILLS = [
   { name: "tech-design-dev", dir: "skills/self/dev-workflow/tech-design-dev" },

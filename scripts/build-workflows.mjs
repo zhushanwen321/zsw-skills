@@ -43,8 +43,8 @@ const SAVED_DIR = join(homedir(), ".zcode", "workflows");
 // 源的理由见层文件头注）
 const PROV_LAYER_PATH = join(SRC, "provenance.shared.ts");
 // 构建名单 = 现行代（DEV 加固线 / V4 / V5）与跨代共用引擎。V1-V3 代的 workflow 产物
-// 连同所属技能已归档（仓库根 archived/：技能在 archived/<技能名>/，产物在
-// archived/workflows-v{1,2,3}/）——不再构建、不参与对账；复活某一代时从归档树恢复，
+// 连同所属技能已归档（仓库根 .archived/：技能在 .archived/<技能名>/，产物在
+// .archived/workflows-v{1,2,3}/；该目录不入版本库，仅本机保留）——不再构建、不参与对账；复活某一代时从归档树恢复，
 // 并重新登记本名单与下方 SKILL_VERSION_SOURCES
 const NAMES = [
   // design-code-sync 两引擎跨代共用（V4/V5 与 dev 线的 D5 仍在用，不随 V1 代归档），

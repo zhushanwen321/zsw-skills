@@ -19,7 +19,7 @@ agents/
   self/            自用 agent（symlink 登记）
   external/        预留
 scripts/           workflow 双平台构建与校验脚本
-archived/          已退役技能与产物归档（V1-V3 代，见 archived/README.md）
+.archived/         已退役技能与产物归档（V1-V3 代，不入版本库，仅本机）
 ```
 
 ## Skills

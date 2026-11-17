@@ -21,7 +21,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const GATE = join(ROOT, "archived", "delivery-v1", "scripts", "delivery-gate.mjs");
+const GATE = join(ROOT, ".archived", "delivery-v1", "scripts", "delivery-gate.mjs");
+// 载体 = 归档裁决器（.archived/ 不入版本库，仅本机保留）。不在盘时整文件跳过，
+// 跳过不是静默的——node --test 输出逐条打印 skip 原因
+const GATE_READY = existsSync(GATE);
+const ARCHIVE_SKIP = GATE_READY ? false : "归档裁决器不在盘（.archived/ 不入版本库，仅本机保留）——本组用例跳过";
 const ACTOR_BY_TYPE = {
   ContractApproved: "user",
   ImplementationRecorded: "builder",
@@ -396,7 +400,7 @@ test("init 输出任务目录与一次性密钥，幂等复用不重发私钥，
   }
 });
 
-test("--help 可执行；未知命令与未知参数 exit 2 且含恢复动作", () => {
+test("--help 可执行；未知命令与未知参数 exit 2 且含恢复动作", { skip: ARCHIVE_SKIP }, () => {
   const help = runGate(["--help"]);
   assertOk(help);
   assert.match(help.stdout, /approve-contract/);

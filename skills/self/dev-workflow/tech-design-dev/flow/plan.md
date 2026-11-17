@@ -105,7 +105,7 @@
 
 ## 符号词表 [MANDATORY]
 
-设计文档（含 impl-plan.md）会被下游 design-code-sync 的机械扫描消费：扫描器**只读本节产出的词表**、不自行抓取反引号词——哪些词该扫由本节的语义分析裁决，扫描器与文档作者之间无隐式形态约定。下游 design-code-sync 的输入适配（消费设计目录 / 渲染视图的新形态）已于 2026-11-07 立项——规格见 `../design-code-sync-loop-six-chapter-adaptation-spec.md`，实现排专门会话；落地前六章节设计包的 D5 走 dev-flow-dev SKILL 手工路径（2026-11-07 两包实测形态）。本节按现行词表协议产出不变。
+设计文档（含 impl-plan.md）会被下游 design-code-sync 的机械扫描消费：扫描器**只读本节产出的词表**、不自行抓取反引号词——哪些词该扫由本节的语义分析裁决，扫描器与文档作者之间无隐式形态约定。下游 design-code-sync-v2 引擎已直接消费设计目录与渲染视图（六章节设计包直接发起 D5，无需转换）。本节按现行词表协议产出不变。
 
 1. **抓草稿**：cd 到设计包目录（`~/.agents/skill-data/tech-design/<project-slug>/`）后 `node ~/.agents/skills/symbol-watchlist/scripts/extract-backticks.mjs <name>/<name>.rendered.md <name>.impl-plan.md`（脚本属 symbol-watchlist skill；传参形态不限——相对 / `~/` / 绝对均归一为绝对路径键，推荐 cd 后相对传参调用串短。stdout = JSON 对象：`sourceFingerprints`（各输入文件的 sha256 指纹，键 = 入参归一后的绝对路径——传参形态不限，`~/` 与相对路径入参均被脚本归一，键形态以脚本输出为准）/ `words`（提取词数组）/ `dropped`（被过滤词与剔除规则，漏报可审计）；提取规则与扫描器逐字同源，勿手抄手补。输入取渲染视图而非章节 JSON：渲染视图格式由渲染脚本固定生成，反引号提取稳定；章节 JSON 的一堆字段名 / 枚举值不是「文档里反引号包裹的符号」语义，进入词表只会制造 skip 噪音）
 2. **语义甄别**：对照设计文档逐词判定——`scan` = 本项目代码里可定位、悬空时应被揪出的符号；`skip` = 其余一切（外部/上游包符号、shell 命令、协议词、JSON 字段名、纯排版标注……），每个 skip 词必须带一句理由（典型：「上游包符号，非本项目代码」「命令行示例」）。拿不准的词归 skip——漏扫的代价由下游 LLM 语义审查兜底，误扫的代价是下游误报死循环

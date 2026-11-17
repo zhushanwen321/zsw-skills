@@ -19,7 +19,7 @@ agents/
   self/            Personal agents (registered via symlinks)
   external/        Reserved
 scripts/           Dual-platform workflow build and validation scripts
-archived/          Retired skills and artifacts archive (V1-V3 lines, see archived/README.md)
+.archived/         Retired skills and artifacts archive (V1-V3 lines, not tracked by git, local only)
 ```
 
 ## Skills

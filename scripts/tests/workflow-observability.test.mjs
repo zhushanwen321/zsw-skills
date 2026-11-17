@@ -31,9 +31,13 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WF = join(ROOT, "skills/self/dev-workflow/workflows");
-// V1 代 workflow 产物归档位（技能与产物已随 V1-V3 归档退场；第 1-6 节与第 10 节以
-// 归档产物为载体测通用观测机制——产物字节未变，仅路径迁移）
-const WF_V1 = join(ROOT, "archived/workflows-v1");
+// V1 代 workflow 产物归档位（.archived/ 不入版本库，仅本机保留；第 1-5 节与第 10 节以
+// 归档产物为载体测通用观测机制——产物字节未变，仅路径迁移）。载体缺失时相关节跳过
+const WF_V1 = join(ROOT, ".archived/workflows-v1");
+// 归档载体在盘判定：.archived/ 不入版本库，其他检出上无这些文件——相关用例跳过
+//（跳过不是静默的，node --test 输出逐条打印 skip 原因）
+const V1_CARRIER_READY = existsSync(join(WF_V1, "tech-review-loop.dwf.ts")) && existsSync(join(WF_V1, "pi", "tech-review-loop.js"));
+const V1_SKIP = V1_CARRIER_READY ? false : "归档载体不在盘（.archived/ 不入版本库，仅本机保留）——本组用例跳过";
 const ts = require("typescript");
 
 const transpile = (code) =>
@@ -167,7 +171,7 @@ const setupFailureExpect = (taskId) => [
   { event: "end", step: "execution", outcome: "setup-failure" },
 ];
 
-test("zcode 产物：setup-failure 终态的观测事件序列与字段契约", async () => {
+test("zcode 产物：setup-failure 终态的观测事件序列与字段契约", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
     const { designDoc, projectRoot } = makeSkillScaffold(home, false);
@@ -203,7 +207,7 @@ test("zcode 产物：setup-failure 终态的观测事件序列与字段契约", 
   }
 });
 
-test("pi 产物：setup-failure 终态的观测事件序列与 zcode 对拍一致", async () => {
+test("pi 产物：setup-failure 终态的观测事件序列与 zcode 对拍一致", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   const prevHome = process.env.HOME;
   process.env.HOME = home; // pi 壳 world.run 走 spawnSync 继承进程 env
@@ -231,7 +235,7 @@ test("pi 产物：setup-failure 终态的观测事件序列与 zcode 对拍一�
 
 // ── 2. 自然 end 与中断 end 并存：假 skill 走到四席审查（stub agent 不写报告 → review-failure）──
 
-test("zcode 产物：setup 自然 end（无 outcome）+ review 由终态统一补记（outcome=review-failure）", async () => {
+test("zcode 产物：setup 自然 end（无 outcome）+ review 由终态统一补记（outcome=review-failure）", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
     const { designDoc, projectRoot } = makeSkillScaffold(home, true);
@@ -261,7 +265,7 @@ test("zcode 产物：setup 自然 end（无 outcome）+ review 由终态统一�
 
 // ── 3. 可选观测兼容 ──
 
-test("观测 ID 合法但业务参数缺失：execution 边界完整（参数失败早退不漏记）", async () => {
+test("观测 ID 合法但业务参数缺失：execution 边界完整（参数失败早退不漏记）", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
     const { projectRoot } = makeSkillScaffold(home, false);
@@ -287,7 +291,7 @@ test("观测 ID 合法但业务参数缺失：execution 边界完整（参数失
   }
 });
 
-test("projectRoot 不存在：slug 探针失败早退仍有 4 行完整事件（真实 run dwfrun-e3741b98 漏记回归）", async () => {
+test("projectRoot 不存在：slug 探针失败早退仍有 4 行完整事件（真实 run dwfrun-e3741b98 漏记回归）", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
     const { designDoc } = makeSkillScaffold(home, false);
@@ -316,7 +320,7 @@ test("projectRoot 不存在：slug 探针失败早退仍有 4 行完整事件（
   }
 });
 
-test("不传观测参数：业务照常（setup-failure）且不产生观测文件", async () => {
+test("不传观测参数：业务照常（setup-failure）且不产生观测文件", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
     const { designDoc, projectRoot } = makeSkillScaffold(home, false);
@@ -330,7 +334,7 @@ test("不传观测参数：业务照常（setup-failure）且不产生观测文�
   }
 });
 
-test("只传 taskId：可操作告警且不落盘", async () => {
+test("只传 taskId：可操作告警且不落盘", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
     const { designDoc, projectRoot } = makeSkillScaffold(home, false);
@@ -345,7 +349,7 @@ test("只传 taskId：可操作告警且不落盘", async () => {
   }
 });
 
-test("路径穿越形态 taskId（../evil）：拒绝落盘且观测根外无写入", async () => {
+test("路径穿越形态 taskId（../evil）：拒绝落盘且观测根外无写入", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
     const { designDoc, projectRoot } = makeSkillScaffold(home, false);
@@ -361,7 +365,7 @@ test("路径穿越形态 taskId（../evil）：拒绝落盘且观测根外无写
   }
 });
 
-test("sampleType 非法：告警并关闭观测", async () => {
+test("sampleType 非法：告警并关闭观测", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
     const { designDoc, projectRoot } = makeSkillScaffold(home, false);
@@ -377,7 +381,7 @@ test("sampleType 非法：告警并关闭观测", async () => {
 
 // ── 4. 并发执行不同文件 ──
 
-test("并发两次执行（不同 executionId）：各自 JSONL 完整互不串扰", async () => {
+test("并发两次执行（不同 executionId）：各自 JSONL 完整互不串扰", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
     const { designDoc, projectRoot } = makeSkillScaffold(home, false);
@@ -396,7 +400,7 @@ test("并发两次执行（不同 executionId）：各自 JSONL 完整互不串�
 
 // ── 5. 观测层单元行为（单一构建输入 observability.shared.ts + 壳钩子拼接执行）──
 
-test("withStage/obsBegin/obsCloseExecution：正常 end、fn 抛异常补 script-error、阶段重叠披露 abandoned、终态统一补记", async () => {
+test("withStage/obsBegin/obsCloseExecution：正常 end、fn 抛异常补 script-error、阶段重叠披露 abandoned、终态统一补记", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
     // 直接消费单一构建输入全文（与产物同一份文本，非测试内复制）
@@ -463,7 +467,7 @@ test("withStage/obsBegin/obsCloseExecution：正常 end、fn 抛异常补 script
   }
 });
 
-test("obsEnd 配对检查：错名/round 错位给实际打开阶段补 abandoned、重复 end 不伪造事件", async () => {
+test("obsEnd 配对检查：错名/round 错位给实际打开阶段补 abandoned、重复 end 不伪造事件", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
     const layerSrc = readFileSync(join(WF, "src/observability.shared.ts"), "utf8");
@@ -1470,13 +1474,13 @@ test("五项寻址登记与代码常量一致（skill-data-addressing.md §2 con
 
 // ── 10. delivery-v1 三 workflow（DESIGN / BUILD / ASSURE）双平台真实产物 ──
 //
-// delivery-v1 技能与产物已归档（archived/delivery-v1/、archived/workflows-v1/），本节
+// delivery-v1 技能与产物已归档（.archived/delivery-v1/、.archived/workflows-v1/），本节
 // 以归档产物为载体测三段 workflow 的通用观测行为（产物字节未变，仅路径迁移；归档产物
 // 不再由构建器重建）。产物或 SKILL.md 缺失时本节跳过并说明原因；跳过不是静默的，
 // node --test 会在输出中逐条打印 skip 原因。
 const DELIVERY_WFS = ["contract-design", "candidate-build", "independent-assurance"];
 const DELIVERY_SKILL_VERSION =
-  readFileSync(join(ROOT, "archived/delivery-v1/SKILL.md"), "utf8").match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m)?.[1] ?? null;
+  readFileSync(join(ROOT, ".archived/delivery-v1/SKILL.md"), "utf8").match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m)?.[1] ?? null;
 const DELIVERY_PRODUCTS_READY = DELIVERY_SKILL_VERSION !== null && DELIVERY_WFS.every((n) => {
   for (const p of [join(WF_V1, `${n}.dwf.ts`), join(WF_V1, "pi", `${n}.js`)]) {
     if (!existsSync(p)) return false;

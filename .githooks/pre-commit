@@ -49,10 +49,10 @@ fi
 
 # 段 3：技能版本纪律（AX3 强制器：bump 对账 + 共享源按产物 diff 联动 + 产物版本戳一致性）
 # 判定对象 = git 索引（本次提交内容与 HEAD 的差异）；触技能自有文件 / 共享构建源 / 产物时
-# 检查。检查器逐条输出「违规 → 权威源 → 恢复动作」，此处只给总处置提示。过滤器覆盖
-# dev-workflow 全树 + archived/（检查器只登记现行技能，归档改动恒放行；宽前缀防技能
-# 目录改名后再漏检——曾因旧目录名过滤器全部失效）
-VERSION_STAGED=$(git diff --cached --name-only --diff-filter=ACMRD -- 'skills/self/dev-workflow/' 'archived/')
+# 检查。检查器逐条输出「违规 → 权威源 → 恢复动作」，此处只给总处置提示。过滤器 =
+# dev-workflow 全树宽前缀（防技能目录改名后再漏检——曾因旧目录名过滤器全部失效）。
+# 归档目录 .archived/ 不入版本库，其改动永不进 staged 列表，无需 pathspec
+VERSION_STAGED=$(git diff --cached --name-only --diff-filter=ACMRD -- 'skills/self/dev-workflow/')
 if [ -n "$VERSION_STAGED" ]; then
   echo "pre-commit[version-discipline]: staged 变更含技能自有文件 / 共享构建源 / 产物，跑版本纪律检查…"
   node scripts/check-version-discipline.mjs || {
