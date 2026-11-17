@@ -34,9 +34,9 @@
 // 判不可读（不尝试读），其余不展开波浪号、不拼接基目录、fs.readFileSync 原样直读。
 //
 // 本脚本只产草稿——哪些词纳入扫描（scan）、哪些剔除（skip）由 T3 主 agent 对照设计文档
-// 语义分析后写入 <basename>.symbol-watchlist.json（见 tech-design-v2 flow/plan.md「符号词表」节）。
-// 本脚本现属 symbol-watchlist skill（词表协议的共享契约载体，生成流程在 tech-design-v2 T3、
-// 发起前自验在 dev-flow-v2 D5）；传参形态不限——相对 / ~/ / 绝对均归一为绝对路径键。
+// 语义分析后写入 <basename>.symbol-watchlist.json（见 tech-design-v5 flow/plan.md「符号词表」节）。
+// 本脚本现属 symbol-watchlist skill（词表协议的共享契约载体，生成流程在 tech-design-v5 T3、
+// 发起前自验在 dev-flow-v5 D5）；传参形态不限——相对 / ~/ / 绝对均归一为绝对路径键。
 
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -76,7 +76,7 @@ function runCheck(wlPath) {
   if (wl === null || typeof wl !== "object") {
     return fail(
       "词表内容非 JSON 对象",
-      `${wlPath}（顶层为 null 或标量——词表须为含 scan/skip/sourceFingerprints 的对象；词表内容损坏手修不可靠，回 tech-design-v2 T3 重新生成词表）`,
+      `${wlPath}（顶层为 null 或标量——词表须为含 scan/skip/sourceFingerprints 的对象；词表内容损坏手修不可靠，回 tech-design-v5 T3 重新生成词表）`,
     );
   }
   const scanBad = !Array.isArray(wl.scan);
@@ -105,7 +105,7 @@ function runCheck(wlPath) {
   }
   const fps = wl.sourceFingerprints;
   if (fps === null || typeof fps !== "object" || Array.isArray(fps) || Object.keys(fps).length === 0) {
-    return fail("缺 sourceFingerprints", `${wlPath}（字段缺失或空对象——旧版生成器产物或手写词表，回 tech-design-v2 T3 重新生成词表）`);
+    return fail("缺 sourceFingerprints", `${wlPath}（字段缺失或空对象——旧版生成器产物或手写词表，回 tech-design-v5 T3 重新生成词表）`);
   }
   // 指纹键判定与探针逐字一致：键形态判定同步（非 / 开头的相对或 ~/ 形态键直接判不可读，
   // 不尝试读——否则相对键恰在运行 cwd 下存在且指纹正确时本侧会 PASS 而探针 ok:false，
@@ -139,7 +139,7 @@ function runCheck(wlPath) {
   let hasFpFail = false;
   if (badShape.length > 0) {
     hasFpFail = true;
-    console.log(`FAIL: 指纹值形态畸形: ${badShape.join("、")}（须 64 位 sha256 hex 字符串——词表内容损坏手修不可靠，回 tech-design-v2 T3 重新生成词表）`);
+    console.log(`FAIL: 指纹值形态畸形: ${badShape.join("、")}（须 64 位 sha256 hex 字符串——词表内容损坏手修不可靠，回 tech-design-v5 T3 重新生成词表）`);
   }
   if (unreadable.length > 0) {
     hasFpFail = true;
@@ -147,7 +147,7 @@ function runCheck(wlPath) {
   }
   if (mismatched.length > 0) {
     hasFpFail = true;
-    console.log(`FAIL: 指纹不等: ${mismatched.join("、")}——源文档已改而词表未重生成，回 tech-design-v2 T3 重跑（脚本+甄别）`);
+    console.log(`FAIL: 指纹不等: ${mismatched.join("、")}——源文档已改而词表未重生成，回 tech-design-v5 T3 重跑（脚本+甄别）`);
   }
   if (hasFpFail) process.exit(1);
   console.log("PASS");

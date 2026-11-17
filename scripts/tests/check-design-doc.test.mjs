@@ -1,6 +1,6 @@
 // check-design-doc.test.mjs — 设计包机器自检 check-design-doc.mjs 的独立测试
 //
-// 对应实现：skills/self/dev-workflow/tech-design-v1/scripts/check-design-doc.mjs（十条规则）。
+// 对应实现：skills/self/dev-workflow/tech-design-v5/scripts/check-design-doc.mjs（十条规则）。
 // 本测试聚焦守护全文单一登记契约（decisions[].guards 登记 + {{<id>}} 引用）三组校验：
 //   - 规则 2 扩展：guards[].id 进全局唯一并集（重复定义 fail；元素 id/text 形态畸形 fail；
 //     text 内嵌 {{...}} 叶子禁令 fail）
@@ -28,8 +28,8 @@ import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v1", "scripts", "check-design-doc.mjs");
-const RENDER_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v1", "scripts", "render-design-doc.mjs");
+const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v5", "scripts", "check-design-doc.mjs");
+const RENDER_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v5", "scripts", "render-design-doc.mjs");
 const CHAPTER_FILES = ["meta.json", "s1-context.json", "s2-status.json", "s3-solution.json", "s4-accept.json", "s5-breakdown.json"];
 
 // 特征子串用 token：单 token 无空白 35 字符，含正则元字符聚集（[[ 与 ]]）与 ASCII 左括号，
@@ -143,10 +143,12 @@ function runCheckAndRender(mutate) {
   }
 }
 
-// 全绿形态断言：exit 0 且 stdout 仅一行确认（warning 会另起一行，行数即 warning 计数的上界）
+// 全绿形态断言：exit 0 且 stdout 除确认行外无其他 warning 行（warning 会另起一行，
+// 行数即 warning 计数的上界）。[验收绑定] 提示行是设计内合法输出（无 acceptanceBinding
+// 的独立设计任务合法省略、不阻塞），不计入 warning——过滤后再断言
 function assertAllGreen(r, label) {
   assert.equal(r.status, 0, `「${label}」应 exit 0，实际 exit=${r.status}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
-  const lines = r.stdout.trim().split("\n");
+  const lines = r.stdout.trim().split("\n").filter((l) => !l.startsWith("[验收绑定]"));
   assert.equal(lines.length, 1, `「${label}」应零 warning（stdout 仅确认一行），实际 stdout：${r.stdout}`);
   assert.match(lines[0], /十条规则全绿$/);
 }

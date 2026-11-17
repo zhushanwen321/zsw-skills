@@ -3,7 +3,7 @@ name: tech-design-v5
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 5.0.0
+version: 5.1.0
 description: >-
   Use when 在已批准目标与验收（delivery-v5 产出）的约束下三阶段推敲方案并产出完整设计包：
   写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan 双格式），用户确认后登记方案包
@@ -12,7 +12,7 @@ description: >-
   每阶段结束默认停下等用户确认，前期授权可连跑。含 W1 tech-review-loop-v5 审查循环
   （workflow 就绪前走内置手工路径）。
   Not for 未验收定义就直接设计（先走 delivery-v5 的验收设计）、写代码实现、写测试（用 test-quality）、
-  纯架构分析无文档产出、体系外独立设计（用户明确不走交付体系时用 tech-design-v1）。
+  纯架构分析无文档产出、体系外独立设计（用户明确不走交付体系）。
 ---
 
 # tech-design-v5（技能②：设计——三技能交付体系的生产侧上游）
@@ -25,7 +25,7 @@ description: >-
 **入口门 [MANDATORY]**：T1 开始前，交付任务目录必须存在已批准的 acceptance.json——用
 `node ~/.agents/skills/delivery-v5/scripts/delivery-gate.mjs evaluate --task-dir <taskDir>` 检查，
 state 须为 `design`（已批准、待方案——验收版本递增重批后 DesignApproved 失效、state 亦回到该态，重入设计走同一判据；该判据仅对应 verdict-rules `requireDesignApproved` 默认 true 的任务）。verdict-rules `requireDesignApproved=false` 的任务 state 不落 design（delivery-gate 状态路由跳过 design 分支，直接落到 acceptance-approved）：该策略下设计阶段非裁决前置，不得按「未批准」误判回 delivery-v5；仍需推敲方案时按用户明确要求进入（照常走三阶段并 record-design-approved）。缺任务目录或未批准 → 停止并回 delivery-v5 走验收设计
-（用户明确不走交付体系的独立设计任务用 tech-design-v1，不经本门）。设计包全程绑定该任务的
+（用户明确不走交付体系的独立设计任务不经本门，按普通任务处理）。设计包全程绑定该任务的
 acceptanceVersion 与 acceptancePackageSha256。
 
 **三阶段产出完整设计包**，每阶段结束默认停下向用户确认产出是否合理，确认后进下一阶段：
@@ -47,7 +47,7 @@ T3 实施计划（impl-plan 双格式 + 三类关联声明 associations + 自检
 - **T2 进场门槛 = 机器项全绿 [MANDATORY]**：进 T2 派审前 `scripts/check-design-doc.mjs` 对设计目录跑必须 exit 0（T1 Step 6 机器自检跑同一脚本）——六文件完整、跨章节引用存在、导航对齐这类机器可查的写作完备性问题在 T1 拦截，T2 审查不花轮次报它们（执行细节见 `flow/review.md` T2 进场门槛节）
 - **用语规范 [MANDATORY]**：T1 动笔写设计文档前必须加载 meta-words-guidance skill（zcode 用 Skill 工具；pi / 无 Skill 工具环境直接 Read `~/.agents/skills/meta-words-guidance/SKILL.md` 及其词表），写出的文档必须遵守其中的用语规范（四张词表逐条适用 + 该 skill 的扫描自查），细则见 `flow/write.md` 头部
 - 确认的裁决维度：T1 = 问题定义、方案方向与用例走查缺口处置；T2 = 审查是否真收敛（含方向审一句话判定的转述）；T3 = 拆分粒度与验收计划。打回 = 回该阶段或上一阶段修订。**T1/T3 确认点以「人工审核导航」为入口**：每条关键决策写作期已定审核级别（A = 必须逐条裁决 / B = 无异议即过 / C = 局部实现细节不入决策节），用户只逐条裁决 A 级、扫 B 级清单，无需通读全文；分级判据与六维影响评估（架构/功能/复杂度/性能/资源/红线触碰）见 `references/review-guide-rubric.md`
-- **与 tech-design-v1 / tech-design-v2 / tech-design-dev / tech-design-v3 的关系**：v1 为冻结维护版，v2 为稳定线，dev 为加固线，v3 为 dev 的基线复制版，v4 为质量传递线（机制对账、反例场景测试绑定、T2 冲突清零门）。v5 增加循环上限收编：T2 方向审 rewrite 档打回的重写回边至多 2 次（attempt 计数，超限停回用户裁决——不再回 T1 重写），验收复审轮预算见 delivery-v5。入口门、验收绑定与 DesignApproved 登记沿用 v3，workflow 执行韧性沿用 dev。
+- **与 tech-design-dev / tech-design-v4 及归档代的关系**：dev 为加固线（v2 分叉，交付语义同源），v4 为质量传递线（机制对账、反例场景测试绑定、T2 冲突清零门）；v1 / v2 / v3 已归档（仓库根 `archived/`），不再作为正式技能。v5 增加循环上限收编：T2 方向审 rewrite 档打回的重写回边至多 2 次（attempt 计数，超限停回用户裁决——不再回 T1 重写），验收复审轮预算见 delivery-v5。入口门、验收绑定与 DesignApproved 登记沿用 v3（归档代基线），workflow 执行韧性沿用 dev。
 
 ## 设计包（dev-flow-v5 的唯一入口输入）
 

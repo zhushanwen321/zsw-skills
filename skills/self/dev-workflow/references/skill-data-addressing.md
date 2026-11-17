@@ -68,10 +68,10 @@
 
 | 承载文件 | 写入者 | 说明 |
 |---|---|---|
-| `meta.json` 的 `skillVersion` | tech-design-v2 T1 主 agent | 可选字段，规格见 `tech-design-v2/references/design-doc-schema.md`；机器检查有则查 semver、无则放行 |
-| impl-plan 双格式的版本行 / `skillVersion` | tech-design-v2 T3 主 agent | `.impl-plan.md` 头部版本行与 `.impl-plan.json` 的 `skillVersion` 同源同值 |
+| `meta.json` 的 `skillVersion` | tech-design-v5 T1 主 agent | 可选字段，规格见 `tech-design-v5/references/design-doc-schema.md`；机器检查有则查 semver、无则放行 |
+| impl-plan 双格式的版本行 / `skillVersion` | tech-design-v5 T3 主 agent | `.impl-plan.md` 头部版本行与 `.impl-plan.json` 的 `skillVersion` 同源同值 |
 | `final.json` / `run.json`（tech-design 段） | W1 tech-review-loop | 终态记录与运行清单 |
-| `exec-plan.json` / 初始 `status.json` | dev-flow-v2 D0 主 agent | D0 编译时写入 |
+| `exec-plan.json` / 初始 `status.json` | dev-flow-v5 D0 主 agent | D0 编译时写入 |
 | `status.json` 的事件回写 | W2 / W3 | W3 追加事件时仅在字段缺失时补写引擎当前版本，不覆盖已有值 |
 | `run.json`（dev-flow 段） | W2 / W3 / W4 | W2/W3 落 dev-flow 段产物根，W4 落 `<name>.sync/` |
 | `ledger` 追加笔 | W4 | 每笔正文首行 `skillVersion: <值>` |
@@ -115,7 +115,7 @@
 projectRoot 不是工作区内已 `git worktree add` 的路径（或误传仓库外路径）时：检测退单仓形态，寻址本身成功但落到 `tech-design/<project-slug>/`，入口门在 `tech-design/<ws-slug>/` 下找不到设计包。入口门报错必须包含：
 
 - 检测到的形态与寻址根：`form`、`slug`，工作区形态另给 `workspaceRoot` / `worktreeName`；
-- 缺失清单（入口门逐行核对缺哪个文件）与回到 tech-design-v2 哪一阶段补；
+- 缺失清单（入口门逐行核对缺哪个文件）与回到 tech-design-v5 哪一阶段补；
 - 恢复动作：确认 projectRoot 是工作区内已登记的 worktree 路径后重发；worktree 尚未创建时先 `git worktree add` 再发起。
 
 ### 5.3 projectRoot 是非 git 目录

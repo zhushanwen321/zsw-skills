@@ -435,7 +435,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "2.9.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.10.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -942,4 +942,3 @@ for (let round = 1; round <= maxRounds; round += 1) {
     return finishDesign("acceptance-ready", round, `契约草稿与增量已通过独立审查和 delivery-gate 校验（${round} 轮），已登记 AcceptanceReviewed（pass）。等待主会话在用户明确批准后追加 AcceptanceApproved；本 workflow 未宣告交付接受`);
 }
 return finishDesign("design-failed", maxRounds, `已达到 maxRounds=${maxRounds}，契约仍未通过。最后反馈：${feedback || "无"}。恢复动作：按反馈修订设计输入或提高轮次上限后重新发起，不伪造 acceptance-ready`);
-

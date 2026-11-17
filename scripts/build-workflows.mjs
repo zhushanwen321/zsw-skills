@@ -42,35 +42,23 @@ const SAVED_DIR = join(homedir(), ".zcode", "workflows");
 // 校验入口（zcode 发起即比对 saved 副本与仓内产物，漂移即抛错——机制与刻意不比 src/
 // 源的理由见层文件头注）
 const PROV_LAYER_PATH = join(SRC, "provenance.shared.ts");
+// 构建名单 = 现行代（DEV 加固线 / V4 / V5）与跨代共用引擎。V1-V3 代的 workflow 产物
+// 连同所属技能已归档（仓库根 archived/：技能在 archived/<技能名>/，产物在
+// archived/workflows-v{1,2,3}/）——不再构建、不参与对账；复活某一代时从归档树恢复，
+// 并重新登记本名单与下方 SKILL_VERSION_SOURCES
 const NAMES = [
-  "tech-review-loop",
-  "wave-executor",
-  "dev-consistency-loop",
+  // design-code-sync 两引擎跨代共用（V4/V5 与 dev 线的 D5 仍在用，不随 V1 代归档），
+  // 版本权威归属 dev-flow-v5（现行执行线）
   "design-code-sync-loop",
   "design-code-sync-v2",
-  "contract-design",
-  "candidate-build",
-  "independent-assurance",
-  "tech-review-loop-v2",
-  "wave-executor-v2",
-  "dev-consistency-loop-v2",
-  "acceptance-design-v2",
-  "candidate-build-v2",
-  "independent-assurance-v2",
-  // DEV 加固线（v2 分叉；design-code-sync 两引擎跨代共用不复制）
+  // DEV 加固线（v2 分叉）
   "tech-review-loop-dev",
   "wave-executor-dev",
   "dev-consistency-loop-dev",
   "acceptance-design-dev",
   "candidate-build-dev",
   "independent-assurance-dev",
-  // V3 基线与 V4 质量传递线
-  "tech-review-loop-v3",
-  "wave-executor-v3",
-  "dev-consistency-loop-v3",
-  "acceptance-design-v3",
-  "candidate-build-v3",
-  "independent-assurance-v3",
+  // V4 质量传递线与 V5 内核线
   "tech-review-loop-v4",
   "wave-executor-v4",
   "dev-consistency-loop-v4",
@@ -111,9 +99,6 @@ const RESILIENCE_WORKFLOWS = new Set([
   "acceptance-design-dev",
   "candidate-build-dev",
   "independent-assurance-dev",
-  "acceptance-design-v3",
-  "candidate-build-v3",
-  "independent-assurance-v3",
   "acceptance-design-v4",
   "candidate-build-v4",
   "independent-assurance-v4",
@@ -131,22 +116,10 @@ const RESILIENCE_SYMBOL_RE = /\b(askGuarded|recordRepair|retryOnSpawnFailure|rep
 // 业务源直接引用 SKILL_VERSION 盖产物载体（run.json / status.json / final.json / ledger）。
 // 版本戳比对（--check）：产物内嵌值 ≠ frontmatter 当前值 → 红灯（拦 bump 后忘重建）
 const SKILL_VERSION_SOURCES = {
-  // v1 代（旧名 workflow → v1 技能目录）
-  "tech-review-loop": join(ROOT, "skills/self/dev-workflow/tech-design-v1/SKILL.md"),
-  "wave-executor": join(ROOT, "skills/self/dev-workflow/dev-flow-v1/SKILL.md"),
-  "dev-consistency-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-v1/SKILL.md"),
-  "design-code-sync-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-v1/SKILL.md"),
-  "design-code-sync-v2": join(ROOT, "skills/self/dev-workflow/dev-flow-v1/SKILL.md"),
-  "contract-design": join(ROOT, "skills/self/dev-workflow/delivery-v1/SKILL.md"),
-  "candidate-build": join(ROOT, "skills/self/dev-workflow/delivery-v1/SKILL.md"),
-  "independent-assurance": join(ROOT, "skills/self/dev-workflow/delivery-v1/SKILL.md"),
-  // v2 代（-v2 workflow → v2 技能目录）
-  "tech-review-loop-v2": join(ROOT, "skills/self/dev-workflow/tech-design-v2/SKILL.md"),
-  "wave-executor-v2": join(ROOT, "skills/self/dev-workflow/dev-flow-v2/SKILL.md"),
-  "dev-consistency-loop-v2": join(ROOT, "skills/self/dev-workflow/dev-flow-v2/SKILL.md"),
-  "acceptance-design-v2": join(ROOT, "skills/self/dev-workflow/delivery-v2/SKILL.md"),
-  "candidate-build-v2": join(ROOT, "skills/self/dev-workflow/delivery-v2/SKILL.md"),
-  "independent-assurance-v2": join(ROOT, "skills/self/dev-workflow/delivery-v2/SKILL.md"),
+  // design-code-sync 两引擎：跨代共用（V4/V5 与 dev 线的 D5 仍在用，不随 V1 代归档），
+  // 版本权威归属 dev-flow-v5（现行执行线）
+  "design-code-sync-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-v5/SKILL.md"),
+  "design-code-sync-v2": join(ROOT, "skills/self/dev-workflow/dev-flow-v5/SKILL.md"),
   // DEV 加固线
   "tech-review-loop-dev": join(ROOT, "skills/self/dev-workflow/tech-design-dev/SKILL.md"),
   "wave-executor-dev": join(ROOT, "skills/self/dev-workflow/dev-flow-dev/SKILL.md"),
@@ -154,13 +127,6 @@ const SKILL_VERSION_SOURCES = {
   "acceptance-design-dev": join(ROOT, "skills/self/dev-workflow/delivery-dev/SKILL.md"),
   "candidate-build-dev": join(ROOT, "skills/self/dev-workflow/delivery-dev/SKILL.md"),
   "independent-assurance-dev": join(ROOT, "skills/self/dev-workflow/delivery-dev/SKILL.md"),
-  // V3 基线
-  "tech-review-loop-v3": join(ROOT, "skills/self/dev-workflow/tech-design-v3/SKILL.md"),
-  "wave-executor-v3": join(ROOT, "skills/self/dev-workflow/dev-flow-v3/SKILL.md"),
-  "dev-consistency-loop-v3": join(ROOT, "skills/self/dev-workflow/dev-flow-v3/SKILL.md"),
-  "acceptance-design-v3": join(ROOT, "skills/self/dev-workflow/delivery-v3/SKILL.md"),
-  "candidate-build-v3": join(ROOT, "skills/self/dev-workflow/delivery-v3/SKILL.md"),
-  "independent-assurance-v3": join(ROOT, "skills/self/dev-workflow/delivery-v3/SKILL.md"),
   // V4 质量传递线
   "tech-review-loop-v4": join(ROOT, "skills/self/dev-workflow/tech-design-v4/SKILL.md"),
   "wave-executor-v4": join(ROOT, "skills/self/dev-workflow/dev-flow-v4/SKILL.md"),
@@ -212,12 +178,13 @@ const OBS_STAGE_LITERALS_IGNORE = new Set(["dev", "acceptance"]);
 // step 词表 = 阶段内的串行步骤名（execution = 执行级边界事件；其余为业务步骤）
 const OBS_STEPS = new Set(["execution", "setup", "review", "aggregate", "fix", "execute", "finalize", "gate-a", "retire"]);
 // canonical skill 词表 = 事件 skill 字段的合法值（所属技能名，不是 workflow 脚本名——
-// 统计入口按技能过滤，曾因写成 workflow 名被过滤掉，2026-11-01 实测）
+// 统计入口按技能过滤，曾因写成 workflow 名被过滤掉，2026-11-01 实测）。
+// dev-flow-v1 / dev-flow-v2 两名为归档代技能，因跨代共用引擎 design-code-sync-v2/loop
+// 的观测事件按发起方代际归缺省发射它们而保留（引擎注释见其 shared 源）；其余归档代
+// 技能名已随归档移除——其产物不再构建，无发射点
 const OBS_SKILLS = new Set([
-  "tech-design-v1", "dev-flow-v1", "delivery-v1",
-  "tech-design-v2", "dev-flow-v2", "delivery-v2",
   "tech-design-dev", "dev-flow-dev", "delivery-dev",
-  "tech-design-v3", "dev-flow-v3", "delivery-v3",
+  "dev-flow-v1", "dev-flow-v2",
   "tech-design-v4", "dev-flow-v4", "delivery-v4",
   "tech-design-v5", "dev-flow-v5", "delivery-v5",
 ]);
@@ -314,7 +281,7 @@ const ts = createRequire(import.meta.url)("typescript");
 const STITCH = /^\s*@@STITCH@@\s*$/;
 
 // ── 拼接：标记行替换为 shared 全文（保持标记行缩进） ──
-function stitch(template, shared, normalizeTrailingNewline = false) {
+function stitch(template, shared) {
   const out = [];
   let replaced = 0;
   for (const line of template.split("\n")) {
@@ -328,10 +295,9 @@ function stitch(template, shared, normalizeTrailingNewline = false) {
   }
   if (replaced !== 1) throw new Error(`模板应有恰好 1 个 @@STITCH@@ 标记行，实际 ${replaced}`);
   const joined = out.join("\n");
-  // 新版本产物逐行去行尾空白并统一单个末尾换行；旧版本产物保持逐字节不变
-  return normalizeTrailingNewline
-    ? joined.split("\n").map((line) => line.replace(/[ \t]+$/g, "")).join("\n").replace(/(?:\r?\n)+$/, "\n")
-    : joined;
+  // 全部现行产物统一格式契约：逐行去行尾空白 + 恰好一个末尾换行（曾按 -v[34] 代际
+  // 开关，V5/dev 线 fork 后漏扩名单致产物带双换行结尾——归档 V1-V3 后归一无条件化）
+  return joined.split("\n").map((line) => line.replace(/[ \t]+$/g, "")).join("\n").replace(/(?:\r?\n)+$/, "\n");
 }
 
 // ── 词法扫描（与 check-workflow-parity.mjs 的提取器同一套状态机设计；两处需同步维护）──
@@ -556,8 +522,8 @@ for (const name of names) {
     throw new Error(`${name}: 拼接层（观测/寻址）中出现 agent( 调用点（不应发生——两层均不派 agent）`);
   }
   const piShared = stripTs(`${provPi}\n${rewrittenFull.text}`);
-  const zcOut = stitch(zcTpl, `${provZc}\n${sharedFull}`, /-v[34]$/.test(name));
-  const piOut = stitch(piTpl, piShared, /-v[34]$/.test(name));
+  const zcOut = stitch(zcTpl, `${provZc}\n${sharedFull}`);
+  const piOut = stitch(piTpl, piShared);
 
   // 观测契约核对（构建期门禁：stage/step 词表、事件字段、终态统一补记出口、两侧调用点一致）
   const obsErrors = [];

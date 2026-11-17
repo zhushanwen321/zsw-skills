@@ -420,7 +420,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.9.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.10.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -1078,4 +1078,3 @@ return finishDesign(
   maxRounds,
   `已达到 maxRounds=${maxRounds}，契约仍未通过。最后反馈：${feedback || "无"}。恢复动作：按反馈修订设计输入或提高轮次上限后重新发起，不伪造 acceptance-ready`,
 );
-

@@ -19,6 +19,7 @@ agents/
   self/            Personal agents (registered via symlinks)
   external/        Reserved
 scripts/           Dual-platform workflow build and validation scripts
+archived/          Retired skills and artifacts archive (V1-V3 lines, see archived/README.md)
 ```
 
 ## Skills
@@ -27,25 +28,16 @@ scripts/           Dual-platform workflow build and validation scripts
 
 | Skill | Description |
 |-------|-------------|
-| tech-design-v1 | Produces a complete design package in three stages: design document writing → adversarial review loop → implementation plan (impl-plan in dual formats); frozen v1 line, use v2 for new tasks |
-| dev-flow-v1 | Turns a design package into accepted code (D0-D5 pipeline: compile & execute / consistency review / final-state sync); frozen v1 line, use v2 for new tasks |
-| delivery-v1 | Delivery verdict skill: product contracts, candidate implementation, independent assurance, and a single delivery verdict; frozen v1 line, use v2 for new tasks |
-| tech-design-v2 | Solution design under an approved acceptance package (produced by delivery-v2): design document → adversarial review loop → full solution package (bound to the acceptance package hash, registered as DesignApproved afterwards) |
-| dev-flow-v2 | Executes the candidate implementation under the acceptance package + solution package: entry gate checks the acceptance package hash and DesignApproved; finish yields a candidate handed to delivery-v2 for verdict, never self-declares delivery |
-| delivery-v2 | Acceptance (referee) skill: acceptance design → independent assurance → machine gate as the only delivery verdict; three-role signed event stream + policy packages + raw-intent anti-narrowing |
-| tech-design-dev | DEV hardening line forked from the v2 trio: design semantics identical to tech-design-v2; workflow execution resilience added (agent-call structure validation with corrective re-ask, CLI failure correction hints, self-repair journal with end-of-run reporting) |
-| dev-flow-dev | DEV hardening line forked from the v2 trio: execution semantics identical to dev-flow-v2; W2/W3 workflow resilience added; the W4 conformance engine is shared across generations with v2 |
-| delivery-dev | DEV hardening line forked from the v2 trio: verdict semantics fully compatible with delivery-v2 (events and verdicts interoperate); three workflows gain execution resilience plus a self-repair journal (self-repairs.jsonl) surfaced in the final report |
-| tech-design-v3 | Baseline copy of tech-design-dev: preserves DEV design and review semantics for comparison and rollback; no V4 mechanisms |
-| dev-flow-v3 | Baseline copy of dev-flow-dev: preserves DEV execution and consistency-review semantics for comparison and rollback; no V4 mechanisms |
-| delivery-v3 | Baseline copy of delivery-dev: preserves DEV acceptance, verdict, and assurance semantics for comparison and rollback; no V4 mechanisms |
-| tech-design-v4 | Adds quality transfer to the V3 baseline: assertion-to-mechanism reconciliation, adversarial-form test bindings, zero-conflict T2 completion, and complete T3 reference checks |
+| tech-design-dev | DEV hardening line forked from the v2 trio (archived generation): design semantics identical to the archived tech-design-v2; workflow execution resilience added (agent-call structure validation with corrective re-ask, CLI failure correction hints, self-repair journal with end-of-run reporting) |
+| dev-flow-dev | DEV hardening line forked from the v2 trio (archived generation): execution semantics identical to the archived dev-flow-v2; W2/W3 workflow resilience added; the W4 conformance engine is shared across generations |
+| delivery-dev | DEV hardening line forked from the v2 trio (archived generation): verdict semantics fully compatible with the archived delivery-v2 (events and verdicts interoperate); three workflows gain execution resilience plus a self-repair journal (self-repairs.jsonl) surfaced in the final report |
+| tech-design-v4 | Adds quality transfer to the V3 baseline (archived generation): assertion-to-mechanism reconciliation, adversarial-form test bindings, zero-conflict T2 completion, and complete T3 reference checks |
 | dev-flow-v4 | Adds three-way consistency review, candidate adversarial review after D3, current-revision exploration and zero-must-fix gates before D4, and controlled repair paths |
 | delivery-v4 | Adds schema-2 acceptance assertions and adversarial forms, assertion-level verdicts, full/recheck modes, a unified repair loop, and process-failed on repair round 4 or unique must-fix 11 |
 | tech-design-v5 | Onboards the delivery-core kernel to the V4 baseline: T2 direction-review rewrite back-edge capped at 2 (then halts back to the user); acceptance re-review round budget of 6 |
 | dev-flow-v5 | Onboards the delivery-core kernel to the V4 baseline: W2 node-status writes converge into a single transition entry (attempts fixed — counted at dispatch, preserved across re-dispatch), D2 item reflow cap of 2, and explicit manual-disposition transitions |
 | delivery-v5 | Lands the delivery-core transaction kernel on the V4 baseline: five-domain transition tables with static validation, single-source judgment library (open findings / explorations / due / repair budgets each have exactly one implementation), acceptance-package write protection (freeze + open-revision + tamper detection), FindingRaised grading guardrails, three-tier loop budgets (new cross-run assurance cap of 6), and the pending-actions entity |
-| symbol-watchlist | Symbol watchlist generation and self-check tool (extract-backticks.mjs): shared contract carrier for tech-design-v2 T3 watchlist production and dev-flow-v2 D5 pre-launch self-check |
+| symbol-watchlist | Symbol watchlist generation and self-check tool (extract-backticks.mjs): shared contract carrier for tech-design-v5 T3 watchlist production and dev-flow-v5 D5 pre-launch self-check |
 | design-code-sync | Keep code implementation and design documents in sync |
 | architecture-clean-domain-design | Domain modeling and architecture analysis with DDD and hexagonal architecture as analysis lenses: ubiquitous language, bounded contexts, aggregate invariants, ring-nature mapping; records and maps only — never outputs structural transformation designs |
 | workflow-authoring | Authoring and observability onboarding guide for dual-platform workflow scripts: single-source build layout, GUI lane constraints, five-step observability onboarding, check gates, and data layout |

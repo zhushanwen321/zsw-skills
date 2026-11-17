@@ -7,7 +7,7 @@
 // 该两段只在 tech-design 侧 T2 门核对，D0 漏检——review-fix-loop MF-1-7）。
 //
 // 差分测试（check-exec-plan-parity.test.mjs）只对账 validatePlanSchema / checkPlan 的
-// schema 段（锚定 dev-flow-v1 版本），--task-dir 三段附加核对由本文件按 CLI 行为断言：
+// schema 段（锚定 dev-flow-v5 版本），--task-dir 三段附加核对由本文件按 CLI 行为断言：
 //   - 机制对账缺行（criterionMechanisms 无该断言行）→ FAIL: quality（含缺口文案）
 //   - 机制与绑定齐备 → PASS exit 0（追加 --design-dir 后正常链路不误伤）
 //

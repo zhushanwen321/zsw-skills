@@ -25,7 +25,7 @@
 | `reports/outcomes.mjs` | 四层结论派生：scriptStatus / engineOutcome / integrationOutcome / deliveryOutcome 词表与分层不可互覆盖 | M5 |
 | `reports/render.mjs` | 派生报告五视图（current/final/matrix/trajectory/ledger）渲染，落盘 tech-design 段 `<name>/v2/` | M5 |
 
-M3 执行层与 M5 报告迁移层已交付于本目录对应子目录；M4 的 D5 v2 对账引擎与 agent 模板（design-code-sync-v2.shared.ts、conformance-reviewer/changeset-fixer、flow/sync.md）落 `workflows/src/` 与 `dev-flow-v2/`，不在本目录模块地图内。
+M3 执行层与 M5 报告迁移层已交付于本目录对应子目录；M4 的 D5 v2 对账引擎与 agent 模板（design-code-sync-v2.shared.ts、conformance-reviewer/changeset-fixer、flow/sync.md）落 `workflows/src/` 与 `dev-flow-v5/`，不在本目录模块地图内。
 
 ## 核心契约
 
@@ -35,7 +35,7 @@ M3 执行层与 M5 报告迁移层已交付于本目录对应子目录；M4 的 
 - 义务摘要 = 规范化身份四元组 `{ bindingId, repoId, violationKind, bindingVersion }` 的内容哈希（`facts.obligationSummaryHash`；golden corpus 夹具 `obligationHash` 同此口径）。
 - 覆盖率分母只含带 conformance 绑定的条目（AX8）；未绑定条目列入 `unbound` 清单，不进分母。
 - 义务表版本 `tableVersion` = 规范化义务集字段子集（身份四元组 + 检查契约字段）的 sha256（含 `CONFORMANCE_SCHEMA_VERSION`）；绑定集或契约字段变化即升版。
-- conformance 字段规格：`tech-design-v2/references/design-doc-schema.md` §9b（conformance schemaVersion 2；violationKind 六值词表与 severity 三值词表扩充必须升 schema 版本）。violationKind 词表唯一权威 = `kernel/facts.mjs`；`check-design-doc.mjs` 持同步副本，`scripts/tests/obligation-identity.test.mjs` 断言三处一致。
+- conformance 字段规格：`tech-design-v5/references/design-doc-schema.md` §9b（conformance schemaVersion 2；violationKind 六值词表与 severity 三值词表扩充必须升 schema 版本）。violationKind 词表唯一权威 = `kernel/facts.mjs`；`check-design-doc.mjs` 持同步副本，`scripts/tests/obligation-identity.test.mjs` 断言三处一致。
 
 ### checker 退出契约（checkers/registry.mjs）
 
@@ -99,7 +99,7 @@ node --test scripts/tests/changeset-isolation.test.mjs scripts/tests/workspace-i
   scripts/tests/cutover-guard.test.mjs scripts/tests/workflow-observability.test.mjs
 
 # conformance 绑定校验（设计包写作期机器检查；无绑定文档零失败零警告）
-node skills/self/dev-workflow/tech-design-v2/scripts/check-design-doc.mjs <设计包目录>
+node skills/self/dev-workflow/tech-design-v5/scripts/check-design-doc.mjs <设计包目录>
 
 # 义务提取（repl 示意）
 import { extractObligations } from ".../conformance-plane/extractors/obligations.mjs";

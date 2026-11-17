@@ -31,6 +31,9 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WF = join(ROOT, "skills/self/dev-workflow/workflows");
+// V1 代 workflow 产物归档位（技能与产物已随 V1-V3 归档退场；第 1-6 节与第 10 节以
+// 归档产物为载体测通用观测机制——产物字节未变，仅路径迁移）
+const WF_V1 = join(ROOT, "archived/workflows-v1");
 const ts = require("typescript");
 
 const transpile = (code) =>
@@ -77,9 +80,10 @@ const obsArgs = (taskId, executionId, extra = {}) => ({
   ...(extra.sampleType !== undefined ? { sampleType: extra.sampleType } : {}),
 });
 
-/** zcode 产物执行器：transpile + vm，facade 全部由参数注入；world.run 真实 spawn（HOME 指向 home） */
-async function runZcodeArtifact(home, argsValue, agentImpl, name = "tech-review-loop") {
-  const raw = readFileSync(join(WF, `${name}.dwf.ts`), "utf8");
+/** zcode 产物执行器：transpile + vm，facade 全部由参数注入；world.run 真实 spawn（HOME 指向 home）。
+ *  dir 默认归档 v1 目录（与默认 name=tech-review-loop 配套）；测现行 workflow 时显式传 WF */
+async function runZcodeArtifact(home, argsValue, agentImpl, name = "tech-review-loop", dir = WF_V1) {
+  const raw = readFileSync(join(dir, `${name}.dwf.ts`), "utf8");
   const js = transpile(raw);
   const logs = [];
   const world = {
@@ -108,9 +112,9 @@ async function runZcodeArtifact(home, argsValue, agentImpl, name = "tech-review-
   return { result, logs };
 }
 
-/** pi 产物执行器：vm + require/$ARGS/$WORKSPACE 注入（pi 宿主注入形态） */
-async function runPiArtifact(home, argsValue, agentImpl, name = "tech-review-loop") {
-  const raw = readFileSync(join(WF, "pi", `${name}.js`), "utf8");
+/** pi 产物执行器：vm + require/$ARGS/$WORKSPACE 注入（pi 宿主注入形态）；dir 语义同 zcode 执行器 */
+async function runPiArtifact(home, argsValue, agentImpl, name = "tech-review-loop", dir = WF_V1) {
+  const raw = readFileSync(join(dir, "pi", `${name}.js`), "utf8");
   const logs = [];
   const context = {
     require,
@@ -191,7 +195,7 @@ test("zcode 产物：setup-failure 终态的观测事件序列与字段契约", 
     assert.ok(!("outcome" in lines[0] || "outcome" in lines[1]), "start 事件不带 outcome");
     // skill_version 恒记执行引擎注入的当前版本（D6/V5 定案：事件回答「谁在执行」——
     // 本用例是 setup-failure 的老式场景、无任何产物版本字段参与，事件照记引擎版本不记 unknown）
-    const embedded = readFileSync(join(WF, "tech-review-loop.dwf.ts"), "utf8").match(/const SKILL_VERSION = "([^"]*)";/)?.[1] ?? null;
+    const embedded = readFileSync(join(WF_V1, "tech-review-loop.dwf.ts"), "utf8").match(/const SKILL_VERSION = "([^"]*)";/)?.[1] ?? null;
     assert.ok(embedded, "产物应内嵌 SKILL_VERSION 版本戳");
     lines.forEach((l) => assert.equal(l.skill_version, embedded, "事件 skill_version 应等于产物内嵌的引擎版本"));
   } finally {
@@ -397,7 +401,7 @@ test("withStage/obsBegin/obsCloseExecution：正常 end、fn 抛异常补 script
   try {
     // 直接消费单一构建输入全文（与产物同一份文本，非测试内复制）
     const layerSrc = readFileSync(join(WF, "src/observability.shared.ts"), "utf8");
-    const shellSrc = readFileSync(join(WF, "src/tech-review-loop.zcode.tpl.ts"), "utf8");
+    const shellSrc = readFileSync(join(WF_V1, "src/tech-review-loop.zcode.tpl.ts"), "utf8");
     const hookStart = shellSrc.indexOf("// ── O 区观测平台钩子");
     const hookEnd = shellSrc.indexOf("@@STITCH@@");
     assert.ok(hookStart > 0 && hookEnd > hookStart, "壳 O 区锚点定位失败");
@@ -463,7 +467,7 @@ test("obsEnd 配对检查：错名/round 错位给实际打开阶段补 abandone
   const home = tmpHome();
   try {
     const layerSrc = readFileSync(join(WF, "src/observability.shared.ts"), "utf8");
-    const shellSrc = readFileSync(join(WF, "src/tech-review-loop.zcode.tpl.ts"), "utf8");
+    const shellSrc = readFileSync(join(WF_V1, "src/tech-review-loop.zcode.tpl.ts"), "utf8");
     const hookStart = shellSrc.indexOf("// ── O 区观测平台钩子");
     const hookEnd = shellSrc.indexOf("@@STITCH@@");
     const code = transpile(`${shellSrc.slice(hookStart, hookEnd)}\n${layerSrc}`);
@@ -632,7 +636,7 @@ test("构建器：全量 --check 不漏检（全部 workflow 接入观测且三�
   // 在三个落点（仓内双平台 + ~/.zcode/workflows saved 副本）全部一致
   const r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
   assert.equal(r.status, 0, `全量 --check 应全绿：\n${r.stdout}\n${r.stderr}`);
-  for (const name of ["tech-review-loop", "wave-executor", "dev-consistency-loop", "design-code-sync-loop", "design-code-sync-v2", "contract-design", "candidate-build", "independent-assurance"]) {
+  for (const name of ["design-code-sync-loop", "design-code-sync-v2", "tech-review-loop-dev", "wave-executor-dev", "dev-consistency-loop-dev", "tech-review-loop-v4", "wave-executor-v4", "tech-review-loop-v5", "wave-executor-v5", "assurance-repair-loop-v5"]) {
     assert.ok(r.stdout.includes(name), `全量 --check 输出须覆盖 ${name}（不得漏检）`);
     assert.ok(r.stdout.includes(`${name}.dwf.ts（一致）`), `${name} 产物应一致：\n${r.stdout}\n${r.stderr}`);
   }
@@ -644,7 +648,7 @@ test("构建器：--only 未知名报错 exit 2；--only 全部 workflow 构建�
   let r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "no-such"], { encoding: "utf8" });
   assert.equal(r.status, 2);
   assert.ok(r.stderr.includes("未知 workflow 名"), r.stderr);
-  r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "tech-review-loop,wave-executor,dev-consistency-loop,design-code-sync-loop,design-code-sync-v2,contract-design,candidate-build,independent-assurance"], { encoding: "utf8" });
+  r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "design-code-sync-loop,design-code-sync-v2,tech-review-loop-dev,wave-executor-dev,dev-consistency-loop-dev,tech-review-loop-v4,wave-executor-v4,tech-review-loop-v5,wave-executor-v5,assurance-repair-loop-v5"], { encoding: "utf8" });
   assert.equal(r.status, 0, `--only 构建应绿：\n${r.stdout}\n${r.stderr}`);
   assert.ok(r.stdout.includes("--only 生效"), r.stdout);
   assert.ok(r.stdout.includes("观测契约"), "构建应输出观测契约核对结果");
@@ -732,6 +736,7 @@ test("D5 zcode：全清 converged 路径——setup/review 自然 end（无 outc
       { ...syncBaseArgs(s), ...obsArgs("t-d5", "e-conv", { sampleType: "selftest" }) },
       syncAgentStub(convergeStubMap(s)),
       "design-code-sync-loop",
+      WF,
     );
     assert.equal(result.terminated, "converged");
     assert.ok(result.message.includes("终态同步收敛"), result.message);
@@ -766,6 +771,7 @@ test("D5 zcode：setup-failure（必读模板缺失）早退补终态——4 行
       { ...syncBaseArgs(s), reviewerTemplate: join(home, "no-such-template.md"), ...obsArgs("t-d5", "e-sf") },
       undefined,
       "design-code-sync-loop",
+      WF,
     );
     assert.equal(result.terminated, "setup-failure");
     assert.ok(result.message.includes("必读文件缺失"), result.message);
@@ -801,6 +807,7 @@ test("D5 zcode：planner 调用失败——setup 保持打开由终态补记（o
       { ...syncBaseArgs(s), ...obsArgs("t-d5", "e-pf") },
       agent,
       "design-code-sync-loop",
+      WF,
     );
     assert.equal(result.terminated, "planner-failure");
     const lines = readJsonl(home, "t-d5", "e-pf");
@@ -856,6 +863,7 @@ test("D5 zcode：must-fix 修复轮（maxRounds=1）——fix 自然 end + 轮�
       { ...syncBaseArgs(s), maxRounds: 1, ...obsArgs("t-d5", "e-fix") },
       agent,
       "design-code-sync-loop",
+      WF,
     );
     assert.equal(result.terminated, "stuck");
     const lines = readJsonl(home, "t-d5", "e-fix");
@@ -888,6 +896,7 @@ test("D5 zcode：不传观测参数——业务照常 converged 且无观测文�
       syncBaseArgs(s),
       syncAgentStub(convergeStubMap(s)),
       "design-code-sync-loop",
+      WF,
     );
     assert.equal(result.terminated, "converged");
     assert.ok(!existsSync(join(home, ".agents/skill-data/workflow-observability")), "不应创建观测根目录");
@@ -908,6 +917,7 @@ test("D5 pi：converged 事件序列与 zcode 对拍一致（除 timestamp）", 
       { ...syncBaseArgs(s), ...obsArgs("t-d5", "e-pi") },
       syncAgentStub(convergeStubMap(s)),
       "design-code-sync-loop",
+      WF,
     );
     assert.equal(result.terminated, "converged");
     const zcHome = tmpHome();
@@ -918,6 +928,7 @@ test("D5 pi：converged 事件序列与 zcode 对拍一致（除 timestamp）", 
         { ...syncBaseArgs(zs), ...obsArgs("t-d5", "e-pi") },
         syncAgentStub(convergeStubMap(zs)),
         "design-code-sync-loop",
+        WF,
       );
       const piLines = readJsonl(home, "t-d5", "e-pi").map(({ timestamp, ...rest }) => rest);
       const zcLines = readJsonl(zcHome, "t-d5", "e-pi").map(({ timestamp, ...rest }) => rest);
@@ -1459,23 +1470,23 @@ test("五项寻址登记与代码常量一致（skill-data-addressing.md §2 con
 
 // ── 10. delivery-v1 三 workflow（DESIGN / BUILD / ASSURE）双平台真实产物 ──
 //
-// 源文件先于产物落盘是常态（workflow 实现者写 src/，主会话统一构建产物）——产物未生成
-// 或内嵌 SKILL_VERSION 落后于 SKILL.md frontmatter 时本节跳过并说明原因，构建后
-// （node scripts/build-workflows.mjs）自动启用；跳过不是静默的，node --test 会在
-// 输出中逐条打印 skip 原因。
+// delivery-v1 技能与产物已归档（archived/delivery-v1/、archived/workflows-v1/），本节
+// 以归档产物为载体测三段 workflow 的通用观测行为（产物字节未变，仅路径迁移；归档产物
+// 不再由构建器重建）。产物或 SKILL.md 缺失时本节跳过并说明原因；跳过不是静默的，
+// node --test 会在输出中逐条打印 skip 原因。
 const DELIVERY_WFS = ["contract-design", "candidate-build", "independent-assurance"];
 const DELIVERY_SKILL_VERSION =
-  readFileSync(join(ROOT, "skills/self/dev-workflow/delivery-v1/SKILL.md"), "utf8").match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m)?.[1] ?? null;
+  readFileSync(join(ROOT, "archived/delivery-v1/SKILL.md"), "utf8").match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m)?.[1] ?? null;
 const DELIVERY_PRODUCTS_READY = DELIVERY_SKILL_VERSION !== null && DELIVERY_WFS.every((n) => {
-  for (const p of [join(WF, `${n}.dwf.ts`), join(WF, "pi", `${n}.js`)]) {
+  for (const p of [join(WF_V1, `${n}.dwf.ts`), join(WF_V1, "pi", `${n}.js`)]) {
     if (!existsSync(p)) return false;
     if (!readFileSync(p, "utf8").includes(`const SKILL_VERSION = "${DELIVERY_SKILL_VERSION}";`)) return false;
   }
   return true;
 });
 const DELIVERY_SKIP_REASON =
-  `delivery-v1 双平台产物未生成或内嵌 SKILL_VERSION 落后于 SKILL.md frontmatter（当前 ${DELIVERY_SKILL_VERSION ?? "无版本"}）` +
-  "——主会话跑 node scripts/build-workflows.mjs 后本节用例启用";
+  `delivery-v1 归档产物缺失或内嵌 SKILL_VERSION 与归档 SKILL.md frontmatter 不一致（当前 ${DELIVERY_SKILL_VERSION ?? "无版本"}）` +
+  "——本节用例以归档产物为载体，产物受损时跳过";
 
 /** 事件写入凭据桩（模拟 delivery-gate init 输出的角色私钥：builderKey 只进 candidate-build、assuranceKey 只进 independent-assurance） */
 const DELIVERY_BUILDER_KEY = "-----BEGIN PRIVATE KEY-----\nStubBuilderKeyForTests\n-----END PRIVATE KEY-----\n";

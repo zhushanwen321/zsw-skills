@@ -1,141 +1,4 @@
 {
- "skills/self/dev-workflow/workflows/src/dev-consistency-loop.shared.ts": [
-  [
-   37,
-   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
-   "enum-check"
-  ],
-  [
-   191,
-   "\"var SHELL_QUOTE = function (s) { return /^[A-Za-z0-9_\\\\/:.,@%^+=-]+$/.test(s) ? s : SQ + s.split(SQ).join(SQ + '\\\\\\\\' + SQ + SQ) + SQ; };\",",
-   "format-validation"
-  ],
-  [
-   200,
-   "\"    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-z]*c/i.test(args[fai])) { fci = fai; break; } }\",",
-   "format-validation"
-  ],
-  [
-   214,
-   "\"    if (STUB_RE.test(cc) || (ci > args.length && STUB_HEAD_RE.test(cc)) || NOOP_RE.test(cc)) return label + ' 是恒绿形态命令（' + full + '）——不构成真实测试证据（恢复：检查 testPlan.f",
-   "format-validation"
-  ],
-  [
-   220,
-   "\"if (ALLOWED.indexOf(fsuite.program) < 0) die('testPlan.fullSuite.program 不在白名单 ' + ALLOWED.join('/') + ': ' + fsuite.program);\",",
-   "enum-check"
-  ],
-  [
-   229,
-   "\"    if (ALLOWED.indexOf(at.command.program) < 0) die('testPlan.artifacts[' + ai + '].command.program 不在白名单: ' + at.command.program);\",",
-   "enum-check"
-  ],
-  [
-   236,
-   "\"  if (ALLOWED.indexOf(ep.testPlan.incremental.program) < 0) die('testPlan.incremental.program 不在白名单: ' + ep.testPlan.incremental.program);\",",
-   "enum-check"
-  ],
-  [
-   241,
-   "\"if (!/^[0-9a-f]{7,40}$/i.test(bl)) die('baseline 非 git hash 形态: ' + bl);\",",
-   "protocol-parse"
-  ],
-  [
-   254,
-   "\"var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);\",",
-   "path-set"
-  ],
-  [
-   262,
-   "\"    var m = line.match(/^(\\\\d+|-)\\\\s+(\\\\d+|-)\\\\s+(.+)$/);\",",
-   "protocol-parse"
-  ],
-  [
-   352,
-   "\"  var idx = p.indexOf(' -> ');\",",
-   "protocol-parse"
-  ],
-  [
-   357,
-   "\"var untracked = entries.filter(function (e) { return e.code.indexOf('?') >= 0; }).map(function (e) { return e.path; });\",",
-   "protocol-parse"
-  ],
-  [
-   358,
-   "\"var foreign = changed.filter(function (f) { return pool.indexOf(f) < 0; });\",",
-   "enum-check"
-  ],
-  [
-   359,
-   "\"var foreignUntracked = foreign.filter(function (f) { return untracked.indexOf(f) >= 0; });\",",
-   "enum-check"
-  ],
-  [
-   381,
-   "\"      if (m.indexOf('index.lock') >= 0 && i < 6) { sleep(200 + i * 300); continue; }\",",
-   "protocol-parse"
-  ],
-  [
-   454,
-   "\"  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }\",",
-   "protocol-parse"
-  ],
-  [
-   458,
-   "\"    if (BYPASS_RE[j][0].test(content)) { hits.push({ file: curFile, pattern: BYPASS_RE[j][1], line: content.trim().slice(0, 160) }); break; }\",",
-   "format-validation"
-  ],
-  [
-   540,
-   "if (p.startsWith(\"./\")) p = p.slice(2);",
-   "path-set"
-  ],
-  [
-   541,
-   "if (p.startsWith(projectRoot + \"/\")) p = p.slice(projectRoot.length + 1);",
-   "path-set"
-  ],
-  [
-   1042,
-   "for (const p of parts) if (p.files.includes(filePath)) return p.name;",
-   "path-set"
-  ],
-  [
-   1186,
-   "if (GREP_CHECK_STUB_RE.test(cmd)) {",
-   "format-validation"
-  ],
-  [
-   1200,
-   "const impure = (f[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));",
-   "format-validation"
-  ],
-  [
-   1408,
-   "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))",
-   "format-validation"
-  ],
-  [
-   1902,
-   "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));",
-   "enum-check"
-  ],
-  [
-   1986,
-   "f === \".tmp\" || f.startsWith(\".tmp/\") || f === \".pi\" || f.startsWith(\".pi/workflows/\");",
-   "path-set"
-  ],
-  [
-   1993,
-   "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),",
-   "enum-check"
-  ],
-  [
-   2425,
-   "\"var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.sp",
-   "protocol-parse"
-  ]
- ],
  "skills/self/dev-workflow/workflows/src/design-code-sync-loop.shared.ts": [
   [
    130,
@@ -378,284 +241,1676 @@
    "enum-check"
   ]
  ],
- "skills/self/dev-workflow/workflows/src/wave-executor.shared.ts": [
+ "skills/self/dev-workflow/workflows/src/design-code-sync-v2.shared.ts": [
+  [
+   203,
+   "\"const getEntry=(d,p)=>{let cur=d;for(const seg of p.split('.')){const m=seg.match(/^([^\\\\[]+)((?:\\\\[\\\\d+\\\\])*)$/);if(!m)return undefined;if(cur===null||cur===u",
+   "unclassified"
+  ],
+  [
+   569,
+   "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${homeDir}/${p.slice(2)}` : p);",
+   "unclassified"
+  ],
+  [
+   960,
+   "const rel = name.startsWith(\"pkg:\") ? name.slice(4) : name;",
+   "unclassified"
+  ],
+  [
+   961,
+   "const abs = name.startsWith(\"pkg:\") ? `${inputs.designPkg}/${rel}` : `${inputs.projectRoot}/${rel}`;",
+   "unclassified"
+  ],
+  [
+   987,
+   "const m = o.targetSelector.startsWith(\"path:\") ? o.targetSelector.slice(5) : o.targetSelector;",
+   "unclassified"
+  ],
+  [
+   1157,
+   "absPath: name.startsWith(\"pkg:\") ? `${inputs.designPkg}/${name.slice(4)}` : `${inputs.projectRoot}/${name}`,",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/tech-review-loop-dev.shared.ts": [
+  [
+   141,
+   "if (!p.endsWith(\".rendered.md\")) return p;",
+   "unclassified"
+  ],
+  [
+   151,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
+   "unclassified"
+  ],
+  [
+   157,
+   "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");",
+   "unclassified"
+  ],
+  [
+   512,
+   "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${home}/${p.slice(2)}` : p);",
+   "unclassified"
+  ],
+  [
+   602,
+   "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +",
+   "unclassified"
+  ],
+  [
+   603,
+   "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +",
+   "unclassified"
+  ],
+  [
+   607,
+   "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;",
+   "unclassified"
+  ],
+  [
+   708,
+   ".filter((l) => l.startsWith(\"[\"));",
+   "unclassified"
+  ],
+  [
+   1358,
+   ".filter((l) => l.startsWith(\"[\"));",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/wave-executor-dev.shared.ts": [
   [
    31,
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
-   "enum-check"
+   "unclassified"
   ],
   [
    68,
    "return SHELL_SAFE_ARG_RE.test(s) ? s : \"'\" + s.split(\"'\").join(\"'\\\\''\") + \"'\";",
-   "format-validation"
+   "unclassified"
   ],
   [
    76,
    "const flagIdx = args.findIndex((a) => /^-[a-z]*c/i.test(a));",
-   "format-validation"
+   "unclassified"
   ],
   [
    90,
    "if (NOOP_CMD_STUB_RE.test(c) || (i > args.length && NOOP_CMD_STUB_HEAD_RE.test(c)) || NOOP_CMD_ECHO_RE.test(c)) {",
-   "format-validation"
+   "unclassified"
   ],
   [
    246,
    "\"if(m.indexOf('index.lock')>=0&&i<10){sleep(1000+i*1000);continue}throw e}}};\" +",
-   "protocol-parse"
+   "unclassified"
   ],
   [
    301,
    "\"try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',claimAny=process.argv[5]==='claim",
-   "protocol-parse"
+   "unclassified"
   ],
   [
    317,
    "\"const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));\" +",
-   "protocol-parse"
+   "unclassified"
   ],
   [
    320,
    "\"if(hit){const h=hit.slice(0,hit.indexOf('\\\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（'+(claimAny?'前缀+词边界认领（stat",
-   "protocol-parse"
+   "unclassified"
   ],
   [
    367,
    "if (rel.startsWith(\"/\")) return rel;",
-   "path-set"
+   "unclassified"
   ],
   [
    368,
    "const trimmed = base.endsWith(\"/\") ? base.slice(0, -1) : base;",
-   "path-set"
+   "unclassified"
   ],
   [
    415,
    "const prefix = t.endsWith(\"/\") ? t : `${t}/`;",
-   "path-set"
+   "unclassified"
   ],
   [
    416,
    "if (file === t || file.startsWith(prefix)) return true;",
-   "path-set"
+   "unclassified"
   ],
   [
    430,
    "const abs = entries.filter((t) => t.startsWith(\"/\"));",
-   "path-set"
+   "unclassified"
   ],
   [
    434,
    "const mixed = entries.filter((t) => /\\s/.test(t) || /[()（）]/.test(t));",
-   "path-set"
+   "unclassified"
   ],
   [
    449,
    "const arrow = p.indexOf(\" -> \");",
-   "protocol-parse"
+   "unclassified"
   ],
   [
    459,
    "const isTmpArtifact = (f: string): boolean => /^(\\.\\.\\/)*\\.tmp\\//.test(f);",
-   "path-set"
+   "unclassified"
   ],
   [
    535,
    "} else if (workspaceRoot !== null && !workspaceRoot.startsWith(\"/\")) {",
-   "path-set"
+   "unclassified"
   ],
   [
    626,
    "if (!(TEST_WHITELIST as readonly string[]).includes(tc.program)) {",
-   "enum-check"
+   "unclassified"
   ],
   [
    727,
    "if (!commitTemplate.includes(\"{unitId}\") || !commitTemplate.includes(\"{summary}\")) {",
-   "format-validation"
+   "unclassified"
   ],
   [
    1098,
    "if (n.deps.includes(cur) && !seen.has(n.id)) {",
-   "enum-check"
+   "unclassified"
   ],
   [
    1111,
    "const interpreter = node.script.endsWith(\".sh\") ? \"bash\" : \"node\";",
-   "format-validation"
+   "unclassified"
   ],
   [
    1360,
    "node.designRef !== \"\" && !summary.includes(node.designRef) ? `${node.designRef} ${summary}` : summary;",
-   "presentation"
+   "unclassified"
   ],
   [
    1614,
    "if (!failedIds.includes(nid)) errors.push(`item ${it[\"id\"]}：nodeIds 含未知/已 disputed 节点 ${nid}（幻觉 ref）`);",
-   "enum-check"
+   "unclassified"
   ],
   [
    1629,
    "const conflicted = [...covered].filter((id) => fixCovered.has(id) && items.some((it) => it[\"action\"] === \"disputed\" && isStrArr(it[\"nodeIds\"]) && (it[\"nodeIds\"]",
-   "enum-check"
+   "unclassified"
   ],
   [
    1643,
    "const files = items.filter((it) => ids.includes(it[\"id\"] as string)).flatMap((it) => (isStrArr(it[\"files\"]) ? (it[\"files\"] as string[]) : []));",
-   "enum-check"
+   "unclassified"
   ],
   [
    1650,
    "const inter = groupFiles[i].filter((f) => groupFiles[j].includes(f));",
-   "enum-check"
+   "unclassified"
   ],
   [
    1772,
    "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);",
-   "enum-check"
+   "unclassified"
   ],
   [
    1802,
    "fixItems.filter((it) => commitGateFailures.some((cf) => cf.nodeIds.some((nid) => it.nodeIds.includes(nid)))).map((it) => it.id),",
-   "enum-check"
+   "unclassified"
   ],
   [
    1808,
    "const gItems = fixItems.filter((it) => g.itemIds.includes(it.id));",
-   "enum-check"
+   "unclassified"
   ],
   [
    1810,
    "const gNodes = plan.nodes.filter((n) => gItems.some((it) => it.nodeIds.includes(n.id)));",
-   "enum-check"
+   "unclassified"
   ],
   [
    1875,
    "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);",
-   "enum-check"
+   "unclassified"
   ],
   [
    1899,
    "const node = plan.nodes.find((n) => cf.nodeIds.includes(n.id));",
-   "enum-check"
+   "unclassified"
   ],
   [
    1901,
    "const fixFiles = rep.fixes.filter((f) => f.itemId !== \"\" && cf.nodeIds.some((nid) => (fixItems.find((it) => it.id === f.itemId)?.nodeIds.includes(nid) ?? false)",
-   "enum-check"
+   "unclassified"
   ],
   [
    1905,
    "const cfIdx = commitGateFailures.indexOf(cf);",
-   "enum-check"
+   "unclassified"
   ],
   [
    1906,
    "const dcIdx = deferredCommits.findIndex((dc) => cf.nodeIds.includes(dc.id) && dc.message === cf.message);",
-   "enum-check"
+   "unclassified"
   ],
   [
    2051,
    "for (const t of n.territory) if (!list.includes(t)) list.push(t);",
-   "path-set"
+   "unclassified"
   ],
   [
    2447,
    "for (const n of plan.nodes) if (n.kind === \"dev\") for (const t of n.territory) if (!allTerr.includes(t)) allTerr.push(t);",
-   "enum-check"
+   "unclassified"
   ]
  ],
- "skills/self/dev-workflow/workflows/src/tech-review-loop.shared.ts": [
+ "skills/self/dev-workflow/workflows/src/dev-consistency-loop-dev.shared.ts": [
   [
-   137,
-   "if (!p.endsWith(\".rendered.md\")) return p;",
-   "format-validation"
-  ],
-  [
-   147,
+   37,
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
-   "enum-check"
+   "unclassified"
   ],
   [
-   153,
-   "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");",
-   "path-set"
+   191,
+   "\"var SHELL_QUOTE = function (s) { return /^[A-Za-z0-9_\\\\/:.,@%^+=-]+$/.test(s) ? s : SQ + s.split(SQ).join(SQ + '\\\\\\\\' + SQ + SQ) + SQ; };\",",
+   "unclassified"
   ],
   [
-   506,
-   "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${home}/${p.slice(2)}` : p);",
-   "path-set"
+   200,
+   "\"    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-z]*c/i.test(args[fai])) { fci = fai; break; } }\",",
+   "unclassified"
   ],
   [
-   596,
-   "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +",
-   "protocol-parse"
+   214,
+   "\"    if (STUB_RE.test(cc) || (ci > args.length && STUB_HEAD_RE.test(cc)) || NOOP_RE.test(cc)) return label + ' 是恒绿形态命令（' + full + '）——不构成真实测试证据（恢复：检查 testPlan.f",
+   "unclassified"
   ],
   [
-   597,
-   "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +",
-   "protocol-parse"
+   220,
+   "\"if (ALLOWED.indexOf(fsuite.program) < 0) die('testPlan.fullSuite.program 不在白名单 ' + ALLOWED.join('/') + ': ' + fsuite.program);\",",
+   "unclassified"
   ],
   [
-   601,
-   "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;",
-   "format-validation"
+   229,
+   "\"    if (ALLOWED.indexOf(at.command.program) < 0) die('testPlan.artifacts[' + ai + '].command.program 不在白名单: ' + at.command.program);\",",
+   "unclassified"
   ],
   [
-   702,
-   ".filter((l) => l.startsWith(\"[\"));",
-   "protocol-parse"
+   236,
+   "\"  if (ALLOWED.indexOf(ep.testPlan.incremental.program) < 0) die('testPlan.incremental.program 不在白名单: ' + ep.testPlan.incremental.program);\",",
+   "unclassified"
   ],
   [
-   1294,
-   ".filter((l) => l.startsWith(\"[\"));",
-   "protocol-parse"
+   241,
+   "\"if (!/^[0-9a-f]{7,40}$/i.test(bl)) die('baseline 非 git hash 形态: ' + bl);\",",
+   "unclassified"
+  ],
+  [
+   254,
+   "\"var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);\",",
+   "unclassified"
+  ],
+  [
+   262,
+   "\"    var m = line.match(/^(\\\\d+|-)\\\\s+(\\\\d+|-)\\\\s+(.+)$/);\",",
+   "unclassified"
+  ],
+  [
+   352,
+   "\"  var idx = p.indexOf(' -> ');\",",
+   "unclassified"
+  ],
+  [
+   357,
+   "\"var untracked = entries.filter(function (e) { return e.code.indexOf('?') >= 0; }).map(function (e) { return e.path; });\",",
+   "unclassified"
+  ],
+  [
+   358,
+   "\"var foreign = changed.filter(function (f) { return pool.indexOf(f) < 0; });\",",
+   "unclassified"
+  ],
+  [
+   359,
+   "\"var foreignUntracked = foreign.filter(function (f) { return untracked.indexOf(f) >= 0; });\",",
+   "unclassified"
+  ],
+  [
+   381,
+   "\"      if (m.indexOf('index.lock') >= 0 && i < 6) { sleep(200 + i * 300); continue; }\",",
+   "unclassified"
+  ],
+  [
+   454,
+   "\"  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }\",",
+   "unclassified"
+  ],
+  [
+   458,
+   "\"    if (BYPASS_RE[j][0].test(content)) { hits.push({ file: curFile, pattern: BYPASS_RE[j][1], line: content.trim().slice(0, 160) }); break; }\",",
+   "unclassified"
+  ],
+  [
+   540,
+   "if (p.startsWith(\"./\")) p = p.slice(2);",
+   "unclassified"
+  ],
+  [
+   541,
+   "if (p.startsWith(projectRoot + \"/\")) p = p.slice(projectRoot.length + 1);",
+   "unclassified"
+  ],
+  [
+   1042,
+   "for (const p of parts) if (p.files.includes(filePath)) return p.name;",
+   "unclassified"
+  ],
+  [
+   1186,
+   "if (GREP_CHECK_STUB_RE.test(cmd)) {",
+   "unclassified"
+  ],
+  [
+   1200,
+   "const impure = (f[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));",
+   "unclassified"
+  ],
+  [
+   1408,
+   "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))",
+   "unclassified"
+  ],
+  [
+   1902,
+   "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));",
+   "unclassified"
+  ],
+  [
+   1986,
+   "f === \".tmp\" || f.startsWith(\".tmp/\") || f === \".pi\" || f.startsWith(\".pi/workflows/\");",
+   "unclassified"
+  ],
+  [
+   1993,
+   "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),",
+   "unclassified"
+  ],
+  [
+   2425,
+   "\"var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.sp",
+   "unclassified"
   ]
  ],
- "skills/self/dev-workflow/workflows/src/contract-design.shared.ts": [
+ "skills/self/dev-workflow/workflows/src/acceptance-design-dev.shared.ts": [
   [
-   71,
+   79,
    "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
-   "format-validation"
+   "unclassified"
   ],
   [
-   99,
+   107,
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
-   "protocol-parse"
+   "unclassified"
   ]
  ],
- "skills/self/dev-workflow/workflows/src/candidate-build.shared.ts": [
+ "skills/self/dev-workflow/workflows/src/candidate-build-dev.shared.ts": [
   [
-   88,
+   122,
    "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
-   "format-validation"
+   "unclassified"
   ],
   [
-   129,
+   163,
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
-   "protocol-parse"
+   "unclassified"
+  ],
+  [
+   586,
+   "const patchSha256 = patchRes && patchRes.exitCode === 0 && /^[0-9a-f]{64}$/.test(patchRes.stdout.trim())",
+   "unclassified"
   ]
  ],
- "skills/self/dev-workflow/workflows/src/independent-assurance.shared.ts": [
-  [
-   94,
-   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
-   "format-validation"
-  ],
+ "skills/self/dev-workflow/workflows/src/independent-assurance-dev.shared.ts": [
   [
    135,
+   "\"if(!/^[0-9a-f]{40,64}$/.test(head)){process.stderr.write('git HEAD 返回了无法识别的值：'+head);process.exit(1)}\" +",
+   "unclassified"
+  ],
+  [
+   158,
+   "\"const entries=text.split('\\\\n').map(l=>l.trim()).filter(l=>l.length>0&&!l.startsWith('#')).sort();\" +",
+   "unclassified"
+  ],
+  [
+   167,
+   "\"if(entry.includes('..')||pt.isAbsolute(entry)||rel.startsWith('..')){process.stderr.write('内容清单条目越界：'+entry+'（恢复动作：条目必须是项目根内的相对路径）');process.exit(1)}\" +",
+   "unclassified"
+  ],
+  [
+   192,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "unclassified"
+  ],
+  [
+   233,
    "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
-   "protocol-parse"
+   "unclassified"
   ],
   [
-   244,
+   424,
    "return typeof value === \"string\" && value.startsWith(evidenceRoot) && value.length > evidenceRoot.length && !value.split(\"/\").includes(\"..\");",
-   "path-set"
+   "unclassified"
   ],
   [
-   289,
+   481,
+   "if (value.resolvedFindingIds.includes(id)) return `unresolvedFindingIds 与 resolvedFindingIds 不得同时含 ${String(id)}`;",
+   "unclassified"
+  ],
+  [
+   491,
    "if (!value.dimensions.includes(dimension)) return `探索维度未覆盖：${dimension}`;",
-   "enum-check"
+   "unclassified"
+  ],
+  [
+   518,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   527,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   546,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   899,
+   "if (coverage.resolvedFindingIds.includes(fid)) continue;",
+   "unclassified"
+  ],
+  [
+   900,
+   "if (coverage.unresolvedFindingIds.includes(fid)) continue;",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/tech-review-loop-v4.shared.ts": [
+  [
+   141,
+   "if (!p.endsWith(\".rendered.md\")) return p;",
+   "unclassified"
+  ],
+  [
+   151,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
+   "unclassified"
+  ],
+  [
+   157,
+   "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");",
+   "unclassified"
+  ],
+  [
+   519,
+   "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${home}/${p.slice(2)}` : p);",
+   "unclassified"
+  ],
+  [
+   609,
+   "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +",
+   "unclassified"
+  ],
+  [
+   610,
+   "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +",
+   "unclassified"
+  ],
+  [
+   614,
+   "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;",
+   "unclassified"
+  ],
+  [
+   745,
+   ".filter((l) => l.startsWith(\"[\"));",
+   "unclassified"
+  ],
+  [
+   1410,
+   ".filter((l) => l.startsWith(\"[\"));",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/wave-executor-v4.shared.ts": [
+  [
+   31,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
+   "unclassified"
+  ],
+  [
+   68,
+   "return SHELL_SAFE_ARG_RE.test(s) ? s : \"'\" + s.split(\"'\").join(\"'\\\\''\") + \"'\";",
+   "unclassified"
+  ],
+  [
+   76,
+   "const flagIdx = args.findIndex((a) => /^-[a-z]*c/i.test(a));",
+   "unclassified"
+  ],
+  [
+   90,
+   "if (NOOP_CMD_STUB_RE.test(c) || (i > args.length && NOOP_CMD_STUB_HEAD_RE.test(c)) || NOOP_CMD_ECHO_RE.test(c)) {",
+   "unclassified"
+  ],
+  [
+   248,
+   "\"if(m.indexOf('index.lock')>=0&&i<10){sleep(1000+i*1000);continue}throw e}}};\" +",
+   "unclassified"
+  ],
+  [
+   303,
+   "\"try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',claimAny=process.argv[5]==='claim",
+   "unclassified"
+  ],
+  [
+   319,
+   "\"const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));\" +",
+   "unclassified"
+  ],
+  [
+   322,
+   "\"if(hit){const h=hit.slice(0,hit.indexOf('\\\\x1f'));nodes[id]={status:'done',attempts:1,commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（'+(claimAny?'前缀+词边界认领（stat",
+   "unclassified"
+  ],
+  [
+   369,
+   "if (rel.startsWith(\"/\")) return rel;",
+   "unclassified"
+  ],
+  [
+   370,
+   "const trimmed = base.endsWith(\"/\") ? base.slice(0, -1) : base;",
+   "unclassified"
+  ],
+  [
+   417,
+   "const prefix = t.endsWith(\"/\") ? t : `${t}/`;",
+   "unclassified"
+  ],
+  [
+   418,
+   "if (file === t || file.startsWith(prefix)) return true;",
+   "unclassified"
+  ],
+  [
+   432,
+   "const abs = entries.filter((t) => t.startsWith(\"/\"));",
+   "unclassified"
+  ],
+  [
+   436,
+   "const mixed = entries.filter((t) => /\\s/.test(t) || /[()（）]/.test(t));",
+   "unclassified"
+  ],
+  [
+   451,
+   "const arrow = p.indexOf(\" -> \");",
+   "unclassified"
+  ],
+  [
+   461,
+   "const isTmpArtifact = (f: string): boolean => /^(\\.\\.\\/)*\\.tmp\\//.test(f);",
+   "unclassified"
+  ],
+  [
+   537,
+   "} else if (workspaceRoot !== null && !workspaceRoot.startsWith(\"/\")) {",
+   "unclassified"
+  ],
+  [
+   632,
+   "if (!(TEST_WHITELIST as readonly string[]).includes(tc.program)) {",
+   "unclassified"
+  ],
+  [
+   742,
+   "if (!commitTemplate.includes(\"{unitId}\") || !commitTemplate.includes(\"{summary}\")) {",
+   "unclassified"
+  ],
+  [
+   1114,
+   "if (n.deps.includes(cur) && !seen.has(n.id)) {",
+   "unclassified"
+  ],
+  [
+   1127,
+   "const interpreter = node.script.endsWith(\".sh\") ? \"bash\" : \"node\";",
+   "unclassified"
+  ],
+  [
+   1384,
+   "node.designRef !== \"\" && !summary.includes(node.designRef) ? `${node.designRef} ${summary}` : summary;",
+   "unclassified"
+  ],
+  [
+   1787,
+   "if (!failedIds.includes(nid)) errors.push(`item ${it[\"id\"]}：nodeIds 含未知/已 disputed 节点 ${nid}（幻觉 ref）`);",
+   "unclassified"
+  ],
+  [
+   1802,
+   "const conflicted = [...covered].filter((id) => fixCovered.has(id) && items.some((it) => it[\"action\"] === \"disputed\" && isStrArr(it[\"nodeIds\"]) && (it[\"nodeIds\"]",
+   "unclassified"
+  ],
+  [
+   1816,
+   "const files = items.filter((it) => ids.includes(it[\"id\"] as string)).flatMap((it) => (isStrArr(it[\"files\"]) ? (it[\"files\"] as string[]) : []));",
+   "unclassified"
+  ],
+  [
+   1823,
+   "const inter = groupFiles[i].filter((f) => groupFiles[j].includes(f));",
+   "unclassified"
+  ],
+  [
+   1953,
+   "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);",
+   "unclassified"
+  ],
+  [
+   1983,
+   "fixItems.filter((it) => commitGateFailures.some((cf) => cf.nodeIds.some((nid) => it.nodeIds.includes(nid)))).map((it) => it.id),",
+   "unclassified"
+  ],
+  [
+   1989,
+   "const gItems = fixItems.filter((it) => g.itemIds.includes(it.id));",
+   "unclassified"
+  ],
+  [
+   1991,
+   "const gNodes = plan.nodes.filter((n) => gItems.some((it) => it.nodeIds.includes(n.id)));",
+   "unclassified"
+  ],
+  [
+   2064,
+   "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);",
+   "unclassified"
+  ],
+  [
+   2088,
+   "const node = plan.nodes.find((n) => cf.nodeIds.includes(n.id));",
+   "unclassified"
+  ],
+  [
+   2090,
+   "const fixFiles = rep.fixes.filter((f) => f.itemId !== \"\" && cf.nodeIds.some((nid) => (fixItems.find((it) => it.id === f.itemId)?.nodeIds.includes(nid) ?? false)",
+   "unclassified"
+  ],
+  [
+   2094,
+   "const cfIdx = commitGateFailures.indexOf(cf);",
+   "unclassified"
+  ],
+  [
+   2095,
+   "const dcIdx = deferredCommits.findIndex((dc) => cf.nodeIds.includes(dc.id) && dc.message === cf.message);",
+   "unclassified"
+  ],
+  [
+   2271,
+   "for (const t of n.territory) if (!list.includes(t)) list.push(t);",
+   "unclassified"
+  ],
+  [
+   2667,
+   "for (const n of plan.nodes) if (n.kind === \"dev\") for (const t of n.territory) if (!allTerr.includes(t)) allTerr.push(t);",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/dev-consistency-loop-v4.shared.ts": [
+  [
+   37,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
+   "unclassified"
+  ],
+  [
+   191,
+   "\"var SHELL_QUOTE = function (s) { return /^[A-Za-z0-9_\\\\/:.,@%^+=-]+$/.test(s) ? s : SQ + s.split(SQ).join(SQ + '\\\\\\\\' + SQ + SQ) + SQ; };\",",
+   "unclassified"
+  ],
+  [
+   200,
+   "\"    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-z]*c/i.test(args[fai])) { fci = fai; break; } }\",",
+   "unclassified"
+  ],
+  [
+   214,
+   "\"    if (STUB_RE.test(cc) || (ci > args.length && STUB_HEAD_RE.test(cc)) || NOOP_RE.test(cc)) return label + ' 是恒绿形态命令（' + full + '）——不构成真实测试证据（恢复：检查 testPlan.f",
+   "unclassified"
+  ],
+  [
+   220,
+   "\"if (ALLOWED.indexOf(fsuite.program) < 0) die('testPlan.fullSuite.program 不在白名单 ' + ALLOWED.join('/') + ': ' + fsuite.program);\",",
+   "unclassified"
+  ],
+  [
+   229,
+   "\"    if (ALLOWED.indexOf(at.command.program) < 0) die('testPlan.artifacts[' + ai + '].command.program 不在白名单: ' + at.command.program);\",",
+   "unclassified"
+  ],
+  [
+   236,
+   "\"  if (ALLOWED.indexOf(ep.testPlan.incremental.program) < 0) die('testPlan.incremental.program 不在白名单: ' + ep.testPlan.incremental.program);\",",
+   "unclassified"
+  ],
+  [
+   241,
+   "\"if (!/^[0-9a-f]{7,40}$/i.test(bl)) die('baseline 非 git hash 形态: ' + bl);\",",
+   "unclassified"
+  ],
+  [
+   271,
+   "\"var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);\",",
+   "unclassified"
+  ],
+  [
+   279,
+   "\"    var m = line.match(/^(\\\\d+|-)\\\\s+(\\\\d+|-)\\\\s+(.+)$/);\",",
+   "unclassified"
+  ],
+  [
+   369,
+   "\"  var idx = p.indexOf(' -> ');\",",
+   "unclassified"
+  ],
+  [
+   374,
+   "\"var untracked = entries.filter(function (e) { return e.code.indexOf('?') >= 0; }).map(function (e) { return e.path; });\",",
+   "unclassified"
+  ],
+  [
+   375,
+   "\"var foreign = changed.filter(function (f) { return pool.indexOf(f) < 0; });\",",
+   "unclassified"
+  ],
+  [
+   376,
+   "\"var foreignUntracked = foreign.filter(function (f) { return untracked.indexOf(f) >= 0; });\",",
+   "unclassified"
+  ],
+  [
+   398,
+   "\"      if (m.indexOf('index.lock') >= 0 && i < 6) { sleep(200 + i * 300); continue; }\",",
+   "unclassified"
+  ],
+  [
+   471,
+   "\"  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }\",",
+   "unclassified"
+  ],
+  [
+   475,
+   "\"    if (BYPASS_RE[j][0].test(content)) { hits.push({ file: curFile, pattern: BYPASS_RE[j][1], line: content.trim().slice(0, 160) }); break; }\",",
+   "unclassified"
+  ],
+  [
+   557,
+   "if (p.startsWith(\"./\")) p = p.slice(2);",
+   "unclassified"
+  ],
+  [
+   558,
+   "if (p.startsWith(projectRoot + \"/\")) p = p.slice(projectRoot.length + 1);",
+   "unclassified"
+  ],
+  [
+   1059,
+   "for (const p of parts) if (p.files.includes(filePath)) return p.name;",
+   "unclassified"
+  ],
+  [
+   1214,
+   "if (GREP_CHECK_STUB_RE.test(cmd)) {",
+   "unclassified"
+  ],
+  [
+   1228,
+   "const impure = (f[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));",
+   "unclassified"
+  ],
+  [
+   1436,
+   "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))",
+   "unclassified"
+  ],
+  [
+   1930,
+   "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));",
+   "unclassified"
+  ],
+  [
+   2014,
+   "f === \".tmp\" || f.startsWith(\".tmp/\") || f === \".pi\" || f.startsWith(\".pi/workflows/\");",
+   "unclassified"
+  ],
+  [
+   2021,
+   "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),",
+   "unclassified"
+  ],
+  [
+   2453,
+   "\"var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.sp",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/acceptance-design-v4.shared.ts": [
+  [
+   79,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "unclassified"
+  ],
+  [
+   107,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/candidate-build-v4.shared.ts": [
+  [
+   139,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "unclassified"
+  ],
+  [
+   180,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
+   "unclassified"
+  ],
+  [
+   388,
+   "if (finding.origin !== undefined && ![\"acceptance\", \"design\", \"planning\", \"implementation\", \"testing\", \"evidence\", \"environment\"].includes(finding.origin)) retu",
+   "unclassified"
+  ],
+  [
+   442,
+   "if (!res.stderr.includes(\"EEXIST\") && !res.stdout.includes(\"EEXIST\")) return \"\";",
+   "unclassified"
+  ],
+  [
+   451,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   642,
+   "const patchSha256 = patchRes && patchRes.exitCode === 0 && /^[0-9a-f]{64}$/.test(patchRes.stdout.trim())",
+   "unclassified"
+  ],
+  [
+   676,
+   "for (const dimension of dimensions) if (!value.dimensions.includes(dimension)) return `缺探索维度 ${dimension}`;",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/independent-assurance-v4.shared.ts": [
+  [
+   149,
+   "\"if(!/^[0-9a-f]{40,64}$/.test(head)){process.stderr.write('git HEAD 返回了无法识别的值：'+head);process.exit(1)}\" +",
+   "unclassified"
+  ],
+  [
+   172,
+   "\"const entries=text.split('\\\\n').map(l=>l.trim()).filter(l=>l.length>0&&!l.startsWith('#')).sort();\" +",
+   "unclassified"
+  ],
+  [
+   181,
+   "\"if(entry.includes('..')||pt.isAbsolute(entry)||rel.startsWith('..')){process.stderr.write('内容清单条目越界：'+entry+'（恢复动作：条目必须是项目根内的相对路径）');process.exit(1)}\" +",
+   "unclassified"
+  ],
+  [
+   206,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "unclassified"
+  ],
+  [
+   247,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
+   "unclassified"
+  ],
+  [
+   358,
+   "if (![\"full\", \"recheck\", \"explore-only\"].includes(mode)) {",
+   "unclassified"
+  ],
+  [
+   449,
+   "return raw === \"\" ? \"\" : raw.startsWith(\"/\") ? raw : `${taskDir}/${raw}`;",
+   "unclassified"
+  ],
+  [
+   483,
+   ".filter((e) => priorFullArtifactCheck.stdout.trim().split(\" | \").includes(artifactAbs(e.artifact)))",
+   "unclassified"
+  ],
+  [
+   545,
+   "return typeof value === \"string\" && value.startsWith(evidenceRoot) && value.length > evidenceRoot.length && !value.split(\"/\").includes(\"..\");",
+   "unclassified"
+  ],
+  [
+   566,
+   "if (finding.origin !== undefined && ![\"acceptance\", \"design\", \"planning\", \"implementation\", \"testing\", \"evidence\", \"environment\"].includes(finding.origin)) {",
+   "unclassified"
+  ],
+  [
+   630,
+   "if (value.resolvedFindingIds.includes(id)) return `unresolvedFindingIds 与 resolvedFindingIds 不得同时含 ${String(id)}`;",
+   "unclassified"
+  ],
+  [
+   640,
+   "if (!value.dimensions.includes(dimension)) return `探索维度未覆盖：${dimension}`;",
+   "unclassified"
+  ],
+  [
+   667,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   676,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   695,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/assurance-repair-loop-v4.shared.ts": [
+  [
+   167,
+   "\"if(!/^[0-9a-f]{40,64}$/.test(head)){process.stderr.write('git HEAD 返回了无法识别的值：'+head);process.exit(1)}\" +",
+   "unclassified"
+  ],
+  [
+   190,
+   "\"const entries=text.split('\\\\n').map(l=>l.trim()).filter(l=>l.length>0&&!l.startsWith('#')).sort();\" +",
+   "unclassified"
+  ],
+  [
+   199,
+   "\"if(entry.includes('..')||pt.isAbsolute(entry)||rel.startsWith('..')){process.stderr.write('内容清单条目越界：'+entry+'（恢复动作：条目必须是项目根内的相对路径）');process.exit(1)}\" +",
+   "unclassified"
+  ],
+  [
+   224,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "unclassified"
+  ],
+  [
+   265,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
+   "unclassified"
+  ],
+  [
+   454,
+   "return raw === \"\" ? \"\" : raw.startsWith(\"/\") ? raw : `${taskDir}/${raw}`;",
+   "unclassified"
+  ],
+  [
+   488,
+   ".filter((e) => priorFullArtifactCheck.stdout.trim().split(\" | \").includes(String(e.artifact)))",
+   "unclassified"
+  ],
+  [
+   541,
+   "return typeof value === \"string\" && value.startsWith(evidenceRoot) && value.length > evidenceRoot.length && !value.split(\"/\").includes(\"..\");",
+   "unclassified"
+  ],
+  [
+   562,
+   "if (finding.origin !== undefined && ![\"acceptance\", \"design\", \"planning\", \"implementation\", \"testing\", \"evidence\", \"environment\"].includes(finding.origin)) {",
+   "unclassified"
+  ],
+  [
+   626,
+   "if (value.resolvedFindingIds.includes(id)) return `unresolvedFindingIds 与 resolvedFindingIds 不得同时含 ${String(id)}`;",
+   "unclassified"
+  ],
+  [
+   653,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   662,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   681,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   877,
+   "if (!value.affectedAssertionIds.includes(id)) return `修复计划的受影响断言漏掉机器推导的 ${id}`;",
+   "unclassified"
+  ],
+  [
+   920,
+   "\"const bad=files.filter(f=>typeof f!=='string'||f.length===0||f.startsWith('/')||f.split('/').includes('..'));if(bad.length){console.error('非法文件路径 '+bad.join(',",
+   "unclassified"
+  ],
+  [
+   1018,
+   "if (!value.resolvedFindingIds.includes(id) && !value.unresolvedFindingIds.includes(id)) return `复核漏报旧 finding ${id}`;",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/tech-review-loop-v5.shared.ts": [
+  [
+   141,
+   "if (!p.endsWith(\".rendered.md\")) return p;",
+   "unclassified"
+  ],
+  [
+   151,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
+   "unclassified"
+  ],
+  [
+   157,
+   "const isAbs = (v: unknown): v is string => typeof v === \"string\" && v.trim().startsWith(\"/\");",
+   "unclassified"
+  ],
+  [
+   519,
+   "const expandTilde = (p: string): string => (p.startsWith(\"~/\") ? `${home}/${p.slice(2)}` : p);",
+   "unclassified"
+  ],
+  [
+   609,
+   "\"for(var n of names){var m=/^round-\\\\d+\\\\.attempt(\\\\d+)$/.exec(n);if(m){var v=Number(m[1]);if(v>mx)mx=v}}\" +",
+   "unclassified"
+  ],
+  [
+   610,
+   "\"if(mx===0&&(names.some(n=>/^round-\\\\d+$/.test(n))||names.indexOf('final.json')>=0))mx=1;\" +",
+   "unclassified"
+  ],
+  [
+   614,
+   "attemptProbe.exitCode === 0 && /^\\d+$/.test(attemptProbe.stdout.trim()) ? Number(attemptProbe.stdout.trim()) : 0;",
+   "unclassified"
+  ],
+  [
+   745,
+   ".filter((l) => l.startsWith(\"[\"));",
+   "unclassified"
+  ],
+  [
+   1421,
+   ".filter((l) => l.startsWith(\"[\"));",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/wave-executor-v5.shared.ts": [
+  [
+   31,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
+   "unclassified"
+  ],
+  [
+   68,
+   "return SHELL_SAFE_ARG_RE.test(s) ? s : \"'\" + s.split(\"'\").join(\"'\\\\''\") + \"'\";",
+   "unclassified"
+  ],
+  [
+   76,
+   "const flagIdx = args.findIndex((a) => /^-[a-z]*c/i.test(a));",
+   "unclassified"
+  ],
+  [
+   90,
+   "if (NOOP_CMD_STUB_RE.test(c) || (i > args.length && NOOP_CMD_STUB_HEAD_RE.test(c)) || NOOP_CMD_ECHO_RE.test(c)) {",
+   "unclassified"
+  ],
+  [
+   248,
+   "\"if(m.indexOf('index.lock')>=0&&i<10){sleep(1000+i*1000);continue}throw e}}};\" +",
+   "unclassified"
+  ],
+  [
+   303,
+   "\"try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',claimAny=process.argv[5]==='claim",
+   "unclassified"
+  ],
+  [
+   319,
+   "\"const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));\" +",
+   "unclassified"
+  ],
+  [
+   322,
+   "\"if(hit){const h=hit.slice(0,hit.indexOf('\\\\x1f'));nodes[id]={status:'done',attempts:Math.max(1,((e.attempts||0)+1)),commit:h,evidence:'恢复对账：git log 反查命中本单元 com",
+   "unclassified"
+  ],
+  [
+   369,
+   "if (rel.startsWith(\"/\")) return rel;",
+   "unclassified"
+  ],
+  [
+   370,
+   "const trimmed = base.endsWith(\"/\") ? base.slice(0, -1) : base;",
+   "unclassified"
+  ],
+  [
+   417,
+   "const prefix = t.endsWith(\"/\") ? t : `${t}/`;",
+   "unclassified"
+  ],
+  [
+   418,
+   "if (file === t || file.startsWith(prefix)) return true;",
+   "unclassified"
+  ],
+  [
+   432,
+   "const abs = entries.filter((t) => t.startsWith(\"/\"));",
+   "unclassified"
+  ],
+  [
+   436,
+   "const mixed = entries.filter((t) => /\\s/.test(t) || /[()（）]/.test(t));",
+   "unclassified"
+  ],
+  [
+   451,
+   "const arrow = p.indexOf(\" -> \");",
+   "unclassified"
+  ],
+  [
+   461,
+   "const isTmpArtifact = (f: string): boolean => /^(\\.\\.\\/)*\\.tmp\\//.test(f);",
+   "unclassified"
+  ],
+  [
+   537,
+   "} else if (workspaceRoot !== null && !workspaceRoot.startsWith(\"/\")) {",
+   "unclassified"
+  ],
+  [
+   632,
+   "if (!(TEST_WHITELIST as readonly string[]).includes(tc.program)) {",
+   "unclassified"
+  ],
+  [
+   742,
+   "if (!commitTemplate.includes(\"{unitId}\") || !commitTemplate.includes(\"{summary}\")) {",
+   "unclassified"
+  ],
+  [
+   977,
+   "const row = NODE_TRANSITIONS.find((t) => t.event === eventName && t.from.includes(fromStatus));",
+   "unclassified"
+  ],
+  [
+   979,
+   "const legal = NODE_TRANSITIONS.filter((t) => t.from.includes(fromStatus)).map((t) => t.event);",
+   "unclassified"
+  ],
+  [
+   1188,
+   "if (n.deps.includes(cur) && !seen.has(n.id)) {",
+   "unclassified"
+  ],
+  [
+   1201,
+   "const interpreter = node.script.endsWith(\".sh\") ? \"bash\" : \"node\";",
+   "unclassified"
+  ],
+  [
+   1458,
+   "node.designRef !== \"\" && !summary.includes(node.designRef) ? `${node.designRef} ${summary}` : summary;",
+   "unclassified"
+  ],
+  [
+   1861,
+   "if (!failedIds.includes(nid)) errors.push(`item ${it[\"id\"]}：nodeIds 含未知/已 disputed 节点 ${nid}（幻觉 ref）`);",
+   "unclassified"
+  ],
+  [
+   1876,
+   "const conflicted = [...covered].filter((id) => fixCovered.has(id) && items.some((it) => it[\"action\"] === \"disputed\" && isStrArr(it[\"nodeIds\"]) && (it[\"nodeIds\"]",
+   "unclassified"
+  ],
+  [
+   1890,
+   "const files = items.filter((it) => ids.includes(it[\"id\"] as string)).flatMap((it) => (isStrArr(it[\"files\"]) ? (it[\"files\"] as string[]) : []));",
+   "unclassified"
+  ],
+  [
+   1897,
+   "const inter = groupFiles[i].filter((f) => groupFiles[j].includes(f));",
+   "unclassified"
+  ],
+  [
+   2027,
+   "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);",
+   "unclassified"
+  ],
+  [
+   2057,
+   "fixItems.filter((it) => commitGateFailures.some((cf) => cf.nodeIds.some((nid) => it.nodeIds.includes(nid)))).map((it) => it.id),",
+   "unclassified"
+  ],
+  [
+   2063,
+   "const gItems = fixItems.filter((it) => g.itemIds.includes(it.id));",
+   "unclassified"
+  ],
+  [
+   2065,
+   "const gNodes = plan.nodes.filter((n) => gItems.some((it) => it.nodeIds.includes(n.id)));",
+   "unclassified"
+  ],
+  [
+   2138,
+   "if (commitGateFailures[i].nodeIds.some((nid) => it.nodeIds.includes(nid))) commitGateFailures.splice(i, 1);",
+   "unclassified"
+  ],
+  [
+   2162,
+   "const node = plan.nodes.find((n) => cf.nodeIds.includes(n.id));",
+   "unclassified"
+  ],
+  [
+   2164,
+   "const fixFiles = rep.fixes.filter((f) => f.itemId !== \"\" && cf.nodeIds.some((nid) => (fixItems.find((it) => it.id === f.itemId)?.nodeIds.includes(nid) ?? false)",
+   "unclassified"
+  ],
+  [
+   2168,
+   "const cfIdx = commitGateFailures.indexOf(cf);",
+   "unclassified"
+  ],
+  [
+   2169,
+   "const dcIdx = deferredCommits.findIndex((dc) => cf.nodeIds.includes(dc.id) && dc.message === cf.message);",
+   "unclassified"
+  ],
+  [
+   2353,
+   "for (const t of n.territory) if (!list.includes(t)) list.push(t);",
+   "unclassified"
+  ],
+  [
+   2749,
+   "for (const n of plan.nodes) if (n.kind === \"dev\") for (const t of n.territory) if (!allTerr.includes(t)) allTerr.push(t);",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/dev-consistency-loop-v5.shared.ts": [
+  [
+   37,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) {",
+   "unclassified"
+  ],
+  [
+   191,
+   "\"var SHELL_QUOTE = function (s) { return /^[A-Za-z0-9_\\\\/:.,@%^+=-]+$/.test(s) ? s : SQ + s.split(SQ).join(SQ + '\\\\\\\\' + SQ + SQ) + SQ; };\",",
+   "unclassified"
+  ],
+  [
+   200,
+   "\"    for (var fai = 0; fai < args.length; fai++) { if (/^-[a-z]*c/i.test(args[fai])) { fci = fai; break; } }\",",
+   "unclassified"
+  ],
+  [
+   214,
+   "\"    if (STUB_RE.test(cc) || (ci > args.length && STUB_HEAD_RE.test(cc)) || NOOP_RE.test(cc)) return label + ' 是恒绿形态命令（' + full + '）——不构成真实测试证据（恢复：检查 testPlan.f",
+   "unclassified"
+  ],
+  [
+   220,
+   "\"if (ALLOWED.indexOf(fsuite.program) < 0) die('testPlan.fullSuite.program 不在白名单 ' + ALLOWED.join('/') + ': ' + fsuite.program);\",",
+   "unclassified"
+  ],
+  [
+   229,
+   "\"    if (ALLOWED.indexOf(at.command.program) < 0) die('testPlan.artifacts[' + ai + '].command.program 不在白名单: ' + at.command.program);\",",
+   "unclassified"
+  ],
+  [
+   236,
+   "\"  if (ALLOWED.indexOf(ep.testPlan.incremental.program) < 0) die('testPlan.incremental.program 不在白名单: ' + ep.testPlan.incremental.program);\",",
+   "unclassified"
+  ],
+  [
+   241,
+   "\"if (!/^[0-9a-f]{7,40}$/i.test(bl)) die('baseline 非 git hash 形态: ' + bl);\",",
+   "unclassified"
+  ],
+  [
+   271,
+   "\"var tplAbs = templateArgRaw.indexOf('~/') === 0 ? path.join(os.homedir(), templateArgRaw.slice(2)) : path.resolve(templateArgRaw);\",",
+   "unclassified"
+  ],
+  [
+   279,
+   "\"    var m = line.match(/^(\\\\d+|-)\\\\s+(\\\\d+|-)\\\\s+(.+)$/);\",",
+   "unclassified"
+  ],
+  [
+   369,
+   "\"  var idx = p.indexOf(' -> ');\",",
+   "unclassified"
+  ],
+  [
+   374,
+   "\"var untracked = entries.filter(function (e) { return e.code.indexOf('?') >= 0; }).map(function (e) { return e.path; });\",",
+   "unclassified"
+  ],
+  [
+   375,
+   "\"var foreign = changed.filter(function (f) { return pool.indexOf(f) < 0; });\",",
+   "unclassified"
+  ],
+  [
+   376,
+   "\"var foreignUntracked = foreign.filter(function (f) { return untracked.indexOf(f) >= 0; });\",",
+   "unclassified"
+  ],
+  [
+   398,
+   "\"      if (m.indexOf('index.lock') >= 0 && i < 6) { sleep(200 + i * 300); continue; }\",",
+   "unclassified"
+  ],
+  [
+   471,
+   "\"  if (l.indexOf('+++ ') === 0) { curFile = l.slice(6); continue; }\",",
+   "unclassified"
+  ],
+  [
+   475,
+   "\"    if (BYPASS_RE[j][0].test(content)) { hits.push({ file: curFile, pattern: BYPASS_RE[j][1], line: content.trim().slice(0, 160) }); break; }\",",
+   "unclassified"
+  ],
+  [
+   557,
+   "if (p.startsWith(\"./\")) p = p.slice(2);",
+   "unclassified"
+  ],
+  [
+   558,
+   "if (p.startsWith(projectRoot + \"/\")) p = p.slice(projectRoot.length + 1);",
+   "unclassified"
+  ],
+  [
+   1059,
+   "for (const p of parts) if (p.files.includes(filePath)) return p.name;",
+   "unclassified"
+  ],
+  [
+   1214,
+   "if (GREP_CHECK_STUB_RE.test(cmd)) {",
+   "unclassified"
+  ],
+  [
+   1228,
+   "const impure = (f[\"affectedFiles\"] as string[]).filter((p) => IMPURE_PATH_RE.test(p));",
+   "unclassified"
+  ],
+  [
+   1436,
+   "if (typeof t[\"kind\"] !== \"string\" || !KINDS.includes(t[\"kind\"]))",
+   "unclassified"
+  ],
+  [
+   1821,
+   "const reflowsSoFar = it.fixHistory.filter((h) => h.includes(\"转 doc_errors 回流\")).length;",
+   "unclassified"
+  ],
+  [
+   1948,
+   "for (const g of groupStates) g.changedFiles = verify.changed.filter((f) => g.own.includes(f));",
+   "unclassified"
+  ],
+  [
+   2032,
+   "f === \".tmp\" || f.startsWith(\".tmp/\") || f === \".pi\" || f.startsWith(\".pi/workflows/\");",
+   "unclassified"
+  ],
+  [
+   2039,
+   "(f) => !excluded(f) && verify.foreignUntracked.indexOf(f) < 0 && !isPreExisting(f),",
+   "unclassified"
+  ],
+  [
+   2471,
+   "\"var cp=require('child_process');var r=cp.execFileSync('git',['status','--porcelain'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});var hits=[];r.sp",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/acceptance-design-v5.shared.ts": [
+  [
+   79,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "unclassified"
+  ],
+  [
+   107,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/candidate-build-v5.shared.ts": [
+  [
+   139,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "unclassified"
+  ],
+  [
+   180,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
+   "unclassified"
+  ],
+  [
+   388,
+   "if (finding.origin !== undefined && ![\"acceptance\", \"design\", \"planning\", \"implementation\", \"testing\", \"evidence\", \"environment\"].includes(finding.origin)) retu",
+   "unclassified"
+  ],
+  [
+   442,
+   "if (!res.stderr.includes(\"EEXIST\") && !res.stdout.includes(\"EEXIST\")) return \"\";",
+   "unclassified"
+  ],
+  [
+   451,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   642,
+   "const patchSha256 = patchRes && patchRes.exitCode === 0 && /^[0-9a-f]{64}$/.test(patchRes.stdout.trim())",
+   "unclassified"
+  ],
+  [
+   676,
+   "for (const dimension of dimensions) if (!value.dimensions.includes(dimension)) return `缺探索维度 ${dimension}`;",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/independent-assurance-v5.shared.ts": [
+  [
+   149,
+   "\"if(!/^[0-9a-f]{40,64}$/.test(head)){process.stderr.write('git HEAD 返回了无法识别的值：'+head);process.exit(1)}\" +",
+   "unclassified"
+  ],
+  [
+   172,
+   "\"const entries=text.split('\\\\n').map(l=>l.trim()).filter(l=>l.length>0&&!l.startsWith('#')).sort();\" +",
+   "unclassified"
+  ],
+  [
+   181,
+   "\"if(entry.includes('..')||pt.isAbsolute(entry)||rel.startsWith('..')){process.stderr.write('内容清单条目越界：'+entry+'（恢复动作：条目必须是项目根内的相对路径）');process.exit(1)}\" +",
+   "unclassified"
+  ],
+  [
+   217,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "unclassified"
+  ],
+  [
+   258,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
+   "unclassified"
+  ],
+  [
+   370,
+   "if (![\"full\", \"recheck\", \"explore-only\"].includes(mode)) {",
+   "unclassified"
+  ],
+  [
+   461,
+   "return raw === \"\" ? \"\" : raw.startsWith(\"/\") ? raw : `${taskDir}/${raw}`;",
+   "unclassified"
+  ],
+  [
+   495,
+   ".filter((e) => priorFullArtifactCheck.stdout.trim().split(\" | \").includes(artifactAbs(e.artifact)))",
+   "unclassified"
+  ],
+  [
+   548,
+   "return typeof value === \"string\" && value.startsWith(evidenceRoot) && value.length > evidenceRoot.length && !value.split(\"/\").includes(\"..\");",
+   "unclassified"
+  ],
+  [
+   569,
+   "if (finding.origin !== undefined && ![\"acceptance\", \"design\", \"planning\", \"implementation\", \"testing\", \"evidence\", \"environment\"].includes(finding.origin)) {",
+   "unclassified"
+  ],
+  [
+   633,
+   "if (value.resolvedFindingIds.includes(id)) return `unresolvedFindingIds 与 resolvedFindingIds 不得同时含 ${String(id)}`;",
+   "unclassified"
+  ],
+  [
+   643,
+   "if (!value.dimensions.includes(dimension)) return `探索维度未覆盖：${dimension}`;",
+   "unclassified"
+  ],
+  [
+   670,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   679,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   698,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ]
+ ],
+ "skills/self/dev-workflow/workflows/src/assurance-repair-loop-v5.shared.ts": [
+  [
+   167,
+   "\"if(!/^[0-9a-f]{40,64}$/.test(head)){process.stderr.write('git HEAD 返回了无法识别的值：'+head);process.exit(1)}\" +",
+   "unclassified"
+  ],
+  [
+   190,
+   "\"const entries=text.split('\\\\n').map(l=>l.trim()).filter(l=>l.length>0&&!l.startsWith('#')).sort();\" +",
+   "unclassified"
+  ],
+  [
+   199,
+   "\"if(entry.includes('..')||pt.isAbsolute(entry)||rel.startsWith('..')){process.stderr.write('内容清单条目越界：'+entry+'（恢复动作：条目必须是项目根内的相对路径）');process.exit(1)}\" +",
+   "unclassified"
+  ],
+  [
+   234,
+   "if (typeof value !== \"string\" || !value.trim().startsWith(\"/\")) return \"\";",
+   "unclassified"
+  ],
+  [
+   275,
+   "if (!VALID_ARG_KEYS.has(key) && !key.startsWith(\"_\")) inputProblems.push(`未知参数 ${key}`);",
+   "unclassified"
+  ],
+  [
+   465,
+   "return raw === \"\" ? \"\" : raw.startsWith(\"/\") ? raw : `${taskDir}/${raw}`;",
+   "unclassified"
+  ],
+  [
+   497,
+   ".filter((e) => priorFullArtifactCheck.stdout.trim().split(\" | \").includes(String(e.artifact)))",
+   "unclassified"
+  ],
+  [
+   549,
+   "return typeof value === \"string\" && value.startsWith(evidenceRoot) && value.length > evidenceRoot.length && !value.split(\"/\").includes(\"..\");",
+   "unclassified"
+  ],
+  [
+   570,
+   "if (finding.origin !== undefined && ![\"acceptance\", \"design\", \"planning\", \"implementation\", \"testing\", \"evidence\", \"environment\"].includes(finding.origin)) {",
+   "unclassified"
+  ],
+  [
+   634,
+   "if (value.resolvedFindingIds.includes(id)) return `unresolvedFindingIds 与 resolvedFindingIds 不得同时含 ${String(id)}`;",
+   "unclassified"
+  ],
+  [
+   661,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   670,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   689,
+   "if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {",
+   "unclassified"
+  ],
+  [
+   898,
+   "if (!value.affectedAssertionIds.includes(id)) return `修复计划的受影响断言漏掉机器推导的 ${id}`;",
+   "unclassified"
+  ],
+  [
+   941,
+   "\"const bad=files.filter(f=>typeof f!=='string'||f.length===0||f.startsWith('/')||f.split('/').includes('..'));if(bad.length){console.error('非法文件路径 '+bad.join(',",
+   "unclassified"
+  ],
+  [
+   1039,
+   "if (!value.resolvedFindingIds.includes(id) && !value.unresolvedFindingIds.includes(id)) return `复核漏报旧 finding ${id}`;",
+   "unclassified"
   ]
  ]
 }

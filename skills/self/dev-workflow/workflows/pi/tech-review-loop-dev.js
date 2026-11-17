@@ -544,7 +544,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "2.6.0"; // 构建注入自 tech-design-dev/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.7.0"; // 构建注入自 tech-design-dev/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // tech-review-loop-dev — tech-design-dev 技能 W1 审查循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
@@ -1795,4 +1795,3 @@ for (let round = 1; round <= maxRounds; round++) {
 phase("落盘终态档案");
 await obsBegin("finalize", null);
 return await finish("max-rounds", maxRounds, `轮次上限耗尽仍有未收敛条目（critical must-fix 轨迹：${trajectory.join(" → ")}）。停回通道：remaining 已逐条带 guidance/reportRefs（聚合批次的可执行处方与报告锚点）——主 agent 按清单直接处置后登记 dispositions，不必再派复审 run；minor 项见 minor-findings.json（${minorFindings.length} 条，最后一波统一处理或登记放行）；由用户裁决——继续循环或人工接管`);
-

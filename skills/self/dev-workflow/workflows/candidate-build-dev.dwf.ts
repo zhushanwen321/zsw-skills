@@ -413,7 +413,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "2.9.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.10.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -1285,4 +1285,3 @@ const result: CandidateBuildResult = {
   message: `全部增量已形成候选实现并交由 delivery-gate 重新裁决；builder 测试不是 verified 证据，下一步运行 independent-assurance-dev${repairSummary()}${statsTailNote()}`,
 };
 return result;
-

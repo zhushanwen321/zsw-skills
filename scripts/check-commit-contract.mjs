@@ -24,7 +24,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const PI_PRODUCT = new URL("../skills/self/dev-workflow/workflows/pi/wave-executor.js", import.meta.url).pathname;
+const PI_PRODUCT = new URL("../skills/self/dev-workflow/workflows/pi/wave-executor-v5.js", import.meta.url).pathname;
 const src = readFileSync(PI_PRODUCT, "utf8");
 
 // ── 源码提取（产物为纯 JS；函数按行起点 + 大括号配平，常量按分号配平） ──
@@ -221,7 +221,7 @@ try {
   //    继而复审反复判「未提交」并累计触发停机线。本场景把解析钉在真实仓的三种形态上
   //    （未暂存修改 / 已暂存修改 / 未跟踪），任一形态路径失真即红。
   {
-    const consistProduct = new URL("../skills/self/dev-workflow/workflows/pi/dev-consistency-loop.js", import.meta.url).pathname;
+    const consistProduct = new URL("../skills/self/dev-workflow/workflows/pi/dev-consistency-loop-v5.js", import.meta.url).pathname;
     const consistSrc = readFileSync(consistProduct, "utf8");
     const eq = consistSrc.indexOf("const NODE_VERIFY =");
     if (eq < 0) throw new Error("产物中找不到 NODE_VERIFY（契约提取失败）");

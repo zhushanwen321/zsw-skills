@@ -49,8 +49,10 @@ fi
 
 # 段 3：技能版本纪律（AX3 强制器：bump 对账 + 共享源按产物 diff 联动 + 产物版本戳一致性）
 # 判定对象 = git 索引（本次提交内容与 HEAD 的差异）；触技能自有文件 / 共享构建源 / 产物时
-# 检查。检查器逐条输出「违规 → 权威源 → 恢复动作」，此处只给总处置提示
-VERSION_STAGED=$(git diff --cached --name-only --diff-filter=ACMRD -- 'skills/self/dev-workflow/tech-design-wf/' 'skills/self/dev-workflow/dev-flow-wf/' 'skills/self/dev-workflow/delivery-wf/' 'skills/self/dev-workflow/workflows/')
+# 检查。检查器逐条输出「违规 → 权威源 → 恢复动作」，此处只给总处置提示。过滤器覆盖
+# dev-workflow 全树 + archived/（检查器只登记现行技能，归档改动恒放行；宽前缀防技能
+# 目录改名后再漏检——曾因旧目录名过滤器全部失效）
+VERSION_STAGED=$(git diff --cached --name-only --diff-filter=ACMRD -- 'skills/self/dev-workflow/' 'archived/')
 if [ -n "$VERSION_STAGED" ]; then
   echo "pre-commit[version-discipline]: staged 变更含技能自有文件 / 共享构建源 / 产物，跑版本纪律检查…"
   node scripts/check-version-discipline.mjs || {
@@ -63,15 +65,16 @@ fi
 
 # 段 4：check-exec-plan 差分测试（移植侧与 W2 引擎同源防漂移）
 # check-exec-plan.mjs 的 schema 主段是 wave-executor validatePlan 的 JS 移植（错误文案逐字
-# 一致），改任一侧（共享源 / 构建产物 / 移植脚本 / 差分测试自身）必须过差分对账
-EXEC_STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- 'skills/self/dev-workflow/workflows/src/wave-executor.shared.ts' 'skills/self/dev-workflow/workflows/pi/wave-executor.js' 'skills/self/dev-workflow/dev-flow-wf/scripts/check-exec-plan.mjs' 'scripts/tests/check-exec-plan-parity.test.mjs')
+# 一致），改任一侧（共享源 / 构建产物 / 移植脚本 / 差分测试自身）必须过差分对账。
+# 差分锚定 dev-flow-v5；dev/v4 的移植脚本同族，一并纳入触发
+EXEC_STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- 'skills/self/dev-workflow/workflows/src/wave-executor*.shared.ts' 'skills/self/dev-workflow/workflows/pi/wave-executor*.js' 'skills/self/dev-workflow/dev-flow-v5/scripts/check-exec-plan.mjs' 'skills/self/dev-workflow/dev-flow-v4/scripts/check-exec-plan.mjs' 'skills/self/dev-workflow/dev-flow-dev/scripts/check-exec-plan.mjs' 'scripts/tests/check-exec-plan-parity.test.mjs')
 if [ -n "$EXEC_STAGED" ]; then
   echo "pre-commit[exec-plan-parity]: staged 变更含 validatePlan 共享源 / 产物 / 移植侧，跑差分测试…"
   node --test scripts/tests/check-exec-plan-parity.test.mjs || {
     echo ""
     echo "[exec-plan-parity] check-exec-plan 与 wave-executor validatePlan 差分测试失败。"
-    echo "  恢复动作：同步修改 skills/self/dev-workflow/dev-flow-wf/scripts/check-exec-plan.mjs 与"
-    echo "  workflows/src/wave-executor.shared.ts 的同源段（错误文案逐字一致）→ node scripts/build-workflows.mjs"
+    echo "  恢复动作：同步修改 skills/self/dev-workflow/dev-flow-v5/scripts/check-exec-plan.mjs 与"
+    echo "  workflows/src/wave-executor-v5.shared.ts 的同源段（错误文案逐字一致）→ node scripts/build-workflows.mjs"
     echo "  → node --test scripts/tests/check-exec-plan-parity.test.mjs 绿后重新 git add"
     exit 1
   }

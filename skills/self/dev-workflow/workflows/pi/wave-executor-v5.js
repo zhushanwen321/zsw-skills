@@ -531,7 +531,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "5.0.0"; // 构建注入自 dev-flow-v5/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "5.1.0"; // 构建注入自 dev-flow-v5/SKILL.md frontmatter version（唯一权威）
 // ── W2 wave-executor-v5 ──
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
@@ -2803,7 +2803,7 @@ if (existingStatus === null) {
     for (const n of plan.nodes)
         initialNodes[n.id] = { status: "pending", attempts: 0 };
     try {
-        await writeTextViaNode(plan.statusPath, 
+        await writeTextViaNode(plan.statusPath,
         // skillVersion 盖初建（产物溯源字段 = SKILL_VERSION 构建注入常量，本引擎 =
         // dev-flow-v5 版本）：此后回写链构造性保留——readStatusFile 把 schema 外顶层字段
         // 收进 extra 原样回写、RECONCILE 探针保留全部 schema 外顶层字段，后续覆盖不丢
@@ -3113,4 +3113,3 @@ return {
         ? { rounds: failureFixRounds, disputed: acceptanceDisputed, fixesDir: `${skillDataDir}/${String(plan.statusPath.split("/").pop() ?? "status")}.fixes` }
         : null,
 };
-

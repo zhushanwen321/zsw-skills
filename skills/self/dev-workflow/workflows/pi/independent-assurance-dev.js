@@ -480,7 +480,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "2.9.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "2.10.0"; // 构建注入自 delivery-dev/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -1511,4 +1511,3 @@ const result = {
     message: `独立保证活动已完成，返回值携带 delivery-gate 生成的 verdict；workflow 本身不宣告 accepted；${triageNote}；本任务累计保证轮次 ${assuranceRoundsTotal}（重发前先核对累计成本再决定）${repairSummary()}${statsTailNote()}`,
 };
 return result;
-

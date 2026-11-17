@@ -26,14 +26,31 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE = join(repoRoot, "scripts", "text-assertion-baseline.json");
+// 扫描对象 = 现行代全部业务单源（构建名单 NAMES 对应的 shared.ts；V1-V3 代单源已归档
+// 退出构建树，不再扫描）。基线键含归档路径的存量条目随归档失效，--update 时自然清除
 const TARGETS = [
-  "skills/self/dev-workflow/workflows/src/dev-consistency-loop.shared.ts",
   "skills/self/dev-workflow/workflows/src/design-code-sync-loop.shared.ts",
-  "skills/self/dev-workflow/workflows/src/wave-executor.shared.ts",
-  "skills/self/dev-workflow/workflows/src/tech-review-loop.shared.ts",
-  "skills/self/dev-workflow/workflows/src/contract-design.shared.ts",
-  "skills/self/dev-workflow/workflows/src/candidate-build.shared.ts",
-  "skills/self/dev-workflow/workflows/src/independent-assurance.shared.ts",
+  "skills/self/dev-workflow/workflows/src/design-code-sync-v2.shared.ts",
+  "skills/self/dev-workflow/workflows/src/tech-review-loop-dev.shared.ts",
+  "skills/self/dev-workflow/workflows/src/wave-executor-dev.shared.ts",
+  "skills/self/dev-workflow/workflows/src/dev-consistency-loop-dev.shared.ts",
+  "skills/self/dev-workflow/workflows/src/acceptance-design-dev.shared.ts",
+  "skills/self/dev-workflow/workflows/src/candidate-build-dev.shared.ts",
+  "skills/self/dev-workflow/workflows/src/independent-assurance-dev.shared.ts",
+  "skills/self/dev-workflow/workflows/src/tech-review-loop-v4.shared.ts",
+  "skills/self/dev-workflow/workflows/src/wave-executor-v4.shared.ts",
+  "skills/self/dev-workflow/workflows/src/dev-consistency-loop-v4.shared.ts",
+  "skills/self/dev-workflow/workflows/src/acceptance-design-v4.shared.ts",
+  "skills/self/dev-workflow/workflows/src/candidate-build-v4.shared.ts",
+  "skills/self/dev-workflow/workflows/src/independent-assurance-v4.shared.ts",
+  "skills/self/dev-workflow/workflows/src/assurance-repair-loop-v4.shared.ts",
+  "skills/self/dev-workflow/workflows/src/tech-review-loop-v5.shared.ts",
+  "skills/self/dev-workflow/workflows/src/wave-executor-v5.shared.ts",
+  "skills/self/dev-workflow/workflows/src/dev-consistency-loop-v5.shared.ts",
+  "skills/self/dev-workflow/workflows/src/acceptance-design-v5.shared.ts",
+  "skills/self/dev-workflow/workflows/src/candidate-build-v5.shared.ts",
+  "skills/self/dev-workflow/workflows/src/independent-assurance-v5.shared.ts",
+  "skills/self/dev-workflow/workflows/src/assurance-repair-loop-v5.shared.ts",
 ];
 // 覆盖六类字面匹配 API（2026-11-04 审查缺陷 7 修正：只扫三类会漏 .match/.exec/
 // startsWith/endsWith 回潮——本次退役的判定点恰有 /词表符号.../.exec 与 startsWith("[process]") 形态）

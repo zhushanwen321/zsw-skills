@@ -23,8 +23,8 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const GATE = join(ROOT, "skills", "self", "dev-workflow", "delivery-v2", "scripts", "delivery-gate.mjs");
-const POLICY_DIR = join(ROOT, "skills", "self", "dev-workflow", "delivery-v2", "policies");
+const GATE = join(ROOT, "archived", "delivery-v2", "scripts", "delivery-gate.mjs");
+const POLICY_DIR = join(ROOT, "archived", "delivery-v2", "policies");
 
 function sha256(text) {
   return createHash("sha256").update(text, "utf8").digest("hex");

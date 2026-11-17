@@ -3,7 +3,7 @@ name: dev-flow-dev
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 2.5.0
+version: 2.6.0
 description: >-
   Use when 一份完整设计包（tech-design-dev 产出：设计文档 + 双格式 impl-plan + 审查终态）
   需要落地为已验收代码。纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 →
@@ -44,7 +44,7 @@ description: >-
 | `<name>.plan-review.md`（与设计文档同目录） | 触发门槛（关键路径深度 ≥3 或单元 ≥4）时必须存在 |
 
 **外部设计文档直投** → 拒绝，转 tech-design-dev（先补 T2 审查再 T3 拆计划）。
-**交付体系外的独立执行**（用户明确不走交付体系）→ 用 dev-flow-v1 通道。
+**交付体系外的独立执行**（用户明确不走交付体系）→ 无专用技能，按普通开发任务处理。
 
 ## 执行七段
 
@@ -196,9 +196,9 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 
 进度唯一事实源 = `<name>.status.json`（D0 生成于 dev-flow 段产物根——workspace 形态为 `<ws-slug>/<worktreeName>/` 两级，单仓形态为现行 `<project-slug>/` 平铺；实际落点以 exec-plan 内 statusPath 声明为准；workflow/手工路径每次节点终态后回写）。恢复程序：以 git log 与工作区实物校准 status（**冲突以 git 为准**：标 done 无 commit → 回 pending；有 commit 未写 → 补写 done）→ 按所处段选 flow 落点续跑。
 
-## 与 dev-flow-v1 / dev-flow-v2 的关系
+## 与归档代（v1 / v2 / v3）的关系
 
-本技能是纯执行重构形态（impl-plan 上移 tech-design-dev T3；编排收归 workflow；状态载体 JSON 化；design-code-sync 升级内嵌 D5）。dev-flow-v1 冻结维护（交付体系外独立执行的旧通道）；dev 是 dev-flow-v2（三技能体系稳定线）分叉的 DEV 加固线：交付语义与 v2 一致（验收任务门、D4 候选化、发现桥接同构），差异集中在 W2/W3 的 workflow 执行韧性（agent 调用结构校验与修正重问、CLI 失败修正提示、自修复记录与终态上报，见 Workflow 契约）。W4 对账引擎 design-code-sync-v2 与 legacy design-code-sync-loop 为跨代共用（状态落在设计包目录，复制引擎会造成双写者），本技能与 v2 引用同一份。执行引擎层与判据面（dag-authoring / parallelism-reviewer / post-delivery）同源继承。
+本技能是纯执行重构形态（impl-plan 上移 tech-design-dev T3；编排收归 workflow；状态载体 JSON 化；design-code-sync 升级内嵌 D5）。v1 / v2 / v3 已归档（仓库根 `archived/`），不再作为正式技能——v1 曾是交付体系外独立执行的旧通道，该通道已退役（体系外任务按普通开发任务处理）；dev 是 dev-flow-v2（归档代三技能体系稳定线）分叉的 DEV 加固线：交付语义与 v2 一致（验收任务门、D4 候选化、发现桥接同构），差异集中在 W2/W3 的 workflow 执行韧性（agent 调用结构校验与修正重问、CLI 失败修正提示、自修复记录与终态上报，见 Workflow 契约）。W4 对账引擎 design-code-sync-v2 与 legacy design-code-sync-loop 为跨代共用（状态落在设计包目录，复制引擎会造成双写者），本技能与 v2 引用同一份。执行引擎层与判据面（dag-authoring / parallelism-reviewer / post-delivery）同源继承。
 
 ## 标记说明
 

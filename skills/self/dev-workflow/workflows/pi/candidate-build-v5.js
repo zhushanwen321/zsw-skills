@@ -456,7 +456,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "5.0.0"; // 构建注入自 delivery-v5/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "5.1.0"; // 构建注入自 delivery-v5/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -1272,4 +1272,3 @@ const result = {
     message: `全部增量已形成候选实现并交由 delivery-gate 重新裁决；builder 测试不是 verified 证据，下一步运行 independent-assurance-v5${repairSummary()}${statsTailNote()}`,
 };
 return result;
-

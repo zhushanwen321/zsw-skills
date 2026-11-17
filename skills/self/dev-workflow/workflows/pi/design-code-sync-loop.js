@@ -705,7 +705,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "1.1.8"; // 构建注入自 dev-flow-v1/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "5.1.0"; // 构建注入自 dev-flow-v5/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // design-code-sync-loop — dev-flow-v1 技能 W4 终态同步循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts 与 tech-review-loop.dwf.ts（多脚本循环骨架
@@ -4590,4 +4590,3 @@ if (finalResult === null) {
 // execution end——全部终态路径在此统一补记，早退路径各自在 return 前补记
 await obsCloseExecution(finalResult.terminated);
 return finalResult;
-

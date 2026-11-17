@@ -1,9 +1,9 @@
 // check-exec-plan-parity.test.mjs — check-exec-plan 与两引擎校验的差分测试（防漂移对账）
 //
-// 对应实现：skills/self/dev-workflow/dev-flow-v1/scripts/check-exec-plan.mjs（D0 编译
+// 对应实现：skills/self/dev-workflow/dev-flow-v5/scripts/check-exec-plan.mjs（D0 编译
 // 「生成即校验」门）。该脚本的 schema 主段是 W2 wave-executor validatePlan 的 JS 移植
 // （错误文案逐字一致），本测试防止两份实现漂移：
-//   - 差分侧：从构建产物 workflows/pi/wave-executor.js 零转抄提取 validatePlan 及其
+//   - 差分侧：从构建产物 workflows/pi/wave-executor-v5.js 零转抄提取 validatePlan 及其
 //     依赖闭包（产物由构建器维护、已剥 TS、形态稳定；源↔产物一致性另有 build --check
 //     与 parity 门把守），实跑后与移植侧逐 fixture 断言 ok 与错误文案完全一致。
 //   - 附加侧：testPlan / 必填字段 / baseline hash / verify script 扩展名 / cwd 形态
@@ -22,11 +22,11 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
-import { validatePlanSchema, checkPlan } from "../../skills/self/dev-workflow/dev-flow-v1/scripts/check-exec-plan.mjs";
+import { validatePlanSchema, checkPlan } from "../../skills/self/dev-workflow/dev-flow-v5/scripts/check-exec-plan.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const PI_ARTIFACT = join(ROOT, "skills", "self", "dev-workflow", "workflows", "pi", "wave-executor.js");
-const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v1", "scripts", "check-exec-plan.mjs");
+const PI_ARTIFACT = join(ROOT, "skills", "self", "dev-workflow", "workflows", "pi", "wave-executor-v5.js");
+const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v5", "scripts", "check-exec-plan.mjs");
 
 function loadReferenceValidatePlan() {
   const src = readFileSync(PI_ARTIFACT, "utf-8");
@@ -224,7 +224,8 @@ const PARITY_CASES = [
   },
   {
     name: "kind 非法值",
-    build: () => { const p = legalDevPlan(); p.nodes[0].kind = "review"; return p; },
+    // 注意不能用 "review"——V4 起渐进式 review 使 kind=review 在 dev 模式合法
+    build: () => { const p = legalDevPlan(); p.nodes[0].kind = "bogus"; return p; },
     ok: false, categories: ["field"],
   },
   {

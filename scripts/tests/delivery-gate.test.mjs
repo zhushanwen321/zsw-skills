@@ -21,7 +21,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const GATE = join(ROOT, "skills", "self", "dev-workflow", "delivery-v1", "scripts", "delivery-gate.mjs");
+const GATE = join(ROOT, "archived", "delivery-v1", "scripts", "delivery-gate.mjs");
 const ACTOR_BY_TYPE = {
   ContractApproved: "user",
   ImplementationRecorded: "builder",

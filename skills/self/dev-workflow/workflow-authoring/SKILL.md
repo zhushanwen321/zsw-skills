@@ -5,7 +5,7 @@ description: >-
   单源构建产物），或需要核对 workflow 的阶段事件观测接入、观测数据落盘与统计归集。
   触发词：「写 workflow」「新建双平台 workflow」「改 workflow 脚本」「观测接入」
   「观测 JSONL」「构建器报错」。Not for 发起/运行已有 workflow（用 CreateWorkflow 与
-  dev-flow-v2 / tech-design-v2 的流程文档）、查询某次执行的观测数据（直接读落盘
+  dev-flow-v5 / tech-design-v5 的流程文档）、查询某次执行的观测数据（直接读落盘
   JSONL 或跑统计脚本，见第 7 节）。
 ---
 
@@ -24,7 +24,7 @@ description: >-
   实装先例：taiji 工作区仓把构建器放在 `<仓>/.agents/workflows/scripts/build-workflows.mjs`，
   其观测层路径指向 `~/.agents/scripts/workflow-observability.shared.ts`——这是本仓
   `skills/self/dev-workflow/workflows/src/observability.shared.ts` 的安装 symlink
-  （symlink 安装命令见 dev-flow-v2 SKILL.md「阶段事件观测」节的安装说明）。
+  （symlink 安装命令见 dev-flow-v5 SKILL.md「阶段事件观测」节的安装说明）。
 
 ## 2. 单源构建结构
 
@@ -135,7 +135,7 @@ run 因脚本 bug 崩溃后改脚本续跑：新 run 导入原 run 已完成节�
    `(skill: string, stage: string, attempt: number | null): ObsCtx | null`。
    `args.taskId` 与 `args.executionId` 同时提供才启用观测（都不传 = 关闭、业务照常；
    只传其一 = 告警并关闭）。`skill` 写所属技能的 canonical 名（`OBS_SKILLS` 词表：
-   `tech-design-v2` / `dev-flow-v2` / `delivery-v2`），不是 workflow 脚本名——统计入口按技能名过滤，
+   `tech-design-v5` / `dev-flow-v5` / `delivery-v5`），不是 workflow 脚本名——统计入口按技能名过滤，
    写成 workflow 名会归不上类。`stage` 是流程阶段编号（`OBS_STAGES` 词表，允许字面量
    三元，如 wave-executor 按 exec-plan 的 mode 分叉 `"D1" / "D3"`）。`attempt` 未知时传
    `null`，检测确定后回填 `obsCtx.attempt`。调用点放在业务参数窄化之前——参数校验失败
@@ -237,7 +237,7 @@ node --test scripts/tests/workflow-observability.test.mjs   # 观测机制测试
   `agent-session-reader usage` CLI 统一读取（zcode `--zcode`、pi `--pi=<目录>`，
   用法见 `~/.agents/skills/agent-session-reader/SKILL.md`）。
 - **聚合报告**：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs` 汇总五技能
-  （tech-design-v2 / dev-flow-v2 / delivery-v2 / dev-merge / pr-cr-fix）的耗时与 token——观测事件
+  （tech-design-v5 / dev-flow-v5 / delivery-v5 / dev-merge / pr-cr-fix）的耗时与 token——观测事件
   直读观测根 JSONL，token 用量经 agent-session-reader 采集。`sample_type=production`
   缺省计入、`selftest` 默认排除（`--include-selftest` 显式计入）；统计按事件 `skill`
   字段过滤，新 workflow 记得步 4 的 `SKILL_ALIASES` 登记。
@@ -249,10 +249,10 @@ node --test scripts/tests/workflow-observability.test.mjs   # 观测机制测试
 
 | workflow（所属技能 / stage） | step 词表 | 适合当什么参照 |
 |---|---|---|
-| tech-review-loop（tech-design-v2 / T2） | setup / review / aggregate / fix / finalize | 多角色并行审查 + 聚合裁决循环；同名 agent 续聊做聚焦复审 |
-| wave-executor（dev-flow-v2 / D1 或 D3，按 exec-plan 的 mode 三元分叉） | setup / execute / finalize | DAG 节点并发调度 + 同名续聊打回；stage 按入参 mode 标注的写法 |
-| dev-consistency-loop（dev-flow-v2 / D2） | review / aggregate / fix / gate-a | attempt 由参数外置的循环；gate-a 终局门；无 setup/finalize 的紧凑 stage 结构 |
-| design-code-sync-loop（dev-flow-v2 / D5） | setup / review / fix / retire / finalize | 无 LLM 聚合层的矩阵环（矩阵行 = 脚本 concat）；伴生产物退役判定步 |
-| contract-design（delivery-v2 / DESIGN） | setup / execute / review / finalize | 契约草稿与独立设计审查循环（execute = designer 写草稿，review = reviewer 复查）；批准事件留给主 agent |
-| candidate-build（delivery-v2 / BUILD） | setup / execute / finalize | 按实施增量写码、保存原始输出、登记实现事件；每增量单次 ask（实现+报告一次完成），修复轮按未决发现/失败证据选择性重做增量 |
-| independent-assurance（delivery-v2 / ASSURE） | setup / review / execute / finalize | 覆盖核对与探索性审查分工（review = 双角色并行取证，execute = 校验与事件落盘）；只产证据，不直接接受交付 |
+| tech-review-loop-v5（tech-design-v5 / T2） | setup / review / aggregate / fix / finalize | 多角色并行审查 + 聚合裁决循环；同名 agent 续聊做聚焦复审 |
+| wave-executor-v5（dev-flow-v5 / D1 或 D3，按 exec-plan 的 mode 三元分叉） | setup / execute / finalize | DAG 节点并发调度 + 同名续聊打回；stage 按入参 mode 标注的写法 |
+| dev-consistency-loop-v5（dev-flow-v5 / D2） | review / aggregate / fix / gate-a | attempt 由参数外置的循环；gate-a 终局门；无 setup/finalize 的紧凑 stage 结构 |
+| design-code-sync-loop（dev-flow-v5 / D5，跨代共用引擎） | setup / review / fix / retire / finalize | 无 LLM 聚合层的矩阵环（矩阵行 = 脚本 concat）；伴生产物退役判定步 |
+| acceptance-design-v5（delivery-v5 / DESIGN） | setup / execute / review / finalize | 契约草稿与独立设计审查循环（execute = designer 写草稿，review = reviewer 复查）；批准事件留给主 agent |
+| candidate-build-v5（delivery-v5 / BUILD） | setup / execute / finalize | 按实施增量写码、保存原始输出、登记实现事件；每增量单次 ask（实现+报告一次完成），修复轮按未决发现/失败证据选择性重做增量 |
+| independent-assurance-v5（delivery-v5 / ASSURE） | setup / review / execute / finalize | 覆盖核对与探索性审查分工（review = 双角色并行取证，execute = 校验与事件落盘）；只产证据，不直接接受交付 |

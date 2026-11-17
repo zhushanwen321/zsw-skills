@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CP = join(ROOT, "skills", "self", "dev-workflow", "conformance-plane");
-const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v1", "scripts", "check-design-doc.mjs");
+const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v5", "scripts", "check-design-doc.mjs");
 
 const facts = await import(join(CP, "kernel", "facts.mjs"));
 const { fold, addressKey } = await import(join(CP, "kernel", "state-fold.mjs"));

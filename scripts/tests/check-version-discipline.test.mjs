@@ -26,51 +26,22 @@ import { fileURLToPath } from "node:url";
 const CHECKER = join(dirname(fileURLToPath(import.meta.url)), "..", "check-version-discipline.mjs");
 const WORKFLOWS = "skills/self/dev-workflow/workflows";
 const SKILL_DIRS = {
-  "tech-design-v1": "skills/self/dev-workflow/tech-design-v1",
-  "dev-flow-v1": "skills/self/dev-workflow/dev-flow-v1",
-  "delivery-v1": "skills/self/dev-workflow/delivery-v1",
-  "tech-design-v2": "skills/self/dev-workflow/tech-design-v2",
-  "dev-flow-v2": "skills/self/dev-workflow/dev-flow-v2",
-  "delivery-v2": "skills/self/dev-workflow/delivery-v2",
   "tech-design-dev": "skills/self/dev-workflow/tech-design-dev",
   "dev-flow-dev": "skills/self/dev-workflow/dev-flow-dev",
   "delivery-dev": "skills/self/dev-workflow/delivery-dev",
 };
-for (const version of ["v3", "v4", "v5"]) {
+for (const version of ["v4", "v5"]) {
   for (const family of ["tech-design", "dev-flow", "delivery"]) {
     SKILL_DIRS[`${family}-${version}`] = `skills/self/dev-workflow/${family}-${version}`;
   }
 }
-// 与检查器 PRODUCT_SKILL 同域的产物清单（新增产物时两处同步）
+// 与检查器 PRODUCT_SKILL 同域的产物清单（新增产物时两处同步）；两引擎（design-code-sync
+// ×2）归属 dev-flow-v5（跨代共用，V1 归档时改归现行执行线）
 const PRODUCTS = [
-  "tech-review-loop.dwf.ts",
-  "pi/tech-review-loop.js",
-  "wave-executor.dwf.ts",
-  "pi/wave-executor.js",
-  "dev-consistency-loop.dwf.ts",
-  "pi/dev-consistency-loop.js",
   "design-code-sync-loop.dwf.ts",
   "pi/design-code-sync-loop.js",
   "design-code-sync-v2.dwf.ts",
   "pi/design-code-sync-v2.js",
-  "contract-design.dwf.ts",
-  "pi/contract-design.js",
-  "candidate-build.dwf.ts",
-  "pi/candidate-build.js",
-  "independent-assurance.dwf.ts",
-  "pi/independent-assurance.js",
-  "tech-review-loop-v2.dwf.ts",
-  "pi/tech-review-loop-v2.js",
-  "wave-executor-v2.dwf.ts",
-  "pi/wave-executor-v2.js",
-  "dev-consistency-loop-v2.dwf.ts",
-  "pi/dev-consistency-loop-v2.js",
-  "acceptance-design-v2.dwf.ts",
-  "pi/acceptance-design-v2.js",
-  "candidate-build-v2.dwf.ts",
-  "pi/candidate-build-v2.js",
-  "independent-assurance-v2.dwf.ts",
-  "pi/independent-assurance-v2.js",
   "tech-review-loop-dev.dwf.ts",
   "pi/tech-review-loop-dev.js",
   "wave-executor-dev.dwf.ts",
@@ -84,7 +55,7 @@ const PRODUCTS = [
   "independent-assurance-dev.dwf.ts",
   "pi/independent-assurance-dev.js",
 ];
-for (const version of ["v3", "v4", "v5"]) {
+for (const version of ["v4", "v5"]) {
   for (const name of ["tech-review-loop", "wave-executor", "dev-consistency-loop", "acceptance-design", "candidate-build", "independent-assurance"]) {
     PRODUCTS.push(`${name}-${version}.dwf.ts`, `pi/${name}-${version}.js`);
   }
@@ -160,13 +131,13 @@ function cleanup(t, root) {
 test("改技能自有文件未 bump → 拦（恢复动作文案在场）", (t) => {
   const root = makeFixture();
   cleanup(t, root);
-  appendLine(root, `${SKILL_DIRS["tech-design-v1"]}/flow/step.md`, "补充一行");
+  appendLine(root, `${SKILL_DIRS["tech-design-dev"]}/flow/step.md`, "补充一行");
   stageAll(root);
 
   const r = runChecker(root);
   assert.equal(r.status, 1, `应红灯，实际输出：${r.output}`);
   assert.match(r.output, /规则 1（bump 对账）/);
-  assert.match(r.output, /tech-design-v1/);
+  assert.match(r.output, /tech-design-dev/);
   assert.match(r.output, /frontmatter version 未 bump/);
   assert.match(r.output, /恢复动作：/);
   assert.match(r.output, /PATCH/);
@@ -175,10 +146,10 @@ test("改技能自有文件未 bump → 拦（恢复动作文案在场）", (t) 
 test("改技能自有文件且 bump（产物同步重建）→ 放行", (t) => {
   const root = makeFixture();
   cleanup(t, root);
-  appendLine(root, `${SKILL_DIRS["tech-design-v1"]}/flow/step.md`, "补充一行");
-  setSkillVersion(root, "tech-design-v1", "0.1.1");
-  setStamp(root, "tech-review-loop.dwf.ts", "0.1.1");
-  setStamp(root, "pi/tech-review-loop.js", "0.1.1");
+  appendLine(root, `${SKILL_DIRS["tech-design-dev"]}/flow/step.md`, "补充一行");
+  setSkillVersion(root, "tech-design-dev", "0.1.1");
+  setStamp(root, "tech-review-loop-dev.dwf.ts", "0.1.1");
+  setStamp(root, "pi/tech-review-loop-dev.js", "0.1.1");
   stageAll(root);
 
   const r = runChecker(root);
@@ -202,15 +173,15 @@ test("改 workflows/src/ 且产物变、未 bump → 拦（全部技能联动文
   const root = makeFixture();
   cleanup(t, root);
   appendLine(root, `${WORKFLOWS}/src/skill-data.shared.ts`, "// 行为变更");
-  appendLine(root, `${WORKFLOWS}/tech-review-loop.dwf.ts`, "// 产物随共享源变化");
+  appendLine(root, `${WORKFLOWS}/tech-review-loop-dev.dwf.ts`, "// 产物随共享源变化");
   stageAll(root);
 
   const r = runChecker(root);
   assert.equal(r.status, 1, `应红灯，实际输出：${r.output}`);
   assert.match(r.output, /规则 2（共享源联动）/);
-  assert.match(r.output, /tech-design-v1/);
-  assert.match(r.output, /dev-flow-v1/);
-  assert.match(r.output, /delivery-v1/);
+  assert.match(r.output, /tech-design-dev/);
+  assert.match(r.output, /dev-flow-dev/);
+  assert.match(r.output, /delivery-dev/);
   assert.match(r.output, /共享层变化时全部技能升号/);
   assert.match(r.output, /恢复动作：/);
 });
@@ -218,13 +189,13 @@ test("改 workflows/src/ 且产物变、未 bump → 拦（全部技能联动文
 test("frontmatter bump 后产物未重建 → 拦（版本戳一致性）", (t) => {
   const root = makeFixture();
   cleanup(t, root);
-  setSkillVersion(root, "dev-flow-v1", "0.1.1");
+  setSkillVersion(root, "dev-flow-v4", "0.1.1");
   stageAll(root);
 
   const r = runChecker(root);
   assert.equal(r.status, 1, `应红灯，实际输出：${r.output}`);
   assert.match(r.output, /规则 3（版本戳一致性）/);
-  assert.match(r.output, /内嵌 SKILL_VERSION=0\.1\.0 ≠ dev-flow-v1 frontmatter=0\.1\.1/);
+  assert.match(r.output, /内嵌 SKILL_VERSION=0\.1\.0 ≠ dev-flow-v4 frontmatter=0\.1\.1/);
   assert.match(r.output, /node scripts\/build-workflows\.mjs/);
 });
 
@@ -232,20 +203,7 @@ test("共享源 + 产物变 + 全部技能联动 bump → 放行", (t) => {
   const root = makeFixture();
   cleanup(t, root);
   appendLine(root, `${WORKFLOWS}/src/skill-data.shared.ts`, "// 行为变更");
-  setSkillVersion(root, "tech-design-v1", "0.1.1");
-  setSkillVersion(root, "dev-flow-v1", "0.1.1");
-  setSkillVersion(root, "delivery-v1", "0.1.1");
-  setSkillVersion(root, "tech-design-v2", "0.1.1");
-  setSkillVersion(root, "dev-flow-v2", "0.1.1");
-  setSkillVersion(root, "delivery-v2", "0.1.1");
-  setSkillVersion(root, "tech-design-dev", "0.1.1");
-  setSkillVersion(root, "dev-flow-dev", "0.1.1");
-  setSkillVersion(root, "delivery-dev", "0.1.1");
-  for (const version of ["v3", "v4", "v5"]) {
-    for (const family of ["tech-design", "dev-flow", "delivery"]) {
-      setSkillVersion(root, `${family}-${version}`, "0.1.1");
-    }
-  }
+  for (const skill of Object.keys(SKILL_DIRS)) setSkillVersion(root, skill, "0.1.1");
   for (const rel of PRODUCTS) {
     appendLine(root, `${WORKFLOWS}/${rel}`, "// 产物随共享源变化");
     setStamp(root, rel, "0.1.1");
@@ -261,7 +219,7 @@ test("工作区未暂存改动不参与判定 → 放行", (t) => {
   const root = makeFixture();
   cleanup(t, root);
   // 只改工作区、不 git add：判定的提交内容（索引）仍与 HEAD 一致
-  appendLine(root, `${SKILL_DIRS["dev-flow-v1"]}/flow/step.md`, "未暂存改动");
+  appendLine(root, `${SKILL_DIRS["dev-flow-v4"]}/flow/step.md`, "未暂存改动");
 
   const r = runChecker(root);
   assert.equal(r.status, 0, `索引无改动应放行，实际输出：${r.output}`);
