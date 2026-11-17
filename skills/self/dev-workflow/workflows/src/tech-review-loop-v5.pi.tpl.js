@@ -182,6 +182,7 @@ const SCHEMA_AggregatedItem = {
     impact: { type: "string", enum: ["critical", "minor"], description: "V5 代关键决策分级：critical=影响关键 ADR/关键设计决策（分型、公理/不变量、问题定义、方案主干、关键决策前提失实或矛盾、影响决策走向的事实错误），进修复循环参与收敛计数；minor=不影响关键决策（登记缺口、产物表完备性、非关键措辞、实施期探针补登记），不进循环、跨轮收集至 minor-findings.json 最后一波统一处理" },
     consequenceRefutation: { type: "string", description: "minor 必须给出的行为后果否决论证：不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据" },
     consequenceRefutationType: { type: "string", enum: ["will-not-occur", "not-observable", "accepted-by-acceptance"], description: "minor 必填：论证类型三择一（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许），先标类型再给依据" },
+    regradeReason: { type: "string", description: "改判理由（护栏：聚合项覆盖的任一 ref 分级与上轮不同时必填——连续改判不附理由即结构校验失败）" },
   },
   required: ["refs", "title", "guidance", "impact"],
 };

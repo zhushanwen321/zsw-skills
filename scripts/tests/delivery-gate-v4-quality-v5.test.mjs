@@ -91,8 +91,67 @@ function fixture(t) {
   return fx;
 }
 
+// 事件追加走意图命令组（信封由 gate 构造；把既有事件对象形态翻译为意图参数）
+const INTENT_OPTION_KEYS = new Map([
+  ["reopenOf", "--reopen-of"], ["origin", "--origin"],
+  ["consequenceRefutation", "--consequence-refutation"], ["consequenceRefutationType", "--consequence-refutation-type"],
+  ["firstDetectedStage", "--first-detected-stage"], ["expectedStage", "--expected-stage"],
+  ["regressionTestRef", "--regression-test-ref"], ["mode", "--mode"],
+  ["fromRevision", "--from-revision"], ["toRevision", "--to-revision"], ["nature", "--nature"],
+]);
 function append(fx, event, role) {
-  return runGate(["append", "--task-dir", fx.taskDir, "--event", JSON.stringify(event), "--credential", fx.creds[role]], fx.home);
+  const base = ["--task-dir", fx.taskDir, "--credential", fx.creds[role]];
+  const rev = event.revision !== undefined ? ["--revision", event.revision] : [];
+  const opts = [];
+  for (const [field, flag] of INTENT_OPTION_KEYS) {
+    if (event[field] !== undefined) opts.push(flag, String(event[field]));
+  }
+  switch (event.type) {
+    case "ImplementationRecorded":
+      return runGate(["record-implementation", ...base,
+        "--increment-id", event.incrementId, "--summary", event.summary, "--artifact", event.artifact,
+        "--merge-receipt", JSON.stringify(event.mergeReceipt), ...rev], fx.home);
+    case "EvidenceRecorded":
+      return runGate(["record-evidence", ...base,
+        "--requirement-id", event.requirementId, "--kind", event.kind, "--result", event.result,
+        "--summary", event.summary, "--artifact", event.artifact,
+        ...(event.artifactSha256 !== undefined ? ["--artifact-sha256", event.artifactSha256] : []),
+        ...(event.assertionIds !== undefined ? ["--assertion-ids", JSON.stringify(event.assertionIds)] : []),
+        ...(event.adversarialFormIds !== undefined ? ["--adversarial-form-ids", JSON.stringify(event.adversarialFormIds)] : []),
+        ...rev], fx.home);
+    case "AssuranceCompleted":
+      return runGate(["complete-assurance", ...base,
+        "--summary", event.summary, "--coverage-manifest-sha256", event.coverageManifestSha256,
+        "--exploration-event-id", event.explorationEventId,
+        "--increment-receipts", JSON.stringify(event.incrementReceipts), "--artifact", event.artifact,
+        ...(event.evidenceEventIds !== undefined ? ["--evidence-event-ids", JSON.stringify(event.evidenceEventIds)] : []),
+        ...(event.cleanBuild !== undefined ? ["--clean-build", JSON.stringify(event.cleanBuild)] : []),
+        ...opts, ...rev], fx.home);
+    case "ExplorationCompleted":
+      return runGate(["record-exploration", ...base,
+        "--summary", event.summary, "--dimensions", JSON.stringify(event.dimensions),
+        "--coverage-manifest-sha256", event.coverageManifestSha256, "--artifact", event.artifact,
+        ...(event.artifactSha256 !== undefined ? ["--artifact-sha256", event.artifactSha256] : []),
+        ...rev], fx.home);
+    case "RepairRoundRecorded":
+      return runGate(["record-repair-round", ...base,
+        "--round", String(event.round), "--summary", event.summary,
+        "--trigger-finding-ids", JSON.stringify(event.triggerFindingIds),
+        "--affected-assertion-ids", JSON.stringify(event.affectedAssertionIds), "--artifact", event.artifact,
+        ...(event.incrementReceipts !== undefined ? ["--increment-receipts", JSON.stringify(event.incrementReceipts)] : []),
+        ...opts, ...rev], fx.home);
+    case "FindingRaised":
+      return runGate(["record-finding", ...base,
+        "--summary", event.summary, "--category", event.category, "--severity", event.severity,
+        "--requirement-ids", JSON.stringify(event.requirementIds), "--artifact", event.artifact,
+        ...(event.findingId !== undefined ? ["--finding-id", event.findingId] : []),
+        ...opts, ...rev], fx.home);
+    case "FindingResolved":
+      return runGate(["resolve-finding", ...base,
+        "--finding-id", event.findingId, "--summary", event.summary, "--artifact", event.artifact, ...rev], fx.home);
+    default:
+      throw new Error(`测试辅助未路由事件类型 ${event.type}——补 append 路由分支`);
+  }
 }
 function revision(fx) {
   const result = runGate(["revision", "--project-root", fx.projectDir], fx.home);

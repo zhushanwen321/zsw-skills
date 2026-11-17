@@ -520,7 +520,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "5.1.1"; // 构建注入自 delivery-v5/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "5.2.0"; // 构建注入自 delivery-v5/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -1176,8 +1176,61 @@ function validateCoverage(value) {
     }
     return "";
 }
+// 意图提交（信封由 gate 构造）：本地事件对象 → 意图命令参数；--revision 显式锁定，
+// artifactSha256 由 gate 按盘上文件计算。assurance 凭据走本辅助，builder 事件（修复轮）
+// 在调用点直接拼意图参数（凭证不同）
+function intentArgsFor(event) {
+    const base = ["--task-dir", taskDir];
+    const rev = event.revision !== undefined ? ["--revision", String(event.revision)] : [];
+    const opt = (key, flag) => (event[key] !== undefined ? [flag, String(event[key])] : []);
+    switch (event.type) {
+        case "FindingRaised":
+            return ["record-finding", ...base,
+                "--summary", event.summary, "--category", String(event.category), "--severity", String(event.severity),
+                "--requirement-ids", JSON.stringify(event.requirementIds), "--artifact", String(event.artifact),
+                ...(event.findingId !== undefined ? ["--finding-id", String(event.findingId)] : []),
+                ...opt("origin", "--origin"), ...opt("reopenOf", "--reopen-of"),
+                ...opt("consequenceRefutation", "--consequence-refutation"), ...opt("consequenceRefutationType", "--consequence-refutation-type"),
+                ...opt("firstDetectedStage", "--first-detected-stage"), ...opt("expectedStage", "--expected-stage"),
+                ...opt("regressionTestRef", "--regression-test-ref"), ...rev];
+        case "FindingResolved":
+            return ["resolve-finding", ...base,
+                "--finding-id", String(event.findingId), "--summary", event.summary, "--artifact", String(event.artifact), ...rev];
+        case "ResolutionReaffirmed":
+            return ["reaffirm-resolution", ...base,
+                "--finding-id", String(event.findingId), "--original-resolution-event-id", String(event.originalResolutionEventId),
+                "--basis", String(event.basis), "--summary", event.summary, "--artifact", String(event.artifact), ...rev];
+        case "EvidenceRecorded":
+            return ["record-evidence", ...base,
+                "--requirement-id", String(event.requirementId), "--kind", String(event.kind), "--result", String(event.result),
+                "--summary", event.summary, "--artifact", String(event.artifact),
+                ...(event.assertionIds !== undefined ? ["--assertion-ids", JSON.stringify(event.assertionIds)] : []),
+                ...(event.adversarialFormIds !== undefined ? ["--adversarial-form-ids", JSON.stringify(event.adversarialFormIds)] : []),
+                ...rev];
+        case "ExplorationCompleted":
+            return ["record-exploration", ...base,
+                "--summary", event.summary, "--dimensions", JSON.stringify(event.dimensions),
+                "--coverage-manifest-sha256", String(event.coverageManifestSha256), "--artifact", String(event.artifact),
+                ...(event.artifactSha256 !== undefined ? ["--artifact-sha256", String(event.artifactSha256)] : []), ...rev];
+        case "AssuranceCompleted":
+            return ["complete-assurance", ...base,
+                "--summary", event.summary, "--coverage-manifest-sha256", String(event.coverageManifestSha256),
+                "--exploration-event-id", String(event.explorationEventId),
+                "--increment-receipts", JSON.stringify(event.incrementReceipts), "--artifact", String(event.artifact),
+                ...(event.mode !== undefined ? ["--mode", String(event.mode)] : []),
+                ...(event.evidenceEventIds !== undefined ? ["--evidence-event-ids", JSON.stringify(event.evidenceEventIds)] : []),
+                ...(event.cleanBuild !== undefined ? ["--clean-build", JSON.stringify(event.cleanBuild)] : []),
+                ...(event.artifactSha256 !== undefined ? ["--artifact-sha256", String(event.artifactSha256)] : []), ...rev];
+        case "AssuranceRevisionDrift":
+            return ["record-assurance-drift", ...base,
+                "--summary", event.summary, "--setup-revision", String(event.setupRevision),
+                "--finalize-revision", String(event.finalizeRevision), "--drift-seq", String(event.driftSeq), ...rev];
+        default:
+            throw new Error(`intentArgsFor 未路由事件类型 ${event.type}`);
+    }
+}
 async function appendEvent(event) {
-    const appendArgs = ["append", "--task-dir", taskDir, "--event", JSON.stringify(event), "--credential", assuranceCredentialId];
+    const appendArgs = [...intentArgsFor(event), "--credential", assuranceCredentialId];
     if (leaseRunId !== "")
         appendArgs.push("--run-id", leaseRunId);
     const appended = await runGate(gatePath, appendArgs);
@@ -1374,7 +1427,13 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
             summary: `需要第 ${repairRound} 轮实现性修复，超过正常路径上限，停止继续补丁`,
             round: repairRound, triggerFindingIds, affectedAssertionIds: [], artifact,
         };
-        const appended = await runGate(gatePath, ["append", "--task-dir", taskDir, "--event", JSON.stringify(event), "--credential", builderCredentialId]);
+        const appended = await runGate(gatePath, [
+            "record-repair-round", "--task-dir", taskDir,
+            "--round", String(repairRound), "--summary", event.summary,
+            "--trigger-finding-ids", JSON.stringify(triggerFindingIds), "--affected-assertion-ids", "[]",
+            "--artifact", artifact, "--revision", revision,
+            "--credential", builderCredentialId,
+        ]);
         if (appended.exitCode !== 0)
             return failAssurance(`修复上限事件登记失败：${appended.stderr.trim()}`);
         events.push(event);
@@ -1542,7 +1601,17 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
         artifactSha256: repairReportSha,
         artifact: repairReportPath,
     };
-    const repairAppended = await retryOnSpawnFailure(() => runGate(gatePath, ["append", "--task-dir", taskDir, "--event", JSON.stringify(repairEvent), "--credential", builderCredentialId]), { workflow: "assurance-repair-loop-v5", step: "fix", round: repairRound, command: "append RepairRoundRecorded" });
+    const repairAppended = await retryOnSpawnFailure(() => runGate(gatePath, [
+        "record-repair-round", "--task-dir", taskDir,
+        "--round", String(repairRound), "--summary", repairEvent.summary,
+        "--trigger-finding-ids", JSON.stringify(triggerFindingIds),
+        "--affected-assertion-ids", JSON.stringify(repairEvent.affectedAssertionIds),
+        "--artifact", repairReportPath, "--revision", revision,
+        "--from-revision", fromRevision, "--to-revision", revision,
+        "--increment-receipts", JSON.stringify(repairReceipts),
+        "--artifact-sha256", repairReportSha,
+        "--credential", builderCredentialId,
+    ]), { workflow: "assurance-repair-loop-v5", step: "fix", round: repairRound, command: "record-repair-round" });
     if (repairAppended.exitCode !== 0) {
         return failAssurance(`RepairRoundRecorded 登记失败：${repairAppended.stderr.trim() || repairAppended.stdout.trim()}。修复代码已提交（fix(delivery): repair round ${repairRound}，fromRevision=${fromRevision}）但轮次未记账。恢复动作：二选一——用 delivery-gate append 以 builder 凭据补登记下方事件后重发本 workflow（重发会跳过已清零的修复轮）；或 git reset --soft HEAD~1 撤回该笔提交后重发（登记优先，推荐前者）：${JSON.stringify(repairEvent)}`);
     }

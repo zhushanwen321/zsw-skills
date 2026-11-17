@@ -153,6 +153,8 @@ interface AggregatedItem {
   consequenceRefutation?: string;
   /** minor 必填：论证类型三择一（合并稿 §9：先标类型再给依据，缺类型即结构校验失败） */
   consequenceRefutationType?: "will-not-occur" | "not-observable" | "accepted-by-acceptance";
+  /** 改判理由（护栏：聚合项覆盖的任一 ref 分级与上轮不同时必填——连续改判不附理由即结构校验失败） */
+  regradeReason?: string;
 }
 
 interface AggregationOutcome {

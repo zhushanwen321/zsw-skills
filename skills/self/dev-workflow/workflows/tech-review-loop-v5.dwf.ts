@@ -153,6 +153,8 @@ interface AggregatedItem {
   consequenceRefutation?: string;
   /** minor 必填：论证类型三择一（合并稿 §9：先标类型再给依据，缺类型即结构校验失败） */
   consequenceRefutationType?: "will-not-occur" | "not-observable" | "accepted-by-acceptance";
+  /** 改判理由（护栏：聚合项覆盖的任一 ref 分级与上轮不同时必填——连续改判不附理由即结构校验失败） */
+  regradeReason?: string;
 }
 
 interface AggregationOutcome {
@@ -595,7 +597,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "5.1.1"; // 构建注入自 tech-design-v5/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "5.2.0"; // 构建注入自 tech-design-v5/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // tech-review-loop-v5 — tech-design-v5 技能 W1 审查循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
@@ -956,7 +958,7 @@ function validateReviewerVerdict(v: unknown): Validated<ReviewerVerdict> {
 /** 聚合裁决返回校验（工厂形态——划分校验需要闭包原始 ref 集）：items 形态合法 +
  *  refs 全体构成原始清单的精确划分（漏报 = 静默丢失、重叠 = 二次去重失准、
  *  幻觉 ref = 无中生有，三者均 fail-closed 回喂重试，不静默修补） */
-function makeAggregationValidator(rawRefs: string[]): (v: unknown) => Validated<AggregationOutcome> {
+function makeAggregationValidator(rawRefs: string[], prevImpactByRef: Map<string, string>): (v: unknown) => Validated<AggregationOutcome> {
   const rawRefSet = new Set(rawRefs);
   return (v: unknown): Validated<AggregationOutcome> => {
     const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
@@ -995,6 +997,14 @@ function makeAggregationValidator(rawRefs: string[]): (v: unknown) => Validated<
       if (it.impact === "minor" && it.consequenceRefutationType !== "will-not-occur" && it.consequenceRefutationType !== "not-observable" && it.consequenceRefutationType !== "accepted-by-acceptance") {
         errors.push(`items[${i}] 为 minor，必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给依据（合并稿 §9）`);
       }
+      // 改判护栏（设计文档 §3.4）：聚合项覆盖的任一 ref 分级与上轮不同时必须附改判理由
+      const regradedRefs = it.refs.filter((r) => {
+        const prev = prevImpactByRef.get(r);
+        return prev !== undefined && prev !== it.impact;
+      });
+      if (regradedRefs.length > 0 && (typeof it.regradeReason !== "string" || it.regradeReason.trim() === "")) {
+        errors.push(`items[${i}] 覆盖的 ref（${regradedRefs.join("、")}）分级与上轮不同（改判），必须附 regradeReason（为什么本轮改变分级——依据与证据），不允许无声改判收敛与停机判据`);
+      }
     });
     const missing = rawRefs.filter((r) => !seen.has(r));
     if (missing.length > 0) {
@@ -1012,6 +1022,7 @@ function renderAggregatedMd(round: number, items: AggregatedItem[]): string {
       `## AG-${i + 1} ${it.title}`,
       `- 原始 ref：${it.refs.join("、")}`,
       `- 分级：${it.impact}${it.impact === "minor" ? "（不进本轮修复循环，进 minor 收集清单）" : ""}`,
+      ...(it.regradeReason ? [`- 改判理由：${it.regradeReason}`] : []),
       `- 修复指导：${it.guidance}`,
       ...(it.consequenceRefutation ? [`- 行为后果否决（${it.consequenceRefutationType ?? "未标类型"}）：${it.consequenceRefutation}`] : []),
       "",
@@ -1532,6 +1543,10 @@ const minorFindings: { round: number; refs: string[]; title: string; guidance: s
 const collectedMinorRefs = new Set<string>();
 // 最后一次成功聚合的批次（终态 remaining 找回 guidance 的数据源；R1 全 0 无聚合时为空）
 let lastAggregatedItems: AggregatedItem[] = [];
+// 改判留痕（设计文档 §3.4）：ref → 历轮分级序列。连续改判（变化次数）达上限停回——
+// 不允许聚合裁决靠反复改分级操纵收敛与停机判据
+const AGGREGATE_REGRADE_HALT = 2; // 与 kernel/rules.json budgets.aggregateRegradeHalt 对拍（delivery-core-v5.test.mjs）
+const refImpactHistory = new Map<string, Array<{ round: number; impact: string }>>();
 
 for (let round = 1; round <= maxRounds; round++) {
   phase("四席并行聚焦复审");
@@ -1713,12 +1728,18 @@ for (let round = 1; round <= maxRounds; round++) {
     phase("聚合裁决");
     await obsBegin("aggregate", round);
     const rawRefs = roundProblems.map((pp) => pp.ref);
+    // 上轮各 ref 的分级（改判检测输入；首轮为空 Map——validator 的改判分支不触发）
+    const prevImpactByRef = new Map<string, string>();
+    for (const [ref, history] of refImpactHistory) {
+      const last = history[history.length - 1];
+      if (last !== undefined) prevImpactByRef.set(ref, last.impact);
+    }
     let aggregation: AggregationOutcome | null;
     // 同四席：agent(名字) 先注册一次，回喂重试经同一引用续聊（闭包内重复 agent(同名) 会被引擎拒绝）
     const aggregator = agent(`聚合裁决-r${round}`, AGGREGATOR_PERSONA);
     try {
       aggregation = await askValidated(
-        makeAggregationValidator(rawRefs),
+        makeAggregationValidator(rawRefs, prevImpactByRef),
         (p2) => aggregator.ask<AggregationOutcome>(p2),
         [
           `聚合裁决（第 ${round} 轮，产物目录 ${roundAbs}）——四席评审已并行完成，把它们的发现合并为一份去重权威清单。`,
@@ -1740,7 +1761,10 @@ for (let round = 1; round <= maxRounds; round++) {
           "",
           "minor 必须附 consequenceRefutation：不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据；已推演出用户可观察的不正确行为时不得只按判据字面合规降级。",
           "minor 必须同时标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）——先标类型再给依据，缺类型即结构校验失败（合并稿 §9）。",
-          "完成后返回 JSON：items（聚合项数组，每条 { refs: string[]（该条覆盖的原始 ref，至少一个）, title, guidance, impact: \"critical\"|\"minor\", consequenceRefutation?: string, consequenceRefutationType?: \"will-not-occur\"|\"not-observable\"|\"accepted-by-acceptance\" }）。refs 全体构成原始清单的精确划分——每条原始 ref 恰好出现在一条聚合项里，不丢、不重、不造。",
+          ...(prevImpactByRef.size > 0 ? [
+            "改判护栏：聚合项覆盖的任一 ref 分级与上轮不同（改判）时，该条必须附 regradeReason（本轮为什么改变分级——新证据/新依据），未附即结构校验失败；同一 ref 连续改判达上限会触发停回。",
+          ] : []),
+          "完成后返回 JSON：items（聚合项数组，每条 { refs: string[]（该条覆盖的原始 ref，至少一个）, title, guidance, impact: \"critical\"|\"minor\", consequenceRefutation?: string, consequenceRefutationType?: \"will-not-occur\"|\"not-observable\"|\"accepted-by-acceptance\", regradeReason?: string（改判时必填） }）。refs 全体构成原始清单的精确划分——每条原始 ref 恰好出现在一条聚合项里，不丢、不重、不造。",
         ].join("\n"),
       );
     } catch (e) {
@@ -1755,6 +1779,30 @@ for (let round = 1; round <= maxRounds; round++) {
     }
     aggregatedItems = aggregation.items;
     lastAggregatedItems = aggregation.items;
+    // 改判留痕与熔断（§3.4）：更新各 ref 分级史；任一 ref 变化次数达上限即停回用户
+    for (const item of aggregatedItems) {
+      for (const ref of item.refs) {
+        const history = refImpactHistory.get(ref) ?? [];
+        history.push({ round, impact: item.impact });
+        refImpactHistory.set(ref, history);
+      }
+    }
+    const regradeOffenders = [...refImpactHistory.entries()]
+      .map(([ref, history]) => {
+        let changes = 0;
+        for (let idx = 1; idx < history.length; idx += 1) {
+          if (history[idx].impact !== history[idx - 1].impact) changes += 1;
+        }
+        return { ref, changes, trail: history.map((entry) => `r${entry.round}:${entry.impact}`).join(" → ") };
+      })
+      .filter((entry) => entry.changes >= AGGREGATE_REGRADE_HALT);
+    if (regradeOffenders.length > 0) {
+      return await finish(
+        "stuck",
+        round,
+        `聚合分级改判熔断：以下条目连续改判达 ${AGGREGATE_REGRADE_HALT} 次（轨迹：${regradeOffenders.map((entry) => `${entry.ref}（${entry.trail}）`).join("；")}）——分级不应靠反复改判收敛，停回用户裁决最终分级与处置。恢复动作：用户逐条裁定 critical/minor 后，主 agent 按裁定登记 dispositions 并决定是否续跑`,
+      );
+    }
     const aggWrite = await world.run("node", ["-e", NODE_WRITE_FILE, `${roundAbs}/aggregated.md`, renderAggregatedMd(round, aggregatedItems)]);
     if (aggWrite.exitCode !== 0) {
       return await finish("aggregator-failure", round, `聚合清单落盘失败（${roundAbs}/aggregated.md，exit ${aggWrite.exitCode}）：${aggWrite.stderr.trim() || aggWrite.stdout.trim()}。恢复动作：args.attempt 递增重新发起`);

@@ -1,6 +1,6 @@
 # D1 开发循环 — W2 wave-executor-v5 契约与手工降级路径
 
-> 输入：D0 编译产物齐备（exec-plan + prompts + 初始 status.json）。不变量：subagent 零 git；每单元双锁——改动对账一致（自报 files_changed 与工作区 diff 相符，超声明范围的登记对账呈报、不打回）+ 测试真实跑绿；**调度只看依赖边（wave 仅展示标签，不是边界）——并发 ≤5，逐节点完成即重算（单节点 settle 立即解锁后继补派，不等批内其他节点）**；**每单元核验通过瞬间独立 commit**（不等批、不等 wave、不等尾）。
+> 输入：exec-plan + prompts + 初始 status.json（产物格式见 `flow/compile.md`；进入合法性与前置由 delivery-core next 裁决——转移表唯一权威）。不变量：subagent 零 git；每单元双锁——改动对账一致（自报 files_changed 与工作区 diff 相符，超声明范围的登记对账呈报、不打回）+ 测试真实跑绿；**调度只看依赖边（wave 仅展示标签，不是边界）——并发 ≤5，逐节点完成即重算（单节点 settle 立即解锁后继补派，不等批内其他节点）**；**每单元核验通过瞬间独立 commit**（不等批、不等 wave、不等尾）。
 
 ## W2 workflow 契约（zcode 环境默认动作）
 
@@ -17,7 +17,7 @@ args: { execPlan: "~/.agents/skill-data/dev-flow/<project-slug>/<name>.exec-plan
 3. world.run 核验：`git status --porcelain` + 改动对账（自报 files_changed 与工作区 diff 相符，超出 territory 声明范围的路径登记对账事件不打回 + 重跑 testCommand 断言退出码；全工作区清单外残留只登记不拦截——并行单元运行中新建的文件天然不在静态声明里，别人的改动与本节点无关，收尾统一呈报处置）
 4. 核验过 → world.run commit（`git add -- <files_changed>` + commitTemplate 渲染；空改动幂等通过，commit 被仓库钩子拒不 blocked 转待办）→ status.json 回写 → 解锁下游
 
-打回（核验不过）：原节点 agent 会话续聊定向修（贴 diff/失败输出/违反条款），≤2 轮；agent 不可用 → 接替程序（新 agent + 前任证据包：状态表该单元最后一轮 files_changed/test_evidence/deviations + 当前 `git diff --stat`，令其先核验现状再续作）；接替者亦异常 → 节点 blocked（引擎层，其他节点照常推进）。超 2 轮 → 节点 blocked，后继自动挂起（deps 不满足），无依赖节点照常推进 → 全场无可调度且存在 blocked → 终态 `blocked`（+清单+已试方案）→ 主 agent 升级用户。全节点 done → 终态 `completed` → 进 D2。
+打回（核验不过）：原节点 agent 会话续聊定向修（贴 diff/失败输出/违反条款），≤2 轮；agent 不可用 → 接替程序（新 agent + 前任证据包：状态表该单元最后一轮 files_changed/test_evidence/deviations + 当前 `git diff --stat`，令其先核验现状再续作）；接替者亦异常 → 节点 blocked（引擎层，其他节点照常推进）。超 2 轮 → 节点 blocked，后继自动挂起（deps 不满足），无依赖节点照常推进 → 全场无可调度且存在 blocked → 终态 `blocked`（+清单+已试方案）→ 主 agent 升级用户。全节点 done → 终态 `completed`；后续推进由 delivery-core next 裁决（转移表唯一权威）。
 
 worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 worktree 内执行；集成性质下游单元在其合并节点完成后才就绪——合并由 D0 显式排布（合并节点/手工段，见 `flow/compile.md` worktree 合并排布节），引擎不做合并检测。
 
@@ -32,7 +32,7 @@ worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 workt
 5. **流转 commit**：核验过 → 按 files_changed 精确 add → commit（英文 message 含 unit id、对应设计章节、测试结论一行）→ status.json 回写（state=done + 证据指针）
 6. **失败打回**：续聊定向修或接替程序；轮次 +1；超 2 轮冻结该单元升级用户（附已尝试方案）；打回前后都重算就绪集——修单元不阻塞其他就绪节点
 7. **流式推进**：任一 done 即重算就绪集，解锁后继在并发余量内立即补派
-8. **循环至全 done** → 转 `flow/consistency-review.md`
+8. **循环至全 done**——后续推进由 delivery-core next 裁决（转移表唯一权威）
 
 ## 中断恢复
 
@@ -42,7 +42,7 @@ worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 workt
 
 | 终态 | 主 agent 动作 |
 |------|--------------|
-| completed | 全节点 done——D1 完成转 D2（consistency-review.md）；D3 完成转 D4 收尾（含交付体系任务的增量实现登记 ImplementationRecorded，`flow/acceptance.md` 收尾节第 3 步） |
+| completed | 全节点 done（D1/D3 共用终态）——后续推进由 delivery-core next 裁决（转移表唯一权威）；D3 完成后含交付体系任务的增量实现登记 ImplementationRecorded（`flow/acceptance.md` 收尾节第 3 步） |
 | blocked | 读 blocked 清单逐条处置：打回超限类 → 人工裁决（采纳修复方案/放弃该单元）；引擎层异常 → ResumeWorkflowRun 或修复 exec-plan 后重发 |
 | core-failed | 读 coreFailure 归因。verify/inspect 验收失败（D1 与 D3 一律）与 commit 门禁被拒已经统一失败处理中心轮内修（失败池 → 聚合裁决 phase → 修复组 phase → 机器重验，≤3 轮）——此终态 = 修复环已耗尽仍不收敛。聚合清单与全部失败归因在 acceptanceFix.fixesDir，按归因逐条人工裁决（采纳修复方案重验 / 放弃节点）；主 agent 只裁决与重发起，不亲编码 |
 

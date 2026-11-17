@@ -139,14 +139,80 @@ function currentRevision(fx) {
   return result.stdout.trim();
 }
 
+// 事件追加走意图命令组（信封由 gate 构造；本辅助把既有事件对象形态翻译为意图参数）
+const INTENT_OPTION_KEYS = new Map([
+  ["reopenOf", "--reopen-of"], ["origin", "--origin"],
+  ["consequenceRefutation", "--consequence-refutation"], ["consequenceRefutationType", "--consequence-refutation-type"],
+  ["firstDetectedStage", "--first-detected-stage"], ["expectedStage", "--expected-stage"],
+  ["regressionTestRef", "--regression-test-ref"], ["mode", "--mode"],
+  ["fromRevision", "--from-revision"], ["toRevision", "--to-revision"], ["nature", "--nature"],
+]);
+
 function appendEvent(fx, event, role) {
-  const result = fx.gate(
-    "append",
-    "--task-dir", fx.taskDir,
-    "--event", JSON.stringify(event),
-    "--credential", fx.creds[role],
-  );
-  return result;
+  const base = ["--task-dir", fx.taskDir, "--credential", fx.creds[role]];
+  const rev = event.revision !== undefined ? ["--revision", event.revision] : [];
+  const opts = [];
+  for (const [field, flag] of INTENT_OPTION_KEYS) {
+    if (event[field] !== undefined) opts.push(flag, String(event[field]));
+  }
+  switch (event.type) {
+    case "EvidenceRecorded":
+      return fx.gate("record-evidence", ...base,
+        "--requirement-id", event.requirementId, "--kind", event.kind, "--result", event.result,
+        "--summary", event.summary, "--artifact", event.artifact,
+        ...(event.artifactSha256 !== undefined ? ["--artifact-sha256", event.artifactSha256] : []),
+        ...(event.assertionIds !== undefined ? ["--assertion-ids", JSON.stringify(event.assertionIds)] : []),
+        ...(event.adversarialFormIds !== undefined ? ["--adversarial-form-ids", JSON.stringify(event.adversarialFormIds)] : []),
+        ...rev);
+    case "FindingRaised":
+      return fx.gate("record-finding", ...base,
+        "--summary", event.summary, "--category", event.category, "--severity", event.severity,
+        "--requirement-ids", JSON.stringify(event.requirementIds), "--artifact", event.artifact,
+        ...(event.findingId !== undefined ? ["--finding-id", event.findingId] : []),
+        ...opts, ...rev);
+    case "FindingResolved":
+      return fx.gate("resolve-finding", ...base,
+        "--finding-id", event.findingId, "--summary", event.summary, "--artifact", event.artifact, ...rev);
+    case "ResolutionReaffirmed":
+      return fx.gate("reaffirm-resolution", ...base,
+        "--finding-id", event.findingId, "--original-resolution-event-id", event.originalResolutionEventId,
+        "--basis", event.basis, "--summary", event.summary, "--artifact", event.artifact, ...rev);
+    case "ImplementationRecorded":
+      return fx.gate("record-implementation", ...base,
+        "--increment-id", event.incrementId, "--summary", event.summary, "--artifact", event.artifact,
+        "--merge-receipt", JSON.stringify(event.mergeReceipt),
+        ...(event.artifactSha256 !== undefined ? ["--artifact-sha256", event.artifactSha256] : []),
+        ...rev);
+    case "ExplorationCompleted":
+      return fx.gate("record-exploration", ...base,
+        "--summary", event.summary, "--dimensions", JSON.stringify(event.dimensions),
+        "--coverage-manifest-sha256", event.coverageManifestSha256, "--artifact", event.artifact,
+        ...(event.artifactSha256 !== undefined ? ["--artifact-sha256", event.artifactSha256] : []),
+        ...rev);
+    case "AssuranceCompleted":
+      return fx.gate("complete-assurance", ...base,
+        "--summary", event.summary, "--coverage-manifest-sha256", event.coverageManifestSha256,
+        "--exploration-event-id", event.explorationEventId,
+        "--increment-receipts", JSON.stringify(event.incrementReceipts), "--artifact", event.artifact,
+        ...(event.evidenceEventIds !== undefined ? ["--evidence-event-ids", JSON.stringify(event.evidenceEventIds)] : []),
+        ...(event.cleanBuild !== undefined ? ["--clean-build", JSON.stringify(event.cleanBuild)] : []),
+        ...(event.artifactSha256 !== undefined ? ["--artifact-sha256", event.artifactSha256] : []),
+        ...opts, ...rev);
+    case "RepairRoundRecorded":
+      return fx.gate("record-repair-round", ...base,
+        "--round", String(event.round), "--summary", event.summary,
+        "--trigger-finding-ids", JSON.stringify(event.triggerFindingIds),
+        "--affected-assertion-ids", JSON.stringify(event.affectedAssertionIds), "--artifact", event.artifact,
+        ...(event.incrementReceipts !== undefined ? ["--increment-receipts", JSON.stringify(event.incrementReceipts)] : []),
+        ...(event.artifactSha256 !== undefined ? ["--artifact-sha256", event.artifactSha256] : []),
+        ...opts, ...rev);
+    case "AssuranceRevisionDrift":
+      return fx.gate("record-assurance-drift", ...base,
+        "--summary", event.summary, "--setup-revision", event.setupRevision,
+        "--finalize-revision", event.finalizeRevision, "--drift-seq", String(event.driftSeq), ...rev);
+    default:
+      throw new Error(`测试辅助未路由事件类型 ${event.type}——补 appendEvent 路由分支`);
+  }
 }
 
 function appendEvidence(fx, { requirementId, kind, result = "verified", revision, name }) {
@@ -501,24 +567,19 @@ test("accepted_with_risk 逐缺口判定：多缺口须 --gap-id 指定，各接
 test("跨角色凭据与跨任务凭据一律拒绝", (t) => {
   const fx = makeV2Fixture(t);
   writeAcceptancePackage(fx);
+  // 意图命令组下同一断言面：record-evidence 固定 assurance 角色，builder 凭据出示被拒
   const cross = fx.gate(
-    "append", "--task-dir", fx.taskDir,
-    "--event", JSON.stringify({
-      type: "EvidenceRecorded", actor: "assurance", acceptanceVersion: 1, revision: "r",
-      summary: "x", requirementId: "R1", kind: "command", result: "verified",
-      artifact: "evidence/x.md", artifactSha256: sha256("x"),
-    }),
+    "record-evidence", "--task-dir", fx.taskDir,
+    "--requirement-id", "R1", "--kind", "command", "--result", "verified",
+    "--summary", "x", "--artifact", "evidence/x.md", "--artifact-sha256", sha256("x"),
     "--credential", fx.creds.builder,
   );
   assertFailure(cross);
-  assert.match(cross.stderr, /必须出示 assurance 凭据/);
+  assert.match(cross.stderr, /必须出示 assurance 凭据|不可写 evidence 域/);
   const unknown = fx.gate(
-    "append", "--task-dir", fx.taskDir,
-    "--event", JSON.stringify({
-      type: "FindingRaised", actor: "builder", acceptanceVersion: 1, revision: "r",
-      summary: "x", findingId: "F-X1", category: "defect", severity: "non-blocker",
-      requirementIds: [], artifact: "evidence/x.md",
-    }),
+    "record-finding", "--task-dir", fx.taskDir,
+    "--summary", "x", "--category", "defect", "--severity", "non-blocker",
+    "--requirement-ids", "[]", "--artifact", "evidence/x.md",
     "--credential", `${fx.slug}/other-task/builder`,
   );
   assertFailure(unknown);
@@ -668,21 +729,16 @@ test("任务替换：prepare 占用 → 二次 prepare 拒 → commit 前任 sup
   // id——否则继承 blocker 除用户接受风险外无任何机器合法出口（修复死路）
   const resolveArtifact = evidenceFile(successorDir, "inherited-resolved.md");
   assertOk(fx.gate(
-    "append", "--task-dir", successorDir,
-    "--event", JSON.stringify({
-      type: "FindingResolved", actor: "assurance", acceptanceVersion: succVerdict.acceptanceVersion,
-      revision: succVerdict.revision, summary: "修复继承发现", findingId: "F-KEEP", artifact: resolveArtifact.artifact,
-    }),
+    "resolve-finding", "--task-dir", successorDir,
+    "--finding-id", "F-KEEP", "--summary", "修复继承发现", "--artifact", resolveArtifact.artifact,
     "--credential", `${fx.slug}/task-succ/assurance`,
   ));
   const reopenArtifact = evidenceFile(successorDir, "inherited-reopen.md");
   assertOk(fx.gate(
-    "append", "--task-dir", successorDir,
-    "--event", JSON.stringify({
-      type: "FindingRaised", actor: "assurance", acceptanceVersion: succVerdict.acceptanceVersion,
-      revision: succVerdict.revision, summary: "继承问题复发", findingId: "F-KEEP-RE", category: "defect",
-      severity: "blocker", requirementIds: ["R1"], reopenOf: "F-KEEP", artifact: reopenArtifact.artifact,
-    }),
+    "record-finding", "--task-dir", successorDir,
+    "--summary", "继承问题复发", "--category", "defect", "--severity", "blocker",
+    "--requirement-ids", JSON.stringify(["R1"]), "--finding-id", "F-KEEP-RE",
+    "--reopen-of", "F-KEEP", "--artifact", reopenArtifact.artifact,
     "--credential", `${fx.slug}/task-succ/assurance`,
   ));
   const reopenedVerdict = JSON.parse(parseStdout(fx.gate("evaluate", "--task-dir", successorDir)));
@@ -712,14 +768,18 @@ test("租约：acquire/heartbeat/release；append --run-id 非持有者被拒", 
     summary: "I1", incrementId: "I1", artifact: implArtifact.artifact,
     mergeReceipt: { fromRevision: revision, toRevision: revision, patchSha256: sha256("p") },
   };
+  const intentArgs = [
+    "--task-dir", fx.taskDir, "--increment-id", event.incrementId, "--summary", event.summary,
+    "--artifact", event.artifact, "--merge-receipt", JSON.stringify(event.mergeReceipt),
+  ];
   const wrongRun = fx.gate(
-    "append", "--task-dir", fx.taskDir, "--event", JSON.stringify(event),
+    "record-implementation", ...intentArgs,
     "--credential", fx.creds.builder, "--run-id", "run-2",
   );
   assertFailure(wrongRun);
   assert.match(wrongRun.stderr, /不是当前代次/);
   assertOk(fx.gate(
-    "append", "--task-dir", fx.taskDir, "--event", JSON.stringify(event),
+    "record-implementation", ...intentArgs,
     "--credential", fx.creds.builder, "--run-id", "run-1",
   ));
   assertOk(fx.gate("lease-release", "--project-root", fx.projectDir, "--run-id", "run-1"));
@@ -779,11 +839,12 @@ test("append 完全相同事件幂等；verdict 含缺口 gapId 与非必需失�
   const fx = makeV2Fixture(t);
   writeAcceptancePackage(fx);
   const revision = driveToAssuranceStage(fx);
-  const implArtifact = evidenceFile(fx.taskDir, "impl-I1.md");
+  // 发现引用独立文件（impl 报告已被意图命令哈希登记，发现类契约不带哈希不可复用该路径）
+  const findingArtifact = evidenceFile(fx.taskDir, "finding-idem.md");
   const event = {
     type: "FindingRaised", actor: "builder", acceptanceVersion: 1, revision,
     summary: "重复幂等", findingId: "F-IDEM", category: "defect", severity: "non-blocker",
-    requirementIds: ["R2"], artifact: implArtifact.artifact,
+    requirementIds: ["R2"], artifact: findingArtifact.artifact,
   };
   const first = appendEvent(fx, event, "builder");
   assertOk(first);
@@ -883,25 +944,20 @@ test("默认策略：reviewEventId=none 的批准双路被拒——命令前置�
   );
   assertFailure(noReview);
   assert.match(noReview.stderr, /批准前置不满足/);
-  // 手工 append 路径：借 record-review 生成真实绑定的哈希三元组，伪造 reviewEventId=none 的批准事件 → 语义层拒绝
+  // 手工 append 通道已退役：伪造事件 JSON 的通道在 CLI 面结构性关闭（语义层
+  // reviewEventId=none 拒绝仍在 appendEvent 内保留，作为内部路径的纵深防线）
   writeReviewArtifact(fx);
   assertOk(fx.gate(
     "record-review", "--task-dir", fx.taskDir, "--conclusion", "pass",
     "--summary", "通过", "--credential", fx.creds.assurance,
   ));
-  const events = readFileSync(join(fx.taskDir, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  const review = events.find((event) => event.type === "AcceptanceReviewed");
-  const forged = appendEvent(fx, {
-    type: "AcceptanceApproved", actor: "user", acceptanceVersion: 1, revision: "",
-    summary: "伪造免审查批准",
-    acceptancePackageSha256: review.acceptancePackageSha256,
-    intentSha256: review.intentSha256,
-    policySnapshotSha256: review.policySnapshotSha256,
-    reviewEventId: "none",
-    confirmation: "user-explicit",
-  }, "user");
+  const forged = fx.gate(
+    "append", "--task-dir", fx.taskDir,
+    "--event", JSON.stringify({ type: "AcceptanceApproved", reviewEventId: "none", confirmation: "user-explicit" }),
+    "--credential", fx.creds.user,
+  );
   assertFailure(forged);
-  assert.match(forged.stderr, /reviewEventId=none 但策略要求目标与验收审查为批准前置/);
+  assert.match(forged.stderr, /append 已退役/);
   // 拦截只针对 none 语义：正常绑定审查的批准仍应成功
   assertOk(fx.gate(
     "approve-acceptance", "--task-dir", fx.taskDir, "--confirmation", "user-explicit",
@@ -1140,14 +1196,19 @@ test("DEV 收敛：风险预授权——standing 接受按类别/名额放行；
   assertFailure(accept("requirement", "R1", "standing-authorization", ["--gap-id", "0".repeat(64)]));
   // user-explicit 通道不受预授权影响（blocker 用户可显式接受）
   assertOk(accept("finding", "F-A3", "user-explicit"), "user-explicit 不依赖预授权");
-  // fold 重放一致性：绕过命令直接 append 无覆盖的 standing RiskAccepted → fail
-  const bad = appendEvent(fx, {
-    type: "RiskAccepted", actor: "user", acceptanceVersion: 1, revision: rev,
-    summary: "x", targetType: "finding", targetId: "F-A2", gapId: "F-A2",
-    evidenceState: "failed", confirmation: "standing-authorization",
-  }, "user");
+  // 绕过命令直接拼 RiskAccepted 事件的通道已随 append 退役封闭（fold 侧重放校验
+  // 保留在 appendEvent 内作内部路径纵深防线；CLI 面只剩 accept-risk 单一入口）
+  const bad = fx.gate(
+    "append", "--task-dir", fx.taskDir,
+    "--event", JSON.stringify({
+      type: "RiskAccepted", actor: "user", acceptanceVersion: 1, revision: rev,
+      summary: "x", targetType: "finding", targetId: "F-A2", gapId: "F-A2",
+      evidenceState: "failed", confirmation: "standing-authorization",
+    }),
+    "--credential", fx.creds.user,
+  );
   assertFailure(bad);
-  assert.match(bad.stderr, /预授权/);
+  assert.match(bad.stderr, /append 已退役/);
 });
 
 test("DEV 收敛：preauthorize-risk 输入校验——未登记分类与非法名额被拒；maxSeverity 恒 non-blocker", (t) => {

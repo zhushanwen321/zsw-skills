@@ -1,7 +1,7 @@
 ---
 name: delivery-v5
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 5.1.1
+version: 5.2.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -27,15 +27,19 @@ dev-flow-v5（技能③执行）在本体系内协作：②在已批准目标与
 
 ## 交付事务内核（delivery-core）
 
-「下一步做什么」的唯一回答者是内核（`scripts/delivery-core.mjs` CLI + `scripts/kernel/rules.json` 五域转移表 + `scripts/lib/kernel-judgments.mjs` 判定单源库）。主 agent 每次裁决前先 `delivery-core next --task-dir <taskDir>`，按合法转移的 executor 执行，不凭会话记忆推演流程：
+「下一步做什么」的唯一回答者是内核（`scripts/delivery-core.mjs` CLI + `scripts/kernel/rules.json` 五域转移表 + `scripts/lib/kernel-judgments.mjs` 判定单源库）。主 agent 每次裁决前先 `delivery-core next --task-dir <taskDir>`，按合法转移的 executor 执行（转移带 kind 分类：裁决点停回 / workflow 转移附可照抄的预填发起规格 / gate 命令；`--auto` 自动执行 evaluate 类例行转移），不凭会话记忆推演流程：
 
-- **转移表是数据不是文档**：任务 / DAG 节点 / 发现 / 探索 / 验收包五域，`validate` 静态校验（无环除回边、状态可达、执行器唯一、谓词与角色在词表）——流程顺序矛盾在定义期被机器检出，不靠实跑暴露。
-- **判定单源**：发现 open 集、可用探索集、探索 due、修复轮预算只保留一份实现（kernel-judgments）；gate 与内核同进程复用，workflow 经内核 CLI 的 JSON 子命令消费，禁止在 workflow 复刻同口径判定。
-- **写入防护**：批准即冻结验收包（0444 + frozen/v<N>/ 快照）；合法修订唯一通道 `open-revision`（RevisionOpened 留痕解封）；漏网改写被加载时篡改检测拦下。
-- **定级护栏**：关联需求已有断言级判据明文覆盖的发现禁止归 boundary；non-blocker 必须附 consequenceRefutation 三类论证；同一条目定级组合超过 2 种熔断停回用户。
+- **转移表是数据不是文档**：任务 / DAG 节点 / 发现 / 探索 / 验收包五域，`validate` 静态校验（无环除回边、状态可达、执行器唯一、谓词与角色在词表、写入矩阵词表闭包）——流程顺序矛盾在定义期被机器检出，不靠实跑暴露；静态校验随全量测试进 CI（`.github/workflows/ci.yml`）。
+- **判定单源**：发现 open 集、可用探索集、探索 due、修复轮预算只保留一份实现（kernel-judgments）；gate 与内核同进程复用，workflow 经内核 CLI 的 JSON 子命令消费（workflow 产物禁 import 的平台约束下仍单实现——判定随技能更新即时生效、artifact 哈希校验不分叉），禁止在 workflow 复刻同口径判定。
+- **事件意图提交**：全部事件经意图命令登记（record-implementation / record-finding / record-evidence / record-exploration / complete-assurance 等），信封（actor/revision/acceptanceVersion/domain/artifactSha256）由 gate 构造，执行器不再手工拼事件 JSON；`append` 通道已退役。
+- **写入防护**：批准即冻结验收包（0444 + frozen/v<N>/ 快照）；合法修订唯一通道 `open-revision`（RevisionOpened 留痕解封）；漏网改写被加载时篡改检测拦下；写入矩阵「角色 × 当前阶段 × 目标域」在写入当刻执行（builder 不可写验收/证据/裁决域，assurance 不可写实现/裁决域）。
+- **status.json 派生视图**：节点状态以 status.events 为源（事件带结构化 payload），`node-project` 按事件重新推算并比对在盘 nodes——绕过转移入口的改动被检出，`--write` 以事件恢复。
+- **过程记录读侧合流**：交付事件带 domain 章，过程记录（process-review.jsonl）带 process 域章；`delivery-core events` 输出统一时间线（签名流与观测流分储、读侧单口——签名完整性不因观测数据稀释）。
+- **定级护栏**：关联需求已有断言级判据明文覆盖的发现禁止归 boundary；non-blocker 必须附 consequenceRefutation 三类论证；同一条目定级组合超过 2 种熔断停回用户；T2 聚合分级与 D2 聚合定性的改判必附理由留痕，同一 ref/条目连续改判达上限停回（aggregateRegradeHalt）。护栏只拦新写入；历史记录违规在加载折算时留档 guardrailWarnings（旧任务目录可读）。
 - **循环预算三档**：perVersion 修复 ≤3、不同 must-fix ≤10、跨 run 保证总轮 ≤6——超限 evaluate 判 process-failed 停回（`quality.budgets` 报用量）。
-- **待办实体**（pending-actions）：善后 / 待恢复 / 待登记 / 待裁决落盘，`next` 优先回答；中断恢复 = 读待办 + 合法转移，不依赖会话记忆。
-- **人工处置显式转移**：DAG 节点人工改判 done 的唯一合法通道 `node-transition --event manual-disposition --basis <依据>`；禁止词表外事件与直改状态文件。
+- **待办实体**（pending-actions）：善后 / 待恢复 / 待登记 / 待裁决 / 待复盘落盘，`next` 优先回答；中断恢复 = 读待办 + 合法转移，不依赖会话记忆。
+- **人工处置显式转移**：DAG 节点人工改判 done 的唯一合法通道 `node-transition --event manual-disposition --basis <依据> --task-dir <taskDir>`（自动登记待复盘待办）；禁止词表外事件与直改状态文件。
+- **验证体系**：转移表静态校验 + 编排链已知答案样例 + golden 任务端到端（`scripts/tests/delivery-golden-v5.test.mjs`：正常流与预置缺陷流，断言拦截阶段/定级/轮次；agent 语义行为的 golden 需活跑，见 dev-flow-v5 题库分级）+ 历史任务回放（`delivery-core replay --task-dir`：真实事件序列对转移表的可表达性核验）+ 全量机制单测，全部进 CI。
 
 内核命令组与逐裁决点命令见 `references/operations.md`（§0 内核命令组、§11 中断恢复）。
 

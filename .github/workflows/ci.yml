@@ -1,0 +1,29 @@
+# CI：转移图静态校验 + 单源构建对账 + 全量测试（设计文档目标 1「静态校验进 CI」的载体）
+# 本地等价命令序列见各 step；无 npm 依赖，Node 直跑
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 内核转移表静态校验（无环除回边/可达/执行器唯一/谓词与角色在词表/写入矩阵词表闭包）
+        run: node skills/self/dev-workflow/delivery-v5/scripts/delivery-core.mjs validate
+      - name: workflow 单源构建 --check（改源忘构建拦截）
+        run: node scripts/build-workflows.mjs --check
+      - name: zcode/pi 双平台产物对账
+        run: node scripts/check-workflow-parity.mjs
+      - name: workflow 产物 tsc strict
+        run: node scripts/check-workflow-types.mjs
+      - name: 版本纪律（SKILL.md 版本与产物一致）
+        run: node scripts/check-version-discipline.mjs
+      - name: 全量测试
+        run: node --test scripts/tests/*.test.mjs

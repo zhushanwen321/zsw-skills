@@ -12,12 +12,19 @@ node ~/.agents/skills/delivery-v5/scripts/delivery-core.mjs next --task-dir <tas
 
 | 命令 | 用途 | 调用方 |
 |------|------|--------|
-| `validate` | 转移表静态校验（无环除回边/可达/执行器唯一/谓词与角色在词表）——改 rules.json 后必跑 | 主 agent / CI |
-| `next` | 下一步唯一回答者（见上） | 主 agent |
-| `pending add\|resolve\|list` | 脑内状态实体化：`--kind cleanup\|awaiting-restore\|awaiting-registration\|awaiting-ruling --note <一句话待办>` | 主 agent |
+| `validate` | 转移表静态校验（无环除回边/可达/执行器唯一/谓词与角色在词表/写入矩阵词表闭包）——改 rules.json 后必跑 | 主 agent / CI |
+| `next [--auto]` | 下一步唯一回答者（见上）；转移带 kind 分类（裁决点 / workflow 附预填发起规格 / gate 命令），`--auto` 自动执行 evaluate 类例行转移 | 主 agent |
+| `pending add\|resolve\|list` | 脑内状态实体化：`--kind cleanup\|awaiting-restore\|awaiting-registration\|awaiting-ruling\|awaiting-review --note <一句话待办>` | 主 agent |
 | `budget` | 循环预算查询（修复轮/跨 run/改判统计） | 主 agent / workflow |
 | `open-findings` / `usable-explorations` / `exploration-due` / `repair-budget` | 判定单源 JSON 出口（唯一实现在 `scripts/lib/kernel-judgments.mjs`） | workflow（IA/ARL 经此消费，禁复刻） |
-| `node-transition` | DAG 节点状态转移唯一判定（`--dry-run` 供引擎串行写链内先判后写；`manual-disposition --basis <依据>` 为人工处置唯一合法通道） | wave-executor-v5 / 主 agent |
+| `node-transition` | DAG 节点状态转移唯一判定（`--dry-run` 供引擎串行写链内先判后写；`manual-disposition --basis <依据> --task-dir <taskDir>` 为人工处置唯一合法通道，自动登记待复盘待办） | wave-executor-v5 / 主 agent |
+| `node-project [--write]` | status.json 派生视图：从 status.events 按事件重新推算节点状态、比对在盘 nodes（绕过转移入口的改动被检出）；`--write` 以事件恢复 | 主 agent / 断点恢复 |
+| `events [--domain D]` | 事件时间线读侧合流：交付事件（domain 章）+ 过程记录（process 域）统一输出 | 主 agent / 复盘 |
+| `replay` | 历史任务回放：真实事件序列对转移表的可表达性核验（不可表达即建模缺口或词表外操作） | 主 agent / 内核演进 |
+
+**判定单源的消费通道**：gate 与内核同进程 import kernel-judgments；workflow 经内核 CLI 的 JSON 子命令消费——zcode/pi workflow 产物禁模块 import（平台约束），CLI 通道保持判定随技能更新即时生效且 artifact 哈希校验不分叉，单实现不受影响。
+
+**事件意图提交**（执行器事件唯一通道，`append` 已退役）：`record-implementation` / `record-repair-round` / `record-finding` / `resolve-finding` / `reaffirm-resolution` / `record-evidence` / `record-exploration` / `complete-assurance` / `record-assurance-drift`——信封（actor/revision/acceptanceVersion/domain/artifactSha256）由 gate 构造；`--revision` 显式锁定保证 run 在途的 setup revision；写入矩阵「角色 × 当前阶段 × 目标域」与 domain 章在写入当刻执行。主会话命令（批准/风险接受/替换等）见 `delivery-gate.mjs help`。
 
 **写入防护**：`approve-acceptance` 即冻结验收包（acceptance.json + increments.json chmod 0444 + `frozen/v<N>/` 快照）——非法改写在写入当秒被拒，漏网者在下次加载被篡改检测拦下。合法修订唯一通道：
 
@@ -26,7 +33,7 @@ node ~/.agents/skills/delivery-v5/scripts/delivery-gate.mjs open-revision \
   --task-dir <taskDir> --reason "修订理由" --credential <user credentialId>
 ```
 
-**定级护栏**（FindingRaised 登记当时执行）：关联需求已有断言级判据明文覆盖的发现禁止归 boundary；non-blocker 必须附 consequenceRefutation（三类枚举）；同一条目（reopenOf 根）定级组合超过 2 种即熔断停回用户裁决。
+**定级护栏**（新写入当时执行；历史记录违规在加载折算时留档 guardrailWarnings，不阻塞旧任务目录读取）：关联需求已有断言级判据明文覆盖的发现禁止归 boundary；non-blocker 必须附 consequenceRefutation（三类枚举）；同一条目（reopenOf 根）定级组合超过 2 种即熔断停回用户裁决；T2 聚合分级与 D2 聚合定性的改判必附理由留痕，连续改判达上限停回（aggregateRegradeHalt）。
 
 ## 1. 初始化（init：意图 + 凭据 + 血统）
 

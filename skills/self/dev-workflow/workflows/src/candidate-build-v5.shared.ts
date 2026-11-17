@@ -370,11 +370,36 @@ if (leaseRunId !== "") {
   leaseHeld = true;
 }
 
+// 意图提交（信封由 gate 构造）：把本地事件对象翻译为意图命令参数——revision 锁定用
+// --revision 显式传入（保证 run 在途的 setup revision 语义保持），artifactSha256 由 gate 计算
+function intentArgsFor(event: DeliveryEvent): string[] {
+  const base = ["--task-dir", taskDir];
+  const rev = ["--revision", event.revision];
+  const opt = (key: string, flag: string): string[] => (event[key] !== undefined ? [flag, String(event[key])] : []);
+  switch (event.type) {
+    case "ImplementationRecorded":
+      return ["record-implementation", ...base,
+        "--increment-id", String(event.incrementId), "--summary", event.summary, "--artifact", String(event.artifact),
+        "--merge-receipt", JSON.stringify(event.mergeReceipt), ...rev];
+    case "FindingRaised":
+      return ["record-finding", ...base,
+        "--summary", event.summary, "--category", String(event.category), "--severity", String(event.severity),
+        "--requirement-ids", JSON.stringify(event.requirementIds), "--artifact", String(event.artifact),
+        ...(event.findingId !== undefined ? ["--finding-id", String(event.findingId)] : []),
+        ...opt("origin", "--origin"), ...opt("reopenOf", "--reopen-of"),
+        ...opt("consequenceRefutation", "--consequence-refutation"), ...opt("consequenceRefutationType", "--consequence-refutation-type"),
+        ...opt("firstDetectedStage", "--first-detected-stage"), ...opt("expectedStage", "--expected-stage"),
+        ...opt("regressionTestRef", "--regression-test-ref"), ...rev];
+    default:
+      throw new Error(`intentArgsFor 未路由事件类型 ${event.type}`);
+  }
+}
+
 async function appendEvent(event: DeliveryEvent): Promise<string | null> {
-  const appendArgs = ["append", "--task-dir", taskDir, "--event", JSON.stringify(event), "--credential", builderCredentialId];
+  const appendArgs = [...intentArgsFor(event), "--credential", builderCredentialId];
   if (leaseRunId !== "") appendArgs.push("--run-id", leaseRunId);
   const appended = await runGate(gatePath, appendArgs);
-  if (appended.exitCode !== 0) return appended.stderr.trim() || appended.stdout.trim() || `append exit ${appended.exitCode}`;
+  if (appended.exitCode !== 0) return appended.stderr.trim() || appended.stdout.trim() || `intent append exit ${appended.exitCode}`;
   events.push(event);
   return null;
 }
@@ -695,12 +720,24 @@ for (let index = 0; index < increments.length; index += 1) {
         event.findingId = `F-X${findingSequence + 1}`;
       }
       findingSequence += 1;
-      const appended = await runGate(gatePath, ["append", "--task-dir", taskDir, "--event", JSON.stringify(event), "--credential", assuranceCredentialId]);
+      const appended = await runGate(gatePath, [
+        "record-finding", "--task-dir", taskDir,
+        "--summary", event.summary, "--category", String(event.category), "--severity", String(event.severity),
+        "--requirement-ids", JSON.stringify(event.requirementIds), "--artifact", String(event.artifact),
+        "--finding-id", String(event.findingId), "--revision", postRevision,
+        ...(event.consequenceRefutation !== undefined ? ["--consequence-refutation", String(event.consequenceRefutation)] : []),
+        ...(event.consequenceRefutationType !== undefined ? ["--consequence-refutation-type", String(event.consequenceRefutationType)] : []),
+        ...(event.origin !== undefined ? ["--origin", String(event.origin)] : []),
+        ...(event.expectedStage !== undefined ? ["--expected-stage", String(event.expectedStage)] : []),
+        ...(event.regressionTestRef !== undefined ? ["--regression-test-ref", String(event.regressionTestRef)] : []),
+        "--credential", assuranceCredentialId,
+      ]);
       if (appended.exitCode !== 0) return failBuild(`候选探索发现登记失败：${appended.stderr.trim()}`, explorationReportPath);
       events.push(event);
       findingIds.push(event.findingId);
     }
-    // 探索报告哈希（coverageManifestSha256 与 artifactSha256 同源同值：同一文件的内容寻址）
+    // 探索报告哈希（coverageManifestSha256 与 artifactSha256 同源同值：同一文件的内容寻址；
+    // artifactSha256 由意图命令按盘上文件计算，此处只算 coverageManifestSha256 绑定值）
     let explorationReportSha = "";
     try {
       explorationReportSha = await artifactSha256Of(explorationReportPath);
@@ -712,7 +749,12 @@ for (let index = 0; index < increments.length; index += 1) {
       summary: exploration.summary, dimensions: exploration.dimensions,
       coverageManifestSha256: explorationReportSha, artifactSha256: explorationReportSha, artifact: explorationReportPath,
     };
-    const explorationAppended = await runGate(gatePath, ["append", "--task-dir", taskDir, "--event", JSON.stringify(explorationEvent), "--credential", assuranceCredentialId]);
+    const explorationAppended = await runGate(gatePath, [
+      "record-exploration", "--task-dir", taskDir,
+      "--summary", exploration.summary, "--dimensions", JSON.stringify(exploration.dimensions),
+      "--coverage-manifest-sha256", explorationReportSha, "--artifact", explorationReportPath, "--revision", postRevision,
+      "--credential", assuranceCredentialId,
+    ]);
     if (explorationAppended.exitCode !== 0) return failBuild(`ExplorationCompleted 登记失败：${explorationAppended.stderr.trim()}`, explorationReportPath);
     events.push(explorationEvent);
     if (exploration.findings.some((finding) => finding.severity === "blocker")) {

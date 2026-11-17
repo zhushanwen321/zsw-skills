@@ -16,7 +16,8 @@
     "t2RewriteAttemptCap": 2,
     "d2ItemReflowCap": 2,
     "acceptanceReReviewRoundCap": 6,
-    "findingRegradeHalt": 2
+    "findingRegradeHalt": 2,
+    "aggregateRegradeHalt": 2
   },
   "guardrails": {
     "//": "FindingRaised 登记护栏（delivery-gate append 写入当时执行）。",
@@ -109,6 +110,40 @@
       "decider": "core",
       "note": "最近批准 seq 晚于最新可用探索"
     }
+  },
+  "writeDomains": {
+    "//": "写入目标域词表（gate append 按「角色 × 当前状态 × 目标域」矩阵裁决）。process 域不在矩阵内 = 签名事件流不可写（过程记录走独立观测流，读侧合流见 delivery-core events）。",
+    "values": ["acceptance", "design", "implementation", "evidence", "finding", "decision", "process"]
+  },
+  "eventDomains": {
+    "//": "事件类型 → 写入目标域。gate 在 appendEvent 写入时盖 domain 章（读侧对无章历史事件按本表补判）。键词表与 gate EVENT_SCHEMAS 的一致性由 scripts/tests/delivery-core-v5.test.mjs 对账（避免双源）。",
+    "acceptance": ["AcceptanceReviewed", "AcceptanceApproved", "RevisionOpened"],
+    "design": ["DesignApproved"],
+    "implementation": ["ImplementationRecorded", "RepairRoundRecorded"],
+    "evidence": ["EvidenceRecorded", "ExplorationCompleted", "AssuranceCompleted", "AssuranceRevisionDrift"],
+    "finding": ["FindingRaised", "FindingResolved", "ResolutionReaffirmed"],
+    "decision": [
+      "RiskAccepted",
+      "RiskPreauthorized",
+      "PolicyUpgraded",
+      "RevisionBaselineConfirmed",
+      "IndependentTaskDeclared",
+      "TaskSuperseded",
+      "TaskSupersedeCancelled"
+    ]
+  },
+  "writeMatrix": {
+    "//": "「角色 × 当前状态 × 目标域」写入矩阵（appendEvent 统一执行）。states 用 kernel-judgments taskPhaseFromEvents 的任务阶段词表（task 域状态）；'*' = 任意阶段。缺行 = 拒绝写入。初始数据 states 全 '*'（阶段维先立机制，取值待实跑证据再收紧——防新死锁优先于收紧）。",
+    "rows": [
+      { "actor": "builder", "domain": "implementation", "states": ["*"] },
+      { "actor": "builder", "domain": "finding", "states": ["*"] },
+      { "actor": "assurance", "domain": "evidence", "states": ["*"] },
+      { "actor": "assurance", "domain": "finding", "states": ["*"] },
+      { "actor": "assurance", "domain": "acceptance", "states": ["*"] },
+      { "actor": "user", "domain": "acceptance", "states": ["*"] },
+      { "actor": "user", "domain": "design", "states": ["*"] },
+      { "actor": "user", "domain": "decision", "states": ["*"] }
+    ]
   },
   "domains": {
     "task": {
@@ -299,6 +334,19 @@
           "executor": "assurance-repair-loop-v5",
           "actor": "builder",
           "backedge": "repair"
+        },
+        {
+          "from": "finalizing",
+          "to": "assuring",
+          "event": "RepairRoundRecorded",
+          "requires": [
+            "budgetPerVersionAvailable",
+            "budgetCrossRunAvailable"
+          ],
+          "executor": "assurance-repair-loop-v5",
+          "actor": "builder",
+          "backedge": "repair",
+          "note": "跨 run 修复循环（历史任务回放发现）：真实事件序 = AssuranceCompleted 落盘后才发现修复需求，RepairRoundRecorded 从 finalizing 回 assuring 再 recheck——缺此边则回放不可表达"
         },
         {
           "from": "finalizing",

@@ -531,7 +531,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "5.1.1"; // 构建注入自 dev-flow-v5/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "5.2.0"; // 构建注入自 dev-flow-v5/SKILL.md frontmatter version（唯一权威）
 // ── W2 wave-executor-v5 ──
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
@@ -1381,13 +1381,15 @@ async function readStatusFile() {
         return null;
     }
 }
-async function statusUpdate(nodeId, entry, event, detail) {
+async function statusUpdate(nodeId, entry, event, detail, payload) {
     await serializedStatus(async () => {
         const st = (await readStatusFile()) ?? { baseline: plan.baseline, nodes: {}, events: [], extra: {} };
         const nodes = { ...st.nodes, [nodeId]: entry };
+        // payload = 结构化字段（commit/evidence/reason）——delivery-core node-project 按 events
+        // 无损重投影 nodes（派生视图），依赖每条事件携带 payload
         const events = [
             ...st.events,
-            { seq: st.events.length + 1, node: nodeId, event, detail: detail ?? entry.evidence ?? "" },
+            { seq: st.events.length + 1, node: nodeId, event, detail: detail ?? entry.evidence ?? "", ...(payload !== undefined && Object.keys(payload).length > 0 ? { payload } : {}) },
         ];
         // schema 外顶层字段（name/updated 等 D0 产物）原样保留（§4.5）
         await writeTextViaNode(plan.statusPath, JSON.stringify({ ...st.extra, baseline: st.baseline, nodes, events }, null, 2));
@@ -1456,7 +1458,14 @@ async function applyNodeTransition(id, eventName, extra = {}) {
         ...(extra.commit !== undefined ? { commit: extra.commit } : {}),
         ...(extra.evidence !== undefined ? { evidence: extra.evidence } : {}),
     };
-    await statusUpdate(id, fileEntry, eventName, extra.detail ?? extra.evidence ?? extra.reason ?? "");
+    const payload = {};
+    if (extra.commit !== undefined)
+        payload.commit = extra.commit;
+    if (extra.evidence !== undefined)
+        payload.evidence = extra.evidence;
+    if (extra.reason !== undefined)
+        payload.reason = extra.reason;
+    await statusUpdate(id, fileEntry, eventName, extra.detail ?? extra.evidence ?? extra.reason ?? "", payload);
     report({ id, state: decision.to === "in-progress" ? "in-progress" : decision.to === "done" ? "done" : "failed", detail: extra.reason ?? extra.commit ?? "" }, "nodes");
     return true;
 }
@@ -1992,7 +2001,8 @@ const reviewForceReasons = new Map();
 async function appendProcessReview(record) {
     processReviewSeq += 1;
     const timestamp = await obsNow();
-    const line = JSON.stringify({ id: `pr-${processReviewSeq}-${record.nodeId}`, ts: timestamp ?? "", round: failureFixRounds, ...record });
+    // domain 章：过程记录属于 process 域（与交付事件流同词表；读侧经 delivery-core events 合流）
+    const line = JSON.stringify({ domain: "process", id: `pr-${processReviewSeq}-${record.nodeId}`, ts: timestamp ?? "", round: failureFixRounds, ...record });
     const err = await obsAppend(processReviewPathOf(), line);
     if (err !== null)
         log(`WARN: 过程审查记录写入失败（${processReviewPathOf()}）：${err}——审查结论以 status.json 与日志为准`);

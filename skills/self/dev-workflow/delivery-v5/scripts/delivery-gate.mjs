@@ -41,7 +41,7 @@ import { fileURLToPath } from "node:url";
 // 判定单源库（V5 内核）：发现 open 集、修复轮与跨 run 预算、定级改判统计只此一份实现，
 // 本文件与 delivery-core.mjs 同进程复用；workflow 侧经 delivery-core CLI 的 JSON 子命令消费，
 // 禁止在别处复刻同口径判定
-import { KERNEL_RULES, findingRegrades, openFindingsFromEvents, repairBudgetFromEvents } from "./lib/kernel-judgments.mjs";
+import { KERNEL_RULES, findingRegrades, openFindingsFromEvents, repairBudgetFromEvents, taskPhaseFromEvents } from "./lib/kernel-judgments.mjs";
 
 const GATE_COMMAND = "node ~/.agents/skills/delivery-v5/scripts/delivery-gate.mjs";
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -201,7 +201,16 @@ const HELP = `delivery-gate（DEV）：delivery-v5 的确定性交付裁决器�
   delivery-gate approve-acceptance --task-dir D --confirmation user-explicit|standing-authorization --summary S --credential <user credentialId> [--revision R]  # V5：批准即冻结（chmod 0444 + frozen/v<N>/ 快照）
   delivery-gate open-revision --task-dir D --reason S --credential <user credentialId>  # V5：合法解冻唯一通道（RevisionOpened 留痕 + chmod 0644）
   delivery-gate record-design-approved --task-dir D --package-file F --decision-file F2 --summary S --credential <user credentialId>
-  delivery-gate append --task-dir D --event '<JSON>' --credential <credentialId> [--run-id R]
+  # 意图提交命令组（执行器事件唯一通道；信封由 gate 构造：actor/revision/acceptanceVersion/domain/artifactSha256 缺省内核计算）
+  delivery-gate record-implementation --task-dir D --increment-id INC-1 --summary S --artifact A --merge-receipt '<JSON>' --credential <builder credentialId> [--revision R]
+  delivery-gate record-repair-round --task-dir D --round N --summary S --trigger-finding-ids '<JSON>' --affected-assertion-ids '<JSON>' --artifact A --credential <builder credentialId> [--from-revision R --to-revision R2 --nature behavior|environment|evidence --increment-receipts '<JSON>']
+  delivery-gate record-finding --task-dir D --summary S --category defect|boundary --severity blocker|non-blocker --requirement-ids '<JSON>' --artifact A --credential <builder|assurance credentialId> [--finding-id F --origin O --consequence-refutation S --consequence-refutation-type T --reopen-of F0]
+  delivery-gate resolve-finding --task-dir D --finding-id F --summary S --artifact A --credential <assurance credentialId>
+  delivery-gate reaffirm-resolution --task-dir D --finding-id F --original-resolution-event-id E --basis S --summary S --artifact A --credential <assurance credentialId>
+  delivery-gate record-evidence --task-dir D --requirement-id R --kind K --result S --summary S --artifact A --credential <assurance credentialId> [--assertion-ids '<JSON>' --adversarial-form-ids '<JSON>']
+  delivery-gate record-exploration --task-dir D --summary S --dimensions '<JSON>' --coverage-manifest-sha256 H --artifact A --credential <assurance credentialId>
+  delivery-gate complete-assurance --task-dir D --summary S --coverage-manifest-sha256 H --exploration-event-id E --increment-receipts '<JSON>' --artifact A --credential <assurance credentialId> [--mode full|recheck|explore-only --evidence-event-ids '<JSON>' --clean-build '<JSON>']
+  delivery-gate record-assurance-drift --task-dir D --setup-revision R --finalize-revision R2 --drift-seq N --summary S --credential <assurance credentialId>
   delivery-gate accept-risk --task-dir D --target-type requirement|finding --target-id ID --confirmation user-explicit --summary S --credential <user credentialId> [--revision R] [--gap-id G]
   delivery-gate accept-risk --task-dir D --target-type finding --target-id ID --confirmation standing-authorization --summary S --credential <user credentialId>  # V5 代：须先由用户 preauthorize-risk 登记覆盖该 finding 的预授权（类别白名单 + 名额上限；severity 上限恒 non-blocker）
   delivery-gate preauthorize-risk --task-dir D --categories defect,boundary --max-findings N --summary S --credential <user credentialId>  # V5 代：用户预先声明 standing 接受范围（持久授权声明；blocker 永不可预授权）
@@ -986,6 +995,8 @@ function eventContent(record) {
   for (const field of eventFields(record.type, record)) {
     if (record[field] !== undefined) content[field] = record[field];
   }
+  // domain 章参与内容哈希（无章历史事件不含该键，哈希口径向后兼容）
+  if (record.domain !== undefined) content.domain = record.domain;
   return content;
 }
 
@@ -1087,13 +1098,16 @@ function validateEventShape(event, { record = false } = {}) {
   const schema = EVENT_SCHEMAS[event.type];
   const allowed = eventFields(event.type, event);
   if (record) allowed.push("seq", "recordedAt", "eventId", "signature");
+  // domain = 写入目标域章（appendEvent 写入时盖；可选——读侧对无章历史事件按 eventDomains 补判）
+  allowed.push("domain");
+  const optional = [...(OPTIONAL_EVENT_FIELDS[event.type] ?? []), "domain"];
   // TaskSuperseded 条件字段：非 committed 段出现 prepareEventId 即形态错误
   if (event.type === "TaskSuperseded" && event.phase !== "committed") {
     if (Object.hasOwn(event, "prepareEventId")) {
       fail("TaskSuperseded(prepare) 不允许携带 prepareEventId（该字段属 committed 段）。", "删除 prepareEventId 字段后重试；committed 段再携带指向 prepare 的 eventId。");
     }
   }
-  requireEventKeys(event, allowed, OPTIONAL_EVENT_FIELDS[event.type] ?? [], record ? `事件记录 ${event.type}` : `事件 ${event.type}`);
+  requireEventKeys(event, allowed, optional, record ? `事件记录 ${event.type}` : `事件 ${event.type}`);
   requireEnum(event.actor, ACTORS, "event.actor");
   if (!schema.actors.includes(event.actor)) {
     fail(`${event.type} 不允许 actor=${event.actor}。`, `把 actor 改为 ${schema.actors.join(" | ")} 后重试 append；不要伪造其他角色事件。`);
@@ -1368,6 +1382,10 @@ function validateArtifact(taskDir, artifact) {
 // 再引用必须携带一致哈希，防绕过哈希绑定）；③ 本次事件声明的哈希与磁盘现状不一致 →
 // 拒绝（防止把已覆盖的文件再登记进事件流）。双方均无哈希的旧形态引用只做磁盘可读
 // 校验（validateArtifact 已覆盖），无内容对账依据时放行以兼容旧事件流。
+// 可携带 artifactSha256 的事件类型（其余类型引用 artifact 但契约上不绑内容哈希——
+// 发现类引用证据文件属常态，防覆盖检查对其不要求携带哈希，其本身也不登记哈希）
+const ARTIFACT_HASH_CAPABLE_TYPES = new Set(["EvidenceRecorded", "ImplementationRecorded", "ExplorationCompleted", "AssuranceCompleted", "RepairRoundRecorded"]);
+
 function validateArtifactNotOverwritten(world, event) {
   const artifact = event.artifact;
   const artifactSha256 = Object.hasOwn(event, "artifactSha256") ? event.artifactSha256 : null;
@@ -1506,7 +1524,9 @@ function loadWorld(taskDirValue, { withEvents = true, requirePackage = true, all
     const parsed = parseEventRecords(taskDir, keys);
     world.entries = parsed.entries;
     world.eventsText = parsed.text;
-    world.fold = foldEvents(world, world.entries);
+    // 加载折算容忍历史护栏违规（V4 代任务目录可读；违规留档 fold.guardrailWarnings）——
+    // 写入路径 appendEvent 的 prospective 折算保持严格（新写入当时被拒）
+    world.fold = foldEvents(world, world.entries, { guardrailStrict: false });
     // 篡改检测（V5 写入防护的加载侧）：最近批准绑定的验收包哈希与当前盘上包不一致，且其后
     // 无 RevisionOpened 解封 → 冻结对象被绕过通道改动（chmod 挡不住的写入在此检出；AG-2
     // 类「修复组直改已冻结 increments.json」在写入当秒被 0444 拒，漏网者在此拦下）。
@@ -1570,7 +1590,7 @@ function matchPreauthorization(preauthorizations, usedCounts, category, severity
   return -1;
 }
 
-function foldEvents(world, entries) {
+function foldEvents(world, entries, { guardrailStrict = true } = {}) {
   const currentVersion = world.acceptance ? world.acceptance.acceptanceVersion : null;
   const fold = {
     reviews: [],
@@ -1580,6 +1600,8 @@ function foldEvents(world, entries) {
     evidence: [],
     findingHistory: [],
     repairs: [],
+    // 历史记录的护栏违规留档（guardrailStrict=false 的加载折算不崩溃，逐条记录在此）
+    guardrailWarnings: [],
     assurances: [],
     explorations: [],
     findings: new Map(),
@@ -1730,7 +1752,9 @@ function foldEvents(world, entries) {
         }
         // 护栏①（V5 定级护栏）：boundary 禁令——关联需求已有断言级判据明文覆盖的行为，
         // 禁止归 boundary 类（V4 实跑实证：违反判据 AX5 明文的发现被定 boundary 绕过
-        // must-fix 计数与接受判定——LLM 语义输出不得直接改写机器判据）
+        // must-fix 计数与接受判定——LLM 语义输出不得直接改写机器判据）。
+        // 仅对新写入执行：历史（V4 代）记录在加载折算时降级为 fold.guardrailWarnings
+        // 留档（加载不得因历史违规崩溃——next/replay/统计要能读旧任务目录）
         if (
           KERNEL_RULES.guardrails.boundaryBanOnAssertedRequirements &&
           current && world.acceptance.schemaVersion === 2 && event.category === "boundary"
@@ -1740,10 +1764,11 @@ function foldEvents(world, entries) {
             return requirement !== undefined && Array.isArray(requirement.assertions) && requirement.assertions.length > 0;
           });
           if (onAsserted) {
-            fail(
-              `${lineLabel} 的 category=boundary 但关联需求已有断言级判据明文覆盖（schema 2 assertions）——有断言覆盖的行为不得申报为边界。`,
-              `改为 category=defect（按实际严重度定级），或从 requirementIds 移除已有断言覆盖的需求并附对照论证后重试。`,
-            );
+            const message = `${lineLabel} 的 category=boundary 但关联需求已有断言级判据明文覆盖（schema 2 assertions）——有断言覆盖的行为不得申报为边界。`;
+            if (guardrailStrict) {
+              fail(message, `改为 category=defect（按实际严重度定级），或从 requirementIds 移除已有断言覆盖的需求并附对照论证后重试。`);
+            }
+            fold.guardrailWarnings.push(`${message}（历史记录，写入时未拦）`);
           }
         }
         // 护栏③（V5 定级护栏）：定级改判熔断——同一条目（reopenOf 根）累计 (category,severity)
@@ -1751,10 +1776,11 @@ function foldEvents(world, entries) {
         if (KERNEL_RULES.guardrails.regradeHaltEnabled) {
           const { halt, offenders } = findingRegrades([...fold.findingHistory, event]);
           if (offenders.length > 0) {
-            fail(
-              `${lineLabel} 使条目 ${offenders.map((item) => item.root).join(", ")} 的定级组合数超过 ${halt} 种（${offenders.map((item) => item.grades.join("/")).join("；")}）——定级反复改写触发熔断。`,
-              `停回用户裁决定级：由用户确定最终 (category, severity) 后按裁决登记；或走 accept-risk 风险通道，不再改判。`,
-            );
+            const message = `${lineLabel} 使条目 ${offenders.map((item) => item.root).join(", ")} 的定级组合数超过 ${halt} 种（${offenders.map((item) => item.grades.join("/")).join("；")}）——定级反复改写触发熔断。`;
+            if (guardrailStrict) {
+              fail(message, `停回用户裁决定级：由用户确定最终 (category, severity) 后按裁决登记；或走 accept-risk 风险通道，不再改判。`);
+            }
+            fold.guardrailWarnings.push(`${message}（历史记录，写入时未拦）`);
           }
         }
         raisedFindings.set(event.findingId, event.acceptanceVersion);
@@ -2763,8 +2789,46 @@ function withEventsLock(taskDirValue, run) {
   }
 }
 
+// 写入目标域（事件类型 → 域；唯一权威 = kernel/rules.json eventDomains）
+function eventDomainOf(eventType) {
+  for (const [writeDomain, eventTypes] of Object.entries(KERNEL_RULES.eventDomains)) {
+    if (writeDomain.startsWith("//")) continue;
+    if (eventTypes.includes(eventType)) return writeDomain;
+  }
+  return null;
+}
+
+// 写入防护（设计文档 §3.2）：「角色 × 当前状态 × 目标域」矩阵在写入当刻执行——
+// 角色不可写的域、当前阶段不允许的写入，在事件落盘前被拒。同时给事件盖 domain 章
+function enforceWriteMatrix(world, event) {
+  const domain = eventDomainOf(event.type);
+  if (domain === null) {
+    fail(`事件类型 ${event.type} 不在 eventDomains 表（kernel/rules.json）。`, "在 eventDomains 登记该类型的目标域后再写入；未登记类型不允许落盘。");
+  }
+  const rows = KERNEL_RULES.writeMatrix?.rows ?? [];
+  const row = rows.find((candidate) => candidate.actor === event.actor && candidate.domain === domain);
+  if (row === undefined) {
+    fail(
+      `写入被拒：角色 ${event.actor} 不可写 ${domain} 域（事件 ${event.type}）——写入矩阵未授权。`,
+      `builder 只可写 implementation/finding 域，assurance 只可写 evidence/finding/acceptance 域，user 写 acceptance/design/decision 域；修复实现走 record-repair-round / record-implementation，改验收走 open-revision 合法通道。`,
+    );
+  }
+  if (!row.states.includes("*")) {
+    const records = world.entries.map((entry) => entry.record);
+    const phase = taskPhaseFromEvents(records, { incrementsCount: world.increments !== null ? world.increments.items.length : null });
+    if (!row.states.includes(phase)) {
+      fail(
+        `写入被拒：${event.actor} 写 ${domain} 域在当前阶段（${phase}）不允许（事件 ${event.type}）。`,
+        `写入矩阵允许的阶段：${row.states.join(", ")}；按当前阶段的合法转移推进（delivery-core next 查看下一步）后重试。`,
+      );
+    }
+  }
+  event.domain = domain;
+}
+
 function appendEvent(world, event, privateKey, options = {}) {
   validateEventShape(event);
+  enforceWriteMatrix(world, event);
   if (Object.hasOwn(event, "artifact")) validateArtifact(world.taskDir, event.artifact);
   // 覆盖写对账（合并稿 §10.3）：全部携带 artifact 的事件（不再只限带哈希的 EvidenceRecorded）
   if (Object.hasOwn(event, "artifact")) validateArtifactNotOverwritten(world, event);
@@ -3752,25 +3816,197 @@ function commandRecordDesignApproved(args) {
   });
 }
 
-function commandAppend(args) {
-  const options = parseOptions(args, { required: ["task-dir", "event", "credential"], optional: ["run-id"] });
-  const event = parseAppendEvent(options.event);
-  validateEventShape(event);
+// ── 意图提交命令组（设计文档 §3.2：事件由内核构造，执行器只提交意图）──
+// 信封（type/actor/acceptanceVersion/revision/domain/artifactSha256 可推导项）一律本命令组
+// 计算，调用方不再手工拼事件 JSON、不再自算 revision 与内容哈希；语义内容（观察到了什么）
+// 仍由调用方提供。--revision 可选：缺省取当前 computeRevision（保证 run 在途锁定的
+// setup revision 用它传入——漂移语义保持显式）。
+function parseJsonOption(value, label, commandName) {
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    fail(`${commandName} 的 ${label} 不是合法 JSON：${error.message}`, `按 JSON 数组/对象字面量重传（workflow 侧用 JSON.stringify 序列化）。`);
+  }
+}
+
+function nextFindingId(world, prefix = "F-N") {
+  const used = new Set(
+    world.entries.map((entry) => entry.record.findingId).filter((id) => typeof id === "string"),
+  );
+  let n = used.size + 1;
+  while (used.has(`${prefix}${n}`)) n += 1;
+  return `${prefix}${n}`;
+}
+
+const INTENT_SPECS = {
+  "record-implementation": {
+    type: "ImplementationRecorded",
+    role: "builder",
+    required: ["task-dir", "increment-id", "summary", "artifact", "merge-receipt", "credential"],
+    optional: ["revision", "run-id"],
+    jsonFields: { "merge-receipt": "mergeReceipt" },
+    build: (world, options, parsed) => ({
+      incrementId: options["increment-id"],
+      artifact: options.artifact,
+      mergeReceipt: parsed["merge-receipt"],
+    }),
+  },
+  "record-repair-round": {
+    type: "RepairRoundRecorded",
+    role: "builder",
+    required: ["task-dir", "round", "summary", "trigger-finding-ids", "affected-assertion-ids", "artifact", "credential"],
+    optional: ["from-revision", "to-revision", "nature", "increment-receipts", "revision", "run-id"],
+    jsonFields: { "trigger-finding-ids": "triggerFindingIds", "affected-assertion-ids": "affectedAssertionIds", "increment-receipts": "incrementReceipts" },
+    build: (world, options, parsed) => ({
+      round: Number(options.round),
+      triggerFindingIds: parsed["trigger-finding-ids"],
+      affectedAssertionIds: parsed["affected-assertion-ids"],
+      artifact: options.artifact,
+      ...(options["from-revision"] !== undefined ? { fromRevision: options["from-revision"] } : {}),
+      ...(options["to-revision"] !== undefined ? { toRevision: options["to-revision"] } : {}),
+      ...(options.nature !== undefined ? { nature: options.nature } : {}),
+      ...(parsed["increment-receipts"] !== undefined ? { incrementReceipts: parsed["increment-receipts"] } : {}),
+    }),
+  },
+  "record-finding": {
+    type: "FindingRaised",
+    role: null, // actor 由凭据角色决定（builder 自报 / assurance 审查）
+    required: ["task-dir", "summary", "category", "severity", "requirement-ids", "artifact", "credential"],
+    optional: ["finding-id", "origin", "consequence-refutation", "consequence-refutation-type", "reopen-of", "first-detected-stage", "expected-stage", "regression-test-ref", "revision", "run-id"],
+    jsonFields: { "requirement-ids": "requirementIds" },
+    build: (world, options, parsed) => ({
+      findingId: options["finding-id"] ?? nextFindingId(world),
+      category: options.category,
+      severity: options.severity,
+      requirementIds: parsed["requirement-ids"],
+      artifact: options.artifact,
+      ...(options.origin !== undefined ? { origin: options.origin } : {}),
+      ...(options["consequence-refutation"] !== undefined ? { consequenceRefutation: options["consequence-refutation"] } : {}),
+      ...(options["consequence-refutation-type"] !== undefined ? { consequenceRefutationType: options["consequence-refutation-type"] } : {}),
+      ...(options["reopen-of"] !== undefined ? { reopenOf: options["reopen-of"] } : {}),
+      ...(options["first-detected-stage"] !== undefined ? { firstDetectedStage: options["first-detected-stage"] } : {}),
+      ...(options["expected-stage"] !== undefined ? { expectedStage: options["expected-stage"] } : {}),
+      ...(options["regression-test-ref"] !== undefined ? { regressionTestRef: options["regression-test-ref"] } : {}),
+    }),
+  },
+  "resolve-finding": {
+    type: "FindingResolved",
+    role: "assurance",
+    required: ["task-dir", "finding-id", "summary", "artifact", "credential"],
+    optional: ["revision", "run-id"],
+    build: (world, options) => ({ findingId: options["finding-id"], artifact: options.artifact }),
+  },
+  "reaffirm-resolution": {
+    type: "ResolutionReaffirmed",
+    role: "assurance",
+    required: ["task-dir", "finding-id", "original-resolution-event-id", "basis", "summary", "artifact", "credential"],
+    optional: ["revision", "run-id"],
+    build: (world, options) => ({
+      findingId: options["finding-id"],
+      originalResolutionEventId: options["original-resolution-event-id"],
+      basis: options.basis,
+      artifact: options.artifact,
+    }),
+  },
+  "record-evidence": {
+    type: "EvidenceRecorded",
+    role: "assurance",
+    required: ["task-dir", "requirement-id", "kind", "result", "summary", "artifact", "credential"],
+    optional: ["assertion-ids", "adversarial-form-ids", "artifact-sha256", "revision", "run-id"],
+    jsonFields: { "assertion-ids": "assertionIds", "adversarial-form-ids": "adversarialFormIds" },
+    build: (world, options, parsed) => ({
+      requirementId: options["requirement-id"],
+      kind: options.kind,
+      result: options.result,
+      artifact: options.artifact,
+      ...(parsed["assertion-ids"] !== undefined ? { assertionIds: parsed["assertion-ids"] } : {}),
+      ...(parsed["adversarial-form-ids"] !== undefined ? { adversarialFormIds: parsed["adversarial-form-ids"] } : {}),
+    }),
+  },
+  "record-exploration": {
+    type: "ExplorationCompleted",
+    role: "assurance",
+    required: ["task-dir", "summary", "dimensions", "coverage-manifest-sha256", "artifact", "credential"],
+    optional: ["artifact-sha256", "revision", "run-id"],
+    jsonFields: { dimensions: "dimensions" },
+    build: (world, options, parsed) => ({
+      dimensions: parsed.dimensions,
+      coverageManifestSha256: options["coverage-manifest-sha256"],
+      artifact: options.artifact,
+    }),
+  },
+  "complete-assurance": {
+    type: "AssuranceCompleted",
+    role: "assurance",
+    required: ["task-dir", "summary", "coverage-manifest-sha256", "exploration-event-id", "increment-receipts", "artifact", "credential"],
+    optional: ["mode", "evidence-event-ids", "clean-build", "artifact-sha256", "revision", "run-id"],
+    jsonFields: { "increment-receipts": "incrementReceipts", "evidence-event-ids": "evidenceEventIds", "clean-build": "cleanBuild" },
+    build: (world, options, parsed) => ({
+      coverageManifestSha256: options["coverage-manifest-sha256"],
+      explorationEventId: options["exploration-event-id"],
+      incrementReceipts: parsed["increment-receipts"],
+      artifact: options.artifact,
+      ...(options.mode !== undefined ? { mode: options.mode } : {}),
+      ...(parsed["evidence-event-ids"] !== undefined ? { evidenceEventIds: parsed["evidence-event-ids"] } : { evidenceEventIds: ["none"] }),
+      // cleanBuild 必填可空：content-manifest 豁免干净构建时显式 null（与 workflow 构造同形态）
+      cleanBuild: parsed["clean-build"] !== undefined ? parsed["clean-build"] : null,
+    }),
+  },
+  "record-assurance-drift": {
+    type: "AssuranceRevisionDrift",
+    role: "assurance",
+    required: ["task-dir", "summary", "setup-revision", "finalize-revision", "drift-seq", "credential"],
+    optional: ["revision", "run-id"],
+    build: (world, options) => ({
+      setupRevision: options["setup-revision"],
+      finalizeRevision: options["finalize-revision"],
+      driftSeq: Number(options["drift-seq"]),
+    }),
+  },
+};
+
+function commandIntent(commandName, args) {
+  const spec = INTENT_SPECS[commandName];
+  const options = parseOptions(args, { required: spec.required, optional: spec.optional });
+  const parsed = {};
+  for (const [optionKey] of Object.entries(spec.jsonFields ?? {})) {
+    if (options[optionKey] !== undefined) parsed[optionKey] = parseJsonOption(options[optionKey], `--${optionKey}`, commandName);
+  }
   withEventsLock(options["task-dir"], () => {
-    const world = loadWorld(options["task-dir"], { requirePackage: false });
-    const privateKey = loadCredentialPrivateKey(world, options.credential, event.actor);
-    verifyLeaseForAppend(world, options["run-id"]);
-    // 需要验收包语义的事件在有包世界里追加（fold 依赖包结构）；任务级事件允许无包
-    const fullWorld = isTaskLevelEventType(event.type)
-      ? world
-      : loadWorld(options["task-dir"], { requirePackage: true });
-    if (fullWorld !== world) {
-      const privateKeyFull = privateKey;
-      printJson(appendEvent(fullWorld, event, privateKeyFull));
-    } else {
-      printJson(appendEvent(world, event, privateKey));
+    // 包语义事件需要完整世界（fold 依赖包结构）；record-assurance-drift 等无包也合法
+    const world = loadWorld(options["task-dir"], { requirePackage: !isTaskLevelEventType(spec.type) });
+    // actor 由凭据角色裁决（record-finding 双角色：builder 自报 / assurance 审查）
+    const actor = spec.role ?? options.credential.split("/")[2];
+    const privateKey = loadCredentialPrivateKey(world, options.credential, actor);
+    const revision = options.revision !== undefined ? options.revision : computeRevision(world.task.projectRoot);
+    const content = spec.build(world, options, parsed);
+    const event = {
+      type: spec.type,
+      actor,
+      acceptanceVersion: world.acceptance !== null ? world.acceptance.acceptanceVersion : 0,
+      revision,
+      summary: options.summary,
+      ...content,
+    };
+    // artifactSha256 缺省由内核计算（仅限事件契约允许该字段的内容哈希类型；发现类事件不绑内容哈希）
+    if (Object.hasOwn(event, "artifact") && ARTIFACT_HASH_CAPABLE_TYPES.has(spec.type)) {
+      if (options["artifact-sha256"] === undefined && event.artifact !== "none") {
+        event.artifactSha256 = sha256File(join(world.taskDir, event.artifact), `--artifact ${event.artifact}`);
+      } else if (options["artifact-sha256"] !== undefined) {
+        event.artifactSha256 = options["artifact-sha256"];
+      }
     }
+    verifyLeaseForAppend(world, options["run-id"]);
+    printJson(appendEvent(world, event, privateKey));
   });
+}
+
+// append 已退役（意图命令组覆盖全部事件类型）：消灭「执行器手工拼事件 JSON」通道
+function commandAppend(args) {
+  fail(
+    "append 已退役：全部事件经意图提交命令登记（信封由 gate 构造——type/actor/revision/acceptanceVersion/domain/artifactSha256 不再手工拼）。",
+    "执行器命令：record-implementation / record-repair-round / record-finding / resolve-finding / reaffirm-resolution / record-evidence / record-exploration / complete-assurance / record-assurance-drift；主会话命令见 --help。",
+  );
 }
 
 // V5 代收敛机制：用户预先声明可由 standing-authorization 接受的 finding 范围。
@@ -4393,6 +4629,17 @@ function main() {
         break;
       case "append":
         commandAppend(commandArgs);
+        break;
+      case "record-implementation":
+      case "record-repair-round":
+      case "record-finding":
+      case "resolve-finding":
+      case "reaffirm-resolution":
+      case "record-evidence":
+      case "record-exploration":
+      case "complete-assurance":
+      case "record-assurance-drift":
+        commandIntent(command, commandArgs);
         break;
       case "accept-risk":
         commandAcceptRisk(commandArgs);

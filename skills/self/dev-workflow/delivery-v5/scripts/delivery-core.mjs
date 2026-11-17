@@ -14,7 +14,14 @@
 //     exploration-due  探索 due 判定（同上）
 //     repair-budget    修复轮预算（同上）
 //     node-transition  DAG 节点状态转移（wave-executor 六写入点收敛后的唯一判定；
-//                      --dry-run 供引擎在串行写链内先判定后自写，非 dry-run 直接落盘）
+//                      --dry-run 供引擎在串行写链内先判定后自写，非 dry-run 直接落盘；
+//                      manual-disposition 带 --task-dir 时自动登记待复盘待办）
+//     node-project     status.json 派生视图：从 status.events 重投影节点状态，比对在盘
+//                      nodes（篡改/漂移检测），--write 以事件为准重建（恢复通道）
+//     events           事件时间线读侧合流：交付事件（domain 盖章）+ 过程记录
+//                      （process-review.jsonl，process 域）按序合并输出
+//     replay           历史任务回放：逐事件前缀推算阶段，报告转移表无法表达的
+//                      事件序列（定义期矛盾检测对真实数据的补充）
 //
 // 单源纪律：判定逻辑一律 import lib/kernel-judgments.mjs 或读 kernel/rules.json，
 // 本文件不另立判定副本。gate 内部函数经 delivery-gate.mjs 导入复用（同一份实现）。
@@ -29,7 +36,9 @@ import {
   explorationDue,
   findingRegrades,
   openFindingsFromEvents,
+  projectNodeEvents,
   repairBudgetFromEvents,
+  taskPhaseFromEvents,
   usableExplorations,
 } from "./lib/kernel-judgments.mjs";
 import {
@@ -41,7 +50,7 @@ import {
 
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const RULES_PATH = join(SKILL_ROOT, "scripts", "kernel", "rules.json");
-const PENDING_KINDS = ["cleanup", "awaiting-restore", "awaiting-registration", "awaiting-ruling"];
+const PENDING_KINDS = ["cleanup", "awaiting-restore", "awaiting-registration", "awaiting-ruling", "awaiting-review"];
 
 function usageFail(message) {
   process.stderr.write(`delivery-core: ${message}\n`);
@@ -99,6 +108,7 @@ function parseOptions(args, specification) {
 //   ④ 同一 (from,to) 至多一条转移（执行器唯一）
 //   ⑤ requires ∈ 谓词词表；actor ∈ 角色词表；terminalStates ⊆ states
 //   ⑥ 非终态非 initial 状态必须有出边（死端 = 流程走进去出不来）
+//   ⑦ eventDomains 域闭包且事件不重复登记；writeMatrix 角色/域/阶段在词表且 (actor,domain) 唯一
 function validateRules(rules) {
   const errors = [];
   const actorSet = new Set(rules.actors);
@@ -191,6 +201,34 @@ function validateRules(rules) {
       }
     }
   }
+  // ⑦ eventDomains / writeMatrix：域词表闭包、矩阵角色与域在词表、states 用任务阶段词表
+  const writeDomainSet = new Set(rules.writeDomains?.values ?? []);
+  const taskStateSet = new Set(rules.domains.task.states);
+  const domainOfEvent = new Map();
+  for (const [writeDomain, eventTypes] of Object.entries(rules.eventDomains ?? {})) {
+    if (writeDomain.startsWith("//")) continue;
+    if (!Array.isArray(eventTypes)) {
+      errors.push(`eventDomains: 域 ${writeDomain} 的值必须是事件类型数组`);
+      continue;
+    }
+    if (!writeDomainSet.has(writeDomain)) errors.push(`eventDomains: 域 ${writeDomain} 不在 writeDomains 词表`);
+    for (const eventType of eventTypes) {
+      if (domainOfEvent.has(eventType)) errors.push(`eventDomains: 事件 ${eventType} 在 ${domainOfEvent.get(eventType)} 与 ${writeDomain} 两域重复登记`);
+      else domainOfEvent.set(eventType, writeDomain);
+    }
+  }
+  const matrixRows = new Map();
+  for (const row of rules.writeMatrix?.rows ?? []) {
+    if (!actorSet.has(row.actor)) errors.push(`writeMatrix: actor ${row.actor} 不在角色词表`);
+    if (!writeDomainSet.has(row.domain)) errors.push(`writeMatrix: 域 ${row.domain} 不在 writeDomains 词表（process 域不可经签名事件流写入，不设行）`);
+    const rowKey = `${row.actor}\u0000${row.domain}`;
+    if (matrixRows.has(rowKey)) errors.push(`writeMatrix: ${row.actor} × ${row.domain} 重复登记`);
+    else matrixRows.set(rowKey, row);
+    if (!Array.isArray(row.states) || row.states.length === 0) errors.push(`writeMatrix: ${row.actor} × ${row.domain} states 为空`);
+    for (const stateName of row.states ?? []) {
+      if (stateName !== "*" && !taskStateSet.has(stateName)) errors.push(`writeMatrix: ${row.actor} × ${row.domain} 状态 ${stateName} 不在任务域状态词表`);
+    }
+  }
   return errors;
 }
 
@@ -226,7 +264,7 @@ function commandPending(args) {
   }
   if (action === "add") {
     if (!PENDING_KINDS.includes(options.kind ?? "")) {
-      fail(`--kind 必须是 ${PENDING_KINDS.join(" / ")} 之一（善后/待恢复/待登记/待裁决四类）。`, "按中断时的实际待办类型重选 kind 后重试。");
+      fail(`--kind 必须是 ${PENDING_KINDS.join(" / ")} 之一（善后/待恢复/待登记/待裁决/待复盘）。`, "按中断时的实际待办类型重选 kind 后重试。");
     }
     if (typeof options.note !== "string" || options.note.trim() === "") {
       fail("--note 必填（一句话说明待办内容，恢复后可直接照做）。", "补 --note 后重试。");
@@ -424,8 +462,55 @@ function deriveFlowState(world, verdict, findingOpenIds, exploration) {
 }
 
 // 「下一步」唯一回答者。输出顺序 = 待办优先 → 五域状态 → 合法转移（含执行器与角色）→ 预算。
+// ── 转移分类与预填发起（三-6：例行转移给到可直接照抄的发起形态；裁决点显式停回）──
+const ADJUDICATION_PREDICATES = new Set(["userConfirmation", "versionIncrementApproved", "userRiskAcceptance", "baselineConfirmed"]);
+// CreateWorkflow 可直接发起的 workflow 名 → 预填参数骨架（凭据由主 agent 持有，占位）
+const WORKFLOW_LAUNCH_ARGS = {
+  "acceptance-design-v5": { projectRoot: "<projectRoot>", taskDir: "<taskDir>", objective: "<objective>", assuranceCredentialId: "<assuranceCredentialId>" },
+  "candidate-build-v5": { projectRoot: "<projectRoot>", taskDir: "<taskDir>", builderCredentialId: "<builderCredentialId>", assuranceCredentialId: "<assuranceCredentialId>" },
+  "independent-assurance-v5": { projectRoot: "<projectRoot>", taskDir: "<taskDir>", assuranceCredentialId: "<assuranceCredentialId>", mode: "<full|recheck|explore-only>" },
+  "assurance-repair-loop-v5": { projectRoot: "<projectRoot>", taskDir: "<taskDir>", assuranceCredentialId: "<assuranceCredentialId>", builderCredentialId: "<builderCredentialId>", allowCommit: "<bool>" },
+};
+const WORKFLOW_NAMES = new Set(Object.keys(WORKFLOW_LAUNCH_ARGS));
+
+function classifyTransition(transition) {
+  if ((transition.requires ?? []).some((predicate) => ADJUDICATION_PREDICATES.has(predicate))) return "adjudication";
+  const executor = transition.executor ?? "";
+  if (executor.startsWith("delivery-gate")) return "gate-command";
+  for (const name of WORKFLOW_NAMES) {
+    if (executor === name || executor.startsWith(`${name} `) || executor.startsWith(`${name} --`)) return "workflow";
+  }
+  if (executor.startsWith("tech-design-v5") || executor.startsWith("dev-flow-v5")) return "skill";
+  return "engine";
+}
+
+function launchSpecOf(transition, world) {
+  const executor = transition.executor ?? "";
+  const [workflowName, ...rest] = executor.split(/\s+/);
+  const replacements = { "<projectRoot>": world.task?.projectRoot ?? "<projectRoot>", "<taskDir>": world.taskDir };
+  const args = {};
+  for (const [key, value] of Object.entries(WORKFLOW_LAUNCH_ARGS[workflowName] ?? {})) {
+    args[key] = replacements[value] ?? value;
+  }
+  for (const token of rest) {
+    if (token.startsWith("--") && token.includes("=")) {
+      const [flag, value] = token.slice(2).split("=");
+      args[flag] = replacements[value] ?? value;
+    } else if (token.startsWith("--mode")) {
+      // 「--mode explore-only」拆词形态：值取后续词（executor 字符串内联常量）
+    }
+  }
+  const modeMatch = executor.match(/--mode\s+(\S+)/);
+  if (modeMatch !== null) args.mode = modeMatch[1];
+  return {
+    zcode: `CreateWorkflow saved: ${workflowName}（args 见下，凭据占位符替换为实际 credentialId）`,
+    pi: `workflow run ${workflowName}`,
+    args,
+  };
+}
+
 async function commandNext(args) {
-  const options = parseOptions(args, { required: ["task-dir"], optional: ["revision", "status-file"] });
+  const options = parseOptions(args, { required: ["task-dir"], optional: ["revision", "status-file"], flags: ["auto"] });
   const world = loadWorldAuto(options["task-dir"]);
   const revision = options.revision ?? computeRevision(world.task.projectRoot);
   let verdict = null;
@@ -446,14 +531,39 @@ async function commandNext(args) {
   const taskDomain = KERNEL_RULES.domains.task;
   const legalTransitions = taskDomain.transitions
     .filter((transition) => transition.from === flowState || transition.from === "*")
-    .map((transition) => ({
-      to: transition.to,
-      event: transition.event,
-      executor: transition.executor,
-      actor: transition.actor,
-      repairBackedge: transition.backedge === "repair",
-      requires: transition.requires ?? [],
-    }));
+    .map((transition) => {
+      const kind = classifyTransition(transition);
+      return {
+        to: transition.to,
+        event: transition.event,
+        executor: transition.executor,
+        actor: transition.actor,
+        kind,
+        repairBackedge: transition.backedge === "repair",
+        requires: transition.requires ?? [],
+        ...(kind === "workflow" ? { launch: launchSpecOf(transition, world) } : {}),
+      };
+    });
+  // 例行转移中唯一可安全自动执行的是 evaluate（幂等、无用户语义输入；其余 gate 命令
+  // 需 confirmation/summary 等裁决语义，workflow/skill 类由主 agent 按预填规格发起）
+  const auto = [];
+  if (options.auto === "true") {
+    const evaluateTransitions = legalTransitions.filter(
+      (transition) => transition.kind === "gate-command" && transition.event === "evaluate",
+    );
+    for (const transition of evaluateTransitions) {
+      const { spawnSync } = await import("node:child_process");
+      const gatePath = join(SKILL_ROOT, "scripts", "delivery-gate.mjs");
+      const run = spawnSync(process.execPath, [gatePath, "evaluate", "--task-dir", world.taskDir], { encoding: "utf8" });
+      let verdictState = null;
+      try {
+        verdictState = JSON.parse(run.stdout).state ?? null;
+      } catch {
+        verdictState = null;
+      }
+      auto.push({ event: "evaluate", to: transition.to, exitCode: run.status, verdictState, error: run.status === 0 ? null : run.stderr.trim() });
+    }
+  }
 
   const output = {
     taskDir: world.taskDir,
@@ -465,6 +575,7 @@ async function commandNext(args) {
     nextAction: verdict?.nextAction ?? null,
     pendingActions: pending.items.filter((item) => item.status === "open"),
     legalTransitions,
+    ...(auto.length > 0 ? { auto } : {}),
     machineChecks: {
       schema2: world.acceptance?.schemaVersion === 2,
       mustFixOpen,
@@ -508,7 +619,7 @@ function nodeDomainFacts(statusFilePath) {
 function commandNodeTransition(args) {
   const options = parseOptions(args, {
     required: ["status", "node", "event"],
-    optional: ["current-json", "payload", "basis", "reason", "commit", "evidence", "detail"],
+    optional: ["current-json", "payload", "basis", "reason", "commit", "evidence", "detail", "task-dir"],
     flags: ["dry-run"],
   });
   const eventName = options.event;
@@ -599,10 +710,200 @@ function commandNodeTransition(args) {
   }
   status.nodes[options.node] = entry;
   const events = Array.isArray(status.events) ? status.events : [];
-  events.push({ seq: events.length + 1, node: options.node, event: eventName, detail });
+  // payload = 结构化字段（node-project 派生视图无损重投影依赖它；detail 保持人读）
+  const payload = {};
+  if (options.commit !== undefined) payload.commit = options.commit;
+  if (options.evidence !== undefined) payload.evidence = options.evidence;
+  if (options.reason !== undefined) payload.reason = options.reason;
+  if (options.basis !== undefined) payload.basis = options.basis;
+  events.push({
+    seq: events.length + 1,
+    node: options.node,
+    event: eventName,
+    detail,
+    ...(Object.keys(payload).length > 0 ? { payload } : {}),
+  });
   status.events = events;
   writeFileSync(options.status, `${JSON.stringify(status, null, 2)}\n`);
-  printJson({ ok: true, node: options.node, event: eventName, from: fromStatus, to: entry.status, entry, written: true });
+  // 人工处置 = 逃生口不是后门：每次使用登记待复盘待办（设计文档 §5），复盘后 resolve
+  let reviewRegistered = false;
+  if (eventName === "manual-disposition" && options["task-dir"] !== undefined) {
+    const core = loadTaskCore(options["task-dir"]);
+    const document = readPending(core.taskDir);
+    document.items.push({
+      id: `pa-${document.items.length + 1}`,
+      kind: "awaiting-review",
+      note: `人工处置复盘：节点 ${options.node} 判 done（依据：${options.basis}）——确认处置正确并总结为何走到人工通道`,
+      ref: options.status,
+      createdAt: new Date().toISOString(),
+      status: "open",
+    });
+    writePending(core.taskDir, document);
+    reviewRegistered = true;
+  }
+  printJson({ ok: true, node: options.node, event: eventName, from: fromStatus, to: entry.status, entry, written: true, reviewRegistered });
+}
+
+// ── status.json 派生视图（二-1：事件为源，nodes 是投影；篡改/漂移检测 + 恢复通道）──
+function commandNodeProject(args) {
+  const options = parseOptions(args, { required: ["status"], optional: [], flags: ["write"] });
+  if (!existsSync(options.status)) fail(`status 文件不存在：${options.status}`, "核对 --status 路径后重试。");
+  let status;
+  try {
+    status = JSON.parse(readFileSync(options.status, "utf8"));
+  } catch (error) {
+    fail(`status 文件不是合法 JSON：${error.message}`, "修复 status 文件后重试；无法解析时以 git 与日志为源重建。");
+  }
+  const events = Array.isArray(status.events) ? status.events : [];
+  const projection = projectNodeEvents(events, KERNEL_RULES.domains.node);
+  const onDisk = status.nodes ?? {};
+  const mismatches = [];
+  const nodeIds = new Set([...Object.keys(projection.nodes), ...Object.keys(onDisk)]);
+  for (const nodeId of nodeIds) {
+    const projected = projection.nodes[nodeId];
+    const disk = onDisk[nodeId];
+    const same =
+      disk !== undefined &&
+      projected !== undefined &&
+      disk.status === projected.status &&
+      disk.attempts === projected.attempts;
+    if (!same) mismatches.push({ node: nodeId, projected, onDisk: disk ?? null });
+  }
+  const result = {
+    statusFile: options.status,
+    eventsReplayed: events.length,
+    partialEvents: projection.partialEvents,
+    nodeCount: Object.keys(projection.nodes).length,
+    consistent: mismatches.length === 0,
+    mismatches,
+  };
+  if (mismatches.length > 0) {
+    result.recovery = "以事件为源恢复：delivery-core node-project --status <path> --write（nodes 按事件重投影重建；events 不动）；mismatches 非零 = 在盘 nodes 与事件流不一致（写入绕过转移入口或手工编辑）";
+  }
+  if (options.write === "true") {
+    status.nodes = projection.nodes;
+    writeFileSync(options.status, `${JSON.stringify(status, null, 2)}\n`);
+    result.written = true;
+  }
+  printJson(result);
+}
+
+// ── 事件时间线读侧合流（三-3：交付事件 domain 盖章 + 过程记录 process 域，单一读取口）──
+function domainOfType(eventType) {
+  for (const [domain, types] of Object.entries(KERNEL_RULES.eventDomains)) {
+    if (types.includes(eventType)) return domain;
+  }
+  return "unknown";
+}
+
+function commandEventsTimeline(args) {
+  const options = parseOptions(args, { required: ["task-dir"], optional: ["domain"] });
+  const world = loadWorldAuto(options["task-dir"]);
+  const timeline = [];
+  for (const entry of world.entries) {
+    const record = entry.record;
+    timeline.push({
+      source: "events",
+      seq: record.seq,
+      domain: typeof record.domain === "string" ? record.domain : domainOfType(record.type),
+      type: record.type,
+      at: record.recordedAt ?? null,
+      summary: record.summary ?? "",
+    });
+  }
+  const processPath = join(world.taskDir, "process-review.jsonl");
+  if (existsSync(processPath)) {
+    const lines = readFileSync(processPath, "utf8").split("\n").filter((line) => line.trim() !== "");
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line);
+        timeline.push({
+          source: "process-review",
+          seq: parsed.id ?? null,
+          domain: "process",
+          type: "ProcessObserved",
+          at: parsed.ts ?? null,
+          summary: `${parsed.nodeId ?? "?"}/${parsed.mechanism ?? "?"} ${parsed.verdict ?? ""}：${parsed.summary ?? ""}`,
+        });
+      } catch {
+        timeline.push({ source: "process-review", seq: null, domain: "process", type: "ProcessObserved", at: null, summary: `（不可解析行：${line.slice(0, 80)}）` });
+      }
+    }
+  }
+  const filtered = options.domain !== undefined ? timeline.filter((item) => item.domain === options.domain) : timeline;
+  const counts = {};
+  for (const item of timeline) counts[item.domain] = (counts[item.domain] ?? 0) + 1;
+  printJson({
+    taskDir: world.taskDir,
+    counts,
+    timeline: filtered,
+  });
+}
+
+// ── 历史任务回放（三-8：真实事件序列 vs 转移表可表达性——定义期校验的经验补充）──
+// 合法性规则：
+//   decision 域事件（RiskAccepted 等）= 任意非终态阶段合法（裁决可打断流程，结构上如此）
+//   流程事件 = 任务域存在 event 同名边且 from == 当前阶段或 "*"；
+//     放行一类在途阶段：AssuranceCompleted 落盘前「保证 run 在途」在事件流不可见
+//     （阶段停在 implementation-recorded），assuring/repairing 出发的边在此阶段放行
+const REPLAY_INFLIGHT_EDGES = ["AssuranceCompleted", "RepairRoundRecorded", "repair-start"];
+function commandReplay(args) {
+  const options = parseOptions(args, { required: ["task-dir"], optional: [] });
+  const world = loadWorldAuto(options["task-dir"]);
+  const records = recordsOf(world);
+  const incrementsCount = world.increments !== null ? world.increments.items.length : null;
+  const taskTransitions = KERNEL_RULES.domains.task.transitions;
+  const decisionTypes = new Set(KERNEL_RULES.eventDomains.decision);
+  const flowEventNames = new Set(taskTransitions.map((transition) => transition.event));
+  const edgeFromByEvent = new Map();
+  for (const transition of taskTransitions) {
+    if (!edgeFromByEvent.has(transition.event)) edgeFromByEvent.set(transition.event, new Set());
+    edgeFromByEvent.get(transition.event).add(transition.from);
+  }
+  const stats = { routed: 0, decision: 0, relaxedInflight: 0, content: 0, unroutable: 0 };
+  const unroutable = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    const phase = taskPhaseFromEvents(records.slice(0, index), { incrementsCount });
+    if (decisionTypes.has(record.type)) {
+      stats.decision += 1;
+      continue;
+    }
+    const edgeEvent = record.type === "TaskSuperseded" ? (record.phase === "committed" ? "supersede-commit" : "supersede-prepare") : record.type;
+    if (!flowEventNames.has(edgeEvent)) {
+      stats.content += 1; // 内容事件（发现/证据/实现/探索/漂移等）——不驱动任务域转移，阶段无关
+      continue;
+    }
+    const froms = edgeFromByEvent.get(edgeEvent) ?? new Set();
+    if (froms.has(phase) || froms.has("*")) {
+      stats.routed += 1;
+    } else if (froms.has("assuring") && phase === "implementation-recorded" && REPLAY_INFLIGHT_EDGES.includes(edgeEvent)) {
+      stats.relaxedInflight += 1;
+    } else if (froms.has("assuring") && phase === "finalizing" && edgeEvent === "AssuranceCompleted") {
+      // recheck 重入（历史任务回放实证）：判据/探索变化触发的重取证不经过修复轮，
+      // 起点（assurance-start）不落事件流——AssuranceCompleted(recheck) 直接从 finalizing 到场
+      stats.relaxedInflight += 1;
+    } else {
+      stats.unroutable += 1;
+      unroutable.push({
+        seq: record.seq,
+        type: record.type,
+        phaseBefore: phase,
+        legalFrom: [...froms],
+        summary: record.summary ?? "",
+        note: "该事件在当前阶段按任务域转移表不可表达——补转移边（若语义合法）或确认为词表外操作（应被拦截）",
+      });
+    }
+  }
+  const finalPhase = taskPhaseFromEvents(records, { incrementsCount });
+  printJson({
+    taskDir: world.taskDir,
+    events: records.length,
+    finalPhase,
+    stats,
+    unroutable,
+    verdict: unroutable.length === 0 ? "全序列可表达" : `${unroutable.length} 个事件不可表达（见 unroutable 清单）`,
+  });
 }
 
 // ── main 分发 ──
@@ -654,9 +955,18 @@ try {
     case "node-transition":
       commandNodeTransition(commandArgs);
       break;
+    case "node-project":
+      commandNodeProject(commandArgs);
+      break;
+    case "events":
+      commandEventsTimeline(commandArgs);
+      break;
+    case "replay":
+      commandReplay(commandArgs);
+      break;
     default:
       usageFail(
-        `未知命令 ${JSON.stringify(command ?? "")}。合法命令：validate / rules / next / pending / budget / open-findings / usable-explorations / exploration-due / repair-budget / node-transition。`,
+        `未知命令 ${JSON.stringify(command ?? "")}。合法命令：validate / rules / next / pending / budget / open-findings / usable-explorations / exploration-due / repair-budget / node-transition / node-project / events / replay。`,
       );
   }
 } catch (error) {

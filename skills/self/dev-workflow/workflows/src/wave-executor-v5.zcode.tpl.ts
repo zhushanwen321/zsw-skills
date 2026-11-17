@@ -157,6 +157,8 @@ interface StatusEvent {
   node: string;
   event: string;
   detail?: string;
+  // 结构化字段（commit/evidence/reason）——delivery-core node-project 派生视图重投影依赖
+  payload?: Record<string, unknown>;
 }
 
 interface StatusFileData {

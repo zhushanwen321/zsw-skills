@@ -19,12 +19,13 @@
 ## Step 0：问题定义先行（设计前必做，禁止跳过）
 
 **交付体系入口门（先于本步一切内容）**：本设计属于三技能交付体系时（用户目标 = 设计并实现 / 修复 /
-开发），必须已有已批准的验收包——`node ~/.agents/skills/delivery-v5/scripts/delivery-gate.mjs
-evaluate --task-dir <taskDir>` 的 state 为 `design`（已批准、待方案）。该判据仅对应 verdict-rules
+开发），设计阶段的进入合法性由交付事务内核裁决（转移表唯一权威，见 delivery-v5 SKILL「交付事务内核」节）——
+`node ~/.agents/skills/delivery-v5/scripts/delivery-gate.mjs
+evaluate --task-dir <taskDir>` 的 state 为 `design`（已批准、待方案）即合法进入。该判据仅对应 verdict-rules
 `requireDesignApproved` 默认 true 的任务——`requireDesignApproved=false` 的任务 state 不落 design
 （delivery-gate 状态路由跳过 design 分支，直接落到 acceptance-approved）：该策略下设计阶段非裁决
 前置，不得按「未批准」误判回 delivery-v5，仍需推敲方案时按用户明确要求进入（照常走三阶段并
-record-design-approved）。通过后把 `acceptanceBinding`
+record-design-approved）。state 落 design 后把 `acceptanceBinding`
 （taskDir + acceptanceVersion + acceptancePackageSha256）写进 `meta.json`；验收版本此后变化
 （delivery-v5 递增 acceptanceVersion 重批）时，本设计包须重新过影响审查——对照新版本
 acceptance.json 与 increments.json 逐条比对设计包是否仍覆盖（判据缩窄 / 新增需求逐条核对

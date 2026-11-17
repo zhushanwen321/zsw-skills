@@ -171,3 +171,98 @@ export function findingRegrades(records) {
     .map(([root, grades]) => ({ root, grades: [...grades] }));
   return { halt, offenders };
 }
+
+/** 任务阶段推导（writeMatrix「角色 × 当前状态 × 目标域」的当前状态单源）。
+ * 只看事件流（不含 verdict——verdict 是判定产物不是写入授权依据）。任务终态与
+ * deriveFlowState 的差异：accepted / accepted_with_risk / process-failed 是 verdict
+ * 裁决态，本函数在裁决前阶段返回 finalizing；写入矩阵 states 引用本函数词表。 */
+export function taskPhaseFromEvents(records, { incrementsCount = null } = {}) {
+  const lastOfType = (type, predicate = () => true) => {
+    const matches = records.filter((record) => record.type === type && predicate(record));
+    return matches.length > 0 ? matches[matches.length - 1] : null;
+  };
+  if (lastOfType("TaskSuperseded", (record) => record.phase === "committed")) return "superseded";
+  if (lastOfType("TaskSupersedeCancelled")) return "supersede-cancelled";
+  if (lastOfType("TaskSuperseded", (record) => record.phase === "prepare")) return "supersede-pending";
+  const approvals = records.filter((record) => record.type === "AcceptanceApproved");
+  if (approvals.length === 0) {
+    const passReview = records.some((record) => record.type === "AcceptanceReviewed" && record.conclusion === "pass");
+    return passReview ? "acceptance-reviewed" : "acceptance-drafting";
+  }
+  if (!records.some((record) => record.type === "DesignApproved")) {
+    // route-design 是无事件的路由步（acceptance-approved → design），事件流不可见——
+    // 批准后、DesignApproved 前按缺省路径取 design（verificationOnly 直进实现属策略
+    // 分支，同样无事件，replay 的 content 事件不依赖此区分）
+    return "design";
+  }
+  const implementedIds = new Set(
+    records.filter((record) => record.type === "ImplementationRecorded").map((record) => record.incrementId),
+  );
+  if (incrementsCount !== null) {
+    if (implementedIds.size < incrementsCount) return "implementing";
+  } else if (implementedIds.size === 0) {
+    return "implementing";
+  }
+  if (!records.some((record) => record.type === "AssuranceCompleted")) return "implementation-recorded";
+  return "finalizing";
+}
+
+/** 节点事件投影器（status.json 派生视图单源）：按事件序列重放 node 域转移表重建节点条目。
+ * events = status.events 数组（{seq,node,event,detail,payload?}）；payload 为结构化字段
+ * （commit/evidence/reason/basis），缺 payload 的历史事件只能重建 status+attempts（partial）。
+ * core 的 node-project 用它做「事件 → 节点状态」重投影与篡改检测。 */
+export function projectNodeEvents(events, nodeTable) {
+  const nodes = new Map();
+  let partialEvents = 0;
+  // 只有这些事件类型携带可恢复的结构化字段；begin/reset/suspend/resume 天然无 payload
+  const PAYLOAD_BEARING_EVENTS = new Set(["finish-done", "block", "fail", "reconcile-done", "manual-disposition"]);
+  const findTransition = (eventName, fromStatus) =>
+    nodeTable.transitions.find((candidate) => candidate.event === eventName && candidate.from === fromStatus);
+  for (const record of events) {
+    const nodeName = record.node;
+    if (typeof nodeName !== "string" || nodeName === "") continue;
+    if (nodeName === "*") continue; // 引擎级 reconcile 警示行，不落在具体节点上
+    const current = nodes.get(nodeName) ?? { status: "pending", attempts: 0 };
+    const fromStatus = current.status ?? "pending";
+    const transition = findTransition(record.event, fromStatus);
+    if (transition === undefined) continue; // 非法/未知事件不改变投影（重放宽容：以 events 为准重建）
+    const priorAttempts = typeof current.attempts === "number" ? current.attempts : 0;
+    const payload = record.payload ?? null;
+    if (payload === null && PAYLOAD_BEARING_EVENTS.has(record.event)) partialEvents += 1;
+    let entry;
+    switch (record.event) {
+      case "begin":
+        entry = { status: "in-progress", attempts: priorAttempts + 1 };
+        break;
+      case "finish-done":
+        entry = { status: "done", attempts: Math.max(1, priorAttempts), ...(payload?.commit !== undefined ? { commit: payload.commit } : {}) };
+        break;
+      case "block":
+        entry = { status: "blocked", attempts: priorAttempts, ...(payload?.reason !== undefined ? { reason: payload.reason } : {}) };
+        break;
+      case "fail":
+        entry = { status: "failed", attempts: priorAttempts, ...(payload?.reason !== undefined ? { reason: payload.reason } : {}) };
+        break;
+      case "reset":
+      case "resume":
+        entry = { status: "pending", attempts: priorAttempts };
+        break;
+      case "suspend":
+        entry = { status: "suspended", attempts: priorAttempts };
+        break;
+      case "reconcile-pending":
+        entry = { status: "pending", attempts: priorAttempts };
+        break;
+      case "reconcile-done":
+        entry = { status: "done", attempts: Math.max(1, priorAttempts + 1), ...(payload?.commit !== undefined ? { commit: payload.commit } : {}) };
+        break;
+      case "manual-disposition":
+        entry = { status: "done", attempts: Math.max(1, priorAttempts), ...(payload?.basis !== undefined ? { evidence: `人工处置：${payload.basis}` } : {}) };
+        break;
+      default:
+        continue;
+    }
+    nodes.set(nodeName, entry);
+  }
+  return { nodes: Object.fromEntries(nodes), partialEvents };
+}

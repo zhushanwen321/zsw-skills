@@ -54,6 +54,12 @@
 //                           zcode 后端恒参与（无开关）
 //   --include-selftest      计入自测样本（缺省只算 production；legacy 只按明确名称/
 //                           临时路径特征识别自测并标记 sampleTypeSource）
+//   --deliverable-tokens N  交付物 token 数（成本冗余度块输入；与 --deliverable-chars
+//                           二选一，同时给出时 tokens 优先）
+//   --deliverable-chars N   交付物总字符数，按 2.62 chars/token 折算（设计 §1.3 系数）
+//   --tokens-per-sec F      实测生成速度 tok/s（缺省 76.3；含 TTFT 的场次级估计，仅用于
+//                           物理下界换算，误差 ±20%）
+//   --model-name S          模型标注（缺省 GLM-5.3，仅用于输出标注，不参与计算）
 //   --output <路径>         另存完整 JSON 报告到文件（table 模式下也可用）
 //   --help / -h             打印本说明
 // 退出码：0 = 成功；1 = 运行/数据错误；2 = 用法错误（stderr 含恢复动作）。
@@ -108,8 +114,14 @@ const SKILL_ALIASES = {
 const canonicalSkill = (s) => SKILL_ALIASES[s] ?? s;
 const GROUP_DIMS = ["stage", "step", "role", "model", "status", "skillVersion"];
 const USAGE_LINE =
-  "node scripts/skill-usage-stats.mjs [--skill <名>]... [--since <时间>] [--until <时间>] [--format table|json] [--group <维>]... [--pi-agent-dir <路径>]... [--include-selftest] [--output <路径>]";
+  "node scripts/skill-usage-stats.mjs [--skill <名>]... [--since <时间>] [--until <时间>] [--format table|json] [--group <维>]... [--pi-agent-dir <路径>]... [--include-selftest] [--deliverable-tokens N] [--deliverable-chars N] [--tokens-per-sec F] [--model-name S] [--output <路径>]";
 const MAX_QUALITY_DETAILS = 500;
+// ── 成本冗余度块系数（交付体系 V5 §1.3 成本量化）──
+// 只报告不设硬闸：冗余度与物理下界是循环失控的停回参考，换算误差约 ±20%（倍率不作验收
+// 承诺），不参与任何退出码判定
+const CHARS_PER_TOKEN = 2.62; // 2026-11 双场实测 chars/token 系数
+const DEFAULT_TOKENS_PER_SEC = 76.3; // GLM 场次级加权实测生成速度（含 TTFT 开销）
+const DEFAULT_MODEL_NAME = "GLM-5.3";
 
 function fail(message, code) {
   console.error(`${message}\n恢复动作：核对参数后重试；完整用法：${USAGE_LINE}`);
@@ -126,9 +138,25 @@ function parseArgs(argv) {
     groups: [],
     piAgentDirs: [],
     includeSelftest: false,
+    deliverableTokens: null,
+    deliverableChars: null,
+    tokensPerSec: DEFAULT_TOKENS_PER_SEC,
+    modelName: DEFAULT_MODEL_NAME,
     output: null,
   };
-  const flagNeedsValue = new Set(["--skill", "--since", "--until", "--format", "--group", "--pi-agent-dir", "--output"]);
+  const flagNeedsValue = new Set([
+    "--skill",
+    "--since",
+    "--until",
+    "--format",
+    "--group",
+    "--pi-agent-dir",
+    "--deliverable-tokens",
+    "--deliverable-chars",
+    "--tokens-per-sec",
+    "--model-name",
+    "--output",
+  ]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") {
@@ -147,12 +175,17 @@ function parseArgs(argv) {
           "  --group <维>           stage|step|role|model|status|skillVersion，可重复（table 透视维度，缺省 stage）",
           "  --pi-agent-dir <路径>  pi 数据目录，可重复；给出即替换缺省 ~/.pi/agent；zcode 恒参与",
           "  --include-selftest     计入自测样本（缺省只算 production）",
+          "  --deliverable-tokens N 交付物 token 数（成本冗余度块输入；与 --deliverable-chars 二选一，同时给出 tokens 优先）",
+          "  --deliverable-chars N  交付物总字符数，按 2.62 chars/token 折算（误差 ±20%）",
+          "  --tokens-per-sec F     实测生成速度 tok/s（缺省 76.3；含 TTFT 的场次级估计，仅用于物理下界换算）",
+          "  --model-name S         模型标注（缺省 GLM-5.3，仅用于输出标注）",
           "  --output <路径>        另存完整 JSON 报告",
           "",
           "示例：",
           "  node scripts/skill-usage-stats.mjs --skill dev-flow-dev --since 2026-10-01",
           "  node scripts/skill-usage-stats.mjs --format json --output /tmp/stats.json",
           "  node scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taiji/agent --group stage --group model",
+          "  node scripts/skill-usage-stats.mjs --deliverable-chars 12000 --tokens-per-sec 103.8 --model-name STEP-4.7",
           "",
           "数据来源：agent-session-reader usage CLI（zcode --zcode / pi --pi=<目录>）+",
           "~/.agents/skill-data/workflow-observability/ 阶段事件；本命令不修改任何会话/workflow 数据，",
@@ -226,6 +259,28 @@ function parseArgs(argv) {
         if (!opts.piAgentDirs.includes(real)) opts.piAgentDirs.push(real);
         break;
       }
+      case "--deliverable-chars":
+      case "--deliverable-tokens": {
+        const v = Number(value);
+        if (!Number.isFinite(v) || v < 0) {
+          fail(`参数 ${arg} 须为非负数值，收到 ${JSON.stringify(value)}（示例：--deliverable-chars 12000；两者同时给出时 tokens 优先）`, 2);
+        }
+        if (arg === "--deliverable-tokens") opts.deliverableTokens = v;
+        else opts.deliverableChars = v;
+        break;
+      }
+      case "--tokens-per-sec": {
+        const v = Number(value);
+        if (!Number.isFinite(v) || v <= 0) {
+          fail(`--tokens-per-sec 须为正数（tok/s），收到 ${JSON.stringify(value)}（示例：--tokens-per-sec 103.8）`, 2);
+        }
+        opts.tokensPerSec = v;
+        break;
+      }
+      case "--model-name":
+        if (value.trim() === "") fail("--model-name 值不能为空（示例：--model-name STEP-4.7）", 2);
+        opts.modelName = value;
+        break;
       case "--output":
         if (value.trim() === "") fail("--output 值不能为空（示例：--output /tmp/stats.json）", 2);
         opts.output = value.startsWith("~") ? join(homedir(), value.slice(1)) : value;
@@ -1460,6 +1515,57 @@ function serializeSkillTree(bySkillRaw) {
   return out;
 }
 
+// ── 成本冗余度块（交付体系 V5 §1.3 成本量化 / §3.6 循环失控停回参考）──
+// 实测输出 token ÷ 交付物 token = 输出冗余度；交付物 token ÷ 生成速度 = 物理下界。
+// 倍率只作停回参考（换算误差 ±20%），不作验收承诺、不设硬闸
+function buildCostBlock(totals, opts) {
+  if (opts.deliverableTokens === null && opts.deliverableChars === null) {
+    return {
+      skipReason:
+        "未提供交付物规模——加 --deliverable-tokens N 或 --deliverable-chars N（二选一，tokens 优先；chars 按 2.62 chars/token 折算）。" +
+        "示例：从 git diff --shortstat 估算字符数——输出「5 files changed, 300 insertions(+)」时按每行约 40 字符估 → node scripts/skill-usage-stats.mjs --deliverable-chars 12000",
+    };
+  }
+  const deliverableTokens =
+    opts.deliverableTokens !== null ? opts.deliverableTokens : Math.round(opts.deliverableChars / CHARS_PER_TOKEN);
+  if (!(deliverableTokens > 0)) {
+    return {
+      skipReason: `交付物规模折算后 deliverableTokens=${deliverableTokens}（0 无法作分母），冗余度与物理下界不可计算——提供正的交付物规模后重试`,
+    };
+  }
+  // 实测输出 token 复用既有 totals 口径（--skill 过滤后合计）：tokensKnown=false → null
+  //（不写 0 冒充无消耗），冗余度随之记 null
+  const measuredOutputTokens = totals.tokensKnown ? totals.tokens.output : null;
+  const redundancyRatio = measuredOutputTokens !== null ? measuredOutputTokens / deliverableTokens : null;
+  const block = {
+    deliverableTokens,
+    measuredOutputTokens,
+    outputTokenSource:
+      "totals.tokens.output（usage CLI 重算值按 --skill 过滤合计：actor 会话重算 + run 级差额补齐；含 reasoning；不含继承 seed 量；不区分 workflow/chat 形态）",
+    redundancyRatio,
+    redundancyHint:
+      redundancyRatio === null
+        ? "输出 token 未知（无用量证据），无法计算冗余度"
+        : redundancyRatio > 3
+          ? "失控参考阈值（>3）已超出——按设计文档 §3.6 作为循环失控停回参考"
+          : "正常参考区间",
+    physicalLowerBoundHours: deliverableTokens / opts.tokensPerSec / 3600,
+    physicalLowerBoundNote: "含 TTFT 的场次级估计，误差 ±20%",
+    // wall 时长复用既有「区间并集」口径（日历实际经过）；纯执行耗时（扣除额度断档）当前
+    // 无既有口径，不新造——记 null 并带说明，execOverLowerBound 相应不输出
+    measuredWallHours: totals.elapsedMsUnion !== null ? totals.elapsedMsUnion / 3_600_000 : null,
+    measuredWallSource: "totals.elapsedMsUnion（证据区间并集，日历实际经过）；null = 无时间证据",
+    measuredPureExecHours: null,
+    pureExecNote: "纯执行耗时需扣除额度断档，当前无既有口径",
+    modelName: opts.modelName,
+    tokensPerSec: opts.tokensPerSec,
+  };
+  if (block.measuredPureExecHours !== null) {
+    block.execOverLowerBound = block.measuredPureExecHours / block.physicalLowerBoundHours;
+  }
+  return block;
+}
+
 // ── table 渲染 ──
 function renderTable(report, opts) {
   const lines = [];
@@ -1507,6 +1613,24 @@ function renderTable(report, opts) {
   lines.push(
     `taskId 汇总：${Object.keys(report.byTask).length} 个任务组（observed/arg/legacy 词干来源分开标注，见 JSON 报告 byTask）；无 taskKey 的 run ${unlinkedRuns} 个`,
   );
+  const cost = report.cost;
+  lines.push("");
+  if (cost.skipReason) {
+    lines.push(`成本冗余度：未计算——${cost.skipReason}`);
+  } else {
+    const fmtHours = (h) => (h === null ? "unknown" : `${h.toFixed(3)}h`);
+    lines.push(
+      `成本冗余度（模型 ${cost.modelName}；生成速度 ${cost.tokensPerSec} tok/s——${cost.physicalLowerBoundNote}）：`,
+    );
+    lines.push(
+      `  交付物 ${fmtNum(cost.deliverableTokens)} tok | 实测输出 ${fmtNum(cost.measuredOutputTokens)} tok | ` +
+        `冗余度 ${cost.redundancyRatio === null ? "unknown" : cost.redundancyRatio.toFixed(2)} → ${cost.redundancyHint}`,
+    );
+    lines.push(
+      `  物理下界 ${fmtHours(cost.physicalLowerBoundHours)} | 实测 wall ${fmtHours(cost.measuredWallHours)}（口径：${cost.measuredWallSource}） | ` +
+        `纯执行耗时 unknown（${cost.pureExecNote}）`,
+    );
+  }
   if (opts.output) lines.push(`完整 JSON 报告已写入：${opts.output}`);
   console.log(lines.join("\n"));
 }
@@ -1668,6 +1792,7 @@ function main() {
     bySkill: serializeSkillTree(bySkillRaw),
     byTask: buildTaskRollup(includedRecords),
     pivot: buildPivot(includedRecords, opts.groups),
+    cost: buildCostBlock(totals, opts),
     platformRaw,
     unclassified: { count: unclassified.length, runs: unclassified },
     dataQuality: quality,

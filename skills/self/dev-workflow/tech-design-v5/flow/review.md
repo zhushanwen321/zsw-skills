@@ -31,7 +31,7 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
 | 终态 | 主 agent 动作 |
 |------|--------------|
 | converged | **T2 确认点**：转述 oneliner（方向审一句话判定）+ 收敛轨迹 + 处置清单 → 默认等用户确认 → 进 T3（前期授权直接进） |
-| direction-rejected | 只在方向审席判 rewrite 档（问题定义/方案主干/分型被击穿）时到达：回 T1 与用户对话重写（含 Step D 诊断期重做）；修完重新发起（attempt+1，重过四席）。重写回边至多 2 次（内核预算 t2RewriteAttemptCap）：第 2 次重写后再次打回即停回用户裁决（换方向/换问题定义/终止本设计线），不再回 T1。patch 档发现不触发本终态——进当轮问题清单由修复者处置，循环继续 |
+| direction-rejected | 只在方向审席判 rewrite 档（问题定义/方案主干/分型被击穿）时到达：回 T1 与用户对话重写（含 Step D 诊断期重做）；修完重新发起（attempt+1，重过四席）。重写回边有内核预算上限（t2RewriteAttemptCap，判定单源见 kernel-judgments，经 delivery-core CLI 消费）：预算耗尽后再次打回即停回用户裁决（换方向/换问题定义/终止本设计线），不再回 T1。patch 档发现不触发本终态——进当轮问题清单由修复者处置，循环继续 |
 | escalated | 方案性意见需方向裁决——与用户对比新候选后改文档重新发起（一律停回用户裁决，不在轮内自行重跑方案对比） |
 | stuck / max-rounds | 呈报残余风险矩阵，用户裁决（stuck = 连续 3 轮 must-fix 不降） |
 | aggregator-failure | 聚合裁决结构化返回多次回喂仍不合规（refs 未构成原始清单的精确划分——漏报/重叠/幻觉 ref）——人工读四份报告合并后把聚合清单落当轮 `aggregated.md` 再续，或 attempt+1 重新发起 |

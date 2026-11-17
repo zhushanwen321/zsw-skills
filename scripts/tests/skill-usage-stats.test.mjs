@@ -1252,6 +1252,67 @@ test("--group skillVersion：observed 读事件、estimated 读产物；老 JSON
   assert.match(resTable.stdout, /技能版本 unknown/);
 });
 
+// ── 13b. 成本冗余度块（--deliverable-*）：skip / 正常区间 / 失控参考 / tokens 优先 / 双形态输出 ──
+test("成本冗余度块：未给交付物带 skipReason（含 git diff 估算示例）；给出时算冗余度与物理下界，>3 报失控参考", (t) => {
+  const { runScript } = setupEnv(t);
+
+  // 未提供交付物：cost 只带 skipReason，不影响既有输出
+  const res0 = runScript(["--format", "json"]);
+  assert.equal(res0.status, 0, res0.stderr);
+  const r0 = JSON.parse(res0.stdout);
+  assert.ok(r0.cost.skipReason.includes("git diff --shortstat"), "skipReason 给出 git diff --shortstat 估算示例");
+  assert.ok(!("deliverableTokens" in r0.cost), "skip 形态不带计算字段");
+
+  // --deliverable-chars 262 → 100 tok（2.62 chars/token）；fixture 实测输出合计 115 → 冗余度 1.15 正常区间
+  const res1 = runScript(["--format", "json", "--deliverable-chars", "262"]);
+  assert.equal(res1.status, 0, res1.stderr);
+  const r1 = JSON.parse(res1.stdout);
+  assert.equal(r1.cost.deliverableTokens, 100);
+  assert.equal(r1.cost.measuredOutputTokens, 115);
+  assert.ok(Math.abs(r1.cost.redundancyRatio - 1.15) < 1e-9);
+  assert.equal(r1.cost.redundancyHint, "正常参考区间");
+  assert.ok(r1.cost.physicalLowerBoundHours > 0);
+  assert.match(r1.cost.physicalLowerBoundNote, /±20%/);
+  assert.ok(r1.cost.measuredWallHours > 0, "wall 复用既有 elapsedMsUnion 口径");
+  assert.equal(r1.cost.measuredPureExecHours, null);
+  assert.match(r1.cost.pureExecNote, /无既有口径/);
+  assert.ok(!("execOverLowerBound" in r1.cost), "纯执行耗时 null 时不出 execOverLowerBound");
+  assert.equal(r1.cost.modelName, "GLM-5.3");
+  assert.equal(r1.cost.tokensPerSec, 76.3);
+
+  // --deliverable-tokens 30 → 115/30 ≈ 3.83 > 3 → 失控停回参考提示；模型/速度标注透传
+  const res2 = runScript(["--format", "json", "--deliverable-tokens", "30", "--tokens-per-sec", "103.8", "--model-name", "STEP-4.7"]);
+  assert.equal(res2.status, 0, res2.stderr);
+  const r2 = JSON.parse(res2.stdout);
+  assert.ok(r2.cost.redundancyRatio > 3);
+  assert.equal(r2.cost.redundancyHint, "失控参考阈值（>3）已超出——按设计文档 §3.6 作为循环失控停回参考");
+  assert.equal(r2.cost.modelName, "STEP-4.7");
+  assert.equal(r2.cost.tokensPerSec, 103.8);
+
+  // 二选一同时给出：tokens 优先
+  const res3 = runScript(["--format", "json", "--deliverable-tokens", "100", "--deliverable-chars", "999999"]);
+  assert.equal(JSON.parse(res3.stdout).cost.deliverableTokens, 100);
+
+  // 折算后为 0：skipReason 不写 0 分母
+  const res4 = runScript(["--format", "json", "--deliverable-chars", "0"]);
+  assert.match(JSON.parse(res4.stdout).cost.skipReason, /deliverableTokens=0/);
+
+  // 非法值 fail-fast exit 2
+  const resBad = runScript(["--deliverable-chars", "abc"]);
+  assert.equal(resBad.status, 2);
+  const resBadRate = runScript(["--tokens-per-sec", "0"]);
+  assert.equal(resBadRate.status, 2);
+  assert.match(resBadRate.stderr, /正数/);
+
+  // table 形态同样带此块（skip 与计算两种形态）
+  const resT0 = runScript([]);
+  assert.match(resT0.stdout, /成本冗余度：未计算/);
+  assert.match(resT0.stdout, /git diff --shortstat/);
+  const resT1 = runScript(["--deliverable-chars", "262"]);
+  assert.match(resT1.stdout, /成本冗余度（模型 GLM-5.3/);
+  assert.match(resT1.stdout, /正常参考区间/);
+});
+
 // ── 14. 继承（seed）口径：seed-only run = 已知零新生消耗；unknown run 全零 actor 不置 tokensKnown ──
 test("seed-only run 不归 unknown 且继承量不双计；unknown run 的全零 actor 不污染桶 tokensKnown", (t) => {
   const home = mkdtempSync(join(tmpdir(), "sus-seed-home-"));

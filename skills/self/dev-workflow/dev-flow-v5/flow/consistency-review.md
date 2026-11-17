@@ -2,9 +2,9 @@
 
 > 审查对象 = `git diff <基线>..HEAD` 与设计文档章节对照，以及 V5 判据原文 ↔ 方案机制与反例场景 ↔ 代码和测试实际行为的三方对账。轮次唯一形态：**R1 = 全面分区审；R2+ = 定向复审**（只审上批修复的影响面，不全面重审）。收敛方向两个：实现回归文档，或文档经确认后演进（进登记表）。
 
-## D2 入口对账（发起前主 agent 核对）
+## D2 入口对账
 
-D1 各节点 deviations 中的测试缺口申报（testCommand 覆盖不了的改动行为）逐条核对闭环形态，二选一：**更新设计包 s4-accept.json verificationBindings / impl-plan acceptancePlan 的测试绑定，或登记由 D3 独立验收节点承接（写明节点与场景 id）**。两者皆无的条目回 D1 对应单元补闭环后再进 D2——只申报缺口不闭环 = 测试覆盖静默流失，D3 不会知道该验什么。核对结果（逐条处置）append 到 `<name>.ledger.md`。
+进入合法性由 delivery-core next 裁决（转移表唯一权威）。D1 各节点 deviations 中的测试缺口申报（testCommand 覆盖不了的改动行为）必须逐条落实去向，二选一：**更新设计包 s4-accept.json verificationBindings / impl-plan acceptancePlan 的测试绑定，或登记由 D3 独立验收节点承接（写明节点与场景 id）**——只申报缺口不落实去向 = 测试覆盖静默流失，D3 不会知道该验什么；未落实的条目回 D1 对应单元补齐。核对结果（逐条处置）append 到 `<name>.ledger.md`。
 
 ## W3 workflow 契约（zcode 环境默认动作）
 
@@ -29,7 +29,7 @@ args: { execPlan: "<path>.exec-plan.json",
 - **Gate A 归因分诊**（独立 phase，红后触发，≤2 轮）：分诊 agent 读 gate-a 日志 + 基线 diff，逐失败段四分类——batch-regression（本批回归）条目（GA-<轮>-<序> id）回注修复轮（聚合定性合池重新分组再修，产物预备与 Gate A 随轮重跑）；flaky 直接重跑 Gate A；legacy（存量红）/ script-defect（测试基建自身缺陷，如段退出码累计传播假红）不属本批修复范围——带分诊报告终态 gate-a-failed，由主 agent 裁决（调整 full-suite 清单 attempt+1 重发 / 登记存量债务）。绕过检测（本批 diff 新增行的跳过/仅跑部分/lint 禁用形态）不经分诊维持直接终态——检测挂在跑全量之前、按 diff 判定，不解析测试输出里的 skip 汇总（设计内分层跳过是合法输出，与 pr-cr-fix PS10 同判据）
 - **产物构建失败**（不再直接终态）：先引擎重跑一次自愈（产物过期是最常见因，重建即愈），仍败登记 GA 条目回注修复轮（fixer 读构建日志修产物脚本/基建——产物是本轮声明依赖、无豁免语义，不派分诊）；回注轮与分诊轮共用 ≤2 上限，耗尽才终态
 - **终态回写 status.json events**：consistency 终态一笔 + gate-a pass/fail 一笔——D3 入口门「Gate A 绿证据可查」即查 gate-a-pass 事件；**终态同时写 `<name>.ledger.md` 未决清单一笔**（docErrors / reasonable / deferredLedger / escalated / remaining / 残留改动，带 attempt 标识——主会话中断后仍可从盘上恢复待处置清单）
-- doc_errors（文档错了）**进文档修复组在审出它的轮次当场修**（方向 = 改文档对齐实现；每组修复批次后引擎派一个文档修复组承接当轮全部 doc_errors，纯文档改动不跑增量测试不派定向复审）；fixer 核实方向两可或实现侧错误的条目随终态回流主 agent 裁决（2026-10-06 裁决：哪个阶段审出来就在哪个阶段修）；同一条目经 doc_errors 回流后再被 skipped 至多 2 次（内核预算 d2ItemReflowCap），超限转升级呈报停回用户，不再回流修复循环。reasonable（合理演化）**不进修复循环**，随终态回流主 agent 写入 impl-plan 合理偏差登记表（`.impl-plan.md` §5 + json notes）
+- doc_errors（文档错了）**进文档修复组在审出它的轮次当场修**（方向 = 改文档对齐实现；每组修复批次后引擎派一个文档修复组承接当轮全部 doc_errors，纯文档改动不跑增量测试不派定向复审）；fixer 核实方向两可或实现侧错误的条目随终态回流主 agent 裁决（2026-10-06 裁决：哪个阶段审出来就在哪个阶段修）；同一条目经 doc_errors 回流后再被 skipped 的次数有内核预算上限（d2ItemReflowCap，判定单源见 kernel-judgments，经 delivery-core CLI 消费），超限转升级呈报停回用户，不再回流修复循环。reasonable（合理演化）**不进修复循环**，随终态回流主 agent 写入 impl-plan 合理偏差登记表（`.impl-plan.md` §5 + json notes）
 
 ## 手工降级路径
 
@@ -39,13 +39,13 @@ args: { execPlan: "<path>.exec-plan.json",
 4. **微修复合并**：单条小修（<5min）攒入下一修复批次，仅当它是 Gate 通过唯一阻塞项才单独派发并即刻重验
 5. **R2+ 定向复审**：每组修完即派只审该组影响面的复审，不攒轮；未清零回 3
 6. **Gate A**：主 agent 直跑全量段（命令从项目配置真实读取；输出落 gate-a.log）——**绕过检测**（发现即失败项；workflow 形态的机器落点 = 环境结构性隔离（不传环境变量）+ Gate A 跑全量之前对本批 diff 新增行检测 `.skip(` / `.only(` / `.todo` / `eslint-disable` 形态，手工形态逐项人审本批 diff 是否新增 SKIP_*/test.skip/仅跑部分/禁用 lint 规则；不解析测试输出里的 skip 汇总——设计内分层跳过是合法输出，与 pr-cr-fix PS10 同判据）；有 failures 派归因 subagent 读落盘输出逐条归因（回 D1 补修 / 用户签认转残留风险登记）；**覆盖矩阵**：单元范围声明 × 实际用例列无人认领改动区（补测试或登记理由）；**产物类前置**：产物构建/fixture 生成第一波并行启动，禁现用现建
-7. Gate A 绿 → status.json 记一笔（命令 + 关键输出行，不产生 commit）→ 进 `flow/acceptance.md`
+7. Gate A 绿 → status.json 记一笔（命令 + 关键输出行，不产生 commit）；后续推进由 delivery-core next 裁决（转移表唯一权威）
 
 ## 终态处置表
 
 | 终态 | 主 agent 动作 |
 |------|--------------|
-| converged | unreasonable 清零 + Gate A 绿——转 D3（acceptance.md），入口门直接引用 status.json events 的 gate-a-pass |
+| converged | unreasonable 清零 + Gate A 绿——后续推进由 delivery-core next 裁决（转移表唯一权威）；Gate A 证据引用 status.json events 的 gate-a-pass |
 | stuck | 读 remaining/escalated 清单人工裁决（定性争议转 doc_errors / 需重设计走设计流程），不盲目重跑；处置后必须重跑受影响审查并达到未解决项为零，禁止把 stuck 当作可直接进入 D3 的完成状态 |
 | gate-a-failed | 引擎已完成 ≤2 轮归因分诊，终态 message 自带分诊报告（逐失败段 kind + 依据）——legacy/script-defect 类按报告裁决：调整 full-suite 清单后 attempt+1 重发，或登记存量债务；分诊轮耗尽（仍有 batch 类）读 gate-a 日志人工归因补修后重跑 |
 | review-failure / fix-failure | 按 message 恢复动作修复后重发（attempt 递增；errored/completed run 不可 resume）；在途改动先 git status 盘点 |

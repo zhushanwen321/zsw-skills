@@ -1,13 +1,10 @@
 # D3 端到端验收 + D4 收尾交付
 
-> D3 输入：D2 清零 + Gate A 绿。只做机器替代不了的验证。排序三原则：**核心先行、依赖解锁、共享状态互斥并行**。L0/L2 已由 D1/D2 覆盖（编译期标注「已覆盖」，入口门引用 Gate A 证据——HEAD 未前进免重跑，前进过只补增量）。
+> 前置与合法转移由 delivery-core next 裁决（转移表唯一权威，见 delivery-v5 SKILL「交付事务内核」节）。D3 只做机器替代不了的验证。排序三原则：**核心先行、依赖解锁、共享状态互斥并行**。L0/L2 已由 D1/D2 覆盖（编译期标注「已覆盖」，入口门引用 Gate A 证据——HEAD 未前进免重跑，前进过只补增量）。
 
 ## D3 入口门 [MANDATORY]
 
-1. status.json 全节点 done（或用户明示豁免单元逐个列名）
-2. D2 清零 + Gate A 绿的证据在 status.json events 可查
-3. L0 静态检查全绿——引用 Gate A 时点证据（status.json events 的 gate-a-pass；HEAD 未前进则免重跑）
-4. fail 回流重验场景：先声明重验范围——未触及共享接线点只重验影响面，触及则全量重来
+入口前置与合法性由 delivery-core next 裁决（转移表唯一权威）——status.json 全节点 done（或用户明示豁免单元逐个列名）、D2 清零与 Gate A 绿证据、L0 静态检查全绿的逐项判定以 next 返回的 machineChecks 为准，不通过按其恢复动作处置，不在本文复述顺序。证据引用机制：L0 引用 Gate A 时点证据（status.json events 的 gate-a-pass；HEAD 未前进则免重跑）。fail 回流重验场景：先声明重验范围——未触及共享接线点只重验影响面，触及则全量重来。
 
 ## 分层铁律 [MANDATORY]
 
@@ -27,21 +24,21 @@
 - **一次性 vs 可复用分流**：可复用（核心 UI/主链路/长期维护面）→ 项目 e2e 目录 + 同 commit 登记测试静态文档；一次性 → `<name>.acceptance/` + status.json 记一笔。项目维护 e2e 资产登记表（如 `docs/testing/e2e-map.json`）时，新增/变更用例同 commit 更新登记表并跑其校验脚本（以项目登记纪律为准）
 - **e2e 单测化**：能以 mock/fixture 重放等价覆盖的圈定项随所属单元转化为 L1/L2 单测——长期方向逐步单测化（与 SKILL e2e 准则同源）
 
-## 候选反例审查（D3 后、D4 前）[MANDATORY]
+## 候选反例审查（explore-only）[MANDATORY]
 
-V5 schema 2 交付任务在 D3 验收执行后、D4 登记前，必须运行 `independent-assurance-v5`，args 增加 `mode: "explore-only"`。该阶段由未参与设计和实现的探索审查者攻击完整候选实现，登记 ExplorationCompleted 与新发现，但不写 AssuranceCompleted。
+V5 schema 2 交付任务的候选反例审查运行 `independent-assurance-v5`（args 增加 `mode: "explore-only"`；触发时点与进入合法性由 delivery-core next 裁决——转移表唯一权威）。该阶段由未参与设计和实现的探索审查者攻击完整候选实现，登记 ExplorationCompleted 与新发现，但不写 AssuranceCompleted。
 
 - 机制与判据冲突回 tech-design-v5；反例场景或测试绑定缺失回 T3；实现缺陷回 D1/D2；判据遗漏回 delivery-v5 递增验收版本。
 - 每条 must-fix 必须有回归测试和受影响一致性复核；修复后重跑受影响场景与全量确定性测试，并在新 revision 重新 explore-only。
 - 非 must-fix 必须附 consequenceRefutation，不能只按判据字面合规降级。
-- D4 的 ImplementationRecorded 由 delivery-gate 强制检查：当前 revision 必须有 ExplorationCompleted 且 must-fix 清零，否则拒绝登记。
-- schema 1 老任务不触发本阶段；schema 2 全部任务（与 exploratoryReview 风险字段无关）在 D4 登记前必须完成当前 revision 的 explore-only——delivery-gate 对 schema 2 的 ImplementationRecorded 无条件要求当前 revision 的 ExplorationCompleted，没有 not-required 豁免分支。
+- D4 实现登记的合法性判定（当前 revision 探索可用性、must-fix open 集）为内核判定单源，见 kernel-judgments（经 delivery-core CLI 消费），不在本文复述。
+- schema 1 老任务不触发本阶段；schema 2 全部任务（与 exploratoryReview 风险字段无关）无条件触发，没有 not-required 豁免分支。
 
 ## D4 收尾（主 agent，不 workflow 化）
 
 1. 全绿交付汇总：目标达成对照表 + 合理偏差登记表 + 残留风险 + 覆盖概览 + 剧本分流结果
 2. 最终 commit（可复用 e2e spec、文档登记；impl-plan/exec-plan/status 落 `~/.agents/skill-data/`，HOME 下天然不入 git）
-3. **增量实现登记（交付体系任务 [MANDATORY]；独立设计任务跳过本步）**：把候选实现按增量登记进交付任务事件流——裁决器与独立保证（independent-assurance-v5）都消费 ImplementationRecorded，缺它 state 无法离开 acceptance-approved（delivery-v5 主流程 5→6 步走不通）。与 candidate-build-v5 通道的分工：两通道最终落到同一事件流——candidate-build-v5 是无设计包的直建通道（引擎逐增量登记），本技能按设计包执行后由主 agent 在本步逐增量登记，命令与回执口径与其一致。逐增量（increments.json items[].id，增量归属单元以 D0 核对的 nodes[].incrementId 为准）：
+3. **增量实现登记（交付体系任务 [MANDATORY]；独立设计任务跳过本步）**：把候选实现按增量登记进交付任务事件流——裁决器与独立保证（independent-assurance-v5）都消费 ImplementationRecorded（缺登记时任务无法向交付终态推进，转移合法性由交付事务内核裁决）。与 candidate-build-v5 通道的分工：两通道最终落到同一事件流——candidate-build-v5 是无设计包的直建通道（引擎逐增量登记），本技能按设计包执行后由主 agent 在本步逐增量登记，命令与回执口径与其一致。逐增量（increments.json items[].id，增量归属单元以 D0 核对的 nodes[].incrementId 为准）：
 
    ```bash
    node ~/.agents/skills/delivery-v5/scripts/delivery-gate.mjs append --task-dir <交付任务目录> \
@@ -65,7 +62,7 @@ V5 schema 2 交付任务在 D3 验收执行后、D4 登记前，必须运行 `in
    - **凭据来源** = delivery-v5 `init` 输出的 builder credentialId（私钥在 `~/.agents/skill-data/delivery-keys/<分组>/<任务id>/builder.key`，只传凭据 id、不碰私钥本体）
    - **前置**：该增量全部归属单元 done 且增量 testCommand（D0 门已核对与 increments.json 逐字一致）重跑绿、工作树 clean（全部改动已 commit）——增量粒度汇总一笔，不逐单元登记
    - **实现报告** artifact 写 `<交付任务目录>/evidence/implementation-<incrementId>.md`（归属单元清单、commit 清单、测试输出摘要）
-   - append 失败 → 停回处置：按 stderr 恢复动作处理（凭据失效走 delivery-v5 任务替换通道）；禁止跳过登记静默进 D5
+   - append 失败 → 停回处置：按 stderr 恢复动作处理（凭据失效走 delivery-v5 任务替换通道）；禁止跳过登记静默推进后续阶段
 4. **功能分级登记同步**：新功能/新用例或「挂掉后果」变化 → 同 commit 更新（如 `docs/FEATURE-PRIORITIES.md`）；纯重构不触发；零触发也须汇报注明
 5. **文档资产更新检查**：对照项目 AGENTS.md 文档索引按变更内容判定同 commit 更新（产品→PRODUCT / 拓扑→ARCHITECTURE / 术语→CONTEXT / 视觉→DESIGN / 规范→STANDARDS / 测试→TEST-STRATEGY / 排障→TROUBLESHOOTING；采样管道资产同 commit 回写）；verification skill 触达时转第 6 步专用流程，不在本步泛化处理；零触发注明「文档资产零同步」
 6. **verification skill 同步检查（项目存在 verification skill 时执行，零触发注明「verification skill 零同步」）**：发现规则同 tech-design-v5 T3（项目 AGENTS.md 显式声明为唯一来源；2026-11-04 起废除 verify-* 前缀与 SKILL.md 内容特征探测）。触发 = 本次交付改动文件触达其覆盖矩阵登记的功能行：
@@ -75,7 +72,7 @@ V5 schema 2 交付任务在 D3 验收执行后、D4 登记前，必须运行 `in
 7. **ADR 复审**：对照本次交付复审（开发中拍板的重要决策漏登的补登记；既有 ADR 被推翻的修订）；核对来源优先 = 设计文档头部「关联登记清单」字段（历史文档同义旧字段名等同——凡头部以「关联登记」开头的字段即认作该字段；字段缺失按变更语义扫描兜底）；零触发注明「ADR 零同步」
 8. **运行档案分流（SKILL「运行记录」节）**：read `<name>.runlog/` 全部文件与 `<name>.ledger.md`——ledger 未清项逐条分流到既有登记处（合理偏差 → impl-plan §5、残留风险 → impl-plan 残留风险节、决策 → ADR）或标注处置完成/记录丢弃理由，禁止档案与登记处双登记并存；runlog 有价值的过程发现（踩坑根因/方案取舍）择要进交付汇总作复盘素材；零未清项注明「档案已清」
 9. [OPTIONAL] 用户指示时产物清理（运行档案默认保留）
-10. **自动衔接 D5**：最终 commit 落地后进 `flow/sync.md`（仅用户明示跳过可免，跳过须记录）
+10. **交付后衔接**：最终 commit 落地后，后续阶段推进由 delivery-core next 裁决（转移表唯一权威；终态同步见 `flow/sync.md`）——仅用户明示跳过可免，跳过须记录
 11. **阶段事件观测终态记录（SKILL「阶段事件观测」节）**：D4 开始时经 `~/.agents/scripts/workflow-observe.mjs` 记 `--stage D4 --step finalize` 的 start，本步收尾后记 end；随后记 `step=execution` 的 start/end 对结束本次执行（end 带 `--outcome <终态词>`）。D0/D6 同理（stage=D0 / D6）；W2/W3/W4 的 D1/D2/D5 已内建观测，步骤边界由引擎写入
 
 ## 失败状态的可视边界

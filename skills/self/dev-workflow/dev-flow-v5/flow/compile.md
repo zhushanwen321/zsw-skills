@@ -1,6 +1,6 @@
 # D0 编译 — 设计包 → 执行数据结构
 
-> 一次性判断性工作（主 agent 亲为），替代此后每单元的重复手工编排。产物：`<name>.exec-plan.json` + `<name>.prompts/*.md` + 初始 `<name>.status.json` + `<name>.runlog/` 目录 + `<name>.ledger.md` 头部初始化，全部落 dev-flow 段（HOME 下天然不入 git）。段内目录按寻址双形态：单仓形态 = `<project-slug>/`（现行平铺，路径不变）；workspace 形态（同仓多个 worktree 同父目录）= `<ws-slug>/<worktreeName>/`（worktree 级隔离，status 与 git 对账、断点恢复绑定该 worktree 的检出状态）。两种 slug 由寻址检测探针按 projectRoot 自动派生，不手算（算法与约定见 `skill-data-addressing.md`——`<zsw-skills 检出根>/skills/self/dev-workflow/references/skill-data-addressing.md`）；设计包落 tech-design 段（workspace 形态为 `<ws-slug>/`，工作区级共享）。项目内 `.tmp/dev-flow/` 未整体废弃——acceptance/plan-mode 脚本族的既有用法不属本流程产物。完成后进 D1。
+> 一次性判断性工作（主 agent 亲为），替代此后每单元的重复手工编排。产物：`<name>.exec-plan.json` + `<name>.prompts/*.md` + 初始 `<name>.status.json` + `<name>.runlog/` 目录 + `<name>.ledger.md` 头部初始化，全部落 dev-flow 段（HOME 下天然不入 git）。段内目录按寻址双形态：单仓形态 = `<project-slug>/`（现行平铺，路径不变）；workspace 形态（同仓多个 worktree 同父目录）= `<ws-slug>/<worktreeName>/`（worktree 级隔离，status 与 git 对账、断点恢复绑定该 worktree 的检出状态）。两种 slug 由寻址检测探针按 projectRoot 自动派生，不手算（算法与约定见 `skill-data-addressing.md`——`<zsw-skills 检出根>/skills/self/dev-workflow/references/skill-data-addressing.md`）；设计包落 tech-design 段（workspace 形态为 `<ws-slug>/`，工作区级共享）。项目内 `.tmp/dev-flow/` 未整体废弃——acceptance/plan-mode 脚本族的既有用法不属本流程产物。交付体系任务的阶段推进由 delivery-core next 裁决（转移表唯一权威）。
 
 ## 编译清单（按序执行）
 
@@ -151,6 +151,6 @@ DAG 含 worktree 单元（node.cwd ≠ projectRoot）且存在跨 cwd 依赖边�
 
 ## 完成判据
 
-exec-plan schema 完整（nodes 非空、每节点 promptFile 存在、testCommand 可执行）+ status.json 初始态落盘 + L0 基线绿。呈现编译摘要（单元数/wave 分组/验收节点数）后进 D1（发起 W2 或走 `flow/execute.md` 手工路径）。
+exec-plan schema 完整（nodes 非空、每节点 promptFile 存在、testCommand 可执行）+ status.json 初始态落盘 + L0 基线绿。呈现编译摘要（单元数/wave 分组/验收节点数）；后续推进由 delivery-core next 裁决（转移表唯一权威），D1 发起形态见 `flow/execute.md`。
 
 **阶段事件观测（SKILL「阶段事件观测」节）**：D0 开始时分配 `task_id`（建议 = 设计包 `<name>`，D1-D6 全段共用）并经 `~/.agents/scripts/workflow-observe.mjs` 记 `--stage D0 --step compile` 的 start，编译完成后记 end；进 D1 时发起 W2 传同一 `taskId` + 新 `executionId`（建议 `D1-<发起时点短时间戳>`）。

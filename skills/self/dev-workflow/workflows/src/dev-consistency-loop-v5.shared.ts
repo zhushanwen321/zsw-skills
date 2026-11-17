@@ -722,6 +722,8 @@ const addDocError = (e: GapEntry): string => {
   return id;
 };
 let reviewRound = 1;
+// 条目历轮聚合改判动作（改判护栏 §3.4：跨轮反复改判达上限停回——回流再入池同 id 也计入）
+const aggregateDecisionHistory = new Map<string, Array<{ round: number; action: string; reason: string }>>();
 let gateALogPath: string | null = null;
 let foreignNote = ""; // 上轮越界改动说明（注入下轮全部修复组 prompt）
 let toRel = (p: string): string => p;
@@ -1274,18 +1276,20 @@ function validateAggregateReport(v: unknown): Validated<AggregateReport> {
       const n = String(i + 1);
       if (typeof it["id"] !== "string") { bad.push(n); return; }
       const action = it["action"];
+      // 改判类动作（merge-into/reclassify/escalate）理由必填且非空——无声改判即结构校验失败
+      const reasonOk = typeof it["reason"] === "string" && String(it["reason"]).trim() !== "";
       if (action === "keep") {
         if (typeof it["group"] !== "string" || !isStrArr(it["expectedFiles"])) bad.push(n);
       } else if (action === "merge-into") {
-        if (typeof it["mergeInto"] !== "string" || typeof it["reason"] !== "string") bad.push(n);
+        if (typeof it["mergeInto"] !== "string" || !reasonOk) bad.push(n);
       } else if (action === "reclassify-doc-error" || action === "escalate") {
-        if (typeof it["reason"] !== "string") bad.push(n);
+        if (!reasonOk) bad.push(n);
       } else {
         bad.push(n);
       }
     });
     if (bad.length > 0)
-      errors.push(`items 第 ${bad.join("、")} 条畸形（keep 须 group + expectedFiles 字符串数组；merge-into 须 mergeInto + reason；reclassify-doc-error/escalate 须 reason；action 限 keep/merge-into/reclassify-doc-error/escalate）`);
+      errors.push(`items 第 ${bad.join("、")} 条畸形（keep 须 group + expectedFiles 字符串数组；merge-into 须 mergeInto + 非空 reason；reclassify-doc-error/escalate 须非空 reason——改判不留理由不允许；action 限 keep/merge-into/reclassify-doc-error/escalate）`);
   }
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v as AggregateReport };
 }
@@ -1529,8 +1533,26 @@ gateARetry: while (true) {
 
   // 按聚合裁决执行：merge-into / reclassify-doc-error / escalate 置不活跃（离场三通道）；
   // keep 条目覆盖组归属（it.group 供下方机械分组落组——路由职责的生效点）
+  // 改判留痕（设计文档 §3.4）：条目历轮聚合改判动作——同一 id 经回流再入池又被改判达上限即停回
+  const AGGREGATE_REGRADE_HALT = 2; // 与 kernel/rules.json budgets.aggregateRegradeHalt 对拍（delivery-core-v5.test.mjs）
   if (aggItems !== null) {
     const byId = new Map(aggItems.map((a) => [a.id, a]));
+    for (const a of aggItems) {
+      if (a.action === "keep") continue;
+      const history = aggregateDecisionHistory.get(a.id) ?? [];
+      history.push({ round: fixRound, action: a.action, reason: a.reason ?? "" });
+      aggregateDecisionHistory.set(a.id, history);
+    }
+    const regradeOffenders = [...aggregateDecisionHistory.entries()]
+      .filter(([, history]) => history.length >= AGGREGATE_REGRADE_HALT)
+      .map(([id, history]) => `${id}（${history.map((entry) => `r${entry.round}:${entry.action}`).join(" → ")}）`);
+    if (regradeOffenders.length > 0) {
+      return finish(
+        "stuck",
+        reviewRound,
+        `聚合定性改判熔断：以下条目跨轮反复被改判 ${AGGREGATE_REGRADE_HALT} 次（${regradeOffenders.join("；")}）——定性不应靠反复改判收敛停机判据，停回用户裁决最终定性。恢复动作：用户逐条裁定三分类归属后，主 agent 按裁定登记处置并决定是否续跑`,
+      );
+    }
     for (const it of roundActive) {
       const a = byId.get(it.id);
       if (a === undefined) continue; // 漏报兜底：保持原状原分区

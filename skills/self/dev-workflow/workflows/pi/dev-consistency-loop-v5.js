@@ -560,7 +560,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "5.1.1"; // 构建注入自 dev-flow-v5/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "5.2.0"; // 构建注入自 dev-flow-v5/SKILL.md frontmatter version（唯一权威）
 // W3 dev-consistency-loop-v5 — dev-flow-v5 D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：
@@ -1208,6 +1208,8 @@ const addDocError = (e) => {
     return id;
 };
 let reviewRound = 1;
+// 条目历轮聚合改判动作（改判护栏 §3.4：跨轮反复改判达上限停回——回流再入池同 id 也计入）
+const aggregateDecisionHistory = new Map();
 let gateALogPath = null;
 let foreignNote = ""; // 上轮越界改动说明（注入下轮全部修复组 prompt）
 let toRel = (p) => p;
@@ -1717,16 +1719,18 @@ function validateAggregateReport(v) {
                 return;
             }
             const action = it["action"];
+            // 改判类动作（merge-into/reclassify/escalate）理由必填且非空——无声改判即结构校验失败
+            const reasonOk = typeof it["reason"] === "string" && String(it["reason"]).trim() !== "";
             if (action === "keep") {
                 if (typeof it["group"] !== "string" || !isStrArr(it["expectedFiles"]))
                     bad.push(n);
             }
             else if (action === "merge-into") {
-                if (typeof it["mergeInto"] !== "string" || typeof it["reason"] !== "string")
+                if (typeof it["mergeInto"] !== "string" || !reasonOk)
                     bad.push(n);
             }
             else if (action === "reclassify-doc-error" || action === "escalate") {
-                if (typeof it["reason"] !== "string")
+                if (!reasonOk)
                     bad.push(n);
             }
             else {
@@ -1734,7 +1738,7 @@ function validateAggregateReport(v) {
             }
         });
         if (bad.length > 0)
-            errors.push(`items 第 ${bad.join("、")} 条畸形（keep 须 group + expectedFiles 字符串数组；merge-into 须 mergeInto + reason；reclassify-doc-error/escalate 须 reason；action 限 keep/merge-into/reclassify-doc-error/escalate）`);
+            errors.push(`items 第 ${bad.join("、")} 条畸形（keep 须 group + expectedFiles 字符串数组；merge-into 须 mergeInto + 非空 reason；reclassify-doc-error/escalate 须非空 reason——改判不留理由不允许；action 限 keep/merge-into/reclassify-doc-error/escalate）`);
     }
     return errors.length > 0 ? { ok: false, errors } : { ok: true, value: v };
 }
@@ -1959,8 +1963,23 @@ gateARetry: while (true) {
         }
         // 按聚合裁决执行：merge-into / reclassify-doc-error / escalate 置不活跃（离场三通道）；
         // keep 条目覆盖组归属（it.group 供下方机械分组落组——路由职责的生效点）
+        // 改判留痕（设计文档 §3.4）：条目历轮聚合改判动作——同一 id 经回流再入池又被改判达上限即停回
+        const AGGREGATE_REGRADE_HALT = 2; // 与 kernel/rules.json budgets.aggregateRegradeHalt 对拍（delivery-core-v5.test.mjs）
         if (aggItems !== null) {
             const byId = new Map(aggItems.map((a) => [a.id, a]));
+            for (const a of aggItems) {
+                if (a.action === "keep")
+                    continue;
+                const history = aggregateDecisionHistory.get(a.id) ?? [];
+                history.push({ round: fixRound, action: a.action, reason: a.reason ?? "" });
+                aggregateDecisionHistory.set(a.id, history);
+            }
+            const regradeOffenders = [...aggregateDecisionHistory.entries()]
+                .filter(([, history]) => history.length >= AGGREGATE_REGRADE_HALT)
+                .map(([id, history]) => `${id}（${history.map((entry) => `r${entry.round}:${entry.action}`).join(" → ")}）`);
+            if (regradeOffenders.length > 0) {
+                return finish("stuck", reviewRound, `聚合定性改判熔断：以下条目跨轮反复被改判 ${AGGREGATE_REGRADE_HALT} 次（${regradeOffenders.join("；")}）——定性不应靠反复改判收敛停机判据，停回用户裁决最终定性。恢复动作：用户逐条裁定三分类归属后，主 agent 按裁定登记处置并决定是否续跑`);
+            }
             for (const it of roundActive) {
                 const a = byId.get(it.id);
                 if (a === undefined)
