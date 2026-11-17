@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// delivery-core.mjs — 交付事务内核 CLI（V5）
+// delivery-core.mjs — 交付事务内核 CLI（V6）
 //
 // 职责边界（设计文档 /tmp 交付事务状态机内核设计的落地载体）：
 //   状态、转移、写入、计数四件事收归一处。delivery-gate 保持裁决器（verdict 与事件 append
@@ -13,6 +13,7 @@
 //     usable-explorations 可用探索集（同上，含磁盘 artifact 校验）
 //     exploration-due  探索 due 判定（同上）
 //     repair-budget    修复轮预算（同上）
+//     full-qualification full 保证资格判定（同上：历史 full 能否作为 recheck/full-first 资格）
 //     node-transition  DAG 节点状态转移（wave-executor 六写入点收敛后的唯一判定；
 //                      --dry-run 供引擎在串行写链内先判定后自写，非 dry-run 直接落盘；
 //                      manual-disposition 带 --task-dir 时自动登记待复盘待办）
@@ -36,6 +37,7 @@ import {
   explorationDue,
   findingRegrades,
   openFindingsFromEvents,
+  priorFullQualification,
   projectNodeEvents,
   repairBudgetFromEvents,
   taskPhaseFromEvents,
@@ -372,6 +374,36 @@ function commandJudgment(command, args) {
     return;
   }
   usageFail(`未知判定命令 ${command}。`);
+}
+
+// full 保证资格判定（workflow 预检消费入口）：历史 full 能否作为 recheck / full-first
+// 的资格基础。输入与裁决器 buildVerdict 完全同源——world.fold 三组记录（artifact 失效
+// 事件已在折算阶段过滤）+ 当前增量清单；判定谓词在 kernel-judgments 单源
+function commandFullQualification(args) {
+  const options = parseOptions(args, { required: ["task-dir"], optional: [] });
+  const world = loadWorldAuto(options["task-dir"]);
+  if (world.acceptance === null) {
+    // 无验收包（早期任务）：无保证资格可判，空结果而非报错——与探索/发现查询的无包
+    // 降级同思路，查询类命令不因包缺失崩溃
+    printJson({
+      taskDir: world.taskDir,
+      acceptanceVersion: null,
+      qualified: false,
+      qualifiedEventIds: [],
+      inspections: [],
+      reason: "无验收包（acceptance.json 缺失），无保证资格可判",
+    });
+    return;
+  }
+  const judgment = priorFullQualification(
+    { assurances: world.fold.assurances, evidence: world.fold.evidence, explorations: world.fold.explorations },
+    {
+      incrementIds: world.increments.items.map((item) => item.id),
+      usesAssertions: world.acceptance.schemaVersion === 2,
+      exploratoryReviewRequired: world.acceptance.exploratoryReview === "required",
+    },
+  );
+  printJson({ taskDir: world.taskDir, acceptanceVersion: world.acceptance.acceptanceVersion, ...judgment });
 }
 
 async function commandExploration(command, args) {
@@ -952,6 +984,9 @@ try {
     case "exploration-due":
       await commandExploration(command, commandArgs);
       break;
+    case "full-qualification":
+      commandFullQualification(commandArgs);
+      break;
     case "node-transition":
       commandNodeTransition(commandArgs);
       break;
@@ -966,7 +1001,7 @@ try {
       break;
     default:
       usageFail(
-        `未知命令 ${JSON.stringify(command ?? "")}。合法命令：validate / rules / next / pending / budget / open-findings / usable-explorations / exploration-due / repair-budget / node-transition / node-project / events / replay。`,
+        `未知命令 ${JSON.stringify(command ?? "")}。合法命令：validate / rules / next / pending / budget / open-findings / usable-explorations / exploration-due / repair-budget / full-qualification / node-transition / node-project / events / replay。`,
       );
   }
 } catch (error) {

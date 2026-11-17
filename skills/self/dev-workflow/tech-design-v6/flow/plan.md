@@ -190,7 +190,7 @@ node ~/.agents/skills/tech-design-v6/scripts/render-impl-plan.mjs ~/.agents/skil
 
 1. 切分粒度：无跨范围声明耦合、无空转单元、依赖方向与 DAG 一致；依赖只写「编译依赖 / 运行时读对方产物」，其他理由（测试可跑、想先验一把）删掉或写真实理由
 2. worktree 标记符合判据（见 dev-flow-v6 `references/dag-authoring.md` 隔离决策表）
-3. 验收条款无遗漏：每单元至少一条可机械核验条款；设计验收场景表每行落到某单元验收条款**且出现在验收计划表**；V5 每个 adversarialForm 必须被至少一个 acceptancePlan[].adversarialFormRefs 认领，D3 节点也须携带同一引用
+3. 验收条款无遗漏：每单元至少一条可机械核验条款；设计验收场景表每行落到某单元验收条款**且出现在验收计划表**；每个 adversarialForm 必须被至少一个 acceptancePlan[].adversarialFormRefs 认领，D3 节点也须携带同一引用
 4. 验收计划表自洽：核心组覆盖主链路；依赖列无环，非默认依赖带理由；verifyAsset = `reuse:` 的场景 id 在项目 verification skill 的场景清单中实际存在（读清单核对，防编造 id 把雷埋到 D3 启动）
 5. e2e 影响面圈定无悬空：设计「e2e 影响面评估」子节存在且非空（或含显式「无受影响项（依据）」）——缺节/空集须已交回 T1 补写，禁止空集通过自检；每项落到验收计划表或「不跑（理由）」
 6. 决策分级列无遗漏：每单元已标注其实现决策的最高审核级别（来源 = meta.json reviewNav 人工审核导航），A 级决策至少被一个单元覆盖

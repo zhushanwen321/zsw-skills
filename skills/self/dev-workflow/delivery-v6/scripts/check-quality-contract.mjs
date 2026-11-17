@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// V5 质量契约联合校验：验收断言 → 设计机制与反例场景 → 实施测试绑定。
+// V6 质量契约联合校验：验收断言 → 设计机制与反例场景 → 实施测试绑定。
 // schema 1 任务直接放行；schema 2 的结构完备性在此统一判定，语义等价仍由独立 reviewer 负责。
 
 import { readFileSync } from "node:fs";
@@ -47,7 +47,7 @@ function main() {
 
   const acceptance = readJson(resolve(taskDir, "acceptance.json"), "验收文件");
   if (acceptance.schemaVersion === 1) {
-    console.log("PASS: schema 1 任务沿用需求级判定，无 V5 质量契约附加检查");
+    console.log("PASS: schema 1 任务沿用需求级判定，无 V6 质量契约附加检查");
     return;
   }
   if (acceptance.schemaVersion !== 2) {

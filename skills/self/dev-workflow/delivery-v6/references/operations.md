@@ -91,7 +91,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs record-design-approv
 - `candidate-build-v6`：入口门校验验收批准；非 `--verification-only` 任务还要求 DesignApproved（state=design 直接拒绝，恢复动作指向 `record-design-approved`）。只核验任务由 builder 逐增量核验不改代码，实现摘要带 `[verification-only]` 标注。
 - dev-flow-v6（技能③）：按验收与方案实现，其 D4 收尾按 increments 逐增量以 builder 凭据登记 `ImplementationRecorded`（衔接定义见 dev-flow-v6 文档），与 candidate-build-v6 的实现记录与合并回执口径一致。
 
-builder 事件经 `append --credential <builder credentialId> [--run-id <runId>]` 登记（ImplementationRecorded 附合并回执：起始指纹=上一增量完成指纹或 setup 基线、合并后指纹、补丁哈希）。schema 2 任务登记实现的门禁：**当前 revision 必须已有候选探索**（explore-only 先行）且 must-fix 清零——探索通道不要求实现先登记（V4 死锁点的机器化否定，转移表 `implementing → candidate-explored`）。
+builder 事件经 `record-implementation --credential <builder credentialId> [--run-id <runId>]` 登记（ImplementationRecorded 附合并回执：起始指纹=上一增量完成指纹或 setup 基线、合并后指纹、补丁哈希）。schema 2 任务登记实现的门禁：**当前 revision 必须已有候选探索**（explore-only 先行）且 must-fix 清零——探索通道不要求实现先登记（V4 死锁点的机器化否定，转移表 `implementing → candidate-explored`）。
 
 ## 5. 独立保证
 
@@ -132,7 +132,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs lease-heartbeat --pr
 node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs lease-release --project-root <项目根> --run-id <runId>
 ```
 
-失联租约被 acquire 接管时先按进程组终止旧进程树并递增代次；`append --run-id` 在事件锁临界区内复核租约持有者，非当前代次拒绝写入。
+失联租约被 acquire 接管时先按进程组终止旧进程树并递增代次；事件登记命令（意图命令组）的 `--run-id` 在事件锁临界区内复核租约持有者，非当前代次拒绝写入。
 
 ## 9. 任务替换与独立声明
 
@@ -164,6 +164,6 @@ revision-unstable 排查完写入源后由用户确认新基线（漂移计数�
 
 恢复 = `delivery-core next` 读待办与合法转移，**不依赖会话记忆**：
 
-1. 中断/善后/待登记事项在中断当下 `pending add` 落盘（kind 四类见第 0 节）；恢复后 `next` 优先回答待办。
-2. workflow 不可用时按 next 给出的合法转移 executor 手工执行同一角色职责，事件仍走 CLI（`append --credential <对应角色>`；user 类命令走第 2/3/6/8/9 节高层命令）。每次恢复先 `evaluate` 读 verdict 与 nextAction；跨会话凭据按 task.json 的 credentialId 定位（evaluate 不需要私钥）。
+1. 中断/善后/待登记事项在中断当下 `pending add` 落盘（kind 五类见第 0 节）；恢复后 `next` 优先回答待办。
+2. workflow 不可用时按 next 给出的合法转移 executor 手工执行同一角色职责，事件走意图命令组（builder/assurance 类，见第 0 节；user 类命令走第 2/3/6/8/9 节高层命令）。每次恢复先 `evaluate` 读 verdict 与 nextAction；跨会话凭据按 task.json 的 credentialId 定位（evaluate 不需要私钥）。
 3. DAG 节点的人工处置（blocked/failed/suspended → done）唯一合法通道 = `delivery-core node-transition --event manual-disposition --basis "<处置依据>"`——依据必填留痕；禁止直接编辑 status.json 或自造词表外事件。

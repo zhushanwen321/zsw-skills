@@ -26,6 +26,8 @@ scripts/           workflow 双平台构建与校验脚本
 
 ### dev-workflow/ — 常规开发流程
 
+v6 三技能（tech-design-v6 / dev-flow-v6 / delivery-v6）为现行开发代，v5 为冻结参照。
+
 | Skill | 说明 |
 |-------|------|
 | tech-design-v4 | 在 V3 基线（归档代）上增加质量传递：验收断言与方案机制对账、反例场景测试绑定、T2 冲突清零与 T3 引用完备检查 |

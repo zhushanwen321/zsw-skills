@@ -16,7 +16,7 @@
 
 **W2 第二实例化（zcode 默认）**：`CreateWorkflow saved: wave-executor-v6, args: { execPlan, taskId, executionId }`（mode=acceptance——节点 = verify/inspect，D0 已编译；观测参数同 D1，executionId 建议用 `D3-<发起时点短时间戳>` 区分两实例化，SKILL「阶段事件观测」节）。verify 节点 fail → **run 内自愈循环**（设计 §8.7，主 agent 零介入）：归因（spec-bug / product-bug / environment）→ spec-bug 由 fixer 修复验收资产后重跑该节点；product-bug **不修**，按依赖可达性判定——fail 节点的 DAG 后继闭包非空（卡住后续验收）→ 立即停止派发熔断上报，闭包为空（不卡）→ 记录跳过、其余节点跑完统一上报；environment 重试一次。自愈不收敛（maxRounds=10）同闭包判定。主 agent 只裁决与重发起；workflow 内任何 agent 禁止向用户提问（T9）。
 
-**手工路径**：场景按 DAG 派发——L3 脚本（预编译剧本：操作 + 断言 + 全页截图 + console 抓取，产物落 `<name>.acceptance/<场景id>/`；项目有 verification skill 时剧本 = 其场景库资产，跑其 wrapper（D0 生成，见 compile.md §7）或 runner 直跑；剧本按 compile.md「每步汇总落盘」规范向 `<artifactsDir>/summary.jsonl` 追加逐步结果）并行跑；L4 判断型（任务书附确定性产物指针 + 逐节点 summary.jsonl 汇总路径——核对以汇总为准、仅异常步骤读全文日志）依赖其前驱；核心组先行（组内依赖拓扑 + 无共享状态并行 ≤5），核心全绿后非核心解锁；混合行已拆行（编译期）。
+**手工路径**：场景按 DAG 派发——L3 脚本（预编译剧本：操作 + 断言 + 全页截图 + console 抓取，产物落 `<name>.acceptance/<场景id>/`；项目有 verification skill 时剧本 = 其场景库资产，跑其 wrapper（D0 生成，见 compile.md「wrapper 生成与 runner 契约」节）或 runner 直跑；剧本按 compile.md「每步汇总落盘」规范向 `<artifactsDir>/summary.jsonl` 追加逐步结果）并行跑；L4 判断型（任务书附确定性产物指针 + 逐节点 summary.jsonl 汇总路径——核对以汇总为准、仅异常步骤读全文日志）依赖其前驱；核心组先行（组内依赖拓扑 + 无共享状态并行 ≤5），核心全绿后非核心解锁；混合行已拆行（编译期）。
 
 - **失败处置（依赖可达性判据，2026-09-26 裁决）**：任一场景 fail 先进 run 内自愈循环（归因 → spec-bug 修复重验 / product-bug 不修 / environment 重试一次）；自愈不收敛或 product-bug 时计算 fail 场景的 DAG 后继闭包——非空（卡住后续验收）→ 立即停止派发、熔断上报；为空（不卡）→ 记录跳过、其余场景全部跑完统一上报。通用原则：处理不了的问题，不影响后续执行就先记录并跳过（记录落 `<name>.ledger.md`——手工路径主 agent 落笔，workflow 路径引擎终态笔已含）；影响后续执行则停止。主 agent 零编码，只裁决与重发起；重发起按 status.json 断点续跑
 - **修复独立性三态前置跑**：核心组缺陷出现时逐场景标三态（无已知缺陷=默认 / 独立于缺陷 N=修复窗口期旧实例前置跑，产物按旧实例标记 / 依赖缺陷 N=阻塞）——仅在「已出现核心缺陷 + 修复窗口时长 > 前置场景预估耗时」时启用
@@ -33,7 +33,7 @@
 
 ## 候选反例审查（explore-only）[MANDATORY]
 
-V5 schema 2 交付任务的候选反例审查运行 `independent-assurance-v6`（args 增加 `mode: "explore-only"`；触发时点与进入合法性由 delivery-core next 裁决——转移表唯一权威）。该阶段由未参与设计和实现的探索审查者攻击完整候选实现，登记 ExplorationCompleted 与新发现，但不写 AssuranceCompleted。
+schema 2 交付任务的候选反例审查运行 `independent-assurance-v6`（args 增加 `mode: "explore-only"`；触发时点与进入合法性由 delivery-core next 裁决——转移表唯一权威）。该阶段由未参与设计和实现的探索审查者攻击完整候选实现，登记 ExplorationCompleted 与新发现，但不写 AssuranceCompleted。
 
 - 机制与判据冲突回 tech-design-v6；反例场景或测试绑定缺失回 T3；实现缺陷回 D1/D2；判据遗漏回 delivery-v6 递增验收版本。
 - 每条 must-fix 必须有回归测试和受影响一致性复核；修复后重跑受影响场景与全量确定性测试，并在新 revision 重新 explore-only。
@@ -45,31 +45,34 @@ V5 schema 2 交付任务的候选反例审查运行 `independent-assurance-v6`�
 
 1. 全绿交付汇总：目标达成对照表 + 合理偏差登记表 + 残留风险 + 覆盖概览 + 剧本分流结果
 2. 最终 commit（可复用 e2e spec、文档登记；impl-plan/exec-plan/status 落 `~/.agents/skill-data/`，HOME 下天然不入 git）
-3. **增量实现登记（交付体系任务 [MANDATORY]；独立设计任务跳过本步）**：把候选实现按增量登记进交付任务事件流——裁决器与独立保证（independent-assurance-v6）都消费 ImplementationRecorded（缺登记时任务无法向交付终态推进，转移合法性由交付事务内核裁决）。与 candidate-build-v6 通道的分工：两通道最终落到同一事件流——candidate-build-v6 是无设计包的直建通道（引擎逐增量登记），本技能按设计包执行后由主 agent 在本步逐增量登记，命令与回执口径与其一致。逐增量（increments.json items[].id，增量归属单元以 D0 核对的 nodes[].incrementId 为准）：
+3. **增量实现登记（交付体系任务 [MANDATORY]；独立设计任务跳过本步）**：把候选实现按增量经意图命令 `record-implementation` 登记进交付任务事件流——裁决器与独立保证（independent-assurance-v6）都消费 ImplementationRecorded（缺登记时任务无法向交付终态推进，转移合法性由交付事务内核裁决）。与 candidate-build-v6 通道的分工：两通道最终落到同一事件流——candidate-build-v6 是无设计包的直建通道（引擎逐增量登记），本技能按设计包执行后由主 agent 在本步逐增量登记，命令与回执口径与其一致。逐增量（increments.json items[].id，增量归属单元以 D0 核对的 nodes[].incrementId 为准）执行；事件信封（type/actor/acceptanceVersion/revision）由 gate 构造，调用方只提交语义内容，不手工拼事件 JSON：
 
    ```bash
-   node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs append --task-dir <交付任务目录> \
-     --event '<下方 JSON 事件>' --credential <builder credentialId>
+   node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs record-implementation \
+     --task-dir <交付任务目录> \
+     --increment-id <increments.items[].id> \
+     --summary "<增量实现摘要：归属单元清单 + 测试结论一行>" \
+     --artifact <交付任务目录>/evidence/implementation-<incrementId>.md \
+     --merge-receipt '{"fromRevision":"<增量首个归属单元开工前的 revision（D0 基线或前一增量 toRevision）>","toRevision":"<增量全部归属单元 commit 后的 HEAD>","patchSha256":"<git diff --binary --full-index <fromRevision>..<toRevision> | shasum -a 256 的哈希>"}' \
+     --credential <builder credentialId>
    ```
 
-   事件形态（每增量一笔，actor 恒 builder——CLI 强制凭据角色与事件 actor 一致）：
-
-   ```jsonc
-   { "type": "ImplementationRecorded", "actor": "builder",
-     "acceptanceVersion": <交付任务当前 acceptanceVersion>,
-     "revision": "<增量完成后的 git revision（toRevision）>",
-     "summary": "<增量实现摘要：归属单元清单 + 测试结论一行>",
-     "incrementId": "<increments.items[].id>",
-     "artifact": "<交付任务目录>/evidence/implementation-<incrementId>.md",
-     "mergeReceipt": { "fromRevision": "<增量首个归属单元开工前的 revision（D0 基线或前一增量 toRevision）>",
-                       "toRevision": "<增量全部归属单元 commit 后的 HEAD>",
-                       "patchSha256": "<git diff --binary --full-index <fromRevision>..<toRevision> | shasum -a 256 的哈希>" } }
-   ```
-
-   - **凭据来源** = delivery-v6 `init` 输出的 builder credentialId（私钥在 `~/.agents/skill-data/delivery-keys/<分组>/<任务id>/builder.key`，只传凭据 id、不碰私钥本体）
-   - **前置**：该增量全部归属单元 done 且增量 testCommand（D0 门已核对与 increments.json 逐字一致）重跑绿、工作树 clean（全部改动已 commit）——增量粒度汇总一笔，不逐单元登记
+   - **凭据来源** = delivery-v6 `init` 输出的 builder credentialId（私钥在 `~/.agents/skill-data/delivery-keys/<分组>/<任务id>/builder.key`，只传凭据 id、不碰私钥本体）；actor 恒 builder——CLI 强制凭据角色与事件 actor 一致
+   - **前置**：该增量全部归属单元 done 且增量 testCommand（D0 门已核对与 increments.json 逐字一致）重跑绿、工作树 clean（全部改动已 commit）——增量粒度汇总一笔，不逐单元登记；当前 revision 必须已有候选探索（explore-only 先行）且 must-fix 清零（登记门禁由 gate 与转移表裁决）
    - **实现报告** artifact 写 `<交付任务目录>/evidence/implementation-<incrementId>.md`（归属单元清单、commit 清单、测试输出摘要）
-   - append 失败 → 停回处置：按 stderr 恢复动作处理（凭据失效走 delivery-v6 任务替换通道）；禁止跳过登记静默推进后续阶段
+   - **合并回执**（`--merge-receipt`，JSON 对象字面量重传）：fromRevision = 增量首个归属单元开工前的 revision（D0 基线或前一增量 toRevision）、toRevision = 增量全部归属单元 commit 后的 HEAD、patchSha256 = `git diff --binary --full-index <fromRevision>..<toRevision> | shasum -a 256` 的哈希
+   - **登记失败** → 停回处置：按 stderr 恢复动作处理（凭据失效走 delivery-v6 任务替换通道）；禁止跳过登记静默推进后续阶段
+   - **发现桥接（D2/D3 终态未决项，SKILL「关键约束」发现桥接条）随候选交付同通道登记**：主会话经 `record-finding` 以 builder 凭据登记 FindingRaised——
+
+     ```bash
+     node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs record-finding \
+       --task-dir <交付任务目录> --summary "<发现摘要>" \
+       --category defect --severity blocker|non-blocker \
+       --requirement-ids '["<关联需求 id>", ...]' \
+       --artifact <发现报告路径> --credential <builder credentialId>
+     ```
+
+     （category=boundary 用于实现有意的边界申报，须附对照论证 `--consequence-refutation`；findingId 缺省由 gate 自动分配）
 4. **功能分级登记同步**：新功能/新用例或「挂掉后果」变化 → 同 commit 更新（如 `docs/FEATURE-PRIORITIES.md`）；纯重构不触发；零触发也须汇报注明
 5. **文档资产更新检查**：对照项目 AGENTS.md 文档索引按变更内容判定同 commit 更新（产品→PRODUCT / 拓扑→ARCHITECTURE / 术语→CONTEXT / 视觉→DESIGN / 规范→STANDARDS / 测试→TEST-STRATEGY / 排障→TROUBLESHOOTING；采样管道资产同 commit 回写）；verification skill 触达时转第 6 步专用流程，不在本步泛化处理；零触发注明「文档资产零同步」
 6. **verification skill 同步检查（项目存在 verification skill 时执行，零触发注明「verification skill 零同步」）**：发现规则同 tech-design-v6 T3（项目 AGENTS.md 显式声明为唯一来源；2026-11-04 起废除 verify-* 前缀与 SKILL.md 内容特征探测）。触发 = 本次交付改动文件触达其覆盖矩阵登记的功能行：

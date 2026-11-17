@@ -36,7 +36,7 @@ worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 workt
 
 ## 中断恢复
 
-回到第 1 步；以 git log 与工作区实物校准 status.json（冲突以 git 为准）。引擎重启时自动双向对账：标 done 无 commit → 回 pending；有 commit 未记 done → 按 git log 匹配单元 id 补写 done。人工手改 status.json 无必要——字段见 compile.md §5（status/attempts）。
+回到第 1 步；以 git log 与工作区实物校准 status.json（冲突以 git 为准）。引擎重启时自动双向对账：标 done 无 commit → 回 pending；有 commit 未记 done → 按 git log 匹配单元 id 补写 done。人工手改 status.json 无必要——字段见 compile.md「手工降级路径」第 4 步（初始 status.json 的 status/attempts）。
 
 ## 终态处置表
 

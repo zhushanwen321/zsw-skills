@@ -20,7 +20,7 @@
     "aggregateRegradeHalt": 2
   },
   "guardrails": {
-    "//": "FindingRaised 登记护栏（delivery-gate append 写入当时执行）。",
+    "//": "FindingRaised 登记护栏（delivery-gate 事件写入（appendEvent）当时执行）。",
     "boundaryBanOnAssertedRequirements": true,
     "consequenceRefutationRequired": true,
     "regradeHaltEnabled": true
@@ -112,7 +112,7 @@
     }
   },
   "writeDomains": {
-    "//": "写入目标域词表（gate append 按「角色 × 当前状态 × 目标域」矩阵裁决）。process 域不在矩阵内 = 签名事件流不可写（过程记录走独立观测流，读侧合流见 delivery-core events）。",
+    "//": "写入目标域词表（gate 事件写入按「角色 × 当前状态 × 目标域」矩阵裁决）。process 域不在矩阵内 = 签名事件流不可写（过程记录走独立观测流，读侧合流见 delivery-core events）。",
     "values": ["acceptance", "design", "implementation", "evidence", "finding", "decision", "process"]
   },
   "eventDomains": {
@@ -633,7 +633,7 @@
           "requires": [
             "criterionChanged"
           ],
-          "executor": "delivery-gate append FindingRaised(reopenOf)",
+          "executor": "delivery-gate record-finding（--reopen-of <被重开的 findingId>）",
           "actor": "assurance",
           "backedge": "repair",
           "note": "revision 失效或探索重开；reopenOf 根去重不重复计数"
@@ -645,7 +645,7 @@
           "requires": [
             "criterionChanged"
           ],
-          "executor": "delivery-gate append FindingRaised(reopenOf)",
+          "executor": "delivery-gate record-finding（--reopen-of <被重开的 findingId>）",
           "actor": "assurance",
           "backedge": "repair"
         },
@@ -656,7 +656,7 @@
           "requires": [
             "criterionChanged"
           ],
-          "executor": "delivery-gate append FindingRaised(reopenOf)",
+          "executor": "delivery-gate record-finding（--reopen-of <被重开的 findingId>）",
           "actor": "assurance",
           "backedge": "repair"
         }

@@ -454,16 +454,16 @@ if (eventsRes.exitCode !== 0 || eventsError !== "") {
   };
   return result;
 }
-// full-first 前置门禁（与 delivery-gate 同口径，登记时点完整性：同验收版本 + 回执覆盖
-// 全部增量（不查红绿——红 = full 发现缺陷，正是本循环的输入）+ 证据事件可解析 +
-// full 自身 artifact 可用 + 探索引用存在）：
+// full-first 前置门禁（与 delivery-gate 同口径，登记时点完整性）：
 // 受控修复循环的语义前提是「最终保证（full）完整发生过」——否则本循环收尾登记的
-// recheck 保证会被裁决器判无效（missing.assuranceFullFirst），白跑全程
-const knownEvidenceEventIds = new Set(events.filter((e) => e.type === "EvidenceRecorded").map((e) => String(e.eventId)));
-const artifactAbs = (artifact: unknown): string => {
-  const raw = String(artifact ?? "");
-  return raw === "" ? "" : raw.startsWith("/") ? raw : `${taskDir}/${raw}`;
-};
+// recheck 保证会被裁决器判无效（missing.assuranceFullFirst），白跑全程。判定走内核单源
+// （delivery-core full-qualification——唯一实现在 kernel-judgments.mjs，与裁决器
+// buildVerdict 同一份谓词；V6 前此处为弱化本地副本：证据集收全部 EvidenceRecorded 不滤
+// 工件失效、工件只查存在性无 sha256 校验）。口径升级说明：单源谓词经折算阶段做 gate
+// 同款工件 sha256 校验——预检变严是修复目的（预检与终判口径一致，工件被篡改的 full 在
+// 预检即拦下，避免跑完全程才被裁决器判白跑）。不查回执红绿：红 = full 发现缺陷，正是
+// 本循环的输入
+let coreFullQualification: Record<string, unknown> = {};
 // 可用探索集：判定走内核单源（delivery-core usable-explorations——唯一实现在
 // kernel-judgments.mjs；V4 此处与 IA/gate 折叠三处复刻、口径靠注释人工同步，V5 收敛
 // 为一份）。full-first 预检与收尾 recheck 的探索引用必须用它而非原始事件流——引用失效
@@ -473,6 +473,7 @@ let coreOpen: Record<string, unknown>;
 try {
   coreExplorations = await runCoreJson(corePath, ["usable-explorations", "--task-dir", taskDir]);
   coreOpen = await runCoreJson(corePath, ["open-findings", "--task-dir", taskDir, "--revision", revision]);
+  coreFullQualification = await runCoreJson(corePath, ["full-qualification", "--task-dir", taskDir]);
 } catch (e) {
   await releaseLease();
   await obsCloseExecution("setup-failure");
@@ -485,42 +486,21 @@ try {
 const usableExplorations = ((coreExplorations.usable ?? []) as Array<Record<string, unknown>>).map(
   (entry) => ({ ...entry, type: "ExplorationCompleted" }) as unknown as DeliveryEvent,
 );
-const usableExplorationIds = new Set(usableExplorations.map((event) => String(event.eventId)));
-const priorFullEvents = events.filter((e) => e.type === "AssuranceCompleted" && (e.mode ?? "full") === "full" && e.acceptanceVersion === acceptanceVersion);
-// full 自身 artifact 可用性（gate fold.assurances 只收 artifactUsable 的保证——artifact
-// 失效的 full 不能给 recheck 背书，此形态下跑完全程仍会被判 missing.assuranceFullFirst）
-const priorFullArtifactCheck = await runNode([NODE_CHECK_FILES, ...priorFullEvents.map((e) => String(e.artifact))]);
-const unusableFullArtifactEventIds = new Set(
-  priorFullArtifactCheck.exitCode === 0
-    ? []
-    : priorFullEvents
-        .filter((e) => priorFullArtifactCheck.stdout.trim().split(" | ").includes(String(e.artifact)))
-        .map((e) => String(e.eventId)),
-);
-const qualifiedPriorFull = (event: DeliveryEvent): boolean => {
-  if (event.type !== "AssuranceCompleted" || (event.mode ?? "full") !== "full") return false;
-  if (event.acceptanceVersion !== acceptanceVersion) return false;
-  if (unusableFullArtifactEventIds.has(String(event.eventId))) return false;
-  const receipts = Array.isArray(event.incrementReceipts) ? event.incrementReceipts as { incrementId?: unknown }[] : [];
-  const coveredIncrementIds = new Set(receipts.map((receipt) => String(receipt.incrementId)));
-  if (!incrementItems.every((item) => coveredIncrementIds.has(item.id))) return false;
-  if (!Array.isArray(event.evidenceEventIds) || !event.evidenceEventIds.every((id) => id === "none" || knownEvidenceEventIds.has(id))) return false;
-  // schema 2 无条件校验探索引用；schema 1 保持 exploratoryReview 词表语义
-  const explorationRefOk = assertionMode
-    ? usableExplorationIds.has(String(event.explorationEventId))
-    : (!explorationRequired || usableExplorationIds.has(String(event.explorationEventId)));
-  if (!explorationRefOk) return false;
-  return true;
-};
-if (!events.some(qualifiedPriorFull)) {
-  const anyPriorFull = events.some((event) => event.type === "AssuranceCompleted" && (event.mode ?? "full") === "full" && event.acceptanceVersion === acceptanceVersion);
+if (coreFullQualification.qualified !== true) {
+  const priorFullInspections = Array.isArray(coreFullQualification.inspections)
+    ? coreFullQualification.inspections as Array<Record<string, unknown>>
+    : [];
+  const anyPriorFull = priorFullInspections.length > 0;
+  const rejectionDetail = priorFullInspections
+    .map((item) => `${String(item.eventId).slice(0, 12)}…：${(Array.isArray(item.reasons) ? item.reasons.map(String).join("；") : "") || "无不合格项"}`)
+    .join("；");
   await releaseLease();
   await obsCloseExecution("setup-failure");
   const result: AssuranceResult = {
     terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
     message: anyPriorFull
-      ? `修复循环前置门禁拒绝：同验收版本存在 full 保证但登记时点不完整（回执未覆盖全部增量或探索引用缺失）——不完整的 full 不能给 recheck 背书。恢复动作：先以 mode=full 重跑 independent-assurance-v6 取得完整首次保证，再进入本循环${repairSummary()}`
-      : `修复循环前置门禁拒绝：同验收版本事件流中不存在任何 full 保证（AssuranceCompleted mode=full）——受控修复循环作用于「最终保证发现的实现缺陷」，无 full 即无受控修复的起点。恢复动作：先以 mode=full 运行 independent-assurance-v6 完成首次完整取证，再按其发现进入本循环${repairSummary()}`,
+      ? `修复循环前置门禁拒绝：同验收版本存在 full 保证但登记时点不合格（${rejectionDetail}）——不合格的 full 不能给 recheck 背书。恢复动作：先以 mode=full 重跑 independent-assurance-v6 取得完整首次保证，再进入本循环${repairSummary()}`
+      : `修复循环前置门禁拒绝：同验收版本事件流中不存在合格的 full 保证（AssuranceCompleted mode=full，工件经完整性校验可用）——受控修复循环作用于「最终保证发现的实现缺陷」，无合格 full 即无受控修复的起点。恢复动作：先以 mode=full 运行 independent-assurance-v6 完成首次完整取证，再按其发现进入本循环${repairSummary()}`,
   };
   return result;
 }
@@ -1076,14 +1056,13 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
       "--artifact", repairReportPath, "--revision", revision,
       "--from-revision", fromRevision, "--to-revision", revision,
       "--increment-receipts", JSON.stringify(repairReceipts),
-      "--artifact-sha256", repairReportSha,
       "--credential", builderCredentialId,
     ]),
     { workflow: "assurance-repair-loop-v6", step: "fix", round: repairRound, command: "record-repair-round" },
   );
   if (repairAppended.exitCode !== 0) {
     return failAssurance(
-      `RepairRoundRecorded 登记失败：${repairAppended.stderr.trim() || repairAppended.stdout.trim()}。修复代码已提交（fix(delivery): repair round ${repairRound}，fromRevision=${fromRevision}）但轮次未记账。恢复动作：二选一——用 delivery-gate append 以 builder 凭据补登记下方事件后重发本 workflow（重发会跳过已清零的修复轮）；或 git reset --soft HEAD~1 撤回该笔提交后重发（登记优先，推荐前者）：${JSON.stringify(repairEvent)}`,
+      `RepairRoundRecorded 登记失败：${repairAppended.stderr.trim() || repairAppended.stdout.trim()}。修复代码已提交（fix(delivery): repair round ${repairRound}，fromRevision=${fromRevision}）但轮次未记账。恢复动作：二选一——用 delivery-gate record-repair-round 以 builder 凭据带同样参数补登记后重发本 workflow（重发会跳过已清零的修复轮）：record-repair-round --task-dir ${taskDir} --round ${repairRound} --summary '${repairEvent.summary}' --trigger-finding-ids '${JSON.stringify(triggerFindingIds)}' --affected-assertion-ids '${JSON.stringify(repairEvent.affectedAssertionIds)}' --artifact ${repairReportPath} --revision ${revision} --from-revision ${fromRevision} --to-revision ${revision} --increment-receipts '${JSON.stringify(repairReceipts)}' --credential ${builderCredentialId}（artifactSha256 由 gate 按在盘 artifact 自动计算，无需传参）；或 git reset --soft HEAD~1 撤回该笔提交后重发（登记优先，推荐前者）`,
     );
   }
   events.push(repairEvent);
@@ -1134,7 +1113,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
     return { terminated: "assurance-failed", taskDir, revision, findingIds, verdict: currentVerdict, message: `不同 must-fix 超过 10 条，停止修复${repairSummary()}${statsTailNote()}` };
   }
   // 修复复核期间漂移检测：复核与登记完成后以 evaluate 的 revision 对照本轮修复登记的
-  // revision——复核期间项目内容被外部改动会让本轮证据失锚
+  // revision——复核期间项目内容被外部改动会让本轮证据定位失败
   if (typeof currentVerdict.revision !== "string" || currentVerdict.revision !== revision) {
     return failAssurance(
       `修复复核期间 revision 漂移：登记时 ${revision}，复核后 evaluate 为 ${typeof currentVerdict.revision === "string" ? currentVerdict.revision : "（非法值）"}。恢复动作：排查修复复核期间的项目内容变化（reviewer 测试产物按验收口径清理，或外部写入回退）后重新发起`,

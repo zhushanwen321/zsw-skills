@@ -161,8 +161,9 @@ function uniq(items) {
 // 设计目录推导：与 dev-flow-v6/scripts/check-exec-plan.mjs designDirFromDocPath 逐字同源——
 // 渲染视图 <slug>/<name>.rendered.md → 设计目录 <slug>/<name>/（六章节 JSON 权威源所在子目录，
 // 布局权威 = dev-workflow references/skill-data-addressing.md §2：rendered.md 与 <name>/ 平铺同层）；
-// designDocPath 本身已是目录形态时原样返回。复刻原因：check-exec-plan.mjs 是直跑 CLI 无 export；
-// 两侧改动必须同步（与该脚本复刻 delivery-gate canonicalJson / acceptancePackageSha256 的同步纪律同款）
+// designDocPath 本身已是目录形态时原样返回。designDirFromDocPath 未在 check-exec-plan.mjs 的
+// export 清单中，目录推导逻辑在此复刻，两处须同源演化（与该脚本复刻 delivery-gate
+// canonicalJson / acceptancePackageSha256 的同步纪律同款）
 function designDirFromDocPath(designDocPath) {
   if (designDocPath.endsWith(".rendered.md")) {
     return join(dirname(designDocPath), basename(designDocPath, ".rendered.md"));

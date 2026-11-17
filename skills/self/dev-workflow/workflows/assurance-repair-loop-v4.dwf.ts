@@ -420,7 +420,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "4.2.1"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "4.2.2"; // 构建注入自 delivery-v4/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -438,6 +438,10 @@ const SKILL_VERSION = "4.2.1"; // 构建注入自 delivery-v4/SKILL.md frontmatt
 //      （同事件重放安全，见 delivery-gate appendEvent）、lease-release 对无租约幂等，
 //      但 lease-acquire 重试会递增代次并终止旧持有者（非幂等）；且超时被杀时无法确认
 //      命令是否已写入，不重试保持保守正确。
+//      豁免登记：内容寻址幂等的意图命令（record-* 组——eventId 由事件内容哈希派生、
+//      gate 按 eventId 判重去重，重复提交幂等）包 spawn 重试属可接受豁免（既有 workflow
+//      如 ARL 的 record-repair-round 已如此使用）；依据：写入当刻幂等——超时被杀时若已
+//      写入，重放被判重安全，若未写入则补写成功，两种时序都正确。
 //   3. recordRepair：自修复登记。逐条追加 <taskDir>/self-repairs.jsonl 并内存计数，
 //      repairSummary() 生成终态上报块（由 workflow 终态 message 携带给主 agent，
 //      转述用户）。兜底被触发这件事本身必须可见，不允许静默修复。写通道与观测层

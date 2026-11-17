@@ -69,7 +69,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSyn
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SKILLS = ["tech-design-v1", "dev-flow-v1", "delivery-v1", "tech-design-v2", "dev-flow-v2", "delivery-v2", "tech-design-dev", "dev-flow-dev", "delivery-dev", "tech-design-v3", "dev-flow-v3", "delivery-v3", "tech-design-v4", "dev-flow-v4", "delivery-v4", "dev-merge", "pr-cr-fix"];
+const SKILLS = ["tech-design-v1", "dev-flow-v1", "delivery-v1", "tech-design-v2", "dev-flow-v2", "delivery-v2", "tech-design-dev", "dev-flow-dev", "delivery-dev", "tech-design-v3", "dev-flow-v3", "delivery-v3", "tech-design-v4", "dev-flow-v4", "delivery-v4", "tech-design", "dev-flow", "delivery", "dev-merge", "pr-cr-fix"];
 // 观测事件 skill 字段历史上写过 workflow 引擎名（与 opts.skills 的技能名不同源）——
 // 统计侧归一到 canonical 技能名；生产事件源已改 canonical，此处兼容存量事件
 const SKILL_ALIASES = {
@@ -108,6 +108,15 @@ const SKILL_ALIASES = {
   "candidate-build-v4": "delivery-v4",
   "independent-assurance-v4": "delivery-v4",
   "assurance-repair-loop-v4": "delivery-v4",
+  // v5/v6 代观测事件 skill 字段带版本后缀（initObservation 字面量），canonical 技能线名
+  // 不带版本——版本归因走事件 skill_version 字段单独统计（--group skillVersion），skill
+  // 字段只回答「哪条技能线」
+  "tech-design-v5": "tech-design",
+  "dev-flow-v5": "dev-flow",
+  "delivery-v5": "delivery",
+  "tech-design-v6": "tech-design",
+  "dev-flow-v6": "dev-flow",
+  "delivery-v6": "delivery",
   "dev-merge-gates": "dev-merge",
   "pr-lifecycle": "pr-cr-fix",
 };

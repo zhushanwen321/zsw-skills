@@ -17,6 +17,8 @@ jobs:
           node-version: 22
       - name: 内核转移表静态校验（无环除回边/可达/执行器唯一/谓词与角色在词表/写入矩阵词表闭包）
         run: node skills/self/dev-workflow/delivery-v5/scripts/delivery-core.mjs validate
+      - name: 内核转移表静态校验（V6 现行代，同上一条的五类检查；V5 为冻结参照退役前保留）
+        run: node skills/self/dev-workflow/delivery-v6/scripts/delivery-core.mjs validate
       - name: workflow 单源构建 --check（改源忘构建拦截）
         run: node scripts/build-workflows.mjs --check
       - name: zcode/pi 双平台产物对账

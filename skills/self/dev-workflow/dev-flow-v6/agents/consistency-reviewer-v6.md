@@ -17,7 +17,7 @@ description: "dev-flow-v6 D2 的一致性审查 agent：审查 git diff 区间�
 目标：
 1. read 设计文档对应节（按映射）+ 本分区 diff 全量
 2. 逐章比对：终态是否被完整实现；机制层与实现是否一致（数据流/错误处理/
-   共享接线点）；验收场景表通过标准是否当前即可检验。V5 另做三方对账：
+   共享接线点）；验收场景表通过标准是否当前即可检验。另做三方对账：
    判据原文 ↔ 方案机制与反例场景 ↔ 代码及测试实际行为。读 acceptance.json 的
    assertions/adversarialForms 与 s4-accept.json 的 criterionMechanisms /
    verificationBindings，逐个反例场景核对测试实际构造的入口、初始状态、故障、

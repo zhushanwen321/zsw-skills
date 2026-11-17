@@ -419,7 +419,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "6.1.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "6.2.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -437,6 +437,10 @@ const SKILL_VERSION = "6.1.0"; // 构建注入自 delivery-v6/SKILL.md frontmatt
 //      （同事件重放安全，见 delivery-gate appendEvent）、lease-release 对无租约幂等，
 //      但 lease-acquire 重试会递增代次并终止旧持有者（非幂等）；且超时被杀时无法确认
 //      命令是否已写入，不重试保持保守正确。
+//      豁免登记：内容寻址幂等的意图命令（record-* 组——eventId 由事件内容哈希派生、
+//      gate 按 eventId 判重去重，重复提交幂等）包 spawn 重试属可接受豁免（既有 workflow
+//      如 ARL 的 record-repair-round 已如此使用）；依据：写入当刻幂等——超时被杀时若已
+//      写入，重放被判重安全，若未写入则补写成功，两种时序都正确。
 //   3. recordRepair：自修复登记。逐条追加 <taskDir>/self-repairs.jsonl 并内存计数，
 //      repairSummary() 生成终态上报块（由 workflow 终态 message 携带给主 agent，
 //      转述用户）。兜底被触发这件事本身必须可见，不允许静默修复。写通道与观测层
@@ -1100,12 +1104,13 @@ if (eventsRes.exitCode !== 0 || eventsError !== "") {
 }
 // full-first 前置门禁（与 delivery-gate 同口径，登记时点完整性）：recheck 是修复后的定向
 // 复核，首次完整保证不可被其替代，否则跑完全程也会被判 missing.assuranceFullFirst——
-// setup 即拦下省一轮成本。不查回执红绿：红 = full 发现缺陷，正是修复循环的输入
-const knownEvidenceEventIds = new Set(events.filter((e) => e.type === "EvidenceRecorded").map((e) => String(e.eventId)));
-const artifactAbs = (artifact: unknown): string => {
-  const raw = String(artifact ?? "");
-  return raw === "" ? "" : raw.startsWith("/") ? raw : `${taskDir}/${raw}`;
-};
+// setup 即拦下省一轮成本。判定走内核单源（delivery-core full-qualification——唯一实现在
+// kernel-judgments.mjs，与裁决器 buildVerdict 同一份谓词；V6 前此处为弱化本地副本：证据
+// 集收全部 EvidenceRecorded 不滤工件失效、工件只查存在性无 sha256 校验）。口径升级说明：
+// 单源谓词经折算阶段做 gate 同款工件 sha256 校验——预检变严是修复目的（预检与终判口径
+// 一致，工件被篡改的 full 在预检即拦下，避免跑完全程才被裁决器判白跑）。不查回执红绿：
+// 红 = full 发现缺陷，正是修复循环的输入
+let coreFullQualification: Record<string, unknown> = {};
 // 可用探索集：判定走内核单源（delivery-core usable-explorations——唯一实现在
 // kernel-judgments.mjs；V4 此处与 ARL/gate 折叠三处复刻、口径靠注释人工同步，V5 收敛
 // 为一份）。due 判定与 full/recheck 的探索引用必须用它而非原始事件流——引用失效探索
@@ -1117,6 +1122,7 @@ try {
   coreExplorations = await runCoreJson(corePath, ["usable-explorations", "--task-dir", taskDir]);
   coreDue = await runCoreJson(corePath, ["exploration-due", "--task-dir", taskDir]);
   coreOpen = await runCoreJson(corePath, ["open-findings", "--task-dir", taskDir, "--revision", revision]);
+  coreFullQualification = await runCoreJson(corePath, ["full-qualification", "--task-dir", taskDir]);
 } catch (e) {
   await releaseLease();
   await obsCloseExecution("setup-failure");
@@ -1129,42 +1135,22 @@ try {
 const usableExplorations = ((coreExplorations.usable ?? []) as Array<Record<string, unknown>>).map(
   (entry) => ({ ...entry, type: "ExplorationCompleted" }) as unknown as DeliveryEvent,
 );
-const usableExplorationIds = new Set(usableExplorations.map((event) => String(event.eventId)));
 const latestUsableExplorationId = String(coreExplorations.latestUsableId ?? "none");
-const priorFullEvents = events.filter((e) => e.type === "AssuranceCompleted" && (e.mode ?? "full") === "full" && e.acceptanceVersion === acceptanceVersion);
-// full 自身 artifact 可用性：gate fold.assurances 只收 artifactUsable 的保证
-const priorFullArtifactCheck = await runNode([NODE_CHECK_FILES, ...priorFullEvents.map((e) => artifactAbs(e.artifact)).filter((path) => path !== "")]);
-const unusableFullArtifactEventIds = new Set(
-  priorFullArtifactCheck.exitCode === 0
-    ? []
-    : priorFullEvents
-        .filter((e) => priorFullArtifactCheck.stdout.trim().split(" | ").includes(artifactAbs(e.artifact)))
-        .map((e) => String(e.eventId)),
-);
-const qualifiedPriorFull = (event: DeliveryEvent): boolean => {
-  if (event.type !== "AssuranceCompleted" || (event.mode ?? "full") !== "full") return false;
-  if (event.acceptanceVersion !== acceptanceVersion) return false;
-  if (unusableFullArtifactEventIds.has(String(event.eventId))) return false;
-  const receipts = Array.isArray(event.incrementReceipts) ? event.incrementReceipts as { incrementId?: unknown }[] : [];
-  const coveredIncrementIds = new Set(receipts.map((receipt) => String(receipt.incrementId)));
-  if (!incrementItems.every((item) => coveredIncrementIds.has(item.id))) return false;
-  if (!Array.isArray(event.evidenceEventIds) || !event.evidenceEventIds.every((id) => id === "none" || knownEvidenceEventIds.has(id))) return false;
-  // schema 2 无条件校验探索引用；schema 1 保持 exploratoryReview 词表语义
-  const explorationRefOk = assertionMode
-    ? usableExplorationIds.has(String(event.explorationEventId))
-    : (!explorationRequired || usableExplorationIds.has(String(event.explorationEventId)));
-  if (!explorationRefOk) return false;
-  return true;
-};
-if (mode === "recheck" && !events.some(qualifiedPriorFull)) {
-  const anyPriorFull = events.some((event) => event.type === "AssuranceCompleted" && (event.mode ?? "full") === "full" && event.acceptanceVersion === acceptanceVersion);
+if (mode === "recheck" && coreFullQualification.qualified !== true) {
+  const priorFullInspections = Array.isArray(coreFullQualification.inspections)
+    ? coreFullQualification.inspections as Array<Record<string, unknown>>
+    : [];
+  const anyPriorFull = priorFullInspections.length > 0;
+  const rejectionDetail = priorFullInspections
+    .map((item) => `${String(item.eventId).slice(0, 12)}…：${(Array.isArray(item.reasons) ? item.reasons.map(String).join("；") : "") || "无不合格项"}`)
+    .join("；");
   await releaseLease();
   await obsCloseExecution("setup-failure");
   const result: AssuranceResult = {
     terminated: "setup-failure", taskDir, revision, findingIds: [], verdict: initialVerdict,
     message: anyPriorFull
-      ? `recheck 前置门禁拒绝：同验收版本存在 full 保证但登记时点不完整（回执未覆盖全部增量或探索引用缺失）——不完整的 full 不能给 recheck 背书。恢复动作：先以 mode=full 重跑本 workflow 取得完整首次保证，再以 recheck 定向复核${repairSummary()}`
-      : `recheck 前置门禁拒绝：同验收版本事件流中不存在任何 full 保证（AssuranceCompleted mode=full）——首次完整保证不可被定向复核替代。恢复动作：先以 mode=full 发起本 workflow 完成首次完整取证（或经 candidate-build-v6 的候选探索补 explore-only 后再 full），修复后再以 recheck 定向复核${repairSummary()}`,
+      ? `recheck 前置门禁拒绝：同验收版本存在 full 保证但登记时点不合格（${rejectionDetail}）——不合格的 full 不能给 recheck 背书。恢复动作：先以 mode=full 重跑本 workflow 取得完整首次保证，再以 recheck 定向复核${repairSummary()}`
+      : `recheck 前置门禁拒绝：同验收版本事件流中不存在合格的 full 保证（AssuranceCompleted mode=full，工件经完整性校验可用）——首次完整保证不可被定向复核替代。恢复动作：先以 mode=full 发起本 workflow 完成首次完整取证（或经 candidate-build-v6 的候选探索补 explore-only 后再 full），修复后再以 recheck 定向复核${repairSummary()}`,
   };
   return result;
 }

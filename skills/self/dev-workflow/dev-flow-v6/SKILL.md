@@ -3,7 +3,7 @@ name: dev-flow-v6
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 6.1.0
+version: 6.1.1
 description: >-
   Use when 一份完整设计包（tech-design-v6 产出：设计文档 + impl-plan.json 单源与渲染视图 + 审查终态）
   需要落地为已验收代码。纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 →
@@ -54,7 +54,7 @@ description: >-
 | D1 开发循环 | 单元 DAG 流式并行（写码→核验→commit→解锁；开发期 e2e verify 失败与 commit 门禁被拒同入统一失败处理中心轮内修；过程审查 kind=review 节点 = 渐进式 review——机器检查三态 + reviewer 按需触发 + 修复波及机器重验，过程记录 process-review.jsonl 带 process 域章，与交付事件流经 `delivery-core events` 读侧合流（分储单口），判据见 `flow/compile.md`） | W2 wave-executor-v6（手工路径 `flow/execute.md`） | 全节点 done 或 blocked |
 | D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组流式槽位池并行（在途 ≤5；文档修复组按文件门控进同一派发池——不相交同池并行、相交回退串行段）+ Gate A 全量测试（红后归因分诊独立 phase：本批回归条目回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态，≤2 轮） | W3 dev-consistency-loop-v6（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
 | D3 端到端验收 | 验收计划表 L3/L4 编译成 verify/inspect 节点（核心先行 + 短路）+ 验收失败修复循环（failed 入失败池 → 聚合裁决独立 phase（跨节点同根因合并/disputed 反证/文件不相交分组）→ 修复组独立 phase（fixer 修产品代码与验收资产，引擎按组 commit）→ 节点重置机器重验回调度循环，≤3 轮不收敛才熔断） | W2 第二实例化（手工路径 `flow/acceptance.md`） | 验收全绿 |
-| D4 收尾（候选完成） | 交付汇总 + 增量实现登记（交付体系任务：逐增量以 builder 凭据 `delivery-gate append` 登记 ImplementationRecorded，与 candidate-build-v6 同一事件流与回执口径——`flow/acceptance.md` 收尾节）+ 功能分级登记 + 文档资产同步 + ADR 复审 + 最终 commit——收尾产出的是**候选实现**，不是交付结论 | 主 agent | `flow/acceptance.md` 收尾节 |
+| D4 收尾（候选完成） | 交付汇总 + 增量实现登记（交付体系任务：逐增量以 builder 凭据 `delivery-gate record-implementation` 登记 ImplementationRecorded，与 candidate-build-v6 同一事件流与回执口径——`flow/acceptance.md` 收尾节）+ 功能分级登记 + 文档资产同步 + ADR 复审 + 最终 commit——收尾产出的是**候选实现**，不是交付结论 | 主 agent | `flow/acceptance.md` 收尾节 |
 | D5 终态同步 | 代码与设计差距收敛为固定义务覆盖率的一致性对账（义务表 → checker 派发（机械优先/语义缓存）→ 差距地址聚合 → 隔离变更集 → 集成器唯一写入门径 → 四层结论；状态唯一权威 = conformance-state 事件流，agent 无状态；未绑定 legacy 包由旧引擎只读期收尾，带 cutover 标记的包旧引擎入口拒启） | W4 v2 design-code-sync-v2（绑定包；手工路径 `flow/sync.md`）/ W4 legacy design-code-sync-loop（未绑定包收尾） | 引擎 completed + 覆盖率分母全 verified/waived |
 | D6 交付后守护 | 交付后修复回写纪律 + 按需定向对抗审查 | 主 agent | `flow/post-delivery.md`（[HISTORICAL] 原样） |
 
@@ -190,8 +190,8 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 - [MANDATORY] 数字阈值：单元 dev→fix 超 2 轮 = blocked 升级用户；一致性审查累计 ≥3 轮不收敛或活跃数不减反增 = stuck 呈报（顽固条目 ≥2 轮修复未清随 escalated 清单标注，优先人工裁决）；终态同步 must-fix 连续 4 轮不降或单条 must-fix 存活超 2 轮 = 呈报
 - [MANDATORY] e2e 只在开发阶段按改动范围跑（清单继承 T3 验收计划表），空载串行；PR/merge/CI 门禁只跑单测（SSOT = 项目 AGENTS.md 测试节）；自动化回归的长期方向 = e2e 逐步单测化——能以 mock/fixture 重放等价覆盖的圈定项，随所属单元转化为 L1/L2 单测
 - [MANDATORY] 偏差三分类：合理 → 登记表固化；不合理 → 打回修；doc_errors → 引擎文档修复组在审出它的轮次当场修（方向 = 改文档对齐实现；fixer 核实方向两可或实现侧错误的条目回流主 agent 裁决）——哪个阶段审出来就在哪个阶段修，禁止把方向已明确的发现转手下一阶段（2026-10-06 裁决）
-- [MANDATORY] D3 全绿 + D4 最终 commit 后自动进 D5（仅用户明示跳过可免，跳过须记录）；交付体系任务在 D4 收尾完成**增量实现登记**（逐增量以 builder 凭据 `delivery-gate append` 登记 ImplementationRecorded 含合并回执——独立保证与裁决器消费该事件，缺它主流程 5→6 步走不通，步骤见 `flow/acceptance.md` 收尾节）；D5 收敛后回 delivery-v6 发起 independent-assurance-v6 独立取证并 `evaluate`——**本技能任何阶段都不宣告交付**，accepted/accepted_with_risk 只由裁决器给出
-- [MANDATORY] 发现桥接：D2/D3 的终态未决项（不合理遗留、escalated 顽固条目）由主会话经 `delivery-gate append`（builder 凭据）登记 FindingRaised（category=defect；实现有意的边界申报用 boundary 并附对照论证）后随候选交付——裁决器据此判定，不在本技能内部静默吞掉；D5 的 conformance 未覆盖项按其状态分流登记
+- [MANDATORY] D3 全绿 + D4 最终 commit 后自动进 D5（仅用户明示跳过可免，跳过须记录）；交付体系任务在 D4 收尾完成**增量实现登记**（逐增量以 builder 凭据 `delivery-gate record-implementation` 登记 ImplementationRecorded 含合并回执——独立保证与裁决器消费该事件，缺它主流程 5→6 步走不通，步骤见 `flow/acceptance.md` 收尾节）；D5 收敛后回 delivery-v6 发起 independent-assurance-v6 独立取证并 `evaluate`——**本技能任何阶段都不宣告交付**，accepted/accepted_with_risk 只由裁决器给出
+- [MANDATORY] 发现桥接：D2/D3 的终态未决项（不合理遗留、escalated 顽固条目）由主会话经 `delivery-gate record-finding`（builder 凭据）登记 FindingRaised（category=defect；实现有意的边界申报用 boundary 并附对照论证）后随候选交付——裁决器据此判定，不在本技能内部静默吞掉；D5 的 conformance 未覆盖项按其状态分流登记
 - [OPTIONAL] 高风险大单元可开 worktree 隔离（判据见 references/dag-authoring.md；exec-plan 节点 cwd 字段承载）
 
 ## 状态恢复

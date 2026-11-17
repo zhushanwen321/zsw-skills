@@ -220,7 +220,7 @@ Step 6 完成后进 Step 7 业务用例走查（T1 确认点前的最后一环�
   3. 逐条走查：按用例步骤对照设计推演「按当前设计这条用例能否走通」。四类缺口都算：
      信息缺失（设计没写到）/ 前后矛盾（两处冲突）/ 边界未定义（设计提到但答案不唯一）/
      走不通（按设计执行到某步无法继续）；每条缺口标注文档位置
-  4. V5 交付任务（meta.json 有 acceptanceBinding 时；独立设计任务跳过本条）加做失败反例
+  4. 交付任务（meta.json 有 acceptanceBinding 时；独立设计任务跳过本条）加做失败反例
      攻击：read 验收包（acceptanceBinding.taskDir 下的 acceptance.json），对关键断言
      （riskAcceptable=false 的判据与 invariant/不变量类优先）各尝试构造一个使设计失败的
      反例——满足验收场景前提、按当前设计执行却产生违反断言结果的具体操作序列。构造成功的

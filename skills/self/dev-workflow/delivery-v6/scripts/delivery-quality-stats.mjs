@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// V5 交付质量监控：输出合并稿 §13 的 11 项交付质量指标（逐项口径见各指标处注释）。
+// V6 交付质量监控：输出合并稿 §13 的 11 项交付质量指标（逐项口径见各指标处注释）。
 // 计轮口径与 delivery-gate 同步（合并稿 §7.1）：behavior 修复轮 + 保证后方案/验收修订
 // 各计一轮；nature=environment/evidence 重试不计。卡住续跑事件流无信号，由调用方经
 // --stuck-continuation-count 传入。

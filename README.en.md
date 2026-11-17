@@ -26,6 +26,8 @@ scripts/           Dual-platform workflow build and validation scripts
 
 ### dev-workflow/ — Routine Development Workflow
 
+The v6 trio (tech-design-v6 / dev-flow-v6 / delivery-v6) is the current development generation; v5 is the frozen reference.
+
 | Skill | Description |
 |-------|-------------|
 | tech-design-v4 | Adds quality transfer to the V3 baseline (archived generation): assertion-to-mechanism reconciliation, adversarial-form test bindings, zero-conflict T2 completion, and complete T3 reference checks |

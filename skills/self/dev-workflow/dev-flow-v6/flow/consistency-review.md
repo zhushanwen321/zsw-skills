@@ -1,6 +1,6 @@
 # D2 一致性审查、修复循环与 Gate A — W3 契约与手工路径
 
-> 审查对象 = `git diff <基线>..HEAD` 与设计文档章节对照，以及 V5 判据原文 ↔ 方案机制与反例场景 ↔ 代码和测试实际行为的三方对账。轮次唯一形态：**R1 = 全面分区审；R2+ = 定向复审**（只审上批修复的影响面，不全面重审）。收敛方向两个：实现回归文档，或文档经确认后演进（进登记表）。
+> 审查对象 = `git diff <基线>..HEAD` 与设计文档章节对照，以及判据原文 ↔ 方案机制与反例场景 ↔ 代码和测试实际行为的三方对账。轮次唯一形态：**R1 = 全面分区审；R2+ = 定向复审**（只审上批修复的影响面，不全面重审）。收敛方向两个：实现回归文档，或文档经确认后演进（进登记表）。
 
 ## D2 入口对账
 
@@ -37,7 +37,7 @@ args: { execPlan: "<path>.exec-plan.json",
 - **修复组并行**：组间范围声明互斥（≤5），每组 fixer；组内核验过即 commit（组级一笔）
 - **R2+**：定向复审（只审上批修复影响面）——对上批待对账条目逐条 reconciliation 申报裁决（{prevId, status: fixed|not-fixed, evidence}，fixed 必须带 file:line 证据；仍存在的条目同时在 unreasonable 带 prevId 重新描述；新问题不带 prevId）；**清零判定唯一采信 reconciliation 的 fixed+证据申报，漏报/not-fixed 保持活跃下轮再核**（fail-closed，条目身份按引擎 U 编号对账，不按文本匹配）；另审修复引入新问题/新 diff 新偏差；复审目标 = 有改动/测试挂的组 ∪ 仍有活跃条目的组（防漏报条目零改动后失去再核机会）
 - **停止线**：审查轮累计 3 轮仍未收敛，或 unreasonable 活跃数不减反增（高于前轮）→ stuck（终态随 remaining 呈报残留清单 + escalated 呈报顽固清单——≥2 轮修复未清的活跃条目在 stuck 消息逐条标注，优先人工裁决）
-- **Gate A**（清零后）：world.run 全量测试（fullSuite = D0 从项目配置真实读取合成的全量命令（含 lint/typecheck），引擎单命令执行；产物类条目 = testPlan.artifacts，引擎自动执行（compile.md §6），无需人工排布——Gate A 前第一波并行预备；代码修复后测试产物可能过期，分诊回注轮随轮重建），输出落 `<name>.gate-a.log`
+- **Gate A**（清零后）：world.run 全量测试（fullSuite = D0 从项目配置真实读取合成的全量命令（含 lint/typecheck），引擎单命令执行；产物类条目 = testPlan.artifacts，引擎自动执行（compile.md「L0 前置 + 环境准备」节），无需人工排布——Gate A 前第一波并行预备；代码修复后测试产物可能过期，分诊回注轮随轮重建），输出落 `<name>.gate-a.log`
 - **Gate A 归因分诊**（独立 phase，红后触发，≤2 轮）：分诊 agent 读 gate-a 日志 + 基线 diff，逐失败段四分类——batch-regression（本批回归）条目（GA-<轮>-<序> id）回注修复轮（聚合定性合池重新分组再修，产物预备与 Gate A 随轮重跑）；flaky 直接重跑 Gate A；legacy（存量红）/ script-defect（测试基建自身缺陷，如段退出码累计传播假红）不属本批修复范围——带分诊报告终态 gate-a-failed，由主 agent 裁决（调整 full-suite 清单 attempt+1 重发 / 登记存量债务）。绕过检测（本批 diff 新增行的跳过/仅跑部分/lint 禁用形态）不经分诊维持直接终态——检测挂在跑全量之前、按 diff 判定，不解析测试输出里的 skip 汇总（设计内分层跳过是合法输出，与 pr-cr-fix PS10 同判据）
 - **产物构建失败**（不再直接终态）：先引擎重跑一次自愈（产物过期是最常见因，重建即愈），仍败登记 GA 条目回注修复轮（fixer 读构建日志修产物脚本/基建——产物是本轮声明依赖、无豁免语义，不派分诊）；回注轮与分诊轮共用 ≤2 上限，耗尽才终态
 - **终态回写 status.json events**：consistency 终态一笔 + gate-a pass/fail 一笔——D3 入口门「Gate A 绿证据可查」即查 gate-a-pass 事件；**终态同时写 `<name>.ledger.md` 未决清单一笔**（docErrors / reasonable / deferredLedger / escalated / remaining / 残留改动，带 attempt 标识——主会话中断后仍可从盘上恢复待处置清单）

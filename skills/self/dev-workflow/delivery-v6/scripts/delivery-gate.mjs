@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// delivery-gate（DEV）——确定性交付裁决器（delivery-v2 的 V5 线，裁决语义同构）。语义权威：.tmp/delivery-wf/redesign-detailed.md 第 3 章。
+// delivery-gate（V6）——确定性交付裁决器。语义权威：.tmp/delivery-wf/redesign-detailed.md 第 3 章。
 // 与 v1 的核心差异：16 事件词表、凭据文件化（私钥不再经参数传递）、验收包联合哈希、
 // 原始意图绑定、策略包三层与快照、逐事件失效范围、accepted 完整判定式、任务替换三段协议、
 // 漂移链计数、写事务租约。命令层新增 record-review/approve-acceptance/supersede-*/lease-* 等。
@@ -38,10 +38,10 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-// 判定单源库（V5 内核）：发现 open 集、修复轮与跨 run 预算、定级改判统计只此一份实现，
+// 判定单源库（V6 内核）：发现 open 集、修复轮与跨 run 预算、定级改判统计只此一份实现，
 // 本文件与 delivery-core.mjs 同进程复用；workflow 侧经 delivery-core CLI 的 JSON 子命令消费，
 // 禁止在别处复刻同口径判定
-import { KERNEL_RULES, findingRegrades, openFindingsFromEvents, repairBudgetFromEvents, taskPhaseFromEvents } from "./lib/kernel-judgments.mjs";
+import { KERNEL_RULES, findingRegrades, openFindingsFromEvents, priorFullQualification, repairBudgetFromEvents, taskPhaseFromEvents } from "./lib/kernel-judgments.mjs";
 
 const GATE_COMMAND = "node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs";
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -143,7 +143,7 @@ const EVENT_SCHEMAS = {
     actors: ["user"],
     fields: ["cancelledPrepareEventId", "predecessorTaskDir", "predecessorTaskJsonSha256", "cancelledTaskJsonSha256", "cancelledVerdictSha256", "reason"],
   },
-  // 冻结解封（V5 写入防护）：批准后验收包 chmod 0444；合法修订唯一通道 = 用户登记
+  // 冻结解封（V6 写入防护）：批准后验收包 chmod 0444；合法修订唯一通道 = 用户登记
   // RevisionOpened 解封（chmod 0644 + 留痕），此后允许起草新版本并重新审查与批准。
   // 未解封的改动在 loadWorld 被篡改检测拦下（写入当秒被 chmod 拒，漏网者在加载时检出）
   RevisionOpened: {
@@ -184,7 +184,7 @@ const POLICY_USER_DIR = join(homedir(), ".agents", "skill-data", "delivery-polic
 const DELIVERY_DATA_DIR = join(homedir(), ".agents", "skill-data", "delivery");
 const LEASE_DIR = join(homedir(), ".agents", "skill-data", "delivery-leases");
 const LEASE_STALE_MS = 120_000;
-const HELP = `delivery-gate（DEV）：delivery-v6 的确定性交付裁决器（状态/转移/计数归 delivery-core 内核，判定单源 = scripts/lib/kernel-judgments.mjs）
+const HELP = `delivery-gate（V6）：delivery-v6 的确定性交付裁决器（状态/转移/计数归 delivery-core 内核，判定单源 = scripts/lib/kernel-judgments.mjs）
 
 凭据（v2 起私钥不再经参数传递）：
   init 将三把角色私钥写入用户级凭据目录（0600）：~/.agents/skill-data/delivery-keys/<分组>/<任务id>/{builder,assurance,user}.key。
@@ -198,8 +198,8 @@ const HELP = `delivery-gate（DEV）：delivery-v6 的确定性交付裁决器�
   delivery-gate validate-acceptance --task-dir D
   delivery-gate snapshot-policy --task-dir D
   delivery-gate record-review --task-dir D --conclusion pass|reject --summary S --credential <assurance credentialId>
-  delivery-gate approve-acceptance --task-dir D --confirmation user-explicit|standing-authorization --summary S --credential <user credentialId> [--revision R]  # V5：批准即冻结（chmod 0444 + frozen/v<N>/ 快照）
-  delivery-gate open-revision --task-dir D --reason S --credential <user credentialId>  # V5：合法解冻唯一通道（RevisionOpened 留痕 + chmod 0644）
+  delivery-gate approve-acceptance --task-dir D --confirmation user-explicit|standing-authorization --summary S --credential <user credentialId> [--revision R]  # V6：批准即冻结（chmod 0444 + frozen/v<N>/ 快照）
+  delivery-gate open-revision --task-dir D --reason S --credential <user credentialId>  # V6：合法解冻唯一通道（RevisionOpened 留痕 + chmod 0644）
   delivery-gate record-design-approved --task-dir D --package-file F --decision-file F2 --summary S --credential <user credentialId>
   # 意图提交命令组（执行器事件唯一通道；信封由 gate 构造：actor/revision/acceptanceVersion/domain/artifactSha256 缺省内核计算）
   delivery-gate record-implementation --task-dir D --increment-id INC-1 --summary S --artifact A --merge-receipt '<JSON>' --credential <builder credentialId> [--revision R]
@@ -752,7 +752,7 @@ function validateAcceptance(acceptance, task) {
   if (acceptance.schemaVersion === 2) acceptanceFields.push("adversarialForms");
   requireExactKeys(acceptance, acceptanceFields, "acceptance.json");
   if (acceptance.schemaVersion !== 1 && acceptance.schemaVersion !== 2) {
-    fail("acceptance.json 的 schemaVersion 必须为 1 或 2。", "旧任务保留 1；带断言与反例场景的 V5 验收包使用 2 后重试 validate-acceptance。");
+    fail("acceptance.json 的 schemaVersion 必须为 1 或 2。", "旧任务保留 1；带断言与反例场景的验收包使用 2 后重试 validate-acceptance。");
   }
   requirePositiveInteger(acceptance.acceptanceVersion, "acceptance.acceptanceVersion");
   validateTaskId(acceptance.taskId);
@@ -1527,7 +1527,7 @@ function loadWorld(taskDirValue, { withEvents = true, requirePackage = true, all
     // 加载折算容忍历史护栏违规（V4 代任务目录可读；违规留档 fold.guardrailWarnings）——
     // 写入路径 appendEvent 的 prospective 折算保持严格（新写入当时被拒）
     world.fold = foldEvents(world, world.entries, { guardrailStrict: false });
-    // 篡改检测（V5 写入防护的加载侧）：最近批准绑定的验收包哈希与当前盘上包不一致，且其后
+    // 篡改检测（V6 写入防护的加载侧）：最近批准绑定的验收包哈希与当前盘上包不一致，且其后
     // 无 RevisionOpened 解封 → 冻结对象被绕过通道改动（chmod 挡不住的写入在此检出；AG-2
     // 类「修复组直改已冻结 increments.json」在写入当秒被 0444 拒，漏网者在此拦下）。
     // allowTampered 仅供 open-revision（合法解冻通道本身不能被检测拦死——鸡生蛋）与
@@ -1750,7 +1750,7 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
             fail(`${lineLabel} 缺少 consequenceRefutationType（行为后果否证论证必须声明三类之一）。`, `为该 non-blocker 附 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）后重试。`);
           }
         }
-        // 护栏①（V5 定级护栏）：boundary 禁令——关联需求已有断言级判据明文覆盖的行为，
+        // 护栏①（V6 定级护栏）：boundary 禁令——关联需求已有断言级判据明文覆盖的行为，
         // 禁止归 boundary 类（V4 实跑实证：违反判据 AX5 明文的发现被定 boundary 绕过
         // must-fix 计数与接受判定——LLM 语义输出不得直接改写机器判据）。
         // 仅对新写入执行：历史（V4 代）记录在加载折算时降级为 fold.guardrailWarnings
@@ -1771,7 +1771,7 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
             fold.guardrailWarnings.push(`${message}（历史记录，写入时未拦）`);
           }
         }
-        // 护栏③（V5 定级护栏）：定级改判熔断——同一条目（reopenOf 根）累计 (category,severity)
+        // 护栏③（V6 定级护栏）：定级改判熔断——同一条目（reopenOf 根）累计 (category,severity)
         // 组合数超过上限即拒绝（改判必须停回用户裁决，不允许多次无声改写收敛与停机判据）
         if (KERNEL_RULES.guardrails.regradeHaltEnabled) {
           const { halt, offenders } = findingRegrades([...fold.findingHistory, event]);
@@ -2196,21 +2196,23 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   // receipts 覆盖全部增量 + 证据事件可解析（artifact 失效的不算）+ 探索引用存在——
   // 不查回执红绿（红 = full 发现了缺陷，属正常修复链起点，绿留给验收判定与 recheck
   // 自身的全量回执）；也不要求其证据仍在当前 revision（修复后旧证据按 currentRevision
-  // 失效是既有语义，recheck 自身补齐当前 revision 的全量证据）
-  const knownEvidenceIds = new Set(fold.evidence.map((event) => event.eventId));
-  const priorFullQualified = (event) => {
-    const covered = new Set(event.incrementReceipts.map((receipt) => receipt.incrementId));
-    const explorationRefOk = usesAssertions
-      ? allExplorationIds.has(event.explorationEventId)
-      : (acceptance.exploratoryReview !== "required" || allExplorationIds.has(event.explorationEventId));
-    return (
-      allIncrementIds.every((id) => covered.has(id)) &&
-      event.evidenceEventIds.every((id) => id === "none" || knownEvidenceIds.has(id)) &&
-      explorationRefOk
-    );
-  };
+  // 失效是既有语义，recheck 自身补齐当前 revision 的全量证据）。
+  // 谓词走内核单源（kernel-judgments.priorFullQualification——V6 前此处为闭包内联实现，
+  // workflow 侧另持两份弱化副本靠注释同步；现收敛为一份，gate / core / workflow 消费
+  // 同一谓词，fold 输入即本函数折算产物的三组记录）
+  const priorFullJudgment = priorFullQualification(
+    { assurances: fold.assurances, evidence: fold.evidence, explorations: fold.explorations },
+    {
+      incrementIds: allIncrementIds,
+      usesAssertions,
+      exploratoryReviewRequired: acceptance.exploratoryReview === "required",
+    },
+  );
+  const qualifiedPriorFullById = new Map(priorFullJudgment.inspections.map((item) => [item.eventId, item.qualified]));
   const hasPriorValidFull = (event) =>
-    fold.assurances.some((full) => (full.mode ?? "full") === "full" && full.seq < event.seq && priorFullQualified(full));
+    fold.assurances.some(
+      (full) => (full.mode ?? "full") === "full" && full.seq < event.seq && qualifiedPriorFullById.get(full.eventId) === true,
+    );
   const assuranceValid = fold.assurances.filter(
     (event) => currentRevision(event) && assuranceBaseValid(event) && ((event.mode ?? "full") !== "recheck" || hasPriorValidFull(event)),
   );
@@ -3739,7 +3741,7 @@ function commandApproveAcceptance(args) {
       confirmation: options.confirmation,
     };
     const record = appendEvent(world, event, privateKey);
-    // 写入防护（V5）：批准即冻结——验收包两文件 chmod 0444（写入当时拒非法改写）+
+    // 写入防护（V6）：批准即冻结——验收包两文件 chmod 0444（写入当时拒非法改写）+
     // 只追加快照 frozen/v<N>/（事后对账与恢复的权威副本）。合法修订唯一通道 = open-revision
     const frozenDir = join(world.taskDir, "frozen", `v${world.acceptance.acceptanceVersion}`);
     mkdirSync(frozenDir, { recursive: true });
@@ -3753,7 +3755,7 @@ function commandApproveAcceptance(args) {
   });
 }
 
-// 合法解冻唯一通道（V5 写入防护）：用户登记 RevisionOpened 并说明理由，chmod 0644 解锁
+// 合法解冻唯一通道（V6 写入防护）：用户登记 RevisionOpened 并说明理由，chmod 0644 解锁
 // 起草；重新批准时 approve-acceptance 再次冻结。不登记即改动 = loadWorld 篡改检测拦截
 function commandOpenRevision(args) {
   const options = parseOptions(args, { required: ["task-dir", "reason", "credential"], optional: [] });
@@ -4702,6 +4704,6 @@ if (invokedPath !== null && invokedPath === realpathSync(fileURLToPath(import.me
   main();
 }
 
-// ── 内核复用导出（V5）：delivery-core.mjs 同进程消费的世界加载与裁决组装。
+// ── 内核复用导出（V6）：delivery-core.mjs 同进程消费的世界加载与裁决组装。
 // 导出的是既有实现本身，不是副本——改这些函数只改一处，两侧同步生效 ──
 export { buildVerdict, computeRevision, loadTaskCore, loadWorld };

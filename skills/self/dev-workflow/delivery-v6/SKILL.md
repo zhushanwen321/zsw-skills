@@ -1,7 +1,7 @@
 ---
 name: delivery-v6
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 6.1.0
+version: 6.2.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -87,14 +87,14 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 | `independent-assurance-v6` | projectRoot、taskDir、assuranceCredentialId、mode | 断言级覆盖结论、探索发现、证据与发现事件、逐增量测试回执 | 产品代码修改、验收修订、风险接受 |
 | `assurance-repair-loop-v6` | projectRoot、taskDir、assuranceCredentialId、builderCredentialId、allowCommit、fixSuggestions? | 修复计划、产品代码与回归测试、RepairRoundRecorded、受影响复核、recheck 证据 | 验收修订、风险接受、user 凭据写入、未经提交授权的 Git 写 |
 
-四个 workflow 均接收可选 `taskId/executionId/sampleType` 观测参数（同时传 `taskId` 与 `executionId` 启用；阶段边界逐行记 `~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl`，skill 字段恒 `delivery-v6`——契约与字段表见 dev-flow-v6 SKILL「阶段事件观测」节）。耗时与 token 统计：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --skill delivery-v6`（阶段窗口来自观测事件、token 经 `agent-session-reader usage` 双平台重算，口径详见该命令 `--help` 与 dev-flow-v6 SKILL「统计入口」节）。写事务租约：`candidate-build-v6`、`independent-assurance-v6` 与 `assurance-repair-loop-v6` 接收可选 `runId`（acquire/心跳/release 全程配对，事件 append 带 `--run-id` 代次复核）；`acceptance-design-v6` 接收可选 `runId`（审查登记期间持有 projectRoot 级租约，任何出口释放）。zcode 用同名 saved workflow；pi 用上级 `workflows/pi/<name>.js`。两边都不可用时主会话可按相同职责手工执行，但事件与最终判定仍必须走 `delivery-gate`。
+四个 workflow 均接收可选 `taskId/executionId/sampleType` 观测参数（同时传 `taskId` 与 `executionId` 启用；阶段边界逐行记 `~/.agents/skill-data/workflow-observability/<task-id>/<execution-id>.jsonl`，skill 字段恒 `delivery-v6`——契约与字段表见 dev-flow-v6 SKILL「阶段事件观测」节）。耗时与 token 统计：`node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --skill delivery-v6`（阶段窗口来自观测事件、token 经 `agent-session-reader usage` 双平台重算，口径详见该命令 `--help` 与 dev-flow-v6 SKILL「统计入口」节）。写事务租约：`candidate-build-v6`、`independent-assurance-v6` 与 `assurance-repair-loop-v6` 接收可选 `runId`（acquire/心跳/release 全程配对，事件登记命令带 `--run-id` 代次复核）；`acceptance-design-v6` 接收可选 `runId`（审查登记期间持有 projectRoot 级租约，任何出口释放）。zcode 用同名 saved workflow；pi 用上级 `workflows/pi/<name>.js`。两边都不可用时主会话可按相同职责手工执行，但事件与最终判定仍必须走 `delivery-gate`。
 
 ### 韧性加固（V6 代差异，v2 无此层）
 
 三个 workflow 拼入韧性层（`workflows/src/resilience.shared.ts`，构建器按登记拼进产物），交付语义不变，执行侧多三道防线：
 
 1. **agent 调用校验与修正重问（askGuarded）**：每次 agent 调用返回后立即做结构校验（各角色的期望 JSON 形态写在 prompt 尾部——首答即合法是正常路径）；结构非法、调用抛异常或该写的报告/证据文件缺失时，携修正提示（失败原因 + 期望结构）以完整自包含 prompt 重问一次（pi 无续聊，重问不依赖上一轮上下文）；两次尝试都失败才走原有终态。覆盖的调用点：designer、acceptance-reviewer、builder（含实现报告后验）、coverage-reviewer（含报告与证据文件后验）、explorer（含探索报告后验）。
-2. **CLI 失败分类**：`delivery-gate` 只读/幂等命令（evaluate、revision、snapshot-policy、validate-acceptance）spawn 级失败（进程没起来/超时前未执行）自动重试一次；语义性失败（exit N>0）不自动重试——gate 报错自带恢复动作，workflow 按「修正提示」回喂下一轮（validate-acceptance 走 feedback 环）或按终态停回主 agent。**变更类命令（append、lease-*）不重试**：超时被杀时命令可能已写入，重试有重复写入风险。
+2. **CLI 失败分类**：`delivery-gate` 只读/幂等命令（evaluate、revision、snapshot-policy、validate-acceptance）spawn 级失败（进程没起来/超时前未执行）自动重试一次；语义性失败（exit N>0）不自动重试——gate 报错自带恢复动作，workflow 按「修正提示」回喂下一轮（validate-acceptance 走 feedback 环）或按终态停回主 agent。**变更类命令（意图命令组、lease-*）不重试**：超时被杀时命令可能已写入，重试有重复写入风险。
 3. **自修复记录与终态上报**：每次防线触发（修正重问 / 重试）逐条追加 `<taskDir>/self-repairs.jsonl`（字段：at、workflow、step、round、kind、target、trigger、outcome=recovered|exhausted）；终态 message 末尾携带汇总块（`自修复兜底被触发：共 N 条（kind 计数）`）——**主 agent 收到后必须向用户披露**，不允许静默修复。正常路径零触发、message 不带该块。
 
 防御次序固定：prompt 写明返回结构（防呆）→ 结构校验 + 修正重问（兜底一）→ 原终态路径（兜底二，语义与 v2 完全一致）。兜底一被触发本身是可见事件（JSONL + 终态块），不是无声失败。
@@ -106,7 +106,7 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 3. **三档处置**：must-fix 立即修复；suggestion 在 must-fix 清零后统一处理；info/boundary 逐项确认或按授权处置。非 must-fix 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不能只按字面合规降级。
 4. **有限结束**：`recheck` 不再默认开放探索。最后一批建议级修复后以 recheck 重新生成当前版本证据，解决「修复后版本变化使旧证据失效」与「最终必须重新取证」的冲突。
 5. **过程失败**：实现性修复需要第 4 轮，或累计不同 must-fix 达到第 11 条，进入 `process-failed`；不得通过改名、错误合并、降低级别或递增验收版本规避。
-6. **证据定位走统一内容索引**：独立保证核对按 evidence-bundle.json（dev-flow-v6 D3 节点执行后生成的内容索引——原始记录与附属 artifact 的 path+sha256 清单，禁手改，`--check` 可核）定位原始执行记录与附属 artifact，不靠重读大量文本与日志找证据；缺记录、缺 artifact、skipped 未披露时不得按完整证据处理——原始步骤 pass/fail/skipped 不自动升格为 verified，交付判定仍走事件与 gate
+6. **证据定位走统一内容索引**：统一内容索引 = evidence-bundle.json（dev-flow-v6 `gen-evidence-bundle.mjs` 生成的内容索引——原始记录与附属 artifact 的 path+sha256 清单，`--check` 可核，禁手改）；当前生成入口 = dev-flow-v6 验收阶段的手工路径（`dev-flow-v6/flow/acceptance.md` 证据内容索引条），独立保证 workflow（independent-assurance-v6）的自动消费接线属待实施项——接线落地前独立保证仍按事件与证据文件定位，缺记录、缺 artifact、skipped 未披露时不得按完整证据处理；原始步骤 pass/fail/skipped 不自动升格为 verified，交付判定仍走事件与 gate，本条不改变交付判定语义
 
 ## 密钥与信任边界
 
@@ -140,4 +140,4 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 
 ## 与归档代（v1 / v2 / v3）/ v4 的关系
 
-v1 / v2 / v3 已归档（仓库根 `.archived/`，不入版本库），不再作为正式技能；v4 为质量传递线（冻结维护）。v5 在 v4 基础上落地交付事务内核（delivery-core）：五域转移表与静态校验、判定单源库（open 集/探索集/due/预算只此一份）、验收包写入防护（冻结 + open-revision + 篡改检测）、FindingRaised 定级护栏（boundary 禁令/后果论证强制/改判熔断）、循环预算三档（新增跨 run 保证 ≤6）、pending-actions 待办实体、节点人工处置显式转移。判定语义与 v4 兼容（schema 1/2 双轨不变）；新增事件 RevisionOpened、新增命令 open-revision 与内核命令组。
+v1 / v2 / v3 已归档（仓库根 `.archived/`，不入版本库），不再作为正式技能；v4 为质量传递线（冻结维护）。v5 在 v4 基础上落地交付事务内核（delivery-core）：五域转移表与静态校验、判定单源库（open 集/探索集/due/预算只此一份）、验收包写入防护（冻结 + open-revision + 篡改检测）、FindingRaised 定级护栏（boundary 禁令/后果论证强制/改判熔断）、循环预算三档（新增跨 run 保证 ≤6）、pending-actions 待办实体、节点人工处置显式转移。判定语义与 v4 兼容（schema 1/2 双轨不变）；新增事件 RevisionOpened、新增命令 open-revision 与内核命令组。v6 在 v5 基线上叠加《三技能结构化优化设计》第二至五步（能力快照、D0 编译器、双索引、reviewer 种子定位），为现行开发代；v5 为冻结参照。

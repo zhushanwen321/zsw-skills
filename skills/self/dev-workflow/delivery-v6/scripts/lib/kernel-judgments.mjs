@@ -1,10 +1,11 @@
-// kernel-judgments.mjs — 交付事务内核·判定单源库（V5）
+// kernel-judgments.mjs — 交付事务内核·判定单源库（V6）
 //
-// 单源纪律：发现 open 判定、可用探索集、探索 due、修复轮预算——全部只保留本文件这一份
-// 实现。消费方两类：
+// 单源纪律：发现 open 判定、可用探索集、探索 due、修复轮预算、full 保证资格——全部只保留
+// 本文件这一份实现。消费方两类：
 //   ① delivery-gate.mjs / delivery-core.mjs（同进程 import，函数直调）
 //   ② workflow 产物（zcode 产物禁模块语法，禁 import 本文件）——经 delivery-core.mjs 的
-//      JSON 子命令消费：open-findings / usable-explorations / exploration-due / repair-budget
+//      JSON 子命令消费：open-findings / usable-explorations / exploration-due / repair-budget /
+//      full-qualification
 // 禁止在 workflow 源码里复刻本库判定逻辑（口径漂移的根源，V4 已证：三套 open 实现、
 // 三处探索集、两处轮上限，靠注释人工同步必然失同步）。
 //
@@ -144,6 +145,50 @@ export function repairBudgetFromEvents(records) {
   };
 }
 
+/** full 保证资格判定（gate priorFullQualified / hasPriorValidFull 的收敛单源）。
+ * 判定历史 full 保证（AssuranceCompleted mode=full，同验收版本）是否合格——能否作为
+ * recheck / full-first 的资格基础（gate missing.assuranceFullFirst 判定与 workflow 预检
+ * 的同口径依据）。逐条口径（与 gate buildVerdict 一致）：
+ *   ① 回执覆盖全部增量——不查回执红绿（红 = full 发现了缺陷，属正常修复链起点）
+ *   ② 引用的证据事件可解析（id === "none" 豁免；证据集合由调用方传入折算后的分组——
+ *      artifact 失效事件已在折算阶段被过滤，此处不重复校验磁盘）
+ *   ③ 探索引用存在（schema 2 无条件要求；schema 1 仅 exploratoryReview=required 时要求）
+ * 输入 = 折算后的分组记录（gate world.fold 的 assurances/evidence/explorations 三组，
+ * core loadWorld 同构）；beforeSeq 给定时只判早于该 seq 的 full（判定某 recheck 的
+ * prior 资格），缺省判全部。返回 qualified（存在合格 full）+ qualifiedEventIds +
+ * inspections（逐条合格性与不合格原因）。 */
+export function priorFullQualification(
+  { assurances, evidence, explorations },
+  { incrementIds, usesAssertions, exploratoryReviewRequired = false, beforeSeq = Number.POSITIVE_INFINITY } = {},
+) {
+  const knownEvidenceIds = new Set(evidence.map((record) => record.eventId));
+  const allExplorationIds = new Set(explorations.map((record) => record.eventId));
+  const inspections = assurances
+    .filter((record) => (record.mode ?? "full") === "full" && seqOf(record) < beforeSeq)
+    .map((record) => {
+      const receipts = Array.isArray(record.incrementReceipts) ? record.incrementReceipts : [];
+      const covered = new Set(receipts.map((receipt) => receipt.incrementId));
+      const missingIncrementIds = incrementIds.filter((id) => !covered.has(id));
+      const missingEvidenceIds = record.evidenceEventIds.filter((id) => id !== "none" && !knownEvidenceIds.has(id));
+      const reasons = [];
+      if (missingIncrementIds.length > 0) {
+        reasons.push(`回执未覆盖全部增量（缺 ${missingIncrementIds.join(", ")}）`);
+      }
+      if (missingEvidenceIds.length > 0) {
+        reasons.push(`引用的证据事件不可解析（${missingEvidenceIds.join(", ")}）`);
+      }
+      const explorationRefOk = usesAssertions
+        ? allExplorationIds.has(record.explorationEventId)
+        : (!exploratoryReviewRequired || allExplorationIds.has(record.explorationEventId));
+      if (!explorationRefOk) {
+        reasons.push(`探索引用缺失或失效（explorationEventId=${record.explorationEventId}）`);
+      }
+      return { eventId: record.eventId, seq: seqOf(record), qualified: reasons.length === 0, reasons };
+    });
+  const qualifiedEventIds = inspections.filter((item) => item.qualified).map((item) => item.eventId);
+  return { qualified: qualifiedEventIds.length > 0, qualifiedEventIds, inspections };
+}
+
 /** 定级改判统计（护栏③：同一条目反复改定级触发停回）。
  * root = reopenOf 链的根 findingId；每个 root 收集 (category, severity) 去重组合，
  * 组合数超过 findingRegradeHalt 即熔断（不允许多次改判收敛与停机判据）。 */
@@ -207,10 +252,10 @@ export function taskPhaseFromEvents(records, { incrementsCount = null } = {}) {
   return "finalizing";
 }
 
-/** 节点事件投影器（status.json 派生视图单源）：按事件序列重放 node 域转移表重建节点条目。
+/** 节点事件视图重建 projectNodeEvents（status.json 派生视图单源）：按事件序列重放 node 域转移表重建节点条目。
  * events = status.events 数组（{seq,node,event,detail,payload?}）；payload 为结构化字段
  * （commit/evidence/reason/basis），缺 payload 的历史事件只能重建 status+attempts（partial）。
- * core 的 node-project 用它做「事件 → 节点状态」重投影与篡改检测。 */
+ * core 的 node-project 用它做「事件 → 节点状态」视图重建与篡改检测。 */
 export function projectNodeEvents(events, nodeTable) {
   const nodes = new Map();
   let partialEvents = 0;
@@ -225,7 +270,7 @@ export function projectNodeEvents(events, nodeTable) {
     const current = nodes.get(nodeName) ?? { status: "pending", attempts: 0 };
     const fromStatus = current.status ?? "pending";
     const transition = findTransition(record.event, fromStatus);
-    if (transition === undefined) continue; // 非法/未知事件不改变投影（重放宽容：以 events 为准重建）
+    if (transition === undefined) continue; // 非法/未知事件不影响重建视图（重放宽容：以 events 为准重建）
     const priorAttempts = typeof current.attempts === "number" ? current.attempts : 0;
     const payload = record.payload ?? null;
     if (payload === null && PAYLOAD_BEARING_EVENTS.has(record.event)) partialEvents += 1;

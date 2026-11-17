@@ -129,7 +129,7 @@ dev 编译：exec-plan schema 完整（nodes 非空、每节点 promptFile 落�
 ## 历史重放与防手改核对
 
 - `--check`：按当前 impl-plan 重生成并与盘上产物比对（exec-plan 深比较、任务书逐字节；status.json 是执行态载体不适用，显式跳过；wrapper 检查委托 gen-acceptance-wrapper `--check`；verification-index.json 的防手改由索引工具自身 `check` 子命令承担，不在编译器 `--check` 范围）。不一致报差异 + 重新生成命令——手修生成物的发现入口
-- `--replay-compare <旧 exec-plan 路径>`：历史只读重放（设计 §7.7）——按旧文件 mode 用当前输入重新生成（不写盘）并逐字段比对报告差异；不推断旧执行行为，对照旧流程实际执行须另行输入旧 status.json、事件、summary.jsonl 等执行记录。baseline / generatedBy 差异属输入快照与溯源字段的自然演进，不是手改信号
+- `--replay-compare <旧 exec-plan 路径>`：历史只读重放（设计 §7.7）——须以与旧文件一致的 --mode 运行（不一致时编译器报用法错误），按旧文件 mode 用当前输入重新生成（不写盘）并逐字段比对报告差异；不推断旧执行行为，对照旧流程实际执行须另行输入旧 status.json、事件、summary.jsonl 等执行记录。baseline / generatedBy 差异属输入快照与溯源字段的自然演进，不是手改信号
 
 ## 手工降级路径（编译器不可用时；语义等价）
 
