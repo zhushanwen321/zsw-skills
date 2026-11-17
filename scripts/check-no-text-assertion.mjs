@@ -20,7 +20,7 @@
 //
 // 用法：node scripts/check-no-text-assertion.mjs [--update]
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,12 +31,6 @@ const BASELINE = join(repoRoot, "scripts", "text-assertion-baseline.json");
 const TARGETS = [
   "skills/self/dev-workflow/workflows/src/design-code-sync-loop.shared.ts",
   "skills/self/dev-workflow/workflows/src/design-code-sync-v2.shared.ts",
-  "skills/self/dev-workflow/workflows/src/tech-review-loop-dev.shared.ts",
-  "skills/self/dev-workflow/workflows/src/wave-executor-dev.shared.ts",
-  "skills/self/dev-workflow/workflows/src/dev-consistency-loop-dev.shared.ts",
-  "skills/self/dev-workflow/workflows/src/acceptance-design-dev.shared.ts",
-  "skills/self/dev-workflow/workflows/src/candidate-build-dev.shared.ts",
-  "skills/self/dev-workflow/workflows/src/independent-assurance-dev.shared.ts",
   "skills/self/dev-workflow/workflows/src/tech-review-loop-v4.shared.ts",
   "skills/self/dev-workflow/workflows/src/wave-executor-v4.shared.ts",
   "skills/self/dev-workflow/workflows/src/dev-consistency-loop-v4.shared.ts",
@@ -58,6 +52,8 @@ const API_RE = /\.includes\(|\.test\(|\.indexOf\(|\.match\(|\.exec\(|\.startsWit
 
 const scanFile = (rel) => {
   const out = [];
+  // 目标文件被删除（整代退役）时跳过：基线中该文件的命中随 --update 重建消亡
+  if (!existsSync(join(repoRoot, rel))) return out;
   const lines = readFileSync(join(repoRoot, rel), "utf8").split("\n");
   lines.forEach((l, i) => {
     if (API_RE.test(l)) out.push([i + 1, l.trim().slice(0, 160)]);

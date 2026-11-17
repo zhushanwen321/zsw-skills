@@ -84,43 +84,31 @@ if (repoCheck.status !== 0 || repoCheck.stdout.toString("utf8").trim() !== "true
 }
 
 // ── 技能 ↔ 自有文件目录 / 产物 ↔ 技能 映射 ──
-// 登记范围 = 现行代技能（DEV 加固线 / V4 / V5）。V1-V3 代技能已归档（仓库根
+// 登记范围 = 现行代技能（V4 冻结 / V5 内核线 / V6 结构化线）。V1-V3 代技能已归档（仓库根
 // .archived/<技能名>/，不入版本库），不参与版本纪律；design-code-sync 两引擎跨代共用，产物归属
 // dev-flow-v5（见 PRODUCT_SKILL）。归档代复活时在此重新登记
 const SKILLS = [
-  { name: "tech-design-dev", dir: "skills/self/dev-workflow/tech-design-dev" },
-  { name: "dev-flow-dev", dir: "skills/self/dev-workflow/dev-flow-dev" },
-  { name: "delivery-dev", dir: "skills/self/dev-workflow/delivery-dev" },
   { name: "tech-design-v4", dir: "skills/self/dev-workflow/tech-design-v4" },
   { name: "dev-flow-v4", dir: "skills/self/dev-workflow/dev-flow-v4" },
   { name: "delivery-v4", dir: "skills/self/dev-workflow/delivery-v4" },
   { name: "tech-design-v5", dir: "skills/self/dev-workflow/tech-design-v5" },
   { name: "dev-flow-v5", dir: "skills/self/dev-workflow/dev-flow-v5" },
   { name: "delivery-v5", dir: "skills/self/dev-workflow/delivery-v5" },
+  { name: "tech-design-v6", dir: "skills/self/dev-workflow/tech-design-v6" },
+  { name: "dev-flow-v6", dir: "skills/self/dev-workflow/dev-flow-v6" },
+  { name: "delivery-v6", dir: "skills/self/dev-workflow/delivery-v6" },
 ];
 const WORKFLOWS = "skills/self/dev-workflow/workflows";
 const SHARED_SRC_PREFIX = `${WORKFLOWS}/src/`;
 // 产物 → 所属技能。权威映射见 scripts/build-workflows.mjs 的 SKILL_VERSION_SOURCES；
 // 新增 workflow 产物时两处同步登记，否则规则 3 无版本戳可对账
 const PRODUCT_SKILL = {
-  // design-code-sync 两引擎跨代共用（V4/V5 与 dev 线 D5 在用），归属 dev-flow-v5
+  // design-code-sync 两引擎跨代共用（V4/V5/V6 在用），归属 dev-flow-v6
   // （原登记 dev-flow-v1，随 V1 代归档改归现行执行线）
-  "design-code-sync-loop.dwf.ts": "dev-flow-v5",
-  "pi/design-code-sync-loop.js": "dev-flow-v5",
-  "design-code-sync-v2.dwf.ts": "dev-flow-v5",
-  "pi/design-code-sync-v2.js": "dev-flow-v5",
-  "tech-review-loop-dev.dwf.ts": "tech-design-dev",
-  "pi/tech-review-loop-dev.js": "tech-design-dev",
-  "wave-executor-dev.dwf.ts": "dev-flow-dev",
-  "pi/wave-executor-dev.js": "dev-flow-dev",
-  "dev-consistency-loop-dev.dwf.ts": "dev-flow-dev",
-  "pi/dev-consistency-loop-dev.js": "dev-flow-dev",
-  "acceptance-design-dev.dwf.ts": "delivery-dev",
-  "pi/acceptance-design-dev.js": "delivery-dev",
-  "candidate-build-dev.dwf.ts": "delivery-dev",
-  "pi/candidate-build-dev.js": "delivery-dev",
-  "independent-assurance-dev.dwf.ts": "delivery-dev",
-  "pi/independent-assurance-dev.js": "delivery-dev",
+  "design-code-sync-loop.dwf.ts": "dev-flow-v6",
+  "pi/design-code-sync-loop.js": "dev-flow-v6",
+  "design-code-sync-v2.dwf.ts": "dev-flow-v6",
+  "pi/design-code-sync-v2.js": "dev-flow-v6",
   "tech-review-loop-v4.dwf.ts": "tech-design-v4",
   "pi/tech-review-loop-v4.js": "tech-design-v4",
   "wave-executor-v4.dwf.ts": "dev-flow-v4",
@@ -149,6 +137,20 @@ const PRODUCT_SKILL = {
   "pi/independent-assurance-v5.js": "delivery-v5",
   "assurance-repair-loop-v5.dwf.ts": "delivery-v5",
   "pi/assurance-repair-loop-v5.js": "delivery-v5",
+  "tech-review-loop-v6.dwf.ts": "tech-design-v6",
+  "pi/tech-review-loop-v6.js": "tech-design-v6",
+  "wave-executor-v6.dwf.ts": "dev-flow-v6",
+  "pi/wave-executor-v6.js": "dev-flow-v6",
+  "dev-consistency-loop-v6.dwf.ts": "dev-flow-v6",
+  "pi/dev-consistency-loop-v6.js": "dev-flow-v6",
+  "acceptance-design-v6.dwf.ts": "delivery-v6",
+  "pi/acceptance-design-v6.js": "delivery-v6",
+  "candidate-build-v6.dwf.ts": "delivery-v6",
+  "pi/candidate-build-v6.js": "delivery-v6",
+  "independent-assurance-v6.dwf.ts": "delivery-v6",
+  "pi/independent-assurance-v6.js": "delivery-v6",
+  "assurance-repair-loop-v6.dwf.ts": "delivery-v6",
+  "pi/assurance-repair-loop-v6.js": "delivery-v6",
 };
 const STAMP_RE = /const SKILL_VERSION = "([^"]*)";/;
 const VERSION_RE = /^version:\s*(\d+\.\d+\.\d+)\s*$/m;

@@ -1,7 +1,7 @@
 ---
 name: delivery-v5
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 5.2.1
+version: 5.2.2
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -137,6 +137,6 @@ dev-flow-v5（技能③执行）在本体系内协作：②在已批准目标与
 | `[MANDATORY]` | 保持交付判定可信所必需的约束 | 必须严格遵守 |
 | `[OPTIONAL]` | 按风险调整执行深度的建议 | 可裁剪流程成本，不改变证据语义 |
 
-## 与归档代（v1 / v2 / v3）/ v4 及 dev 线的关系
+## 与归档代（v1 / v2 / v3）/ v4 的关系
 
-v1 / v2 / v3 已归档（仓库根 `.archived/`，不入版本库），不再作为正式技能；dev 为加固线（v2 分叉），v4 为质量传递线（冻结维护）。v5 在 v4 基础上落地交付事务内核（delivery-core）：五域转移表与静态校验、判定单源库（open 集/探索集/due/预算只此一份）、验收包写入防护（冻结 + open-revision + 篡改检测）、FindingRaised 定级护栏（boundary 禁令/后果论证强制/改判熔断）、循环预算三档（新增跨 run 保证 ≤6）、pending-actions 待办实体、节点人工处置显式转移。判定语义与 v4 兼容（schema 1/2 双轨不变）；新增事件 RevisionOpened、新增命令 open-revision 与内核命令组。
+v1 / v2 / v3 已归档（仓库根 `.archived/`，不入版本库），不再作为正式技能；v4 为质量传递线（冻结维护）。v5 在 v4 基础上落地交付事务内核（delivery-core）：五域转移表与静态校验、判定单源库（open 集/探索集/due/预算只此一份）、验收包写入防护（冻结 + open-revision + 篡改检测）、FindingRaised 定级护栏（boundary 禁令/后果论证强制/改判熔断）、循环预算三档（新增跨 run 保证 ≤6）、pending-actions 待办实体、节点人工处置显式转移。判定语义与 v4 兼容（schema 1/2 双轨不变）；新增事件 RevisionOpened、新增命令 open-revision 与内核命令组。

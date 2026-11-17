@@ -560,7 +560,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "5.4.0"; // 构建注入自 dev-flow-v5/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "5.4.1"; // 构建注入自 dev-flow-v5/SKILL.md frontmatter version（唯一权威）
 // W3 dev-consistency-loop-v5 — dev-flow-v5 D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：

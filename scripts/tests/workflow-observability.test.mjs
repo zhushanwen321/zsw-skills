@@ -640,7 +640,7 @@ test("构建器：全量 --check 不漏检（全部 workflow 接入观测且三�
   // 在三个落点（仓内双平台 + ~/.zcode/workflows saved 副本）全部一致
   const r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
   assert.equal(r.status, 0, `全量 --check 应全绿：\n${r.stdout}\n${r.stderr}`);
-  for (const name of ["design-code-sync-loop", "design-code-sync-v2", "tech-review-loop-dev", "wave-executor-dev", "dev-consistency-loop-dev", "tech-review-loop-v4", "wave-executor-v4", "tech-review-loop-v5", "wave-executor-v5", "assurance-repair-loop-v5"]) {
+  for (const name of ["design-code-sync-loop", "design-code-sync-v2", "tech-review-loop-v4", "wave-executor-v4", "tech-review-loop-v5", "wave-executor-v5", "assurance-repair-loop-v5"]) {
     assert.ok(r.stdout.includes(name), `全量 --check 输出须覆盖 ${name}（不得漏检）`);
     assert.ok(r.stdout.includes(`${name}.dwf.ts（一致）`), `${name} 产物应一致：\n${r.stdout}\n${r.stderr}`);
   }
@@ -652,7 +652,7 @@ test("构建器：--only 未知名报错 exit 2；--only 全部 workflow 构建�
   let r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "no-such"], { encoding: "utf8" });
   assert.equal(r.status, 2);
   assert.ok(r.stderr.includes("未知 workflow 名"), r.stderr);
-  r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "design-code-sync-loop,design-code-sync-v2,tech-review-loop-dev,wave-executor-dev,dev-consistency-loop-dev,tech-review-loop-v4,wave-executor-v4,tech-review-loop-v5,wave-executor-v5,assurance-repair-loop-v5"], { encoding: "utf8" });
+  r = spawnSync(process.execPath, [join(ROOT, "scripts/build-workflows.mjs"), "--only", "design-code-sync-loop,design-code-sync-v2,tech-review-loop-v4,wave-executor-v4,tech-review-loop-v5,wave-executor-v5,assurance-repair-loop-v5"], { encoding: "utf8" });
   assert.equal(r.status, 0, `--only 构建应绿：\n${r.stdout}\n${r.stderr}`);
   assert.ok(r.stdout.includes("--only 生效"), r.stdout);
   assert.ok(r.stdout.includes("观测契约"), "构建应输出观测契约核对结果");

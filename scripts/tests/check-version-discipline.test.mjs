@@ -25,43 +25,25 @@ import { fileURLToPath } from "node:url";
 
 const CHECKER = join(dirname(fileURLToPath(import.meta.url)), "..", "check-version-discipline.mjs");
 const WORKFLOWS = "skills/self/dev-workflow/workflows";
-const SKILL_DIRS = {
-  "tech-design-dev": "skills/self/dev-workflow/tech-design-dev",
-  "dev-flow-dev": "skills/self/dev-workflow/dev-flow-dev",
-  "delivery-dev": "skills/self/dev-workflow/delivery-dev",
-};
-for (const version of ["v4", "v5"]) {
+const SKILL_DIRS = {};
+for (const version of ["v4", "v5", "v6"]) {
   for (const family of ["tech-design", "dev-flow", "delivery"]) {
     SKILL_DIRS[`${family}-${version}`] = `skills/self/dev-workflow/${family}-${version}`;
   }
 }
 // 与检查器 PRODUCT_SKILL 同域的产物清单（新增产物时两处同步）；两引擎（design-code-sync
-// ×2）归属 dev-flow-v5（跨代共用，V1 归档时改归现行执行线）
+// ×2）归属 dev-flow-v6（跨代共用，随现行执行线迁移）
 const PRODUCTS = [
   "design-code-sync-loop.dwf.ts",
   "pi/design-code-sync-loop.js",
   "design-code-sync-v2.dwf.ts",
   "pi/design-code-sync-v2.js",
-  "tech-review-loop-dev.dwf.ts",
-  "pi/tech-review-loop-dev.js",
-  "wave-executor-dev.dwf.ts",
-  "pi/wave-executor-dev.js",
-  "dev-consistency-loop-dev.dwf.ts",
-  "pi/dev-consistency-loop-dev.js",
-  "acceptance-design-dev.dwf.ts",
-  "pi/acceptance-design-dev.js",
-  "candidate-build-dev.dwf.ts",
-  "pi/candidate-build-dev.js",
-  "independent-assurance-dev.dwf.ts",
-  "pi/independent-assurance-dev.js",
 ];
-for (const version of ["v4", "v5"]) {
-  for (const name of ["tech-review-loop", "wave-executor", "dev-consistency-loop", "acceptance-design", "candidate-build", "independent-assurance"]) {
+for (const version of ["v4", "v5", "v6"]) {
+  for (const name of ["tech-review-loop", "wave-executor", "dev-consistency-loop", "acceptance-design", "candidate-build", "independent-assurance", "assurance-repair-loop"]) {
     PRODUCTS.push(`${name}-${version}.dwf.ts`, `pi/${name}-${version}.js`);
   }
 }
-PRODUCTS.push("assurance-repair-loop-v4.dwf.ts", "pi/assurance-repair-loop-v4.js");
-PRODUCTS.push("assurance-repair-loop-v5.dwf.ts", "pi/assurance-repair-loop-v5.js");
 
 const skillMd = (name, version) => `---\nname: ${name}\nversion: ${version}\ndescription: fixture\n---\n\n# ${name}\n`;
 const product = (version) => `// fixture 产物\nconst SKILL_VERSION = "${version}"; // 构建注入\n`;
@@ -131,13 +113,13 @@ function cleanup(t, root) {
 test("改技能自有文件未 bump → 拦（恢复动作文案在场）", (t) => {
   const root = makeFixture();
   cleanup(t, root);
-  appendLine(root, `${SKILL_DIRS["tech-design-dev"]}/flow/step.md`, "补充一行");
+  appendLine(root, `${SKILL_DIRS["tech-design-v6"]}/flow/step.md`, "补充一行");
   stageAll(root);
 
   const r = runChecker(root);
   assert.equal(r.status, 1, `应红灯，实际输出：${r.output}`);
   assert.match(r.output, /规则 1（bump 对账）/);
-  assert.match(r.output, /tech-design-dev/);
+  assert.match(r.output, /tech-design-v6/);
   assert.match(r.output, /frontmatter version 未 bump/);
   assert.match(r.output, /恢复动作：/);
   assert.match(r.output, /PATCH/);
@@ -146,10 +128,10 @@ test("改技能自有文件未 bump → 拦（恢复动作文案在场）", (t) 
 test("改技能自有文件且 bump（产物同步重建）→ 放行", (t) => {
   const root = makeFixture();
   cleanup(t, root);
-  appendLine(root, `${SKILL_DIRS["tech-design-dev"]}/flow/step.md`, "补充一行");
-  setSkillVersion(root, "tech-design-dev", "0.1.1");
-  setStamp(root, "tech-review-loop-dev.dwf.ts", "0.1.1");
-  setStamp(root, "pi/tech-review-loop-dev.js", "0.1.1");
+  appendLine(root, `${SKILL_DIRS["tech-design-v6"]}/flow/step.md`, "补充一行");
+  setSkillVersion(root, "tech-design-v6", "0.1.1");
+  setStamp(root, "tech-review-loop-v6.dwf.ts", "0.1.1");
+  setStamp(root, "pi/tech-review-loop-v6.js", "0.1.1");
   stageAll(root);
 
   const r = runChecker(root);
@@ -173,15 +155,15 @@ test("改 workflows/src/ 且产物变、未 bump → 拦（全部技能联动文
   const root = makeFixture();
   cleanup(t, root);
   appendLine(root, `${WORKFLOWS}/src/skill-data.shared.ts`, "// 行为变更");
-  appendLine(root, `${WORKFLOWS}/tech-review-loop-dev.dwf.ts`, "// 产物随共享源变化");
+  appendLine(root, `${WORKFLOWS}/tech-review-loop-v6.dwf.ts`, "// 产物随共享源变化");
   stageAll(root);
 
   const r = runChecker(root);
   assert.equal(r.status, 1, `应红灯，实际输出：${r.output}`);
   assert.match(r.output, /规则 2（共享源联动）/);
-  assert.match(r.output, /tech-design-dev/);
-  assert.match(r.output, /dev-flow-dev/);
-  assert.match(r.output, /delivery-dev/);
+  assert.match(r.output, /tech-design-v6/);
+  assert.match(r.output, /dev-flow-v6/);
+  assert.match(r.output, /delivery-v6/);
   assert.match(r.output, /共享层变化时全部技能升号/);
   assert.match(r.output, /恢复动作：/);
 });

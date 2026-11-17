@@ -3,7 +3,7 @@ name: dev-flow-v5
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 5.4.0
+version: 5.4.1
 description: >-
   Use when 一份完整设计包（tech-design-v5 产出：设计文档 + impl-plan.json 单源与渲染视图 + 审查终态）
   需要落地为已验收代码。纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 →
@@ -196,9 +196,9 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 
 进度唯一事实源 = `<name>.status.json`（D0 生成于 dev-flow 段产物根——workspace 形态为 `<ws-slug>/<worktreeName>/` 两级，单仓形态为现行 `<project-slug>/` 平铺；实际落点以 exec-plan 内 statusPath 声明为准；workflow/手工路径每次节点终态后回写）。恢复程序：以 git log 与工作区实物校准 status（**冲突以 git 为准**：标 done 无 commit → 回 pending；有 commit 未写 → 补写 done）→ 按所处段选 flow 落点续跑。
 
-## 与归档代（v1 / v2 / v3）及 dev 线的关系
+## 与归档代（v1 / v2 / v3）的关系
 
-本技能是纯执行重构形态（impl-plan 上移 tech-design-v5 T3；编排收归 workflow；状态载体 JSON 化；design-code-sync 升级内嵌 D5）。v1 / v2 / v3 已归档（仓库根 `.archived/`，不入版本库），不再作为正式技能；dev 为加固线（v2 分叉），v4 为质量传递线（三方对账、候选反例审查、受控修复循环）。v5 接入 delivery-core 内核：W2 节点状态六写入点收敛为单一转移入口（`computeNodeTransition` 与内核 node 域同表，测试对拍；attempts 语义修复——派发即计数、重派不清零）；D2 条目回流上限 ≤2（超限转升级呈报停回）；status.json 人工处置唯一合法通道 = `delivery-core node-transition --event manual-disposition --basis`（主 agent 禁止直改 status.json 或自造词表外事件）。W2/W3 执行韧性沿用 dev；W4 对账引擎继续跨代共用，避免状态双写。
+本技能是纯执行重构形态（impl-plan 上移 tech-design-v5 T3；编排收归 workflow；状态载体 JSON 化；design-code-sync 升级内嵌 D5）。v1 / v2 / v3 已归档（仓库根 `.archived/`，不入版本库），不再作为正式技能；v4 为质量传递线（三方对账、候选反例审查、受控修复循环）。v5 接入 delivery-core 内核：W2 节点状态六写入点收敛为单一转移入口（`computeNodeTransition` 与内核 node 域同表，测试对拍；attempts 语义修复——派发即计数、重派不清零）；D2 条目回流上限 ≤2（超限转升级呈报停回）；status.json 人工处置唯一合法通道 = `delivery-core node-transition --event manual-disposition --basis`（主 agent 禁止直改 status.json 或自造词表外事件）。W2/W3 执行韧性层构建期拼接（resilience.shared.ts）；W4 对账引擎继续跨代共用，避免状态双写。
 
 ## 标记说明
 
