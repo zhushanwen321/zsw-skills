@@ -70,7 +70,7 @@ V5 schema 2 交付任务的候选反例审查运行 `independent-assurance-v5`�
    - 影响面实跑：只重跑本次被修改过的场景剧本（经其 runner 直跑，verdict 落新 run 目录）；未修改的剧本引用 D3 verdict 证据路径，零重跑——全量覆盖是维护 pass 的职责，D4 不做
    - 系统性漂移（多处能力文档与实现不符 / 本次大重构跨多域）→ 不在 D4 内修，登记 ledger 并在交付汇总建议单独跑项目维护技能全量 pass（如 `/maintain-verification-skill`，其目标发现规则与本条同源）；产品缺陷走 D3 的 product-bug 熔断语义，不混入 skill 同步
 7. **ADR 复审**：对照本次交付复审（开发中拍板的重要决策漏登的补登记；既有 ADR 被推翻的修订）；核对来源优先 = 设计文档头部「关联登记清单」字段（历史文档同义旧字段名等同——凡头部以「关联登记」开头的字段即认作该字段；字段缺失按变更语义扫描兜底）；零触发注明「ADR 零同步」
-8. **运行档案分流（SKILL「运行记录」节）**：read `<name>.runlog/` 全部文件与 `<name>.ledger.md`——ledger 未清项逐条分流到既有登记处（合理偏差 → impl-plan §5、残留风险 → impl-plan 残留风险节、决策 → ADR）或标注处置完成/记录丢弃理由，禁止档案与登记处双登记并存；runlog 有价值的过程发现（踩坑根因/方案取舍）择要进交付汇总作复盘素材；零未清项注明「档案已清」
+8. **运行档案分流（SKILL「运行记录」节）**：read `<name>.runlog/` 全部文件与 `<name>.ledger.md`——ledger 未清项逐条分流到既有登记处（合理偏差 → 写 `.impl-plan.json` 的 `reasonableDeviations`、残留风险 → 写 `residualRisks`——两处均为映射表 JSON 字段落点，写后重跑渲染命令刷新 `.impl-plan.md` 视图（禁手改 `.impl-plan.md`）；决策 → ADR）或标注处置完成/记录丢弃理由，禁止档案与登记处双登记并存；runlog 有价值的过程发现（踩坑根因/方案取舍）择要进交付汇总作复盘素材；零未清项注明「档案已清」
 9. [OPTIONAL] 用户指示时产物清理（运行档案默认保留）
 10. **交付后衔接**：最终 commit 落地后，后续阶段推进由 delivery-core next 裁决（转移表唯一权威；终态同步见 `flow/sync.md`）——仅用户明示跳过可免，跳过须记录
 11. **阶段事件观测终态记录（SKILL「阶段事件观测」节）**：D4 开始时经 `~/.agents/scripts/workflow-observe.mjs` 记 `--stage D4 --step finalize` 的 start，本步收尾后记 end；随后记 `step=execution` 的 start/end 对结束本次执行（end 带 `--outcome <终态词>`）。D0/D6 同理（stage=D0 / D6）；W2/W3/W4 的 D1/D2/D5 已内建观测，步骤边界由引擎写入

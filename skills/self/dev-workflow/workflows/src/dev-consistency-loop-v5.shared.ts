@@ -245,7 +245,7 @@ const NODE_PREP = [
   "var projectRoot = path.resolve(process.cwd(), ep.projectRoot);",
   "var designAbs = path.resolve(projectRoot, ep.designDocPath);",
   "var planAbs = path.resolve(projectRoot, ep.planPath);",
-  // impl-plan 双格式（§8.4）：人读版 .impl-plan.md 与机器版并存，存在则一并给 reviewer
+  // impl-plan 渲染视图（§8.4）：.impl-plan.md 由 JSON 单源生成，存在则一并给 reviewer（读方）
   "var planMd = planAbs.replace(/\\.impl-plan\\.json$/, '.impl-plan.md');",
   "if (!fs.existsSync(planMd)) planMd = null;",
   "var statusAbs = path.resolve(projectRoot, ep.statusPath);",
@@ -931,7 +931,7 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
       );
     if (result.reasonable.length > 0)
       lg.push(
-        `- [待办] reasonable ${result.reasonable.length} 项（写 impl-plan §5 合理偏差登记表）：${result.reasonable.map((r) => `${r.location}——${one(r.summary)}`).join("；")}`,
+        `- [待办] reasonable ${result.reasonable.length} 项（写 .impl-plan.json 的 reasonableDeviations 后重跑渲染命令刷新视图，禁手改 .impl-plan.md）：${result.reasonable.map((r) => `${r.location}——${one(r.summary)}`).join("；")}`,
       );
     if (result.deferredLedger.length > 0) {
       // 升级呈报条目（聚合判定无组承接 / fixer 职责外申报）从普通待办拆出单列——混在

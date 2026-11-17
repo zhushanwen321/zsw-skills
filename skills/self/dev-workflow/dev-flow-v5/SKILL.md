@@ -3,9 +3,9 @@ name: dev-flow-v5
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 5.2.0
+version: 5.4.0
 description: >-
-  Use when 一份完整设计包（tech-design-v5 产出：设计文档 + 双格式 impl-plan + 审查终态）
+  Use when 一份完整设计包（tech-design-v5 产出：设计文档 + impl-plan.json 单源与渲染视图 + 审查终态）
   需要落地为已验收代码。纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 →
   终态同步 → 交付后守护。
   三技能交付体系的技能③（裁判 = delivery-v5）：产出候选实现，交付结论只由裁决器给出。
@@ -39,7 +39,7 @@ description: >-
 | 文件 | 判据 |
 |------|------|
 | `~/.agents/skill-data/tech-design/<slug>/<name>/`（设计目录：六章节 JSON 权威源，tech-design-v5 产物形态）+ `<slug>/<name>.rendered.md`（渲染视图） | 存在 |
-| `<name>.impl-plan.md` + `.impl-plan.json`（与设计文档同目录） | 存在且单元 id 集一致 |
+| `<name>.impl-plan.json` + `.impl-plan.md`（与设计文档同目录；md 是渲染视图） | 两文件存在且 `node ~/.agents/skills/tech-design-v5/scripts/render-impl-plan.mjs <plan.json> --check` 绿（编译清单步骤 1） |
 | `<name>/final.json`（审查报告目录，与设计文档同根） | terminated == "converged" |
 | `<name>.plan-review.md`（与设计文档同目录） | 触发门槛（关键路径深度 ≥3 或单元 ≥4）时必须存在 |
 
@@ -102,7 +102,7 @@ process.exitCode = run.status === 0 ? 0 : 1;
 | `<name>.ledger.md` | ① W2/W3/W4 引擎终态各一笔（attempt 标识）② 主 agent 处置时追加 | ① 未决事项清单：blocked / deferredCommits / deferredLedger / escalated / contested / overdesignCandidates / 工作区残留等 ② 熔断处置与用户裁决记录（时间 + 终态 + 动作 + 理由 + 结果） |
 
 - 引擎侧已核实互不干扰：产物在 HOME 下不在项目工作区内，`git status --porcelain` 天然看不到（引擎对项目内 `.tmp/` 的过滤器仍在——wave-executor-v5 `isTmpArtifact`，覆盖仍在项目内的其他临时产物），agent 写 runlog 不触发核验红灯
-- **ledger 是中转不是归宿**：合理偏差 / 残留风险 / ADR 的最终登记处仍是 impl-plan §5、impl-plan 残留风险节、docs/adr——D4 收尾把未清项分流过去（处置完成标记 / 登记到既有归宿 / 显式记录丢弃理由），禁止双登记并存
+- **ledger 是中转不是归宿**：合理偏差 / 残留风险 / ADR 的最终登记处仍是 `.impl-plan.json` 的 `reasonableDeviations` / `residualRisks` 字段（写后重跑渲染命令刷新 `.impl-plan.md` 视图，禁手改 `.impl-plan.md`）、docs/adr——D4 收尾把未清项分流过去（处置完成标记 / 登记到既有归宿 / 显式记录丢弃理由），禁止双登记并存
 - 主 agent 处置熔断终态（各 flow 终态处置表任一行）与用户裁决落地时，append 处置记录到 ledger
 - 档案交付后默认保留（HOME 下天然不入 git），仅用户指示时清理（D4 第 8 条）
 

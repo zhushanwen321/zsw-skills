@@ -1,14 +1,14 @@
 # T3 实施计划流程（审查收敛后）
 
-> 输入：T2 converged 的设计文档（final.json 存在且 terminated == "converged"）。产出：**双格式 impl-plan**（`.impl-plan.md` 人读 + `.impl-plan.json` 机器）+ 并行度复审（门槛触发时）。全程不停等用户确认（阶段内动作），完成即 T3 确认点。
+> 输入：T2 converged 的设计文档（final.json 存在且 terminated == "converged"）。产出：**impl-plan.json 计划权威（单源）** + 渲染视图 `.impl-plan.md`（渲染器生成，禁手改）+ 并行度复审（门槛触发时）。全程不停等用户确认（阶段内动作），完成即 T3 确认点。
 
-> **产物路径 [MANDATORY]**：`~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.md` 与 `.impl-plan.json`（与设计目录同级——设计文档是 `<name>/` 目录（六章节 JSON，权威源）+ `<name>.rendered.md` 渲染视图，不是单 md 文件；设计包整体在该目录，slug 与双形态寻址规则见 `skill-data-addressing.md`（`<zsw-skills 检出根>/skills/self/dev-workflow/references/skill-data-addressing.md`））。产物在 HOME 下天然不入 git。基线 = 计划文件落盘，不依赖 git 跟踪。
+> **产物路径 [MANDATORY]**：`~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.json`（计划唯一权威）与同目录 `<name>.impl-plan.md`（渲染视图，由 `scripts/render-impl-plan.mjs` 从 JSON 生成）（与设计目录同级——设计文档是 `<name>/` 目录（六章节 JSON，权威源）+ `<name>.rendered.md` 渲染视图，不是单 md 文件；设计包整体在该目录，slug 与双形态寻址规则见 `skill-data-addressing.md`（`<zsw-skills 检出根>/skills/self/dev-workflow/references/skill-data-addressing.md`））。产物在 HOME 下天然不入 git。基线 = 计划文件落盘，不依赖 git 跟踪。
 
 ## 入口自检（老 dev-flow 预检门的承接）
 
 1. **T2 证据**：`<name>/final.json` 存在且 terminated == "converged"——本 skill 产出的设计天然满足；**外部文档入口**（用户直接给一份未经本流程的设计文档）→ 先补 T2（按 `flow/review.md` 手工路径全量审查，方向审起），补审不通过停止；禁止拿未审查文档直接拆计划
 2. **结构完整性**：写 impl-plan 时逐项引用四类内容的实际节——背景/目标、终态/机制、验收场景表、下一层拆分。引用填不出 = 结构缺失，停下告知用户回 T1 补文档
-3. 章节映射落计划文件「0 章节映射」节（下方模板）——后续所有 subagent/编译从这拿坐标，禁止自猜编号（两代结构并存：完整版 11 节 vs 五段制，一律按实质特征定位；节号坐标 = 渲染视图 `<name>.rendered.md` 的固定编号，渲染脚本保证节号稳定）
+3. 章节映射落 impl-plan.json 的 `sectionMap` 字段（渲染视图「0 章节映射」节由渲染器生成）——后续所有 subagent/编译从这拿坐标，禁止自猜编号（两代结构并存：完整版 11 节 vs 五段制，一律按实质特征定位；节号坐标 = 渲染视图 `<name>.rendered.md` 的固定编号，渲染脚本保证节号稳定）
 4. **验收绑定现行性（交付体系任务 [MANDATORY]）**：设计包 meta.json `acceptanceBinding` 须仍与交付任务目录当前批准一致——跑 `node ~/.agents/skills/delivery-v5/scripts/delivery-gate.mjs evaluate --task-dir <taskDir>`，把输出（verdict.json）的 `acceptanceVersion` 与 `acceptancePackageSha256` 和 meta.json acceptanceBinding 同名字段逐项比对，任一不一致 = 验收版本或验收包已变化（重批），旧设计包绑定失效 → 停止拆计划，回 `flow/write.md` Step 0 重新影响审查（对照新版本 acceptance.json 与 increments.json 逐条比对设计包覆盖，需改动回 T1 修订并按所处阶段重走 T2/T3），更新 binding 后重进本步；binding.taskDir 与 <taskDir> 不一致 = 拿错设计包，改用其绑定任务目录下的交付任务。独立设计任务（无交付任务目录）本条不适用。下游双保险：dev-flow-v5 D0 编译门（`check-exec-plan.mjs --task-dir`）对同一判据机器复算（验收包联合哈希 + 版本比对），本条在拆计划前提前拦
 
 ## 增量契约对齐（交付体系任务 [MANDATORY]）
@@ -49,29 +49,26 @@
 - **波次标注目标交付版本**：项目存在版本化交付队列（按版本排队交付的开发管理机制）时，每波次标注其目标交付版本，形成跨版本交付队列；项目无此机制时不标注，波次按依赖顺序执行
 - **跨版本四约定**：一份设计文档对应一份 impl-plan（波次跨版本不拆成多份设计、不重走设计流程）；各期共用同一设计文档与同一审查终态（final.json 只落一次，不按版本重开）；分期映射在 T3 确认点一次批准，后续版本按波次执行不逐版重过设计确认；每个版本收尾对照终态-现状差距表核对剩余项，全部清零才算设计交付完毕
 
-## 产出模板（.impl-plan.md）
+## 渲染视图节结构（.impl-plan.md，渲染器生成，禁手改）
 
-```markdown
-# <名称> 实施计划
-基线: <流水线起点前 HEAD hash> | 来源设计: <路径> | 日期: <date> | 版本: <tech-design-v5 SKILL.md frontmatter version>
-<!-- 基线 = 开始实施前的代码 HEAD，供一致性审查的 git diff <基线>..HEAD；版本 = 产出本计划的技能版本（产物溯源字段，读文件取真实值，不凭记忆写），与 .impl-plan.json 的 skillVersion 同源同值 -->
-## 0 章节映射     # 四类内容 + 待验证检查点在本文档的实际位置（坐标唯一来源）
-## 1 目标快照     # 摘录设计背景/目标 + Out-of-scope，逐字摘录禁止改写
-## 2 单元列表
-| Unit | 职责 | 范围声明（精确文件路径） | 依赖 | 隔离(plain/worktree) | 验收条款 | 决策分级 | 增量归属 |
-# u-foundation 固定为共享契约根节点，初始即就绪的 DAG 根
-# 增量归属 = increments.items[].id（交付体系任务逐单元必填，见「增量契约对齐」节；独立设计任务该列填「-」）
-# 终态型设计：单元 = 迁移波次（来自设计文档差距-波次映射，见「终态型设计」节）
-# 决策分级 = 该单元实现的设计决策中的最高审核级别（A/B，来源 = meta.json reviewNav 人工审核导航，渲染视图呈现为导航表）；无决策覆盖的单元标 B
-## 3 DAG 图       # mermaid
-## 4 测试与验收计划  # 测试命令从项目 AGENTS.md / package.json scripts / 项目测试策略文档（若存在，典型 docs/TEST-STRATEGY.md）真实读取；增量与全量分开列
-                    # 全量段 = 改动范围 + 依赖闭包（防跨单元叠加回归），逐条标注 产物类/验证类
-## 5 合理偏差登记表  # 初始空；| 偏差 | 内容与理由 | 影响面 | 处置 |
-                    # 影响面 = 误导了什么/造成什么返工，写不出影响的不入表；处置 = 已接受 / 待回写设计文档 / 移交 D5 终态同步
-## 6 残留风险与变更历史  # 残留风险四要素：触发条件/影响/处置/重审触发条件
-```
+节序固定 0—6；每个 md 元素 ↔ JSON 字段的权威落点对照见 `references/impl-plan-mapping.md`，写计划时对照它填 JSON。列与节的语义判据如下（判据不变，承载从手写 md 改为 JSON 字段）：
 
-（执行态事实源是 dev-flow-v5 的 `<name>.status.json`，由 D0 编译生成；本文件不内嵌状态表。）
+- **0 章节映射** ← `sectionMap`：四类内容 + 待验证检查点在设计包的实际位置（坐标唯一来源；扩展键承载「决策分级来源」「验收契约」等附加行）
+- **1 目标快照** ← `goalSnapshot`：摘录设计背景/目标 + Out-of-scope，逐字摘录禁止改写
+- **2 单元列表** ← `units[]`，八列 = id / responsibility / territory / deps（`depReasons` 括注理由）/ isolation(plain/worktree) / acceptance / decisionTier / incrementId
+  - u-foundation 固定为共享契约根节点，初始即就绪的 DAG 根
+  - 增量归属 = increments.items[].id（交付体系任务逐单元必填，见「增量契约对齐」节；独立设计任务省略该字段，渲染为「—（不归属增量）」）
+  - 终态型设计：单元 = 迁移波次（来自设计文档差距-波次映射，见「终态型设计」节）
+  - 决策分级 = 该单元实现的设计决策中的最高审核级别（A/B，来源 = meta.json reviewNav 人工审核导航，渲染视图呈现为导航表）；无决策覆盖的单元标 B
+  - 表后自检陈述（波次覆盖对账、决策覆盖对账等）← `unitsNotes[]`
+- **3 DAG 图** ← `units[].id` + `deps` 推导 mermaid（拓扑事实唯一来源）；关键路径 / 并行窗口 / 边因标注 ← `dagNote`
+- **4 测试与验收计划** ← `testPlan` + `acceptancePlan`：测试命令从项目 AGENTS.md / package.json scripts / 项目测试策略文档（若存在，典型 docs/TEST-STRATEGY.md）真实读取；增量与全量分开列（4.1 增量表 ← `incrementalCommands[]`，4.2 全量 ← `fullSuite` + `artifacts[]` + `fullSuiteNote[]`）
+  - 全量段 = 改动范围 + 依赖闭包（防跨单元叠加回归），逐条标注 产物类/验证类
+- **5 合理偏差登记表** ← `reasonableDeviations[]`（初始空数组；四列 = id+title / content / impact / disposition）
+  - 影响面 = 误导了什么/造成什么返工，写不出影响的不入表；处置 = 已接受 / 待回写设计文档 / 移交 D5 终态同步
+- **6 残留风险与变更历史** ← `residualRisks[]`（五要素：id+title / trigger 触发条件 / impact 影响 / disposition 处置 / reexamine 重审触发条件）+ `changeHistory[]`（id / note / summary）
+
+（执行态事实源是 dev-flow-v5 的 `<name>.status.json`，由 D0 编译生成；渲染视图不内嵌状态表。）
 
 ### 验收计划表（§4 内，7 列）
 
@@ -86,7 +83,7 @@
 - **组**：核心（主链路，走不通则其余验收无意义）/ 非核心
 - **依赖**：默认 = 对应开发单元已提交（唯一无需说明的真实前提）；填其他依赖（另一验收项 id）必须附一句理由——功能先后或共享不可重置状态；编号顺序/顺手连跑不构成依赖
 - **优化判定**：可降级（L4→L3）/ 可合并 / 可脚本化 / L0 可消化；L4 行必须声明「机器判不了的部分是什么」，声明不出 = 拆行或降级
-- **e2e 影响面圈定 [MANDATORY]**：先按标题逐字检索渲染视图 `<name>.rendered.md` 的「e2e 影响面评估」子节（标题由渲染脚本固定输出，章节 JSON 对应字段 = s4-accept.json e2eImpact）——**子节不存在 → 停下来交回补文档（按 write.md Step 4 补写后重进本步），禁止按空集继承**（空集会让下游静默生成零个验证节点，全链无报错）；子节存在但清单为空且无「无受影响项（依据）」显式声明 → 同样交回。继承落清单后逐项「跑（执行时点 = 单元 committed 后 / 阶段 5，空载串行；该项由 dev-flow-v5 D0 编译为 verify 节点（deps=所属 dev 单元）在 D1 内执行）/ 不跑（理由）」；有 `docs/testing/e2e-map.json` 登记表的项目与 `node scripts/select-affected-e2e.mjs --base <基线>` 输出双向对账（差异逐条披露；脚本看不见设计语义，最终清单以人工裁决为准）
+- **e2e 影响面圈定 [MANDATORY]**：先按标题逐字检索渲染视图 `<name>.rendered.md` 的「e2e 影响面评估」子节（标题由渲染脚本固定输出，章节 JSON 对应字段 = s4-accept.json e2eImpact）——**子节不存在 → 停下来交回补文档（按 write.md Step 4 补写后重进本步），禁止按空集继承**（空集会让下游静默生成零个验证节点，全链无报错）；子节存在但清单为空且无「无受影响项（依据）」显式声明 → 同样交回。继承落清单后逐项「跑（执行时点 = 单元 committed 后 / 阶段 5，空载串行；该项由 dev-flow-v5 D0 编译为 verify 节点（deps=所属 dev 单元）在 D1 内执行）/ 不跑（理由）」，圈定结论（含逐项跑/不跑）落 impl-plan.json `e2eImpactScreening` 字段（渲染视图 §4.4）；有 `docs/testing/e2e-map.json` 登记表的项目与 `node scripts/select-affected-e2e.mjs --base <基线>` 输出双向对账（差异逐条披露；脚本看不见设计语义，最终清单以人工裁决为准）
 - **验证资产来源判定（仅 L3 行；项目无 verification skill 时本列统一填「-」，流程零变化）**：项目 verification skill 以**项目 AGENTS.md 的显式声明为唯一来源**（SSOT 清单——项目 AGENTS.md 写明哪些技能属 verification skill）；AGENTS.md 未声明 = 该项目没有，本列填「-」并在计划备注提示项目补一行声明（**禁止**按技能目录前缀或 SKILL.md 内容特征现场探测——前缀与驱动节措辞跨项目常见，误认率最高，2026-11-04 起废除特征探测改声明制）。命中后读其覆盖矩阵（能力/场景对账表，入口见其 SKILL.md），逐 L3 行标三态：
   - `reuse: <场景 id>` —— 矩阵该功能行已是可执行剧本态，验收项语义被现成剧本覆盖；场景 id 必须真实存在于其场景清单（编造的 id 在自检第 4 条被拦）
   - `new: <一句功能定位>` —— 矩阵该行为能力条目态或无覆盖：D0 按其能力原语组装新剧本（写好跑通后入其场景库，下次交付即可 reuse）
@@ -95,36 +92,72 @@
 
 **提速结论 [MANDATORY]**：表后附一段——可降级 N 项 / 可合并 N 项 / 可脚本化 N 项 / L0 静态检查清单（项目既有检查脚本逐个列出），预计节省的派发轮次。随计划一并呈现给用户备查（陈述性展示，不构成等待点）。
 
-## 双格式产出 [MANDATORY]
+## JSON 单源产出 [MANDATORY]
 
-`.impl-plan.json`（机器格式，dev-flow-v5 D0 编译的直接输入）：
+`.impl-plan.json` 是唯一计划权威（dev-flow-v5 D0 编译的直接输入）；字段权威落点对照 = `references/impl-plan-mapping.md`（含各 additive 可选字段的类型与渲染落点）。模板（注释即字段说明）：
 
 ```jsonc
 {
   "name": "<name>",
   "designDoc": "~/.agents/skill-data/tech-design/<project-slug>/<name>",
   "baseline": "<git rev-parse HEAD>",
+  "date": "<YYYY-MM-DD>",                       // additive 可选：渲染视图头部「日期」
+  "headerNote": [],                             // additive 可选：头部说明引文的计划特有行（修订指针等）
   "skillVersion": "<tech-design-v5 SKILL.md frontmatter version>",
   "sectionMap": { "goal": "§N", "mechanism": "§N", "acceptance": "§N", "breakdown": "§N" },
+  // 四键必填；扩展键（决策分级来源 / 验收契约等）按 JSON 键序逐行渲染进「0 章节映射」表
+  "goalSnapshot": { "problem": "…", "goals": ["逐字摘录，禁止改写"], "outOfScope": "…" },   // additive 可选：§1
   "units": [
     { "id": "u-foundation", "responsibility": "…", "territory": ["…"],
       "deps": [], "isolation": "plain", "acceptance": ["条款…"], "decisionTier": "A",
-      "incrementId": "<increments.items[].id——交付体系任务必填（D0 编译门核对归属与测试命令一致），独立设计任务省略>" }
+      "incrementId": "<increments.items[].id——交付体系任务必填（D0 编译门核对归属与测试命令一致），独立设计任务省略>",
+      "depReasons": { "<依赖单元id>": "<依赖理由>" } }   // additive 可选：依赖列括注理由
   ],
-  "testPlan": { "incremental": "…", "fullSuite": "…" },
+  "unitsNotes": [],                             // additive 可选：单元表后自检陈述（波次覆盖对账等）
+  "dagNote": {                                   // additive 可选：§3 附注；mermaid 本体从 units+deps 推导，不手写
+    "nodeLabels": { "<unitId>": "<节点标注覆盖>" },
+    "criticalPath": "…", "parallelWindows": ["…"],
+    "edgeReasons": [{ "edge": "u-a→u-b", "reason": "编译依赖：…" }]
+  },
+  "testPlan": {
+    "incremental": "…",                          // 可选文字段（无增量表时的 §4.1 内容）
+    "incrementalCommands": [                     // additive 可选：§4.1 增量表（命令从交付任务目录 increments.json 逐字转抄）
+      { "incrementId": "inc-1", "unitIds": ["u-main"], "command": "…", "timeoutMs": 300000 }
+    ],
+    "fullSuite": "…",                            // 必填；string 或 {program,args}（从项目配置真实读取合成）
+    "fullSuiteChecks": [                         // additive 可选：§4.2 逐条检查清单（渲染权威；产物类/验证类逐条标注）
+      { "id": "check-1", "command": "…", "kind": "验证类", "note": "…" }
+    ],
+    "artifacts": [{ "id": "build-e2e", "command": { "program": "…", "args": ["…"] } }],   // 可选：产物类条目（Gate A / exec-plan 消费的产物类子集；fullSuiteChecks 缺场时作 §4.2 兜底渲染）
+    "fullSuiteNote": []                          // additive 可选：全量段范围说明列表
+  },
+  "acceptancePlanIntro": "…",                    // additive 可选：验收计划表前说明（验证资产来源判定结论等）
+  "adversarialClaim": "…",                       // additive 可选：表后 adversarialForm 认领对账陈述
+  "e2eImpactScreening": [],                      // additive 可选：§4.4 e2e 影响面圈定结论（逐项跑/不跑）
+  "speedupNote": [],                             // additive 可选：§4.5 提速结论（内容完备性归计划自检）
+  "reasonableDeviations": [],                    // additive 可选：§5 合理偏差登记（{id,title,content,impact,disposition}；初始空数组）
+  "residualRisks": [],                           // additive 可选：§6 残留风险（{id,title,trigger,impact,disposition,reexamine}）
+  "changeHistory": [],                           // additive 可选：§6 变更历史（{id,note,summary}；每轮修订 append 一条）
   "associations": [
     { "id": "assoc-1", "kind": "contract", "trigger": "<生产方文件>", "related": ["<消费方文件>"], "action": "co-change" }
-    // 可选：三类关联声明（见「三类关联声明」节；无跨文件契约/登记处/构建产物时整个字段省略）
+    // 可选：三类关联声明（见「三类关联声明」节；无跨文件契约/登记处/构建产物时整个字段省略；JSON-only，不进渲染视图）
   ],
   "acceptancePlan": [
     { "id": "A1", "item": "…", "level": "L3", "group": "core", "deps": [], "optimization": "…", "verifyAsset": "reuse:p0-counter-render", "adversarialFormRefs": ["AF-..."] }
-    // verifyAsset 与表格「验证资产」列同源：reuse:<场景id> / new / inspect-only（表格列值落 json 时冒号后去空格，如「reuse: p0-x」→「reuse:p0-x」）；项目无 verification skill 时缺省 "-"（可省略字段）
+    // verifyAsset 与「验证资产」列同源：reuse:<场景id> / new / inspect-only（落 json 时冒号后去空格，如「reuse: p0-x」→「reuse:p0-x」）；项目无 verification skill 时缺省 "-"（可省略字段）
   ],
-  "notes": []
+  "notes": []                                    // JSON-only：历轮裁决处置记录（sync-reviewer / D5 消费，不进渲染视图）
 }
 ```
 
-**一致性校验（写完即跑，D0 也会复跑）**：单元数 / 单元 id 集 / 依赖边数 / 验收项 id 集——markdown 与 json 两边一致，不一致 fail-fast 当场修（双格式漂移零容忍）。
+**渲染（写完即跑，D0 入口门也会复跑）**：
+
+```bash
+node ~/.agents/skills/tech-design-v5/scripts/render-impl-plan.mjs ~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.json          # 生成渲染视图
+node ~/.agents/skills/tech-design-v5/scripts/render-impl-plan.mjs ~/.agents/skill-data/tech-design/<project-slug>/<name>.impl-plan.json --check # 渲染一致性自证
+```
+
+`--check` 绿 = 渲染视图与 JSON 重新渲染结果逐字节一致——单元数 / 单元 id 集 / 依赖边数 / 验收项 id 集 / territory 清单与 JSON 同源构造，不存在「两边不一致」形态。渲染器报语义缺口（缺渲染必填字段，错误消息列出全部缺失字段路径）→ 对照映射表补字段后重跑。后续登记纪律：D2 合理偏差回流、D4 档案分流、D5 终态同步一律改 JSON 字段后重跑渲染器；禁止手改 `.impl-plan.md`（视图被手改或 JSON 改后未重渲染时 `--check` 红灯，恢复 = 重新生成）。
 
 ## 符号词表 [MANDATORY]
 
@@ -167,8 +200,8 @@
 
 ## 并行度复审（门槛触发，落盘前）
 
-触发门槛：实现链关键路径深度 ≥3 或单元数 ≥4（门槛内小计划不派——零收益）。派 `~/.agents/skills/dev-flow-v5/agents/parallelism-reviewer.md`（zcode 环境按 subagent_type 派发；无注册机制环境用 general-purpose + 内嵌 agent 文件全文）；task 附 impl-plan 双格式 + 设计文档 + 项目根三绝对路径；报告落 `~/.agents/skill-data/tech-design/<project-slug>/<name>.plan-review.md`。reviewer 只报告——主 agent 逐条裁决（采纳即改计划并重跑自检；不采纳记理由），裁决记入 json 的 notes。头两个使用并行度复审的项目交付后回看其产出：连续零 finding 则降级为自检清单条目、砍掉派发（流程环节要能证明收益）。
+触发门槛：实现链关键路径深度 ≥3 或单元数 ≥4（门槛内小计划不派——零收益）。派 `~/.agents/skills/dev-flow-v5/agents/parallelism-reviewer.md`（zcode 环境按 subagent_type 派发；无注册机制环境用 general-purpose + 内嵌 agent 文件全文）；task 附 impl-plan.json 与渲染视图 + 设计文档 + 项目根绝对路径；报告落 `~/.agents/skill-data/tech-design/<project-slug>/<name>.plan-review.md`。reviewer 只报告——主 agent 逐条裁决（采纳即改计划并重跑自检；不采纳记理由），裁决记入 json 的 notes。头两个使用并行度复审的项目交付后回看其产出：连续零 finding 则降级为自检清单条目、砍掉派发（流程环节要能证明收益）。
 
 ## 落盘与 T3 确认
 
-Write 双格式文件 + 一致性校验通过 = 落盘完成（不 commit）。呈现 DAG/单元表/验收计划表 + 自检与复审结论——**单元表按决策分级分组呈现（A 级单元在前列出，B 级紧随其后一行一条）**，默认等用户确认拆分与验收计划 → 授权后设计包交付；交付体系任务的后续阶段推进由 delivery-core next 裁决（转移表唯一权威），执行侧编译见 dev-flow-v5 `flow/compile.md`。
+Write `.impl-plan.json` + 渲染命令跑通（`--check` 绿）= 落盘完成（不 commit）。呈现 DAG/单元表/验收计划表 + 自检与复审结论——**单元表按决策分级分组呈现（A 级单元在前列出，B 级紧随其后一行一条）**，默认等用户确认拆分与验收计划 → 授权后设计包交付；交付体系任务的后续阶段推进由 delivery-core next 裁决（转移表唯一权威），执行侧编译见 dev-flow-v5 `flow/compile.md`。

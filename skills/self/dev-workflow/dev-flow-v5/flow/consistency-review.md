@@ -29,7 +29,7 @@ args: { execPlan: "<path>.exec-plan.json",
 - **Gate A 归因分诊**（独立 phase，红后触发，≤2 轮）：分诊 agent 读 gate-a 日志 + 基线 diff，逐失败段四分类——batch-regression（本批回归）条目（GA-<轮>-<序> id）回注修复轮（聚合定性合池重新分组再修，产物预备与 Gate A 随轮重跑）；flaky 直接重跑 Gate A；legacy（存量红）/ script-defect（测试基建自身缺陷，如段退出码累计传播假红）不属本批修复范围——带分诊报告终态 gate-a-failed，由主 agent 裁决（调整 full-suite 清单 attempt+1 重发 / 登记存量债务）。绕过检测（本批 diff 新增行的跳过/仅跑部分/lint 禁用形态）不经分诊维持直接终态——检测挂在跑全量之前、按 diff 判定，不解析测试输出里的 skip 汇总（设计内分层跳过是合法输出，与 pr-cr-fix PS10 同判据）
 - **产物构建失败**（不再直接终态）：先引擎重跑一次自愈（产物过期是最常见因，重建即愈），仍败登记 GA 条目回注修复轮（fixer 读构建日志修产物脚本/基建——产物是本轮声明依赖、无豁免语义，不派分诊）；回注轮与分诊轮共用 ≤2 上限，耗尽才终态
 - **终态回写 status.json events**：consistency 终态一笔 + gate-a pass/fail 一笔——D3 入口门「Gate A 绿证据可查」即查 gate-a-pass 事件；**终态同时写 `<name>.ledger.md` 未决清单一笔**（docErrors / reasonable / deferredLedger / escalated / remaining / 残留改动，带 attempt 标识——主会话中断后仍可从盘上恢复待处置清单）
-- doc_errors（文档错了）**进文档修复组在审出它的轮次当场修**（方向 = 改文档对齐实现；每组修复批次后引擎派一个文档修复组承接当轮全部 doc_errors，纯文档改动不跑增量测试不派定向复审）；fixer 核实方向两可或实现侧错误的条目随终态回流主 agent 裁决（2026-10-06 裁决：哪个阶段审出来就在哪个阶段修）；同一条目经 doc_errors 回流后再被 skipped 的次数有内核预算上限（d2ItemReflowCap，判定单源见 kernel-judgments，经 delivery-core CLI 消费），超限转升级呈报停回用户，不再回流修复循环。reasonable（合理演化）**不进修复循环**，随终态回流主 agent 写入 impl-plan 合理偏差登记表（`.impl-plan.md` §5 + json notes）
+- doc_errors（文档错了）**进文档修复组在审出它的轮次当场修**（方向 = 改文档对齐实现；每组修复批次后引擎派一个文档修复组承接当轮全部 doc_errors，纯文档改动不跑增量测试不派定向复审）；fixer 核实方向两可或实现侧错误的条目随终态回流主 agent 裁决（2026-10-06 裁决：哪个阶段审出来就在哪个阶段修）；同一条目经 doc_errors 回流后再被 skipped 的次数有内核预算上限（d2ItemReflowCap，判定单源见 kernel-judgments，经 delivery-core CLI 消费），超限转升级呈报停回用户，不再回流修复循环。reasonable（合理演化）**不进修复循环**，随终态回流主 agent 写入 impl-plan 合理偏差登记表（写 `.impl-plan.json` 的 `reasonableDeviations`（映射表落点）+ 必要时 `notes`，重跑渲染命令刷新 `.impl-plan.md` 视图，禁手改 `.impl-plan.md`）
 
 ## 手工降级路径
 

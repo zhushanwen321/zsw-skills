@@ -560,7 +560,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "5.2.0"; // 构建注入自 dev-flow-v5/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "5.4.0"; // 构建注入自 dev-flow-v5/SKILL.md frontmatter version（唯一权威）
 // W3 dev-consistency-loop-v5 — dev-flow-v5 D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：
@@ -754,7 +754,7 @@ const NODE_PREP = [
     "var projectRoot = path.resolve(process.cwd(), ep.projectRoot);",
     "var designAbs = path.resolve(projectRoot, ep.designDocPath);",
     "var planAbs = path.resolve(projectRoot, ep.planPath);",
-    // impl-plan 双格式（§8.4）：人读版 .impl-plan.md 与机器版并存，存在则一并给 reviewer
+    // impl-plan 渲染视图（§8.4）：.impl-plan.md 由 JSON 单源生成，存在则一并给 reviewer（读方）
     "var planMd = planAbs.replace(/\\.impl-plan\\.json$/, '.impl-plan.md');",
     "if (!fs.existsSync(planMd)) planMd = null;",
     "var statusAbs = path.resolve(projectRoot, ep.statusPath);",
@@ -1399,7 +1399,7 @@ async function finish(terminated, roundsDone, message) {
         if (result.docErrors.length > 0)
             lg.push(`- [待办] docErrors ${result.docErrors.length} 项（文档修复组未清——方向两可或修复失败，主 agent 裁决 / 亲修）：${result.docErrors.map((d) => `${d.location}——${one(d.gap)}`).join("；")}`);
         if (result.reasonable.length > 0)
-            lg.push(`- [待办] reasonable ${result.reasonable.length} 项（写 impl-plan §5 合理偏差登记表）：${result.reasonable.map((r) => `${r.location}——${one(r.summary)}`).join("；")}`);
+            lg.push(`- [待办] reasonable ${result.reasonable.length} 项（写 .impl-plan.json 的 reasonableDeviations 后重跑渲染命令刷新视图，禁手改 .impl-plan.md）：${result.reasonable.map((r) => `${r.location}——${one(r.summary)}`).join("；")}`);
         if (result.deferredLedger.length > 0) {
             // 升级呈报条目（聚合判定无组承接 / fixer 职责外申报）从普通待办拆出单列——混在
             // 「登记残留风险」一行会把优先人工裁决的升级语义降格成普通待办。分流判据 = kind

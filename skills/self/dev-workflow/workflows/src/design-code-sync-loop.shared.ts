@@ -1542,9 +1542,10 @@ const ledgerById = (id: string): FindingRecord | undefined => ledger.find((f) =>
 function findingEditFiles(f: FindingRecord): string[] {
   if (f.direction === "code-right") {
     // planner 域 code-right 的修复对象含 impl-plan（②③ 现实性/一致性差异修计划侧）；
-    // mechanical 域（反引号悬空）修复归属 = 文档侧（含 impl-plan.md 人读版——它也可能含悬空引用）
+    // mechanical 域（反引号悬空）修复归属 = 文档侧——impl-plan 侧悬空引用的语义源在
+    // .impl-plan.json 字段文本（.impl-plan.md 是渲染视图，改视图会被 --check 判手改）
     if (f.owner === "planner") return [designDoc, implPlan];
-    if (f.owner === "mechanical") return [designDoc, implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md")];
+    if (f.owner === "mechanical") return [designDoc, implPlan];
     return [designDoc];
   }
   const base: string[] = [];
@@ -1576,8 +1577,8 @@ function buildCandidateGroups(active: FindingRecord[]): FixGroup[] {
     raw.push({
       id: "M-mech",
       issueIds: mechIds,
-      files: [designDoc, implPlan.replace(/\.impl-plan\.json$/, ".impl-plan.md")],
-      note: "机械信号（反引号悬空引用）——修复归属 = 文档侧引用清理",
+      files: [designDoc, implPlan],
+      note: "机械信号（反引号悬空引用）——修复归属 = 文档侧引用清理（impl-plan 侧改 JSON 字段文本后重渲染视图）",
     });
   }
   // 退役引用清理条目（引擎在收敛点生成，owner=retire-cleanup）：修复范围 = location 锚点
@@ -2286,7 +2287,7 @@ function fixerPrompt(g: FixGroup, byId: Map<string, FindingRecord>): string {
   L.push("方向语义（权威，勿反）：");
   L.push("- doc-right（文档更合理）→ 修代码：改实现使其符合设计声明，跑与改动直接相关的增量测试并确认通过。");
   L.push("- code-right（代码更合理）→ 修文档：改设计文档/登记文档使其反映实现现实，过联动自检五处（正文/数据流图/错误规格/拆分清单/验收场景）。");
-  L.push("- 改 impl-plan.json 的条目：同步 .impl-plan.md 对应行（双格式一致性——下次 D0 编译会逐项校验，单侧改动即 fail-fast）。");
+  L.push("- 改 impl-plan.json 的条目：改后运行 node ~/.agents/skills/tech-design-v5/scripts/render-impl-plan.mjs <该 impl-plan.json 路径> 刷新 .impl-plan.md 视图（渲染视图禁手改；D0 编译以 --check 校验一致性，视图漂移即 fail-fast）。");
   L.push("- 标记 contested 的条目按 doc-right 执行（must-fix 级方向争议已在派发前拦截，不会进入本组）。");
   L.push("- 同组混合方向时逐条按各自 direction 执行。");
   L.push("");

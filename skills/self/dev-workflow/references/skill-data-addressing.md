@@ -69,7 +69,7 @@
 | 承载文件 | 写入者 | 说明 |
 |---|---|---|
 | `meta.json` 的 `skillVersion` | tech-design-v5 T1 主 agent | 可选字段，规格见 `tech-design-v5/references/design-doc-schema.md`；机器检查有则查 semver、无则放行 |
-| impl-plan 双格式的版本行 / `skillVersion` | tech-design-v5 T3 主 agent | `.impl-plan.md` 头部版本行与 `.impl-plan.json` 的 `skillVersion` 同源同值 |
+| impl-plan 渲染视图的版本行（由 json `skillVersion` 生成） / `skillVersion` | tech-design-v5 T3 主 agent | `.impl-plan.md` 头部版本行由渲染器自 `.impl-plan.json` 的 `skillVersion` 生成（同源同值） |
 | `final.json` / `run.json`（tech-design 段） | W1 tech-review-loop | 终态记录与运行清单 |
 | `exec-plan.json` / 初始 `status.json` | dev-flow-v5 D0 主 agent | D0 编译时写入 |
 | `status.json` 的事件回写 | W2 / W3 | W3 追加事件时仅在字段缺失时补写引擎当前版本，不覆盖已有值 |

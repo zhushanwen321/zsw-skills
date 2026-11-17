@@ -21,7 +21,7 @@ impl-plan——事后对抗审查抓出 9 条漂移：残留风险登记仍标�
 ## 修复纪律 [MANDATORY]
 
 1. **登记即债务，修复后同批标记完成**：修复登记过的残留风险时，同 commit 回写该登记
-   （改写为已修复态 + 引用修复 commit + 修复触发依据），并在「变更历史」追加条目。
+   （`.impl-plan.json` 的 `residualRisks` 对应条目改写为已修复态 + 引用修复 commit + 修复触发依据——映射表 JSON 字段落点），并在变更历史（`changeHistory`）追加条目，写后重跑渲染命令刷新 `.impl-plan.md` 视图（禁手改 `.impl-plan.md`）。
    禁止只修代码不回写登记；禁止跨 commit 回写（回写动作与修复同批提交）。
 2. **符号形态变更同批清扫**：修复涉及符号删除/改名/常量改函数时——
    - grep 该符号在 docs/ 与全部测试注释中的引用，悬空引用同批清理（注释里描述
@@ -41,7 +41,7 @@ impl-plan——事后对抗审查抓出 9 条漂移：残留风险登记仍标�
   单 commit 范围；如 impl-plan 登记表/状态表与该 commit 相关，一并纳入对照
 - 三分类输出（reasonable / unreasonable / doc_errors），处理链同 consistency-review：
   doc_errors 主 agent 修，注释级可派 subagent 批量修， unreasonable 打回修复
-- 审查结论（**即使零发现**）回写 impl-plan 变更历史——零发现也是有效证据，
+- 审查结论（**即使零发现**）回写 impl-plan 变更历史（写 `.impl-plan.json` 的 `changeHistory`（映射表落点）→ 重跑渲染命令刷新 `.impl-plan.md` 视图，禁手改 `.impl-plan.md`）——零发现也是有效证据，
   证明该 commit 经过了独立审查。回写是写盘动作（产物在 `~/.agents/skill-data/`，HOME 下天然不入 git），不产生 commit
 
 ## 与既有环节的关系

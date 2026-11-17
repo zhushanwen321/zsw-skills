@@ -3,10 +3,10 @@ name: tech-design-v5
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 5.2.0
+version: 5.4.0
 description: >-
   Use when 在已批准目标与验收（delivery-v5 产出）的约束下三阶段推敲方案并产出完整设计包：
-  写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan 双格式），用户确认后登记方案包
+  写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan.json 单源 + 渲染视图），用户确认后登记方案包
   （DesignApproved）交 dev-flow-v5 执行。三技能体系的技能②（裁判 = delivery-v5）。
   触发词：「三阶段设计」「设计包」「方案推敲」；「优化表达」「换个说法」「agent 说得太绕」（借用 flow/express.md 易理解性准则优化沟通表达，不走 review 流程）。
   每阶段结束默认停下等用户确认，前期授权可连跑。含 W1 tech-review-loop-v5 审查循环
@@ -37,7 +37,7 @@ T1 设计文档（Step 0 问题定义 → Step D 诊断期 → Step 1-5 写作 �
 T2 审查循环（四席并行审查 → 聚合裁决独立 phase → 修复循环至收敛；方向审 rewrite 档击穿整循环终止）
    │ 确认
    ▼
-T3 实施计划（impl-plan 双格式 + 三类关联声明 associations + 自检 + 并行度复审）
+T3 实施计划（impl-plan.json 单源 + 渲染视图 + 三类关联声明 associations + 自检 + 并行度复审）
    │ 确认（A 级逐条、B 级扫清单）
    ▼
 方案包确认 → 主会话 record-design-approved（绑方案包哈希清单）→ dev-flow-v5 候选实现
@@ -57,7 +57,7 @@ T3 实施计划（impl-plan 双格式 + 三类关联声明 associations + 自检
 |------|--------|-------------|
 | `meta.json` 内的 `acceptanceBinding`（acceptanceVersion + acceptancePackageSha256 + taskDir） | T1 入口门写入 | 与交付任务目录当前批准一致——T3 入口自检比对 `delivery-gate evaluate` 输出的 acceptanceVersion / acceptancePackageSha256（flow/plan.md 入口自检第 4 条），dev-flow-v5 D0 编译门 `check-exec-plan.mjs --task-dir` 复算验收包联合哈希机器核对（其 flow/compile.md 步骤 3）；验收版本变化后旧设计包不可直接进 T3/dev-flow-v5 入口（须重新影响审查） |
 | `<name>/`（设计文档目录：六章节 JSON `meta.json` / `s1-context.json` / `s2-status.json` / `s3-solution.json` / `s4-accept.json` / `s5-breakdown.json`——权威源，字段规格见 `references/design-doc-schema.md`）+ `<name>.rendered.md`（渲染视图，`scripts/render-design-doc.mjs` 生成，非权威） | T1 | `scripts/check-design-doc.mjs` 对设计目录 exit 0 |
-| `<name>.impl-plan.md` + `<name>.impl-plan.json`（双格式） | T3 | 两文件存在且单元 id 集一致 |
+| `<name>.impl-plan.json`（计划唯一权威）+ `<name>.impl-plan.md`（渲染视图，`scripts/render-impl-plan.mjs` 生成，禁手改） | T3 | 两文件存在且 `render-impl-plan.mjs --check` 绿（视图与 JSON 同源，单元 id 集一致性构造成立） |
 | `<name>.symbol-watchlist.json`（符号词表） | T3 | 文件存在且 sourceFingerprints 与源文档当前 sha256 一致（design-code-sync 发起时机器复验；词集漂移经 wordsDrift 软监测不拒启） |
 | `<name>/` 内审查产物（`round-N/` 四席报告——review-direction / review-main / review-impact / review-simplicity——与处置表）+ `<name>/final.json`（终态记录，designDoc 字段 = 设计目录） | T2 | 目录存在且 final.json.terminated == "converged" |
 | `<name>.plan-review.md`（并行度复审） | T3 | 触发门槛（关键路径深度 ≥3 或单元 ≥4）时必须存在；未触发缺省合法 |
@@ -84,7 +84,7 @@ T3 确认通过即形成**完整方案包** = 设计文档目录 + `<name>.impl-
 方案决策记录。用户确认（A 级逐条、B 级扫清单）后，主会话执行：
 
 ```bash
-# 方案包哈希清单：逐文件 name+sha256（solution 主文档取渲染视图、impl-plan 双格式、final.json、决策记录）
+# 方案包哈希清单：逐文件 name+sha256（solution 主文档取渲染视图、impl-plan json 与渲染视图、final.json、决策记录）
 node ~/.agents/skills/delivery-v5/scripts/delivery-gate.mjs record-design-approved   --task-dir <交付任务目录> --summary "方案包确认"   --package-file <方案包哈希清单 JSON> --credential <user credentialId>
 ```
 

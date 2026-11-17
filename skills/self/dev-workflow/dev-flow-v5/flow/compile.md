@@ -4,9 +4,15 @@
 
 ## 编译清单（按序执行）
 
-### 1. 双格式一致性校验（fail-fast）
+### 1. 渲染一致性校验（fail-fast）
 
-读 `.impl-plan.json`，逐项与 `.impl-plan.md` 核对：单元数 / 单元 id 集 / 依赖边数 / 验收项 id 集 / **每个单元的范围声明（territory）清单**（粒度到目录或文件族即可，与 §2 territory 声明条款同口径）。不一致 → 停，回 tech-design-v5 T3 修双格式（不猜测哪边是对的）。
+跑 `node ~/.agents/skills/tech-design-v5/scripts/render-impl-plan.mjs <tech-design 段>/<slug>/<name>.impl-plan.json --check`（路径取值同 §2 planPath 占位符）：渲染视图 `.impl-plan.md` 必须与 impl-plan.json 重新渲染结果逐字节一致（文件头生成器元数据注释不参与比较）。`CHECK PASS` 才进步骤 2。FAIL 形态按错误消息路由（消息自带恢复动作）：
+
+- **渲染不一致 / 渲染视图缺失**（视图被手改、JSON 修改后未重渲染、或视图未生成）→ 按错误消息恢复动作重跑无 `--check` 的渲染命令生成视图，再复跑本门；语义改动必须回 impl-plan.json 修改，禁止反向手改渲染视图迁就现状
+- **语义缺口**（impl-plan.json 缺渲染必填字段，错误消息列出全部缺失字段路径）→ 停，回 tech-design-v5 T3 对照 `tech-design-v5/references/impl-plan-mapping.md` 补字段后重渲染，再复跑本门（不猜测渲染）
+- **JSON 文件不存在 / 解析失败** → 路径按 §2 planPath 占位符口径核对；仍失败回 tech-design-v5 T3 重新产出
+
+单字段语义核对（单元数 / 依赖边 / territory 互斥 / 增量契约 / 验收项完整性）不在本门重复——渲染视图与 JSON 同源构造，由步骤 3 `check-exec-plan.mjs` 门与 T3 计划自检承担。
 
 ### 2. exec-plan.json 生成
 
@@ -24,6 +30,7 @@
   "testPlan": {                        // 从 impl-plan.json 的 testPlan 继承（W3 Gate A 消费，缺失即 fail-fast）
     "incremental": "…",                // 可选：修复组核验用的增量测试
     "fullSuite": { "program": "pnpm", "args": ["…"] },  // 必填：项目全量命令（含 lint/typecheck，从项目配置真实读取合成；复杂多命令封装为脚本走 bash）
+    "fullSuiteChecks": [ { "id": "F1", "command": "…", "kind": "验证类|产物类", "note": "…" } ],  // 可选（additive）：4.2 全量段逐条检查清单的渲染权威（两类混排逐条标注；缺省时渲染器按 fullSuite+artifacts 兜底）；继承到 exec-plan 供 Gate A 归因参考
     // program 白名单（引擎启动 fail-fast）：W2 testCommand = pnpm/npm/node/git/bash；W3 fullSuite/artifacts = pnpm/npm/node/bash
     "artifacts": [{ "id": "build-e2e", "command": { "program": "…", "args": ["…"] } }]   // 可选：产物类条目（Gate A 起始第一波并行预备——命令确定、结果确定、被验证类消费；禁现用现建）
   },
@@ -119,9 +126,9 @@ stdout `PASS` 才继续步骤 4（交付体系任务须带 `--task-dir`，缺传
 
 **verify 节点 script 落实（impl-plan verifyAsset 三态；verifyAsset = "-" 即项目无 verification skill 时不适用本段——script = D0 实装的剧本本体路径，不走 wrapper）**：引擎与剧本进程之间只有 script 路径一个通道（`node <script>` 直跑，无参数、无 per-node env），而项目 verification skill 的场景剧本必须经其 runner 加载——因此 verify 节点的 script = D0 生成的 **wrapper 文件**，不是剧本本体：
 
-- wrapper 落 `<name>.verify/<nodeId>.mjs`（exec-plan 同目录，与 `.prompts/` 同模式），内容 = `spawnSync(process.execPath, [<runner 绝对路径>, <scenario 绝对路径>, '--repo', '<项目根>', '--artifacts-dir', '<节点 artifactsDir>', '--name', 'verify-<nodeId>', '--run-id', '<nodeId>-<时间戳>'], { stdio: 'inherit' })` 后 `process.exit(r.status ?? 1)`——全部参数 D0 已知写死；`--name`/`--run-id` 兜底隔离（runner 默认 runId 是秒级时间戳，同秒并发会共享数据目录）；runner 不认这些 flag 时省略之；生成后 `node --check` 过语法即可
+- wrapper 由生成器产出（生成文件，头部带输入哈希防手改，禁手改）：`node ~/.agents/skills/dev-flow-v5/scripts/gen-acceptance-wrapper.mjs --assets <验收资产清单.json> --out <exec-plan 同目录>/<name>.verify [--check]`——清单为纯 JSON（schemaVersion/projectRoot/assets[]，每条 {nodeId, runner{path,flags}, scenario{path}, artifactsDir}，契约细节与退出码约定见脚本 `--help`）；生成器只建模四旗（--repo/--artifacts-dir/--name/--run-id），runner 支持的 flags 须在清单逐字显式声明，未声明/超界即报语义缺口全体不生成（禁止猜参数）；runner 必须是 node 脚本（.mjs/.js/.cjs）。落点 = 输出目录下 `<nodeId>.mjs`（与 `.prompts/` 同模式）；`--name`/`--run-id` 兜底隔离（runner 默认 runId 是秒级时间戳，同秒并发会共享数据目录）与「runner 不认的 flag 省略」由生成器按契约落实；生成后同命令加 `--check` 防手改（区分「文件被手改」与「输入已变化」）；生成产物走引擎 `node <script>` 直跑通道，wrapper 仅用于 verify 节点（勿配作 review 节点 machine-check——exit 2 会被引擎当「分析能力不足」语义）
 - **同一 verification skill 的 verify 节点串行成链**：D0 编译时在 acceptance.nodes 内为它们加线性依赖边（按「依赖」列拓扑，无依赖的按编号串接）——并行启动有两条实测坑：同秒 runId 共享数据目录、并发 run 争抢项目内共享构建产物（两坑均已由项目侧登记在其 API 契约文档；不同 verification skill 或与其他类型节点并行不受限）
-- **锚点对齐契约**：runner 必须把 `verdict.json` 与 `summary.jsonl` 镜像到 `--artifacts-dir` 根（引擎事实锚 `inspectVerdictAnchorOk` 读此根）——采用 wrapper 形态前核对项目 runner 具备该行为；不具备时 wrapper 在 spawn 后自行把这两个文件复制到 artifactsDir 根
+- **锚点对齐契约**：runner 必须把 `verdict.json` 与 `summary.jsonl` 镜像到 `--artifacts-dir` 根（引擎事实锚 `inspectVerdictAnchorOk` 读此根）——生成器只覆盖已具备该镜像行为的 runner（「当次跑通」属 D0 流程硬门槛，见下方 [MANDATORY]）；不具备镜像行为的 runner 不在生成器范围，改走手工 wrapper 并在验收计划表登记原因
 - `reuse:` 态：scenario 绝对路径从 verification skill 场景库取（T3 已核 id 真实存在）
 - `new` 态：D0 按其能力原语组装剧本 → 实跑 exit 0 → 入其场景库并把覆盖矩阵行改为可执行剧本态（下次交付即可 reuse）→ 同 reuse 生成 wrapper
 - `inspect-only` 态：该行编译为 inspect 节点（同 L4 规则）

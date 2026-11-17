@@ -2568,7 +2568,7 @@ function buildNextAction({
     return `先 set-intent 与 snapshot-policy 固定意图与策略，再运行 delivery-v5/acceptance-design-v5 复核验收包，由用户执行 ${GATE_COMMAND} approve-acceptance --task-dir ${taskArg} --confirmation user-explicit --summary "批准当前验收" --credential ${JSON.stringify(userCredential)}。`;
   }
   if (state === "design") {
-    return `运行 tech-design-v5 产出完整方案包（设计文档目录 + 渲染视图 + impl-plan 双格式 + 审查终态），用户确认后执行 ${GATE_COMMAND} record-design-approved 登记方案包哈希清单。`;
+    return `运行 tech-design-v5 产出完整方案包（设计文档目录 + 渲染视图 + impl-plan（JSON 单源 + 渲染视图）+ 审查终态），用户确认后执行 ${GATE_COMMAND} record-design-approved 登记方案包哈希清单。`;
   }
   if (state === "revision-unstable") {
     return `连续漂移超上限：人工排查项目写入源后由用户执行 ${GATE_COMMAND} confirm-baseline --task-dir ${taskArg} --reason "排查结论" --credential ${JSON.stringify(userCredential)} --revision ${revisionArg} 确认新基线。`;
@@ -3798,7 +3798,7 @@ function commandRecordDesignApproved(args) {
     // 方案包清单文件：[{name, sha256}]（主会话按方案包文件逐个计算）
     const manifest = readJson(options["package-file"], "--package-file（方案包哈希清单）");
     if (!Array.isArray(manifest) || manifest.length === 0) {
-      fail("--package-file 必须是非空数组（方案包文件哈希清单）。", "按 [{name, sha256}] 逐文件登记设计文档目录、渲染视图、impl-plan 双格式与审查终态后重试。");
+      fail("--package-file 必须是非空数组（方案包文件哈希清单）。", "按 [{name, sha256}] 逐文件登记设计文档目录、渲染视图、impl-plan（JSON 与渲染视图）与审查终态后重试。");
     }
     requirePackageFilesShape(manifest, "--package-file");
     const revision = computeRevision(world.task.projectRoot);
