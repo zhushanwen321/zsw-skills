@@ -14,6 +14,19 @@ acceptance.json 回答「这个任务要做到什么、做到什么样算做对�
 - 高风险（riskLevel=high）必须标注探索性审查（exploratoryReview=required）且至少一个 reviewDimensions。该字段是披露要求而非探索门控：schema 2 的候选反例审查与 full 开放式探索对全部任务可达——full 探索按「缺少候选探索证据、验收或关键设计变化」触发，中低风险任务不因此跳过探索路径。
 - 修订已有验收必须递增 acceptanceVersion 并重新审查与批准；旧版本上的批准与证据自动失效（保留审计）。
 
+## 静态能力快照（验收起草前置）
+
+验收起草前先对项目跑一次只读探测，生成静态能力快照（project-capabilities.json：测试命令候选、验证资产、unknown 清单的派生缓存，schemaVersion 1）：
+
+```bash
+node ~/.agents/skills/delivery-v6/scripts/detect-project-capabilities.mjs --project-root <projectRoot>
+```
+
+- 快照缺省落 skill-data 寻址段 dev-flow 段 `<slug>/[<worktreeName>/]project-capabilities.json`（工作区形态带 worktreeName 层）；`--check` 重探测比对盘上快照（输入哈希变化报「输入已变化」，值漂移报「不一致」）——快照问题一律重跑探测重建，禁止手改；探测源 = package.json scripts、测试配置文件存在性、项目 AGENTS.md 声明的 verification skill 场景清单。
+- 测试命令与验证资产从快照候选中选择；选择结果仍由 increments.json 批准冻结——快照只提供候选，不成为第二验收权威。快照未覆盖的来源（项目测试策略文档等）仍按现行判据补充读取。
+- 探测定位不到的能力进快照 `unknowns`：由验收设计者选择补建、降级验证或报用户裁决，禁止自动编命令，也不得把 unknown 条目当可用能力引用。
+- 验收审查输入的「断言 × 证据类型 × 验证资产」表由 acceptance 的 evidenceKinds/testAssetRefs 与快照直接生成（逐断言列证据类型，经 testAssetRefs 绑定快照中的命令与资产，空绑定逐条显式披露），不依赖 exec-plan 或验证索引；tech-design-v6 T3 与 dev-flow-v6 D0 读同一份快照，能力口径三阶段同源。
+
 ## increments.json
 
 每个增量关联至少一条需求、可带一条测试命令（program + args + 可选 timeoutMs）。测试命令在验收包批准时被哈希锁定——批准后替换测试命令即验收包变化、批准失效。增量是验收内部的实施步骤，不是独立交付版本。

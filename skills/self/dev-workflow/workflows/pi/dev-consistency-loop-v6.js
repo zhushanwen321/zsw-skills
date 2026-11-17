@@ -560,7 +560,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "6.0.0"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "6.1.0"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
 // W3 dev-consistency-loop-v6 — dev-flow-v6 D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：
@@ -674,7 +674,9 @@ const NODE_PLAN_PROJECT_ROOT = [
 // 启动准备：读 exec-plan → schema 校验 → 解析 projectRoot（消费 exec-plan 的 projectRoot
 // 字段，相对形态按 cwd 解析）→ git diff 文件清单 + numstat 行数 → 按顶层目录段
 // 归组为不相交分区（硬校验）→ 规模判定（diff ≤500 行或单元 ≤2 或 diff 空 → 单分区）
-// → Gate A 日志路径（statusPath 同目录 <name>.gate-a.log）→ 模板路径 ~ 展开与存在性校验。
+// → Gate A 日志路径（statusPath 同目录 <name>.gate-a.log）→ 模板路径 ~ 展开与存在性校验
+// → 引用索引路径推导（exec-plan 同目录 verification-index.json——D2 候选定位查询输入，
+//    文件是否存在由查询出口判定，缺失走降级不阻塞）。
 const NODE_PREP = [
     "var fs = require('fs'), path = require('path'), os = require('os'), cp = require('child_process');",
     "var die = function (m) { console.error(m); process.exit(2); };",
@@ -833,6 +835,10 @@ const NODE_PREP = [
     "if (!skillDataDir) die('skillDataDir 缺失（argv[4]，恢复：核对脚本 argv 布局）');",
     "var runlogDir = path.join(skillDataDir, baseName + '.runlog');",
     "var ledgerPath = path.join(skillDataDir, baseName + '.ledger.md');",
+    // 引用索引路径（§5.2）：verification-index build 的缺省落点 = exec-plan 同目录——与该
+    // 脚本 cmdBuild 的推导逐字同语义（dirname(execPlanPath) + verification-index.json），
+    // 不在此判存在性（查询出口统一判，缺失/失败走降级纪律）
+    "var verificationIndexPath = path.join(path.dirname(epPath), 'verification-index.json');",
     "try { fs.mkdirSync(runlogDir, { recursive: true }); } catch (e) { die('runlog 目录创建失败: ' + e.message); }",
     // 启动前既有改动登记（settle 收编的排除集）：引擎启动时工作区里已存在的已跟踪改动
     // 属于流程外资产（用户的在途工作），归属判断在主 agent/用户——settle 只收编本流程
@@ -845,7 +851,7 @@ const NODE_PREP = [
     "} catch (e) { /* porcelain 失败不阻断启动：settle 退化为无排除集（与旧行为一致） */ }",
     "console.log(JSON.stringify({",
     "  projectRoot: projectRoot, baseline: bl, designDocPath: designAbs, planPath: planAbs, planMdPath: planMd, acceptancePath: acceptancePath, acceptanceBindingStatus: accStatus,",
-    "  statusPath: statusAbs, runlogDir: runlogDir, ledgerPath: ledgerPath,",
+    "  statusPath: statusAbs, runlogDir: runlogDir, ledgerPath: ledgerPath, verificationIndexPath: verificationIndexPath,",
     "  gateALog: gateALog, reviewerTemplate: tplAbs, partitions: partitions,",
     "  diffChurn: churn, diffFileCount: files.length, unitCount: unitCount,",
     "  incremental: incr, fullSuite: { program: fsuite.program, args: fsuite.args }, artifacts: artifacts,",
@@ -1371,6 +1377,9 @@ async function finish(terminated, roundsDone, message) {
             .map((i) => ({ id: i.id, location: i.location, gap: i.gap, severity: i.severity, group: i.group })),
         partitions: info.partitions.map((p) => ({ name: p.name, files: p.files.length })),
         residualFiles,
+        // 机器候选定位使用计数（设计 §9.2）：统计附加字段，终态处置与 message 语义不变——
+        // 作为后续审查降载决策的实测输入，本轮不据此降载任何审查
+        indexUsage,
         message,
     };
     // §4.5：W3 终态回写 status.json events——consistency 终态一笔 + Gate A 结果一笔
@@ -1515,6 +1524,103 @@ toRel = makeToRel(info.projectRoot);
     };
 }
 gateALogPath = null; // Gate A phase 开跑时才赋值——未执行到 Gate A 的终态必须带 null（字段契约）
+// 分区名 → 该分区查询结果（查询成功才入表——r1Prompt 查无条目即不注入，输入与既有
+// 行为逐字一致）；indexUsage 供 finish 组装终态统计字段
+const seedsByPartition = new Map();
+let indexUsage = { available: false, seedsUnits: 0, unmappedFiles: 0, fallback: null };
+{
+    // 查询脚本路径 ~ 占位形态运行时展开（家目录绝对路径不入脚本字面量，与
+    // DEFAULT_REVIEWER_TEMPLATE 同纪律）；spawn 复用既有 world.run("node", ...) 执行模式
+    // ——argv 传参无 shell 拼接，与 NODE_PREP 等执行器同型
+    const indexScript = `${homeRes.stdout.trim()}/.agents/skills/dev-flow-v6/scripts/verification-index.mjs`;
+    const queryable = info.partitions.filter((p) => p.files.length > 0);
+    if (queryable.length === 0) {
+        // diff 为空（全仓对照分区）：无文件可映射，查询无意义，按未查询处置（非通道故障）
+        indexUsage = { available: false, seedsUnits: 0, unmappedFiles: 0, fallback: null, note: "diff 为空，无文件可映射——未查询索引" };
+    }
+    else {
+        let channelBroken = false;
+        const unitsAll = new Set();
+        const unmappedAll = new Set();
+        const fallbackAll = new Set();
+        for (const p of queryable) {
+            // spawn 失败（node 缺失 / 参数超长 E2BIG）走异常通道，与 exit 非 0 同按查询失败处置
+            //——候选是定位辅助，任何通道故障都不许阻塞主审查路径
+            let r = null;
+            try {
+                r = await world.run("node", [
+                    indexScript,
+                    "query",
+                    "--index",
+                    info.verificationIndexPath,
+                    "--reviewer-seeds",
+                    "--files",
+                    p.files.join(","),
+                ]);
+            }
+            catch {
+                r = null;
+            }
+            let parsed = null;
+            if (r !== null && r.exitCode === 0) {
+                try {
+                    const v = JSON.parse(r.stdout);
+                    const s = typeof v.seeds === "object" && v.seeds !== null ? v.seeds : {};
+                    // 形态防御：seeds 五数组 + unmappedFiles 数组缺一即按查询失败处置（seeds 脏数据
+                    // 不清洗不猜——宁可回退现行审查也不注入畸形候选）
+                    if (isStrArr(s.units) &&
+                        isStrArr(s.designEntries) &&
+                        isStrArr(s.assertions) &&
+                        isStrArr(s.scenarios) &&
+                        isStrArr(s.acceptanceNodes) &&
+                        isStrArr(v.unmappedFiles)) {
+                        parsed = {
+                            seeds: {
+                                units: s.units,
+                                designEntries: s.designEntries,
+                                assertions: s.assertions,
+                                scenarios: s.scenarios,
+                                acceptanceNodes: s.acceptanceNodes,
+                            },
+                            unmappedFiles: v.unmappedFiles,
+                            fallback: typeof v.fallback === "string" && v.fallback !== "" ? v.fallback : null,
+                        };
+                    }
+                }
+                catch {
+                    // 输出非 JSON 按查询失败处置
+                }
+            }
+            if (parsed === null) {
+                // 同 run 全部分区共用同一索引与脚本，首败即判通道不可用并停止后续查询（避免逐
+                // 分区重复 WARN）；未查询分区 r1Prompt 查无 seeds 自然回退现行审查输入
+                channelBroken = true;
+                break;
+            }
+            seedsByPartition.set(p.name, parsed);
+            for (const u of parsed.seeds.units)
+                unitsAll.add(u);
+            for (const f of parsed.unmappedFiles)
+                unmappedAll.add(f);
+            if (parsed.fallback !== null)
+                fallbackAll.add(parsed.fallback);
+        }
+        if (channelBroken) {
+            log("WARN 索引不可用，回退现行审查输入（verification-index 查询失败——候选定位未注入，不阻塞主路径）");
+            indexUsage = { available: false, seedsUnits: 0, unmappedFiles: 0, fallback: null, note: "索引不可用（索引缺失或查询 exit 非 0），回退现行审查输入——未注入候选" };
+        }
+        else {
+            indexUsage = {
+                available: true,
+                seedsUnits: unitsAll.size,
+                unmappedFiles: unmappedAll.size,
+                fallback: fallbackAll.size > 0 ? [...fallbackAll].join("；") : null,
+                note: `候选已注入 ${seedsByPartition.size}/${info.partitions.length} 个分区 prompt（R1 分区审）；审查范围始终为分区完整 diff`,
+            };
+            log(`索引候选定位：${seedsByPartition.size} 个分区注入 seeds（单元 ${unitsAll.size} 个，未映射文件 ${unmappedAll.size} 个${fallbackAll.size > 0 ? "，含回退标注" : ""}）`);
+        }
+    }
+}
 const ctxBlock = [
     `- 仓库根：${info.projectRoot}（所有 git 命令与相对路径以此为基准）`,
     `- 变更区间：git diff ${info.baseline}..HEAD`,
@@ -1750,6 +1856,25 @@ function runlogDutyLine(who) {
     return `过程记录（防丢失，不替代 JSON 返回契约）：执行中的临时待办、需主 agent/用户裁决的事项、对复盘有价值的观察（踩坑根因/方案取舍/环境异常），随时用一行 append 到 ${info.runlogDir}/${who}.md（目录已存在，文件不存在则新建），格式 [HH:MM] 类型: 一句话事实（类型 ∈ 待办/裁决/观察）。不影响正常执行与返回。`;
 }
 function r1Prompt(p) {
+    // 候选定位块（§5.2 初始定位语义）：查询成功才入 seedsByPartition——seeds 全空也注入
+    //（含 fallback 标注）；查询失败 / 无 diff 文件的分区查无条目 → 不注入，reviewer 输入
+    // 与既有行为逐字一致。seeds 属项目文件派生数据，按外部数据纪律 wrapUntrusted 包裹
+    const seeds = seedsByPartition.get(p.name);
+    const seedsBlock = seeds
+        ? [
+            "",
+            "初始候选上下文（verification-index 引用索引派生，仅供定位起点——审查范围始终是本分区完整 diff；候选为空/未映射/多单元重合时回退现行分区审查，reviewer 可主动向外扩展）：",
+            wrapUntrusted([
+                JSON.stringify(seeds.seeds),
+                seeds.unmappedFiles.length > 0
+                    ? `未映射文件（不在任何 dev 单元 territory 内，索引无候选）：${seeds.unmappedFiles.join("、")}`
+                    : null,
+                seeds.fallback !== null ? `回退标注：${seeds.fallback}` : null,
+            ]
+                .filter((x) => x !== null)
+                .join("\n")),
+        ]
+        : [];
     return [
         `第 1 轮全面一致性审查（分区：${p.name}）。`,
         "",
@@ -1763,6 +1888,7 @@ function r1Prompt(p) {
         p.files.length === 0
             ? "本分区无 diff 文件——按全仓对照处理：设计文档声称的全部改动均未发生，对照设计终态逐项判 unreasonable（遗漏未做）。"
             : `本分区文件集（分区互斥契约：只审下列文件）：\n${p.files.join("\n")}`,
+        ...seedsBlock,
         "",
         "若 impl-plan 章节映射失效（映射指向的节不存在或与节名对不上）：docErrors 放一条映射失效说明（location = impl-plan 的章节映射节，gap = 失效详情），其余两分类返回空数组，禁止按猜的节继续审。",
         "",

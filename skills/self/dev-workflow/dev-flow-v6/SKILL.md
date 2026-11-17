@@ -3,7 +3,7 @@ name: dev-flow-v6
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 6.0.0
+version: 6.1.0
 description: >-
   Use when 一份完整设计包（tech-design-v6 产出：设计文档 + impl-plan.json 单源与渲染视图 + 审查终态）
   需要落地为已验收代码。纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 →
@@ -50,7 +50,7 @@ description: >-
 
 | 段 | 内容 | 承载 | 推进门 |
 |----|------|------|--------|
-| D0 编译 | 设计包 → exec-plan.json（生成即校验 PASS，含三类关联声明 associations 对账）+ 逐节点 promptFile + 初始 status.json + L0 前置 + 环境 smoke | 主 agent | `flow/compile.md` |
+| D0 编译 | 编译器 `scripts/compile-exec-plan.mjs --impl-plan <plan.json>` 生成 exec-plan.json（生成即校验 PASS，含三类关联声明 associations 对账）+ 逐节点 promptFile + 初始 status.json（语义缺口回上游修后重新编译，禁手修生成物；验收资产就绪后再跑 `--mode acceptance`；手工降级路径见 flow 文件）+ L0 前置 + 环境 smoke | 主 agent | `flow/compile.md` |
 | D1 开发循环 | 单元 DAG 流式并行（写码→核验→commit→解锁；开发期 e2e verify 失败与 commit 门禁被拒同入统一失败处理中心轮内修；过程审查 kind=review 节点 = 渐进式 review——机器检查三态 + reviewer 按需触发 + 修复波及机器重验，过程记录 process-review.jsonl 带 process 域章，与交付事件流经 `delivery-core events` 读侧合流（分储单口），判据见 `flow/compile.md`） | W2 wave-executor-v6（手工路径 `flow/execute.md`） | 全节点 done 或 blocked |
 | D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组流式槽位池并行（在途 ≤5；文档修复组按文件门控进同一派发池——不相交同池并行、相交回退串行段）+ Gate A 全量测试（红后归因分诊独立 phase：本批回归条目回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态，≤2 轮） | W3 dev-consistency-loop-v6（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
 | D3 端到端验收 | 验收计划表 L3/L4 编译成 verify/inspect 节点（核心先行 + 短路）+ 验收失败修复循环（failed 入失败池 → 聚合裁决独立 phase（跨节点同根因合并/disputed 反证/文件不相交分组）→ 修复组独立 phase（fixer 修产品代码与验收资产，引擎按组 commit）→ 节点重置机器重验回调度循环，≤3 轮不收敛才熔断） | W2 第二实例化（手工路径 `flow/acceptance.md`） | 验收全绿 |
@@ -61,6 +61,8 @@ description: >-
 段间不设用户确认（gate 驱动连续推进）；熔断终态（blocked / stuck / core-failed / contested / gate-a-failed / review-failure / fix-failure）停回主 agent 按 flow/execute.md 与 flow/consistency-review.md 的终态处置表处置——core-failed / gate-a-failed 在 D3/D2 是修复循环不收敛的出口（常态失败已由轮内聚合修复消化），终态自带归因材料（聚合清单 / 分诊报告 / disputed 反证）。
 
 ### D3 验收 wrapper 模板（V6 代，主 agent 编译 verify 节点时照抄）
+
+> 编译器通道：D0 acceptance 编译（`compile-exec-plan.mjs --mode acceptance`）已自动经 `gen-acceptance-wrapper.mjs` 生成 wrapper（runner 契约从 impl-plan `acceptancePlan[].runner/scenario` 声明组装，禁手改）；本模板仅手工降级路径使用。
 
 两场实跑证实 D3 首发失败集中在此处，三个坑全部来自引擎接口与直觉相反：引擎以 `node <script>` 直跑 wrapper、**不传任何参数**；`node` 从 stdin 读脚本时 `__dirname` 是 `.`（不是脚本目录）；产物目录不存在时引擎按「节点失败」判定（必须脚本自建）。模板（`<ARTIFACTS_DIR>` 与测试命令写死为绝对路径）：
 

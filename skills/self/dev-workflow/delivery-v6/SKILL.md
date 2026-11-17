@@ -1,7 +1,7 @@
 ---
 name: delivery-v6
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 6.0.0
+version: 6.1.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -106,6 +106,7 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 3. **三档处置**：must-fix 立即修复；suggestion 在 must-fix 清零后统一处理；info/boundary 逐项确认或按授权处置。非 must-fix 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不能只按字面合规降级。
 4. **有限结束**：`recheck` 不再默认开放探索。最后一批建议级修复后以 recheck 重新生成当前版本证据，解决「修复后版本变化使旧证据失效」与「最终必须重新取证」的冲突。
 5. **过程失败**：实现性修复需要第 4 轮，或累计不同 must-fix 达到第 11 条，进入 `process-failed`；不得通过改名、错误合并、降低级别或递增验收版本规避。
+6. **证据定位走统一内容索引**：独立保证核对按 evidence-bundle.json（dev-flow-v6 D3 节点执行后生成的内容索引——原始记录与附属 artifact 的 path+sha256 清单，禁手改，`--check` 可核）定位原始执行记录与附属 artifact，不靠重读大量文本与日志找证据；缺记录、缺 artifact、skipped 未披露时不得按完整证据处理——原始步骤 pass/fail/skipped 不自动升格为 verified，交付判定仍走事件与 gate
 
 ## 密钥与信任边界
 

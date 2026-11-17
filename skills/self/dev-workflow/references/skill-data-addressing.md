@@ -40,7 +40,7 @@
 | sandbox（worktree 检出段，dev-flow 段内） | `~/.agents/skill-data/dev-flow/<ws-slug>/<worktreeName>/sandbox/` | `~/.agents/skill-data/dev-flow/<project-slug>/sandbox/` |
 
 - **tech-design 段 = 工作区级共享、无 worktree 段**：设计包是仓库级资产，任何 worktree 的入口门都发现同一份设计包。`<ws-slug>/` 内部排布与平铺目录一致：`<name>/`（六章节 JSON 权威源）、`<name>.rendered.md`、`<name>.impl-plan.md` / `.impl-plan.json`、`<name>.symbol-watchlist.json`、`<name>.plan-review.md` 平铺其下；T2 审查产物在 `<name>/round-N/` 与 `<name>/final.json`、`<name>/run.json`。
-- **dev-flow 段 = worktree 级隔离**：执行态与 git 实物对账、中断后恢复都绑定该 worktree 的检出状态，所以 worktreeName 单独成段。段内文件：`<name>.exec-plan.json`、`<name>.status.json`、`<name>.run.json`、`<name>.ledger.md`、`<name>.coverage.md`、`<name>.runlog/`、`<name>.prompts/`、`<name>.verify/`、`<name>.sync/round-N/`。
+- **dev-flow 段 = worktree 级隔离**：执行态与 git 实物对账、中断后恢复都绑定该 worktree 的检出状态，所以 worktreeName 单独成段。段内文件：`<name>.exec-plan.json`、`<name>.status.json`、`<name>.run.json`、`<name>.ledger.md`、`<name>.coverage.md`、`project-capabilities.json`（项目静态能力快照，delivery-v6 探测命令产出）、`<name>.runlog/`、`<name>.prompts/`、`<name>.verify/`、`<name>.sync/round-N/`。
 - **不随寻址变化的段**：观测事件按 task-id 直读、不携带 projectRoot；skill-data 下其他技能段各按自己的约定，不在本约定范围。
 - **conformance-plane v2 附加寻址（M5 报告与切换；代码侧常量单一来源 = `skills/self/dev-workflow/conformance-plane/migration/cutover.mjs` 与 `reports/render.mjs` 的登记注释）**：
   - **conformance-state 状态仓段**：tech-design 段 `<name>/conformance-state/`——事件 JSONL 与快照唯一权威（v2 对账引擎 `stateRoot` 缺省同值；粒度每包一仓，见 dev-workflow conformance-plane README）。

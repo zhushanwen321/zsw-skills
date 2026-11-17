@@ -233,6 +233,9 @@ interface PrepInfo {
   runlogDir: string;
   /** 未决事项与裁决处置档案（statusPath 同目录 <name>.ledger.md——终态未决清单写入 + 主 agent 处置记录） */
   ledgerPath: string;
+  /** 逐断言引用索引路径（verification-index.json，exec-plan 同目录推导——R1 候选定位查询
+   *  输入；文件是否存在由查询出口判定，缺失/失败走降级不阻塞主路径） */
+  verificationIndexPath: string;
   gateALog: string;
   reviewerTemplate: string;
   partitions: { name: string; files: string[] }[];
@@ -270,6 +273,11 @@ interface FinalResult {
   /** 终态工作区无人申报的残留改动（历轮留盘待认领未被认领的）——主 agent 判归属后
    *  处置（属修复成果 → 补提交；无主/临时 → 清理；判不了 → 呈报用户，禁静默丢弃） */
   residualFiles: string[];
+  /** 机器候选定位使用计数（verification-index 查询统计，设计 §9.2）：available = 索引查询
+   *  成功；seedsUnits = 注入 seeds 覆盖的单元数（跨分区去重）；unmappedFiles = 未映射文件
+   *  数；fallback = 索引回退标注（无 = null）；note = 人读说明。仅统计附加字段——终态
+   *  处置与 message 语义不变；作为后续审查降载决策的实测输入，本轮不据此降载任何审查 */
+  indexUsage: IndexUsage;
   /** 一句话终态说明（含恢复动作） */
   message: string;
 }

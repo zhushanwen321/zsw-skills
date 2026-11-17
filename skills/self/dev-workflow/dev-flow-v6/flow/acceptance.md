@@ -23,6 +23,13 @@
 - fail → 先 read 项目排障文档（典型 docs/TROUBLESHOOTING.md，路径以 AGENTS.md 索引为准）匹配已知症状再进修复；blocked → 如实报告环境原因，禁 mock 冒充通过
 - **一次性 vs 可复用分流**：可复用（核心 UI/主链路/长期维护面）→ 项目 e2e 目录 + 同 commit 登记测试静态文档；一次性 → `<name>.acceptance/` + status.json 记一笔。项目维护 e2e 资产登记表（如 `docs/testing/e2e-map.json`）时，新增/变更用例同 commit 更新登记表并跑其校验脚本（以项目登记纪律为准）
 - **e2e 单测化**：能以 mock/fixture 重放等价覆盖的圈定项随所属单元转化为 L1/L2 单测——长期方向逐步单测化（与 SKILL e2e 准则同源）
+- **证据内容索引（节点执行后生成，禁手改）**：为 verify/inspect 节点的 artifacts 目录生成 evidence-bundle.json（原始记录与附属 artifact 的 path+sha256 清单）：
+
+  ```bash
+  node ~/.agents/skills/dev-flow-v6/scripts/gen-evidence-bundle.mjs --artifacts-dir <artifactsDir> --summary <summary.jsonl 路径> --verdict <verdict.json 路径>
+  ```
+
+  summary/inspect verdict 缺失的场景按实际存在登记（不报错）；纯命令场景（无汇总记录的普通命令）不传 --summary/--verdict，bundle 登记目录内 receipt.jsonl 为原始回执，不另生成第二份同语义回执。`--check` 核对全部引用文件存在与哈希可重算。L4 与独立保证核对优先读索引与 summary.jsonl 汇总（异常步骤统计 pass/fail/skipped 分开计数），仅语义判断需要时读完整日志或图像；索引不含 revision/断言绑定（归事件流），原始步骤结果不自动升格为 verified——登记 EvidenceRecorded 与交付判定仍走既有事件与 gate
 
 ## 候选反例审查（explore-only）[MANDATORY]
 

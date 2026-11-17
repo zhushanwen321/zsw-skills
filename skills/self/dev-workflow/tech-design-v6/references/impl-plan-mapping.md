@@ -120,3 +120,7 @@ mermaid 本体确定性推导：节点 = `units[].id`（默认标注 = id；`inc
 | D4 档案分流 | 写 `reasonableDeviations[]` / `residualRisks[]` / `changeHistory[]` → 重跑渲染器 |
 | D5 终态同步 / D6 交付后审查回写 | 写 `residualRisks[]` / `changeHistory[]` / `reasonableDeviations[]` → 重跑渲染器 |
 | 任何执行方 | 禁止手改 `.impl-plan.md`——发现不一致按 §3 第 3 条恢复，禁止反向手改 md 迁就现状 |
+
+## 编译消费的 additive 字段（指针）
+
+impl-plan 被 D0 编译器消费的 additive 可选字段（testPlan.incrementalCommands / units[].designRef / units[].cwd / processReviews[] / acceptancePlan[].script·runner·scenario·unit·artifactsDir 等，含缺失后果）唯一权威登记处 = dev-flow-v6 `flow/compile.md`「impl-plan 编译消费字段」表与 compile-exec-plan.mjs 头注——本表不复列（防双源漂移）。

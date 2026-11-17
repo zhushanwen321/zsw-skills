@@ -6,6 +6,18 @@
 
 进入合法性由 delivery-core next 裁决（转移表唯一权威）。D1 各节点 deviations 中的测试缺口申报（testCommand 覆盖不了的改动行为）必须逐条落实去向，二选一：**更新设计包 s4-accept.json verificationBindings / impl-plan acceptancePlan 的测试绑定，或登记由 D3 独立验收节点承接（写明节点与场景 id）**——只申报缺口不落实去向 = 测试覆盖静默流失，D3 不会知道该验什么；未落实的条目回 D1 对应单元补齐。核对结果（逐条处置）append 到 `<name>.ledger.md`。
 
+## 索引初始定位（辅助入口）
+
+R1 发起前可用逐断言引用索引（D0 生成 exec-plan 后重建于 `<exec-plan 同目录>/verification-index.json`，禁手改）拿初始候选上下文——按分区文件清单查询直接相关的设计条目、断言、单元与场景，附进对应 reviewer 任务书：
+
+```bash
+node ~/.agents/skills/dev-flow-v6/scripts/verification-index.mjs query --index <exec-plan 同目录>/verification-index.json --reviewer-seeds --files <逗号分隔文件清单>
+```
+
+`--files` 传仓库根相对路径（与 exec-plan territory 同基准，形如 `src/api/handler.ts`；绝对路径不参与匹配）——同一文件命中多个单元时候选含全部重合单元并回退标注。
+
+索引只作初始定位，不声称完整语义依赖——本分区实际 diff 始终完整提供；查询输出含未映射文件（带 fallback 标注）时回退现行分区审查范围，reviewer 可主动向外扩展。修复轮定向复审同理可用 `--unit <id>` / `--asset <id>` 查直接关联的断言与测试；完整失效范围仍按 acceptance dependsOn、check-quality-contract 与 revision 规则判定——索引不判定计划缺漏，空引用集合只是查询事实。
+
 ## W3 workflow 契约（zcode 环境默认动作）
 
 ```
@@ -49,5 +61,7 @@ args: { execPlan: "<path>.exec-plan.json",
 | stuck | 读 remaining/escalated 清单人工裁决（定性争议转 doc_errors / 需重设计走设计流程），不盲目重跑；处置后必须重跑受影响审查并达到未解决项为零，禁止把 stuck 当作可直接进入 D3 的完成状态 |
 | gate-a-failed | 引擎已完成 ≤2 轮归因分诊，终态 message 自带分诊报告（逐失败段 kind + 依据）——legacy/script-defect 类按报告裁决：调整 full-suite 清单后 attempt+1 重发，或登记存量债务；分诊轮耗尽（仍有 batch 类）读 gate-a 日志人工归因补修后重跑 |
 | review-failure / fix-failure | 按 message 恢复动作修复后重发（attempt 递增；errored/completed run 不可 resume）；在途改动先 git status 盘点 |
+
+终态携带 `indexUsage`（机器候选定位的使用计数：available = 索引查询是否成功、seedsUnits / unmappedFiles / fallback——按设计 §9.2 作为后续审查降载决策的实测输入，本轮不据此降载任何审查）。
 
 **处置记录义务**：终态处置表任一行的处置动作与结果（含用户裁决），append 一笔到 `<name>.ledger.md`——引擎终态已写入未决清单（docErrors 待修文档 / reasonable 待登记 / deferredLedger 待登记残留风险 / escalated 待裁决），主 agent 处置一项即追加记录一项，全部处置完毕在 ledger 标注收尾；手工路径全程同理（reviewer/fixer 任务 prompt 内嵌模板义务句，过程发现记各自 runlog 文件）。
