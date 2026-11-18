@@ -14,7 +14,9 @@
 //      必须等于 resolver 直接输出的契约级哈希（同一字段名、同一值，禁下游另起键名）。
 //
 // fixture 纪律：mkdtempSync 临时目录、HOME 重定向（npm 缓存与凭据全部隔离）、t.after 清理、
-// 无固定文件名；npm 缓存形态照 external-contract-resolve-v6.test.mjs 的 plantNpmCache。
+// 无固定文件名；npm 缓存形态照 external-contract-resolve-v6.test.mjs 的 plantNpmCache——
+// 种真实形态的 gzipped ustar tarball（resolver 的权威内容源 = 缓存 tarball 本体，§4.4 规则 2，
+// fixture 不用真实 tar 就进不了互核后的 tarball 提取路径）。
 //
 // 运行：node --test scripts/tests/external-contract-resolve-integrity-v6.test.mjs
 
@@ -26,6 +28,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realp
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { gzipSync } from "node:zlib";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V6 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6");
@@ -45,26 +48,67 @@ function write(path, content) {
   writeFileSync(path, content);
 }
 
-/** 把假 tarball 内容写进 HOME 下的 npm cacache，返回 lockfile 用的 integrity 串 */
-function plantNpmCache(home, content) {
-  const digest = createHash("sha512").update(content).digest();
+/** 手写最小 ustar 头（512 字节）：fixture 不引第三方 tar 依赖，字段布局照 POSIX ustar */
+function ustarHeader(entryName, size) {
+  const header = Buffer.alloc(512);
+  header.write(entryName, 0, 100, "utf8"); // name
+  header.write("0000644\0", 100, "utf8"); // mode
+  header.write("0000000\0", 108, "utf8"); // uid
+  header.write("0000000\0", 116, "utf8"); // gid
+  header.write(`${size.toString(8).padStart(11, "0")}\0`, 124, "utf8"); // size（八进制）
+  header.write("00000000000\0", 136, "utf8"); // mtime
+  header.write("        ", 148, "utf8"); // chksum 占位 8 空格
+  header.write("0", 156, "utf8"); // typeflag：普通文件
+  header.write("ustar\0", 257, "utf8"); // magic
+  header.write("00", 263, "utf8"); // version
+  let sum = 0;
+  for (const byte of header) sum += byte;
+  header.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "utf8"); // chksum：6 位八进制 + \0 + 空格
+  return header;
+}
+
+/** 构造 npm registry 同形态的包 tarball（gzipped ustar，条目带 package/ 根前缀） */
+function buildPackageTarball(name, version, files) {
+  const manifest = `${JSON.stringify({ name, version, main: "dist/index.js" }, null, 2)}\n`;
+  const entries = [
+    { name: "package/package.json", content: Buffer.from(manifest) },
+    ...Object.entries(files).map(([rel, content]) => ({ name: `package/${rel}`, content: Buffer.from(content) })),
+  ];
+  const blocks = [];
+  for (const entry of entries) {
+    blocks.push(ustarHeader(entry.name, entry.content.length), entry.content, Buffer.alloc((512 - (entry.content.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024)); // tar 结束双零块
+  return gzipSync(Buffer.concat(blocks));
+}
+
+/** 把 tarball 字节写进 HOME 下的 npm cacache（内容文件 = tarball 本体），返回 lockfile 用的 integrity 串 */
+function plantNpmCache(home, tarball) {
+  const digest = createHash("sha512").update(tarball).digest();
   const hex = digest.toString("hex");
   const dir = join(home, ".npm", "_cacache", "content-v2", "sha512", hex.slice(0, 2));
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, hex.slice(2)), content);
+  writeFileSync(join(dir, hex.slice(2)), tarball);
   return `sha512-${digest.toString("base64")}`;
 }
 
+// 正常安装形态的包内容：node_modules 解包副本与缓存 tarball 条目共用这一份事实源
+const SURFACE_FILES = {
+  "dist/types.d.ts": "export interface ToolDefinition { name: string }\n",
+  "dist/index.js": "module.exports = {};\n",
+};
+
 /** npm 项目 fixture：package.json + node_modules 副本 + lockfile（integrity 指向 planted 缓存） */
-function makeNpmProject(base, { name = "fake-host-sdk", version = "1.0.0", content = "TARBALL:fake-host-sdk@1.0.0" } = {}) {
+function makeNpmProject(base, { name = "fake-host-sdk", version = "1.0.0" } = {}) {
   const home = join(base, "home");
   mkdirSync(home, { recursive: true });
   const proj = join(base, "proj");
   write(join(proj, "package.json"), `${JSON.stringify({ name: "fixture-proj", version: "1.0.0", dependencies: { [name]: "^1.0.0" } }, null, 2)}\n`);
   write(join(proj, "node_modules", name, "package.json"), `${JSON.stringify({ name, version, main: "dist/index.js" }, null, 2)}\n`);
-  write(join(proj, "node_modules", name, "dist", "types.d.ts"), "export interface ToolDefinition { name: string }\n");
-  write(join(proj, "node_modules", name, "dist", "index.js"), "module.exports = {};\n");
-  const integrity = plantNpmCache(home, content);
+  for (const [rel, content] of Object.entries(SURFACE_FILES)) {
+    write(join(proj, "node_modules", name, rel), content);
+  }
+  const integrity = plantNpmCache(home, buildPackageTarball(name, version, SURFACE_FILES));
   write(join(proj, "package-lock.json"), `${JSON.stringify({
     name: "fixture-proj",
     lockfileVersion: 3,
@@ -140,14 +184,13 @@ test("lockfile integrity 互核：合法缓存放行（对照）——互核通�
 test("lockfile integrity 互核：篡改缓存内容 → resolve 拒绝（离线 fail-closed 第三核对点承重）", (t) => {
   const base = mkdtempSync(join(tmpdir(), "ec-integrity-tamper-"));
   t.after(() => rmSync(base, { recursive: true, force: true }));
-  const { home, proj } = makeNpmProject(base);
+  const { home, proj, integrity } = makeNpmProject(base);
   const taskDir = join(base, "task");
   mkdirSync(taskDir, { recursive: true });
   writeAcceptance(taskDir, [NPM_CONTRACT]);
   writeFileSync(join(taskDir, "events.jsonl"), "");
   // 篡改：缓存内容字节改写（路径不变——地址仍命中，内容哈希不再匹配 lockfile integrity）
-  const digest = createHash("sha512").update("TARBALL:fake-host-sdk@1.0.0").digest();
-  const hex = digest.toString("hex");
+  const hex = Buffer.from(integrity.replace(/^sha512-/, ""), "base64").toString("hex");
   const cacheFile = join(home, ".npm", "_cacache", "content-v2", "sha512", hex.slice(0, 2), hex.slice(2));
   assert.ok(existsSync(cacheFile), "fixture 前提：缓存内容已落盘");
   writeFileSync(cacheFile, "TARBALL:TAMPERED-EVIL-PAYLOAD");

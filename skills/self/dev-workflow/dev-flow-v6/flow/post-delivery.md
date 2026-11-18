@@ -54,3 +54,5 @@ impl-plan——事后对抗审查抓出 9 条漂移：残留风险登记仍标�
 | D2 一致性审查 | 流水线内 diff（基线..HEAD）× 设计文档 | 流水线外 commit 无对应环节 → 本文件补上 |
 | D5 终态同步（design-code-sync） | 候选交付时点 HEAD 终态全量 × 设计文档（双向校准） | 候选交付后独立 commit 无对应环节 → 本文件补上（定向单 commit 审查，不重开全量校准） |
 | 符号漂移守护（机器） | 文档符号 × 源码导出表 | 只抓符号存在性，抓不住机制描述失真 → 仍需本文件的对抗审查 |
+
+D5 收敛后进入交付判定（delivery-gate evaluate → `generate-delivery-report.mjs` 生成终态报告）时，报告必须含 runtime readiness 首段披露与外部契约清单、runtime probe 统计、证据环境计数、fake-host parity 差异清单、工具链与验证资产状态五个分节——全部由 `generate-delivery-report.mjs` 从权威记录机器生成，缺记录标 unknown 不补 0；手工撰写终态叙事不得改写或省略这些分节的数字与状态（与 D5 修复纪律同源：报告层漂移 = 未回写登记的变体）。

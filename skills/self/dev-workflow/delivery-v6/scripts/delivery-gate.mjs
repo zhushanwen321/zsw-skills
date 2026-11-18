@@ -3859,7 +3859,13 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   // V5 新增跨 run 保证预算：保证 run 次数（AssuranceCompleted）+ perVersion 轮数超过
   // assuranceCrossRunCap 同样进入 process-failed——跨 run「重取证→新发现→再修复」循环
   // 失控（V4 实跑双场实证：失控场输出为交付物的 3.73 倍）由此获得机器上界
-  const budget = repairBudgetFromEvents(world.entries.map((entry) => entry.record));
+  // 跨 run 保证预算优先读 loop-attempts 账本的 started 计数（V5 完整性设计 §8.1 口径：
+  // 进入循环即计数，失败 run 同样消耗预算）；账本无 assurance 记录（迁移前旧任务）时
+  // 内核回退 AssuranceCompleted 事件计数并附 migrationNote，两口径不并存猜测
+  const loopAttemptsPath = join(world.taskDir, "loop-attempts.jsonl");
+  const budget = repairBudgetFromEvents(world.entries.map((entry) => entry.record), {
+    attemptRows: existsSync(loopAttemptsPath) ? parseLoopAttemptsText(readFileSync(loopAttemptsPath, "utf8")) : null,
+  });
   const repairRounds = budget.perVersionUsed;
   // breakdown 展示拆分（判定已收敛进内核；此处仅为 verdict 展示分别列出两类修订数）
   const firstAssuranceEntry = world.entries.find((entry) => entry.record.type === "AssuranceCompleted");
@@ -6674,6 +6680,14 @@ function runGateCommand(argv, home, env) {
     previousEnv[key] = process.env[key];
     process.env[key] = env[key];
   }
+  // 夹具隔离窗口：HOME 重定向时同时剥掉宿主 npm 上下文注入的 npm_*（npm test 注入的
+  // npm_config_cache 会把 evaluate 前置复扫里 resolver 的 npm config get cache 引到真实
+  // 用户缓存，读到隔离外内容——external-contract-resolve 测试同族坑的进程内形态）
+  const strippedNpmKeys = home !== undefined ? Object.keys(process.env).filter((key) => key.startsWith("npm_")) : [];
+  for (const key of strippedNpmKeys) {
+    previousEnv[key] = process.env[key];
+    delete process.env[key];
+  }
   process.argv = [previousArgv[0], previousArgv[1], ...argv];
   if (home !== undefined) process.env.HOME = home;
   process.exitCode = 0;
@@ -6684,7 +6698,7 @@ function runGateCommand(argv, home, env) {
   } finally {
     process.argv = previousArgv;
     if (home !== undefined) process.env.HOME = previousHome;
-    for (const key of overriddenKeys) {
+    for (const key of [...overriddenKeys, ...strippedNpmKeys]) {
       if (previousEnv[key] === undefined) delete process.env[key];
       else process.env[key] = previousEnv[key];
     }

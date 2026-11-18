@@ -196,6 +196,16 @@ function writeReviewArtifact(fx) {
   evidenceFile(fx.taskDir, `acceptance-review-v${version}.md`, `# 审查报告 v${version}\n判据可证伪。\n`);
 }
 
+/** 空候选快照（设计 §4.5：无外部候选的新任务也生成）：golden fixture 无外部契约，照 delivery-gate-v6
+ * 测试同款落空候选快照文件，供 acceptance.json 的 externalContractReview.detectionSha256 绑定。 */
+function writeEmptyCandidateSnapshot(fx, acceptanceVersion) {
+  const dir = join(fx.taskDir, "evidence", `acceptance-v${acceptanceVersion}`);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "external-contract-candidates.json");
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] }, null, 2)}\n`);
+  return sha256(readFileSync(path, "utf8"));
+}
+
 /** golden-normal 验收包：schema 1，R1（invariant，不可风险接受，command+inspection）+ R2（goal，可风险接受，command） */
 function writeAcceptancePackage(fx) {
   writeJson(join(fx.taskDir, "acceptance.json"), {
@@ -212,6 +222,8 @@ function writeAcceptancePackage(fx) {
     riskLevel: "low",
     exploratoryReview: "not-required",
     reviewDimensions: [],
+    // delivery-gate 新检查（§5.1 检查 2）：V6 世代新任务 externalContractReview 键必填，空处置表合法
+    externalContractReview: { detectionSha256: writeEmptyCandidateSnapshot(fx, 1), dispositions: [] },
   });
   writeJson(join(fx.taskDir, "increments.json"), {
     schemaVersion: 1,
@@ -256,6 +268,8 @@ function writeSchema2AcceptancePackage(fx) {
     riskLevel: "high",
     exploratoryReview: "required",
     reviewDimensions: ["smoke"],
+    // delivery-gate 新检查（§5.1 检查 2）：V6 世代新任务 externalContractReview 键必填，空处置表合法
+    externalContractReview: { detectionSha256: writeEmptyCandidateSnapshot(fx, 1), dispositions: [] },
   });
   writeJson(join(fx.taskDir, "increments.json"), {
     schemaVersion: 1,
@@ -306,6 +320,14 @@ function raiseFinding(fx, revision, { findingId, category, severity, requirement
     // 空关联 boundary 必须附不影响任何需求的论证（空关联护栏：requirementIds=[] 不得绕过定级护栏）
     ...(emptyScopeRefutation !== undefined ? { emptyScopeRefutation } : {}),
   }, "assurance");
+}
+
+/** 解决一条 finding（actor=assurance）——reopen 语义=重开已关闭发现（finding 域
+ * 状态机：open→open 表外拒绝），改判熔断场景须先关闭根发现再走重开链 */
+function resolveFinding(fx, findingId) {
+  const artifact = evidenceFile(fx.taskDir, `resolve-${findingId}.md`, `# ${findingId} 已解决\n`);
+  return fx.gate("resolve-finding", "--task-dir", fx.taskDir, "--finding-id", findingId,
+    "--summary", `解决 ${findingId}`, "--artifact", artifact.artifact, "--credential", fx.creds.assurance);
 }
 
 function evaluate(fx) {
@@ -469,6 +491,8 @@ test("golden-defect：boundary 越权 / 非 blocker 无后果论证 / 改判熔�
   assertOk(raiseFinding(fx, revision, {
     findingId: "F-G0", category: "defect", severity: "blocker", requirementIds: ["R1"],
   }), "根发现 F-G0 应登记成功（reopenOf 需指向已存在的 finding）");
+  // finding 域状态机：reopen 只作用于已关闭发现（open→open 表外拒绝），先解决 F-G0 再走重开链
+  assertOk(resolveFinding(fx, "F-G0"), "根发现先关闭——重开链的表内起点");
   assertOk(raiseFinding(fx, revision, {
     findingId: "F-G1", category: "defect", severity: "blocker", requirementIds: ["R1"], reopenOf: "F-G0",
   }), "组合 1/3（defect/blocker 重开，未新增组合）应放行");

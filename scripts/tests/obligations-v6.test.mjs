@@ -164,6 +164,16 @@ function evidenceFile(fx, name) {
   return `evidence/${name}`;
 }
 
+/** 空候选快照（设计 §4.5）：本文件 fixture 无外部契约，照 delivery-gate-v6 测试同款落空候选
+ * 快照文件，供 acceptance.json 的 externalContractReview.detectionSha256 绑定（该键 V6 新任务必填）。 */
+function writeEmptyCandidateSnapshot(fx, acceptanceVersion) {
+  const dir = join(fx.taskDir, "evidence", `acceptance-v${acceptanceVersion}`);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "external-contract-candidates.json");
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] }, null, 2)}\n`);
+  return sha256(readFileSync(path, "utf8"));
+}
+
 /** 推进到「已批准 + 方案确认 + 实现 + 探索」。R1 必需（command+inspection，不可接受风险），
  * R2 可接受风险（command）——两条需求的证据均未登记，由各用例自行补齐。 */
 function driveToImplemented(t) {
@@ -198,6 +208,8 @@ function driveToImplemented(t) {
     riskLevel: "high",
     exploratoryReview: "required",
     reviewDimensions: ["smoke"],
+    // delivery-gate 新检查（§5.1 检查 2）：V6 世代新任务 externalContractReview 键必填，空处置表合法
+    externalContractReview: { detectionSha256: writeEmptyCandidateSnapshot(fx, 1), dispositions: [] },
   }, null, 2)}\n`);
   writeFileSync(join(fx.taskDir, "increments.json"), `${JSON.stringify({
     schemaVersion: 1,

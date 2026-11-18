@@ -111,7 +111,7 @@
     },
     "criterionChanged": {
       "decider": "core",
-      "note": "最近批准 seq 晚于最新可用探索"
+      "note": "按域双语义，均在内核单源实现：exploration 域 = delivery-core exploration-due（最近批准 seq 晚于最新可用探索）；finding 域 = kernel-judgments.criterionChangedSinceResolution（finding 最近一次解决时验收版本 ≠ 当前裁决版本）"
     }
   },
   "writeDomains": {
@@ -559,6 +559,47 @@
           "actor": "engine",
           "note": "git log 反查命中补写",
           "effect": "attempts = max(1, prior+1)（补记 git 中发现的一次未记账完成派发）"
+        },
+        {
+          "from": "in-progress",
+          "to": "pending",
+          "event": "cascade-reset",
+          "requires": [],
+          "executor": "wave-executor-v6",
+          "actor": "engine",
+          "backedge": "repair",
+          "note": "级联失效：上游依赖被重置/失效时下游节点退回待派发。与 reset（失败修复环）、reconcile-pending（恢复对账）是不同业务原因，合法共享同一 (from,to)——转移判定唯一性按 (from,event)，不按 (from,to)",
+          "effect": "attempts 保留——级联失效不归零（V4 缺陷语义：归零即丢修复环计数）"
+        },
+        {
+          "from": "done",
+          "to": "pending",
+          "event": "cascade-reset",
+          "requires": [],
+          "executor": "wave-executor-v6",
+          "actor": "engine",
+          "backedge": "repair",
+          "effect": "attempts 保留——级联失效不归零（V4 缺陷语义：归零即丢修复环计数）"
+        },
+        {
+          "from": "blocked",
+          "to": "pending",
+          "event": "cascade-reset",
+          "requires": [],
+          "executor": "wave-executor-v6",
+          "actor": "engine",
+          "backedge": "repair",
+          "effect": "attempts 保留——级联失效不归零（V4 缺陷语义：归零即丢修复环计数）"
+        },
+        {
+          "from": "failed",
+          "to": "pending",
+          "event": "cascade-reset",
+          "requires": [],
+          "executor": "wave-executor-v6",
+          "actor": "engine",
+          "backedge": "repair",
+          "effect": "attempts 保留——级联失效不归零（V4 缺陷语义：归零即丢修复环计数）"
         },
         {
           "from": "blocked",

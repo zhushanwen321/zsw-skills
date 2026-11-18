@@ -105,10 +105,8 @@ interface DefectFamily {
   /** 修复版本通过证据引用（selectedCases 对应测试的文件路径+用例名，测试须真实存在） */
   greenAfterFix: string[];
   /** 撤销修复再失败证据文件引用（变异验证：临时 revert 修复 commit 跑测试见红再恢复）；
-   * blocker 级修复为空时必须给 mutationWaiver */
+   * blocker 级修复不得为空（§9.1 三组证据缺一不可，无豁免形态） */
   mutationRefs: string[];
-  /** mutationRefs 为空时的书面豁免论证（论证撤销修复再验证为何不可行） */
-  mutationWaiver?: string;
 }
 interface RepairBuilderOutcome {
   summary: string;
@@ -593,8 +591,9 @@ function validateFindings(findings: FindingDraft[]): string {
 }
 
 /** defectFamily 结构校验（§9.1 报告结构）：返回 "missing" = 整体缺失（含 selectedCases
- * 空——无组合即无分析）；其余非空文本 = 结构非法；"" = 合法。mutation 豁免义务只对
- * blocker 轮生效（非 blocker 轮 mutationRefs 空且无 waiver 不算结构非法） */
+ * 空——无组合即无分析）；其余非空文本 = 结构非法；"" = 合法。mutation 证据义务只对
+ * blocker 轮硬性（§9.1 无豁免形态——mutationWaiver 已移除，blocker 轮 mutationRefs 空
+ * 一律结构非法）；非 blocker 轮 mutationRefs 允许空数组 */
 function defectFamilyError(value: RepairBuilderOutcome, blockerRound: boolean): string {
   const family = value.defectFamily;
   if (family === undefined || family === null) return "missing";
@@ -621,13 +620,23 @@ function defectFamilyError(value: RepairBuilderOutcome, blockerRound: boolean): 
   if (!Array.isArray(family.mutationRefs) || family.mutationRefs.some((r) => typeof r !== "string" || r.trim() === "")) {
     return "defectFamily.mutationRefs 须为字符串数组（撤销修复再失败证据文件路径）";
   }
-  if (
-    blockerRound && family.mutationRefs.length === 0 &&
-    (typeof family.mutationWaiver !== "string" || family.mutationWaiver.trim() === "")
-  ) {
-    return "blocker 修复 mutationRefs 为空时必须附 mutationWaiver 书面论证（撤销修复再验证为何不可行）——不得空白豁免";
+  if (blockerRound && family.mutationRefs.length === 0) {
+    return "blocker 修复 mutationRefs 不得为空（§9.1 三组证据缺一不可，无书面豁免形态）——临时 revert 修复 commit 跑测试见红再恢复，证据文件落到引用路径后重报";
   }
   return "";
+}
+
+/** §9.1 三组证据引用 → 在盘存在性核对的绝对路径清单（基准 = 修复报告所在 taskDir，
+ * 与 ARL 现有路径上下文一致：修复报告与证据文件都在 <taskDir>/evidence/ 下）。绝对路径
+ * 原样；相对路径挂 taskDir 解析。条目允许 # 用例名后缀（greenAfterFix 的「测试文件路径
+ * +用例名」形态），存在性核对只取 # 前的文件路径 */
+function defectFamilyRefPaths(family: DefectFamily, taskDir: string): string[] {
+  const base = taskDir.endsWith("/") ? taskDir.slice(0, -1) : taskDir;
+  const filePathOf = (ref: string): string => {
+    const pathPart = ref.split("#")[0].trim();
+    return pathPart.startsWith("/") ? pathPart : `${base}/${pathPart}`;
+  };
+  return [...family.redBeforeFix, ...family.greenAfterFix, ...family.mutationRefs].map(filePathOf);
 }
 
 /** askGuarded 耗尽分支的可挽救发现披露：最后一次尝试已返回的申报按 validateFindings
@@ -1050,8 +1059,8 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
       `本轮触发发现（severity 分级决定 defectFamily 硬校验档位）：${JSON.stringify(actionable)}`,
       `修复报告写入路径：${repairReportPath}`,
       "只修改修复所需代码与测试；每个 must-fix 新增或修正能证明缺陷版本失败的回归测试。运行相关测试，禁止 Git 写，禁止改验收。",
-      "高风险修复（本轮触发发现含 defect 类）必须在修复报告与返回 JSON 同时给 defectFamily 最小同族组合分析：rootCause=根因一句话；dimensions=按根因列出会变化的关键维度（输入数量/故障位置/时序/路径形态等）及取值；selectedCases=只选能区分实现正误的最小组合（不做笛卡尔积全展开），对应测试必须真实存在；redBeforeFix=缺陷版本失败证据文件路径（复现原始缺陷的测试在修复前的失败记录留档）；greenAfterFix=修复版本通过证据（测试文件路径+用例名）；mutationRefs=撤销修复再失败证据文件路径（临时 revert 修复 commit 跑测试见红再恢复）；blocker 级修复撤销验证不可行时必须给 mutationWaiver 书面论证，不得空白豁免。",
-      '返回结构（严格 JSON）：{ "summary": string, "filesChanged": string[], "testEvidence": string, "affectedAssertionIds": string[], "defectFamily": { "rootCause": string, "dimensions": [{ "name": string, "values": string[] }], "selectedCases": string[], "redBeforeFix": string[], "greenAfterFix": string[], "mutationRefs": string[], "mutationWaiver": string|null } | null }',
+      "高风险修复（本轮触发发现含 defect 类）必须在修复报告与返回 JSON 同时给 defectFamily 最小同族组合分析：rootCause=根因一句话；dimensions=按根因列出会变化的关键维度（输入数量/故障位置/时序/路径形态等）及取值；selectedCases=只选能区分实现正误的最小组合（不做笛卡尔积全展开），对应测试必须真实存在；redBeforeFix=缺陷版本失败证据文件路径（复现原始缺陷的测试在修复前的失败记录留档）；greenAfterFix=修复版本通过证据（条目=测试文件路径#用例名，测试须真实存在）；mutationRefs=撤销修复再失败证据文件路径（临时 revert 修复 commit 跑测试见红再恢复）；三组证据引用引擎核对在盘存在性（相对路径挂 taskDir 解析），引用不存在=结构非法；blocker 级修复 mutationRefs 不得为空（无豁免形态）。",
+      '返回结构（严格 JSON）：{ "summary": string, "filesChanged": string[], "testEvidence": string, "affectedAssertionIds": string[], "defectFamily": { "rootCause": string, "dimensions": [{ "name": string, "values": string[] }], "selectedCases": string[], "redBeforeFix": string[], "greenAfterFix": string[], "mutationRefs": string[] } | null }',
       ...(corrective === null ? [] : [corrective]),
     ].join("\n"));
     const reportCheck = await runNode([NODE_CHECK_FILES, repairReportPath]);
@@ -1062,6 +1071,18 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
       const reportText = await runNode([NODE_READ_FILE, repairReportPath]);
       if (reportText.exitCode !== 0 || !reportText.stdout.includes("defectFamily")) {
         throw new Error(`修复报告 ${repairReportPath} 缺 defectFamily 段：blocker 修复的最小同族组合分析必须同时写进报告与返回 JSON`);
+      }
+    }
+    // §9.1 三组证据引用在盘存在性核对（结构合法才有可核对引用——结构非法交给 validate
+    // 的结构错误文本）：缺失 = 空壳引用，抛错进修正重问，耗尽走红错误出口（含缺失路径
+    // 与恢复动作，不留静默缺口）
+    if (outcome.defectFamily !== undefined && outcome.defectFamily !== null && defectFamilyError(outcome, false) === "") {
+      const refPaths = defectFamilyRefPaths(outcome.defectFamily, taskDir);
+      const missingRes = refPaths.length > 0 ? await runNode([NODE_CHECK_FILES, ...refPaths]) : null;
+      if (missingRes !== null && missingRes.exitCode !== 0) {
+        throw new Error(
+          `defectFamily 证据引用在盘缺失：${missingRes.stdout.trim()}（基准目录 = ${taskDir}，相对路径挂 taskDir 解析，条目 # 后缀为用例名不参与核对）。恢复动作：把三组证据文件落到引用路径或修正引用为真实存在路径后重报`,
+        );
       }
     }
     return outcome;
@@ -1075,7 +1096,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
     const familyError = defectFamilyError(value, familyHardCheck);
     if (familyError === "missing") {
       return familyHardCheck
-        ? "defectFamily 缺失：blocker 修复必须给最小同族组合分析（rootCause/dimensions/selectedCases/redBeforeFix/greenAfterFix/mutationRefs 或 mutationWaiver 书面论证）"
+        ? "defectFamily 缺失：blocker 修复必须给最小同族组合分析（rootCause/dimensions/selectedCases/redBeforeFix/greenAfterFix/mutationRefs——无豁免形态）"
         : "";
     }
     return familyError;
@@ -1198,7 +1219,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
   const familySummaryNote = defectFamilyDegradedRounds.includes(repairRound)
     ? "；defectFamilyIncomplete=true（blocker 修复缺陷族分析缺失，见报告降级标记）"
     : built.defectFamily !== undefined && built.defectFamily.selectedCases.length > 0
-      ? `；同族组合 cases=${built.defectFamily.selectedCases.length}、mutation=${built.defectFamily.mutationRefs.length > 0 ? built.defectFamily.mutationRefs.length : "书面豁免"}`
+      ? `；同族组合 cases=${built.defectFamily.selectedCases.length}、mutation=${built.defectFamily.mutationRefs.length}`
       : "";
   const repairEvent = {
     type: "RepairRoundRecorded", actor: "builder", acceptanceVersion, revision,

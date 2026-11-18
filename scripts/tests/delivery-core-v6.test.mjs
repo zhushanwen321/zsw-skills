@@ -82,11 +82,17 @@ test("validate：内置五域表通过；六类建模错误被逐条检出", asy
     assert.match(result.stderr, pattern, `${label} 的报错应可定位`);
   };
   await expectError((r) => { r.domains.task.states.push("ghost-island"); }, /不可达/, "无入边状态不可达");
-  await expectError((r) => { delete r.domains.node.transitions.find((t) => t.event === "reconcile-pending").backedge; }, /无 backedge 标记的环/, "撕掉回边标记后成环被检出");
+  // 环标记断言撕「唯一标记边」的环：{pending,in-progress} 环只靠 in-progress 的
+  // cascade-reset 一条 backedge 合法（begin 无标记）；done↔pending 环有 reconcile-pending
+  // 与 cascade-reset 两条标记边，撕掉任一条环仍合法（检出不了，不是检查失效）
+  await expectError((r) => { delete r.domains.node.transitions.find((t) => t.event === "cascade-reset" && t.from === "in-progress").backedge; }, /无 backedge 标记的环/, "撕掉回边标记后成环被检出");
+  // 判定唯一性按 (from,event)：同状态同事件两条边 = 查表歧义；同 (from,to) 不同事件
+  // （reconcile-pending 与 cascade-reset 共享 done→pending）是合法形态——内置表 validate
+  // 绿（本用例末行）即覆盖该正向断言
   await expectError((r) => {
     const t = r.domains.node.transitions.find((x) => x.event === "begin");
-    r.domains.node.transitions.push({ ...t, event: "begin-dup", executor: "另一个执行器" });
-  }, /重复定义同一 \(from,to\)/, "同一 (from,to) 双转移");
+    r.domains.node.transitions.push({ ...t, executor: "另一个执行器" });
+  }, /重复定义同一 \(from,event\)/, "同一 (from,event) 双转移");
   await expectError((r) => { r.domains.task.transitions[0].requires = ["不存在的谓词"]; }, /谓词 .* 不在词表/, "未知谓词");
   await expectError((r) => { r.domains.task.transitions[0].actor = "hacker"; }, /actor .* 不在角色词表/, "未知角色");
   await expectError((r) => {
@@ -182,6 +188,36 @@ test("findingRegrades：同根多组定级超上限被熔断；同组 reopen 不
   assert.equal(sameGrade.offenders.length, 0, "同组重报（reopen 同定级）不触发");
 });
 
+test("criterionChangedSinceResolution：解决时验收版本 ≠ 当前 → true；同版本/无解决 → false", async () => {
+  const records = [
+    { type: "AcceptanceApproved", acceptanceVersion: 1, seq: 1 },
+    { type: "FindingRaised", acceptanceVersion: 1, seq: 2, findingId: "F-1" },
+    { type: "FindingResolved", acceptanceVersion: 1, seq: 3, findingId: "F-1", revision: "r1" },
+    { type: "AcceptanceApproved", acceptanceVersion: 2, seq: 4 },
+    { type: "ResolutionReaffirmed", acceptanceVersion: 2, seq: 5, findingId: "F-1", revision: "r2" },
+  ];
+  assert.equal(
+    KERNEL.criterionChangedSinceResolution(records, { findingId: "F-1", currentAcceptanceVersion: 1 }),
+    true,
+    "最近解决侧事件（v2 重认领）≠ 当前 v1 → 判据已变化（reopen 合法）",
+  );
+  assert.equal(
+    KERNEL.criterionChangedSinceResolution(records, { findingId: "F-1", currentAcceptanceVersion: 2 }),
+    false,
+    "最近解决发生在当前版本 → 无判据变化依据",
+  );
+  assert.equal(
+    KERNEL.criterionChangedSinceResolution(records.filter((record) => record.type === "FindingResolved"), { findingId: "F-1", currentAcceptanceVersion: 2 }),
+    true,
+    "仅旧版本（v1）解决、当前 v2 → true",
+  );
+  assert.equal(
+    KERNEL.criterionChangedSinceResolution(records, { findingId: "F-none", currentAcceptanceVersion: 2 }),
+    false,
+    "无解决侧事件 → false（无解决时点可比，不能凭空宣称判据变化）",
+  );
+});
+
 // ── 真实任务夹具：next 样例 + CLI 判定 + pending 实体 ──
 
 // 模板仓：每测试进程只构建一次「初始提交仓」，fixture 经 cpSync 复制实例化——git 对象是
@@ -216,6 +252,17 @@ function makeFixture(t, { taskId = "core-next" } = {}) {
   return { root, projectDir, home, taskDir: output.taskDir, creds: output.credentials };
 }
 
+/** 空候选快照（gate §5.1 检查 2：V6 世代新任务无外部契约也必须带 externalContractReview 键，
+ * detectionSha256 绑定候选快照内容；无外部候选时生成空候选快照）。形态对齐
+ * delivery-gate-v6.test.mjs 同名 helper。返回文件内容 sha256。 */
+function writeEmptyCandidateSnapshot(fx, acceptanceVersion) {
+  const dir = join(fx.taskDir, "evidence", `acceptance-v${acceptanceVersion}`);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "external-contract-candidates.json");
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] }, null, 2)}\n`);
+  return sha256(readFileSync(path, "utf8"));
+}
+
 /** schema 2 最小验收包（含断言与反例场景）——对齐 quality 测试夹具形态 */
 function writeSchema2Package(fx) {
   writeFileSync(join(fx.taskDir, "acceptance.json"), `${JSON.stringify({
@@ -240,6 +287,7 @@ function writeSchema2Package(fx) {
     riskLevel: "high",
     exploratoryReview: "required",
     reviewDimensions: ["smoke"],
+    externalContractReview: { detectionSha256: writeEmptyCandidateSnapshot(fx, 1), dispositions: [] },
   }, null, 2)}\n`);
   writeFileSync(join(fx.taskDir, "increments.json"), `${JSON.stringify({
     schemaVersion: 1,
@@ -354,6 +402,43 @@ test("next 样例 C：跨 run 保证预算耗尽 → evaluate 判 process-failed
   assert.ok(next.legalTransitions.every((tr) => !forwardEvents.has(tr.event)), "process-failed 不得给出常规推进转移");
 });
 
+test("next 样例 D（断点①②修复回归）：探索完成未登记 → candidate-explored 可登记；登记后 → implementation-recorded 可保证", async (t) => {
+  const fx = driveToImplementing(t);
+  const revText = (() => {
+    const r = gate(fx, "revision", "--project-root", fx.projectDir);
+    ok(r);
+    return r.stdout.trim();
+  })();
+  // 断点①：schema2 探索已完成（due=false）、增量未全登记 → candidate-explored（D4 登记窗口），
+  // register-implementation 边在该态输出可达——旧口径恒落 implementing，candidate-explored 永不产出
+  ok(gate(fx, "record-exploration", "--task-dir", fx.taskDir,
+    "--summary", "探索", "--dimensions", JSON.stringify(["smoke"]),
+    "--coverage-manifest-sha256", sha256("cov"), "--artifact", evidence(fx, "exploration-d.md"), "--revision", revText,
+    "--credential", fx.creds.assurance), "探索登记");
+  const nextExplored = JSON.parse(parseStdout(await core(fx, "next", "--task-dir", fx.taskDir)));
+  assert.equal(nextExplored.flowState, "candidate-explored", "探索完成、增量未全登记 = candidate-explored（20 态词表成员恢复产出）");
+  assert.equal(nextExplored.machineChecks.explorationDue, false);
+  const register = nextExplored.legalTransitions.find((tr) => tr.event === "register-implementation");
+  assert.ok(register, "candidate-explored 态必须给出 register-implementation 合法转移");
+  assert.equal(register.to, "implementation-recorded");
+  assert.match(register.executor, /dev-flow-v6/, "executor 应为 D4 登记（dev-flow-v6）");
+  assert.equal(register.actor, "builder");
+  assert.deepEqual(register.requires, ["mustFixOpenZero"], "登记边前置 = 无 open must-fix（探索后可登记语义，不挡登记）");
+  // 断点②：增量登记后（verdict=candidate 证据缺口常态）→ implementation-recorded 主链态，
+  // assurance-start 边可达——旧口径直落 candidate，主链态与该边均不可达
+  ok(gate(fx, "record-implementation", "--task-dir", fx.taskDir, "--increment-id", "I1", "--summary", "实现",
+    "--artifact", evidence(fx, "impl-d.md"),
+    "--merge-receipt", JSON.stringify({ fromRevision: revText, toRevision: revText, patchSha256: sha256("p") }),
+    "--credential", fx.creds.builder),
+    "实现登记");
+  const nextRecorded = JSON.parse(parseStdout(await core(fx, "next", "--task-dir", fx.taskDir)));
+  assert.equal(nextRecorded.flowState, "implementation-recorded", "增量全登记、无 open finding、无保证 = implementation-recorded（verdict=candidate 不再短路跳过主链）");
+  const assuranceStart = nextRecorded.legalTransitions.find((tr) => tr.event === "assurance-start");
+  assert.ok(assuranceStart, "implementation-recorded 态必须给出 assurance-start 合法转移（主链不再只剩 evaluate）");
+  assert.equal(assuranceStart.to, "assuring");
+  assert.match(assuranceStart.executor, /independent-assurance-v6/);
+});
+
 test("pending 实体：add/list/resolve 往返；next 优先回答待办", async (t) => {
   const fx = makeFixture(t);
   ok(await core(fx, "pending", "add", "--task-dir", fx.taskDir, "--kind", "awaiting-restore", "--note", "额度中断，恢复后先补登记 increments"));
@@ -429,6 +514,38 @@ test("node-transition 落盘形态：manual-disposition 带 basis 留痕；非�
   assert.equal(after.events.at(-1).event, "manual-disposition");
   const illegal = await runCore(["node-transition", "--status", statusPath, "--node", "n1", "--event", "begin"]);
   assert.notEqual(illegal.status, 0, "done 态 begin 非法应被拒");
+});
+
+test("cascade-reset：done/in-progress/blocked/failed 退回 pending 且 attempts 保留；pending 不接受；重放视图一致", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "cascade-reset-v6-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const statusPath = join(root, "plan.status.json");
+  writeFileSync(statusPath, `${JSON.stringify({ name: "p", baseline: "b", nodes: {}, events: [] })}\n`);
+  const apply = async (node, event, extra = []) => runCore(["node-transition", "--status", statusPath, "--node", node, "--event", event, ...extra]);
+  // n2 造出 attempts=2 的 in-progress（begin→block→reset→begin），级联重置后计数不得归零
+  ok(await apply("n1", "begin"));
+  ok(await apply("n1", "finish-done", ["--commit", "abc123"]));
+  ok(await apply("n2", "begin"));
+  ok(await apply("n2", "block", ["--reason", "依赖缺失"]));
+  ok(await apply("n2", "reset"));
+  ok(await apply("n2", "begin"));
+  ok(await apply("n3", "begin"));
+  ok(await apply("n3", "block", ["--reason", "依赖缺失"]));
+  ok(await apply("n4", "begin"));
+  ok(await apply("n4", "fail", ["--reason", "断言红"]));
+  for (const [node, fromStatus] of [["n1", "done"], ["n2", "in-progress"], ["n3", "blocked"], ["n4", "failed"]]) {
+    const reset = await apply(node, "cascade-reset");
+    ok(reset, `${fromStatus} 态 cascade-reset 应放行`);
+    const decision = JSON.parse(parseStdout(reset));
+    assert.equal(decision.to, "pending", `${fromStatus} 态级联重置应退回 pending`);
+    assert.equal(decision.entry.attempts, node === "n2" ? 2 : 1, `${fromStatus} 态级联重置 attempts 保留（级联失效不归零）`);
+  }
+  const fromPending = await apply("n5", "cascade-reset");
+  assert.notEqual(fromPending.status, 0, "pending 态不接受 cascade-reset（无该出发边）");
+  // 事件重放视图一致：cascade-reset 在派生视图重建中与转移入口同口径（projectNodeEvents 分支）
+  const projection = JSON.parse(parseStdout(await runCore(["node-project", "--status", statusPath])));
+  assert.equal(projection.consistent, true, "含 cascade-reset 的事件流重放视图应与在盘 nodes 一致");
+  assert.equal(projection.partialEvents, 0, "cascade-reset 无 payload（不产生 partial 事件）");
 });
 
 // ── 循环上限常量对拍：workflow 内嵌常量 == rules.json budgets ──

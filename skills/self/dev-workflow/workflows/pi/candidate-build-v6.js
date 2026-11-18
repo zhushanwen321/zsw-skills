@@ -456,7 +456,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "7.3.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "7.4.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -625,6 +625,26 @@ const NODE_RUN_TEST = "const fs=require('fs'),cp=require('child_process'),pt=req
     "const code=r.error?127:(r.status===null?-1:r.status);" +
     "fs.writeFileSync(logPath,'command: '+JSON.stringify({program,args,cwd,timeoutMs})+'\\nexitCode: '+code+'\\n--- stdout ---\\n'+(r.stdout||'')+'\\n--- stderr ---\\n'+(r.stderr||'')+'\\n--- spawn error ---\\n'+String(r.error&&r.error.message||''));" +
     "process.stdout.write(JSON.stringify({exitCode:code,spawnError:r.error?String(r.error.code||r.error.message):null,artifact:logPath}))";
+// 契约冒烟 driver 审计（V6 设计 §6.3 driver 约定的机器校验）：逐 driver 输出 { path,
+// sha256, violations }——文件缺失或带违规整体 exit 1。静态扫只做约定明文禁止的三类：
+// 动态 import()、运行时代码生成（eval / new Function）、非字面量 require（静态不可解析
+// = import 闭包不可枚举）；字符串/注释里的子串误报可接受（driver 是单文件探针脚本，
+// 命中即改写），不做语法级解析（约定执行不需要等价于解析器）
+const NODE_DRIVER_AUDIT = "const fs=require('fs'),pt=require('path'),cr=require('crypto');" +
+    "const root=process.argv[1];const drivers=[];let bad=false;" +
+    "for(const raw of process.argv.slice(2)){" +
+    "const p=raw.startsWith('/')?raw:pt.join(root,raw);" +
+    "let text;try{text=fs.readFileSync(p,'utf8')}catch(e){drivers.push({path:raw,missing:true});bad=true;continue}" +
+    "const violations=[];" +
+    "if(/import\\s*\\(/.test(text))violations.push('dynamic import()');" +
+    "if(/\\beval\\s*\\(/.test(text))violations.push('eval()');" +
+    "if(/new\\s+Function\\s*\\(/.test(text))violations.push('new Function()');" +
+    "if(/require\\s*\\(\\s*[^\"')]/.test(text))violations.push('non-literal require()');" +
+    "const sha256=cr.createHash('sha256').update(text).digest('hex');" +
+    "drivers.push({path:raw,sha256:sha256,violations:violations});" +
+    "if(violations.length>0)bad=true;" +
+    "}" +
+    "process.stdout.write(JSON.stringify({drivers:drivers}));if(bad)process.exit(1)";
 async function runNode(argv, timeoutMs = 330000) {
     try {
         return await world.run("node", ["-e", ...argv], { timeoutMs });
@@ -1027,6 +1047,13 @@ for (let index = 0; index < increments.length; index += 1) {
         .map((f) => f.findingId);
     const hitFailedRequirements = item.requirementIds.filter((id) => reworkRequirementIds.has(id));
     const isRework = implemented.has(item.id) && (findingWithoutRequirement || hitFindingIds.length > 0 || hitFailedRequirements.length > 0);
+    // 契约冒烟增量的 driver 集合（V6 设计 §6.3）：testCommand args 里的脚本文件形 token
+    // （.mjs/.cjs/.js 且非旗标）——driver 由 builder 编写，引擎只做存在性 + 静态扫审计与
+    // driverHash 登记；gate 侧另行核 driverHash，两侧以同一哈希对账
+    const isContractSmoke = item.kind === "contract-smoke";
+    const driverPaths = isContractSmoke && item.testCommand !== undefined
+        ? item.testCommand.args.filter((a) => typeof a === "string" && !a.startsWith("-") && /\.(mjs|cjs|js)$/.test(a))
+        : [];
     if (implemented.has(item.id) && !isRework) {
         log(`跳过增量 ${item.id}：当前 acceptanceVersion 已有实现记录且无修复信号（未决发现/失败证据），不因 revision 变化重做`);
         continue;
@@ -1063,6 +1090,12 @@ for (let index = 0; index < increments.length; index += 1) {
             item.testCommand !== undefined
                 ? "你返回后脚本会执行该增量声明的 testCommand 并把测试摘要追加进报告；不要等待测试结果，也不要伪造。"
                 : "该增量未声明 testCommand；报告中的自测命令与退出码由你亲自运行取得。",
+            ...(isContractSmoke
+                ? [
+                    "本增量为契约冒烟（contract-smoke）：testCommand 运行 runtime probe driver。driver 约定（V6 设计 §6.3，引擎机器校验）：driver 限定单文件；禁止动态 import()、eval()、new Function() 与非字面量 require()（静态不可解析 = import 闭包不可枚举）；需要辅助模块时全部经静态 import 引入。引擎核对 driver 文件存在性并静态扫描上述禁用形态，同时把 driverHash（全文 sha256）登记进实现报告与实现事件——gate 侧凭该哈希对账，违规即构建失败。",
+                    "negative case（错误契约形态调用真实环境、断言真实环境拒绝）若由独立执行者承接，driver 只承载正向能力观察；negative case 留在验收反例通道，不在 driver 里伪造拒绝行为。",
+                ]
+                : []),
             verificationOnlyTask
                 ? "不修改任何产品代码与测试；禁止修改 acceptance.json、increments.json、events.jsonl、verdict.json，禁止 Git 写操作与派新 agent。"
                 : "只实现当前增量的产品代码与测试；禁止修改 acceptance.json、increments.json、events.jsonl、verdict.json，禁止 Git 写操作与派新 agent。",
@@ -1073,6 +1106,20 @@ for (let index = 0; index < increments.length; index += 1) {
         const reportCheck = await runNode([NODE_CHECK_EXISTS, reportPath]);
         if (reportCheck.exitCode !== 0) {
             throw new Error(`实现报告未写入 ${reportPath}——报告与结构化返回同为完成判据，须在同一次任务内完成`);
+        }
+        // §6.3 driver 约定机器校验（仅契约冒烟增量）：存在性 + 静态扫（动态 import /
+        // 运行时生成代码 / 非字面量 require）。抛错进修正重问（askGuarded 语义），耗尽走
+        // failBuild——违规 driver 进 D3 只会被 gate 的 driverHash 对账拦下，前置失败更省
+        if (driverPaths.length > 0) {
+            const audit = await runNode([NODE_DRIVER_AUDIT, projectRoot, ...driverPaths]);
+            if (audit.exitCode !== 0) {
+                const meta = parseObject(audit.stdout);
+                const drivers = meta !== null && Array.isArray(meta.drivers) ? meta.drivers : [];
+                const detail = drivers
+                    .map((d) => `${String(d.path)}：${d.missing === true ? "文件不存在" : `静态扫违规（${Array.isArray(d.violations) ? d.violations.join("、") : "未知"}）`}`)
+                    .join("；");
+                throw new Error(`契约冒烟 driver 审计未通过（§6.3：单文件、无动态 import、无运行时生成代码）：${detail || audit.stderr.trim() || audit.stdout.trim()}。恢复动作：把 driver 改为单文件且辅助模块走静态 import（动态 import()/eval()/new Function()/非字面量 require() 全部移除）后重报`);
+            }
         }
         return outcome;
     }, validateBuilderOutcome, { workflow: "candidate-build-v6", step: "execute", round: index + 1, target: `builder-${item.id}` });
@@ -1119,7 +1166,23 @@ for (let index = 0; index < increments.length; index += 1) {
         testExitCode = testMeta.exitCode;
         testSummary = `testCommand exit=${testExitCode}，原始日志=${testLogPath}`;
     }
-    await runNode([NODE_APPEND_FILE, reportPath, `\n\n## 引擎测试摘要（脚本追加，builder 返回后生成）\n\n${testSummary}\n`]);
+    // driverHash 登记（§6.3，仅契约冒烟增量）：此处重跑审计而非复用 askFn 结果——登记的
+    // 哈希必须是 testCommand 实际执行时点的文件全文哈希（askFn 校验后文件可能再变，登记
+    // 陈旧哈希会让 gate 对账错位）。能过 askFn 审计却在执行时点违规 = driver 被中途改坏，
+    // 构建失败比登记脏哈希更安全
+    let driverAuditNote = "";
+    if (driverPaths.length > 0) {
+        const audit = await runNode([NODE_DRIVER_AUDIT, projectRoot, ...driverPaths]);
+        const meta = parseObject(audit.stdout);
+        const drivers = meta !== null && Array.isArray(meta.drivers) ? meta.drivers : [];
+        if (audit.exitCode !== 0 || meta === null || drivers.some((d) => typeof d.sha256 !== "string" || d.sha256 === "")) {
+            const message = `增量 ${item.id} 的 driver 审计未通过（§6.3：单文件、无动态 import、无运行时生成代码；testCommand 执行时点复核）：${audit.stderr.trim() || audit.stdout.trim()}。恢复动作：把 driver 改为单文件且辅助模块走静态 import 后重新发起 candidate-build-v6`;
+            const auditFailurePath = await writeEvidenceExclusive(failurePath, `# 构建失败\n\n${message}\n`);
+            return failBuild(message, auditFailurePath === "" ? failurePath : auditFailurePath, outcome.findings);
+        }
+        driverAuditNote = drivers.map((d) => `driver=${String(d.path)} driverHash=${String(d.sha256)}`).join("；");
+    }
+    await runNode([NODE_APPEND_FILE, reportPath, `\n\n## 引擎测试摘要（脚本追加，builder 返回后生成）\n\n${testSummary}\n${driverAuditNote !== "" ? `\n## Driver 审计（§6.3 约定核验 + driverHash 登记，脚本追加）\n\n${driverAuditNote}\n` : ""}`]);
     if (testExitCode !== 0) {
         const message = `增量 ${item.id} 的 testCommand 失败（exit ${testExitCode}），原始日志 ${testLogPath}`;
         try {
@@ -1258,7 +1321,7 @@ for (let index = 0; index < increments.length; index += 1) {
         actor: "builder",
         acceptanceVersion,
         revision: postRevision,
-        summary: `${verificationOnlyTask ? "[verification-only] " : ""}${outcome.summary}${patchShaUnavailable ? "（patchSha256 不可得，已置全零占位）" : ""}`,
+        summary: `${verificationOnlyTask ? "[verification-only] " : ""}${outcome.summary}${patchShaUnavailable ? "（patchSha256 不可得，已置全零占位）" : ""}${driverAuditNote !== "" ? `；${driverAuditNote}` : ""}`,
         incrementId: item.id,
         artifact: reportPath,
         mergeReceipt,

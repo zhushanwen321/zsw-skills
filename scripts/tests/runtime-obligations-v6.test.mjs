@@ -127,8 +127,29 @@ function makeFixture(t, { taskId = "runtime-ob" } = {}) {
   };
 }
 
+// gate 侧快照身份复算（delivery-gate.mjs environmentSnapshotStableFacts 的测试镜像，与
+// resolver stableContractFacts 同源）：手写快照 fixture 的文件名必须用本函数计算——gate 读取
+// 快照时重算内容规范哈希与文件名对账，文件名与内容不符即拒（照 external-contracts-v6 同款）
+const canonicalJsonOf = (value) => {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJsonOf).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJsonOf(value[key])}`).join(",")}}`;
+};
+const snapshotShaOf = (contracts) => sha256(canonicalJsonOf(contracts.map((contract) => {
+  const resolver = contract.resolver ?? {};
+  return {
+    id: contract.id,
+    status: contract.status,
+    resolver: { kind: resolver.kind, locator: resolver.locator, resolution: resolver.resolution },
+    identity: contract.identity,
+    surfaces: contract.surfaces,
+    aggregateHash: contract.aggregateHash,
+  };
+})));
+
 function writeSnapshot(fx, contracts, snapshotSha256 = null) {
-  const sha = snapshotSha256 ?? sha256(`snap-${contracts.map((c) => c.id).join(",")}`);
+  // 缺省文件名哈希 = 内容稳定事实规范哈希（gate 读快照时身份复核，手写假哈希会被拒）
+  const sha = snapshotSha256 ?? snapshotShaOf(contracts);
   const path = join(fx.root, "snapshot.json");
   writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, contracts, snapshotSha256: sha }, null, 2)}\n`);
   fx.env.STUB_RESOLVER_SNAPSHOT = path;
@@ -530,7 +551,8 @@ test("权威变化无基线确认：环境历史链断裂阻断 accepted；用�
   const newHash = sha256("authority-v2");
   // 落盘当前（漂移后）环境快照并取其真实 snapshotSha256——confirm-environment-baseline 的
   // F13 校验要求该 sha 对应 environment-contracts/<sha>.json 存在，故此处同步落盘
-  const driftedSnapshotSha = writeSnapshot(fx, [{ id: CONTRACT_ID, status: "resolved", authorityAggregateHash: newHash, identity: { name: "host", version: "2.0.0" }, surfaces: [{ surfaceRef: "dist/types.d.ts", sha256: sha256("t2") }], snapshotSha256: sha256("s2") }], sha256("snap-v2"));
+  // 文件名哈希交由 writeSnapshot 缺省复算（内容稳定事实规范哈希）——手写假哈希会被快照身份复核拒
+  const driftedSnapshotSha = writeSnapshot(fx, [{ id: CONTRACT_ID, status: "resolved", authorityAggregateHash: newHash, identity: { name: "host", version: "2.0.0" }, surfaces: [{ surfaceRef: "dist/types.d.ts", sha256: sha256("t2") }], snapshotSha256: sha256("s2") }]);
   mkdirSync(join(fx.taskDir, "environment-contracts"), { recursive: true });
   writeFileSync(join(fx.taskDir, "environment-contracts", `${driftedSnapshotSha}.json`), JSON.stringify({ schemaVersion: 1, snapshotSha256: driftedSnapshotSha }));
   const drifted = evaluate(fx);
@@ -596,6 +618,11 @@ test("非 essential 契约能力缺失不进 overall，但逐条披露在 nonEss
 test("externalContracts 为空时 overall=not-applicable（普通任务零开销、事件形态不变）", async (t) => {
   const fx = makeFixture(t, { taskId: "runtime-ob-plain" });
   writeSnapshot(fx, []);
+  // 空候选快照（设计 §4.5）：无外部契约的新任务也生成，externalContractReview.detectionSha256 绑其内容哈希
+  const candidatesDir = join(fx.taskDir, "evidence", "acceptance-v1");
+  mkdirSync(candidatesDir, { recursive: true });
+  const candidatesPath = join(candidatesDir, "external-contract-candidates.json");
+  writeFileSync(candidatesPath, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] }, null, 2)}\n`);
   const acceptance = {
     schemaVersion: 2, acceptanceVersion: 1, taskId: basename(fx.taskDir), projectRoot: realpathSync(fx.projectDir),
     objective: "普通内部库改造", nonGoals: [], riskLevel: "low", exploratoryReview: "not-required", reviewDimensions: ["smoke"],
@@ -605,6 +632,8 @@ test("externalContracts 为空时 overall=not-applicable（普通任务零开销
       assertions: [{ id: "A1", statement: "返回稳定结果", qualifiers: ["输入合法"], given: "合法输入", when: "调用", then: "返回结果", adversarialFormRefs: ["AF1"], testAssetRefs: ["test-A1"] }],
     }],
     adversarialForms: [{ id: "AF1", assertionId: "A1", qualifier: "输入合法", entryPoint: "auto", initialState: "s", operation: "非法输入", timing: "调用期", expected: "拒绝", testAssetRefs: ["test-A1"], rationale: "r" }],
+    // delivery-gate 新检查（§5.1 检查 2）：V6 世代新任务 externalContractReview 键必填，空处置表合法
+    externalContractReview: { detectionSha256: sha256(readFileSync(candidatesPath, "utf8")), dispositions: [] },
   };
   writeFileSync(join(fx.taskDir, "acceptance.json"), `${JSON.stringify(acceptance, null, 2)}\n`);
   writeFileSync(join(fx.taskDir, "increments.json"), `${JSON.stringify({ schemaVersion: 1, acceptanceVersion: 1, items: [{ id: "I1", title: "实现", requirementIds: ["R1"], testCommand: { program: "true", args: [] } }] }, null, 2)}\n`);

@@ -188,6 +188,17 @@ function revisionOf(fx) {
   return result.stdout.trim();
 }
 
+/** 空候选快照（gate §5.1 检查 2：V6 世代新任务无外部契约也必须带 externalContractReview 键，
+ * detectionSha256 绑定候选快照内容；无外部候选时生成空候选快照）。形态对齐
+ * delivery-gate-v6.test.mjs 同名 helper。返回文件内容 sha256。 */
+function writeEmptyCandidateSnapshot(fx, acceptanceVersion) {
+  const dir = join(fx.taskDir, "evidence", `acceptance-v${acceptanceVersion}`);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "external-contract-candidates.json");
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] }, null, 2)}\n`);
+  return sha256(readFileSync(path, "utf8"));
+}
+
 function evidenceFile(fx, name, content) {
   const path = join(fx.taskDir, "evidence", name);
   mkdirSync(join(fx.taskDir, "evidence"), { recursive: true });
@@ -222,6 +233,7 @@ function driveToImplemented(t) {
     riskLevel: "high",
     exploratoryReview: "required",
     reviewDimensions: ["smoke"],
+    externalContractReview: { detectionSha256: writeEmptyCandidateSnapshot(fx, 1), dispositions: [] },
   }, null, 2)}\n`);
   writeFileSync(join(fx.taskDir, "increments.json"), `${JSON.stringify({
     schemaVersion: 1,

@@ -53,6 +53,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { gzipSync } from "node:zlib";
 import { makeMjsStubSpawn, runMjsScript } from "./helpers/mjs-runner.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -574,15 +575,58 @@ test("复扫策略文件：回退表与真策略初始关系一致；判定消�
 // 经「重跑 resolver --write 迁移」兼容（写入侧兼容，代码线 parity 测试同口径）+ 纯旧
 // 布局不重解析时响亮失败带恢复动作（读侧不猜路径）。
 
-/** npm 项目 fixture：package.json + node_modules 副本 + lockfile（integrity 指向 planted 缓存） */
-function plantNpmCache(home, content) {
-  const digest = createHash("sha512").update(content).digest();
+/** 手写最小 ustar 头（512 字节）：resolver 现按真实 tarball 解析（缓存条目 = gzipped ustar，
+ * 权威内容源 = 缓存 tarball 本体），裸字符串假内容会被 fail-closed 拒绝——fixture 不引第三方
+ * tar 依赖，字段布局照 external-contract-resolve-v6 测试同款 */
+function ustarHeader(entryName, size) {
+  const header = Buffer.alloc(512);
+  header.write(entryName, 0, 100, "utf8"); // name
+  header.write("0000644\0", 100, "utf8"); // mode
+  header.write("0000000\0", 108, "utf8"); // uid
+  header.write("0000000\0", 116, "utf8"); // gid
+  header.write(`${size.toString(8).padStart(11, "0")}\0`, 124, "utf8"); // size（八进制）
+  header.write("00000000000\0", 136, "utf8"); // mtime
+  header.write("        ", 148, "utf8"); // chksum 占位 8 空格
+  header.write("0", 156, "utf8"); // typeflag：普通文件
+  header.write("ustar\0", 257, "utf8"); // magic
+  header.write("00", 263, "utf8"); // version
+  let sum = 0;
+  for (const byte of header) sum += byte;
+  header.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "utf8"); // chksum：6 位八进制 + \0 + 空格
+  return header;
+}
+
+/** 构造 npm registry 同形态的包 tarball（gzipped ustar，条目带 package/ 根前缀） */
+function buildPackageTarball(name, version, files) {
+  const manifest = `${JSON.stringify({ name, version, main: "dist/index.js" }, null, 2)}\n`;
+  const entries = [
+    { name: "package/package.json", content: Buffer.from(manifest) },
+    ...Object.entries(files).map(([rel, content]) => ({ name: `package/${rel}`, content: Buffer.from(content) })),
+  ];
+  const blocks = [];
+  for (const entry of entries) {
+    blocks.push(ustarHeader(entry.name, entry.content.length), entry.content, Buffer.alloc((512 - (entry.content.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024)); // tar 结束双零块
+  return gzipSync(Buffer.concat(blocks));
+}
+
+/** 把 tarball 字节写进 HOME 下的 npm cacache（内容文件 = tarball 本体），返回 lockfile 用的 integrity 串。 */
+function plantNpmCache(home, tarball) {
+  const digest = createHash("sha512").update(tarball).digest();
   const hex = digest.toString("hex");
   const dir = join(home, ".npm", "_cacache", "content-v2", "sha512", hex.slice(0, 2));
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, hex.slice(2)), content);
+  writeFileSync(join(dir, hex.slice(2)), tarball);
   return `sha512-${digest.toString("base64")}`;
 }
+
+// 缓存 tarball 与 node_modules 解包副本共用这一份事实源（resolver 从缓存 tarball 提取
+// surface 并与 node_modules 对账，两侧不一致即 fail-closed）
+const NPM_SURFACE_FILES = {
+  "dist/types.d.ts": "export interface ToolDefinition { name: string }\n",
+  "dist/index.js": "module.exports = {};\n",
+};
 
 function npmAcceptance() {
   return {
@@ -613,9 +657,12 @@ function overlayNpmProject(f, home) {
   };
   write(join(proj, "package.json"), `${JSON.stringify({ name: "fixture-proj", version: "1.0.0", dependencies: { "fake-host-sdk": "^1.0.0" } }, null, 2)}\n`);
   write(join(proj, "node_modules", "fake-host-sdk", "package.json"), `${JSON.stringify({ name: "fake-host-sdk", version: "1.0.0", main: "dist/index.js" }, null, 2)}\n`);
-  write(join(proj, "node_modules", "fake-host-sdk", "dist", "types.d.ts"), "export interface ToolDefinition { name: string }\n");
-  write(join(proj, "node_modules", "fake-host-sdk", "dist", "index.js"), "module.exports = {};\n");
-  const integrity = plantNpmCache(home, "TARBALL:fake-host-sdk@1.0.0");
+  // node_modules 副本与缓存 tarball 条目共用 NPM_SURFACE_FILES 一份事实源（resolver 双侧对账）
+  for (const [rel, content] of Object.entries(NPM_SURFACE_FILES)) {
+    write(join(proj, "node_modules", "fake-host-sdk", rel), content);
+  }
+  // resolver 现从 npm 缓存 tarball 提取 surface：种真实 gzipped ustar 形态（裸字符串会被 fail-closed 拒绝）
+  const integrity = plantNpmCache(home, buildPackageTarball("fake-host-sdk", "1.0.0", NPM_SURFACE_FILES));
   write(join(proj, "package-lock.json"), `${JSON.stringify({
     name: "fixture-proj",
     lockfileVersion: 3,
@@ -1012,8 +1059,29 @@ function makeEvalFixture(t, { taskId = "crg-eval" } = {}) {
   };
 }
 
+// gate 侧快照身份复算（delivery-gate.mjs environmentSnapshotStableFacts 的测试镜像，与
+// resolver stableContractFacts 同源）：手写快照 fixture 的文件名必须用本函数计算——gate 读取
+// 快照时重算内容规范哈希与文件名对账，文件名与内容不符即拒（照 external-contracts-v6 同款）
+const canonicalJsonOf = (value) => {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJsonOf).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJsonOf(value[key])}`).join(",")}}`;
+};
+const snapshotShaOf = (contracts) => sha256(canonicalJsonOf(contracts.map((contract) => {
+  const resolver = contract.resolver ?? {};
+  return {
+    id: contract.id,
+    status: contract.status,
+    resolver: { kind: resolver.kind, locator: resolver.locator, resolution: resolver.resolution },
+    identity: contract.identity,
+    surfaces: contract.surfaces,
+    aggregateHash: contract.aggregateHash,
+  };
+})));
+
 function evalWriteSnapshot(fx, contracts, snapshotSha256 = null) {
-  const sha = snapshotSha256 ?? sha256(`snap-${contracts.map((c) => c.id).join(",")}`);
+  // 缺省文件名哈希 = 内容稳定事实规范哈希（gate 读快照时身份复核，手写假哈希会被拒）
+  const sha = snapshotSha256 ?? snapshotShaOf(contracts);
   const path = join(fx.root, "snapshot.json");
   writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, contracts, snapshotSha256: sha }, null, 2)}\n`);
   fx.env.STUB_RESOLVER_SNAPSHOT = path;
@@ -1200,12 +1268,14 @@ test("evaluate 侧基线预算可达性：手改两条 EnvironmentBaselineConfir
   const fx = makeEvalFixture(t, { taskId: "crg-eval-b7" });
   const revision = driveToAssured(fx, { essential: true, candidates: STRONG_CANDIDATE });
   recordProbeEvidence(fx, revision);
-  // 对照：单条基线确认合法（命令层登记一次）——新环境快照文件先落盘（命令校验其存在）
-  const newSnapSha = sha256("new-snap");
+  // 对照：单条基线确认合法（命令层登记一次）——新环境快照文件先落盘（命令校验其存在）；
+  // 文件名哈希 = 内容稳定事实规范哈希（gate 读快照时身份复核，手写假哈希会被拒）
+  const newSnapshotContracts = [{ id: EVAL_CONTRACT_ID, status: "resolved", authorityAggregateHash: sha256("authority-v2"), identity: { name: "host", version: "2.0.0" }, surfaces: [{ surfaceRef: "dist/types.d.ts", sha256: sha256("t2") }], snapshotSha256: sha256("s2") }];
+  const newSnapSha = snapshotShaOf(newSnapshotContracts);
   mkdirSync(join(fx.taskDir, "environment-contracts"), { recursive: true });
   writeFileSync(join(fx.taskDir, "environment-contracts", `${newSnapSha}.json`), `${JSON.stringify({
     schemaVersion: 1, snapshotSha256: newSnapSha,
-    contracts: [{ id: EVAL_CONTRACT_ID, status: "resolved", authorityAggregateHash: sha256("authority-v2"), identity: { name: "host", version: "2.0.0" }, surfaces: [{ surfaceRef: "dist/types.d.ts", sha256: sha256("t2") }], snapshotSha256: sha256("s2") }],
+    contracts: newSnapshotContracts,
   }, null, 2)}\n`);
   ok(GATE_MODULE.runGateCommand(["confirm-environment-baseline", "--task-dir", fx.taskDir, "--contract-ids", JSON.stringify([EVAL_CONTRACT_ID]),
     "--new-authority-snapshot-sha256", newSnapSha, "--credential", fx.creds.user], fx.home, fx.env), "首次基线确认应成功");

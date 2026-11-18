@@ -24,6 +24,21 @@
 //   8 宿主类断言证据覆盖   acceptance.json 的 requiredEnvironment 声明 × verdict 断言
 //                          证据状态（gate evaluate 已并入环境档位核对，覆盖 = 存在 verified）
 //   9 未决待办             pending-actions.json open 计数直读（损坏标 unknown，不冒充 0）
+//   首段 runtime readiness verdict.runtimeReadiness 直读（overall 四态 + 逐契约能力状态；
+//                          缺 verdict / 缺字段 → unknown——设计《V6 运行可用性升级》§12.1：
+//                          报告首段披露，防文字画像与机器结论脱节）
+//  10 外部契约清单         acceptance.json externalContracts（契约 id + essential）×
+//                          environment-contracts.current.json 指针 → <sha>.json 快照
+//                          （resolver 状态 + aggregateHash；指针/快照缺 → unknown）
+//  11 runtime probe 统计   events.jsonl EvidenceRecorded(runtimeProbe=true) × probe artifact
+//                          JSON（cases 实算通过率 + summary skipped 直读；artifact 不可读
+//                          不冒充 0）
+//  12 证据环境计数         全部 EvidenceRecorded 事件 × artifact environment.kind 三类分列
+//                          （official-runner / real-host / fake-host；无法归类的逐条披露）
+//  13 parity 差异清单      evidence/fake-host-parity-*.json（IA 落盘：records/mismatches/
+//                          problems；§8.3——差异不是立即失败，披露 + 处置指引）
+//  14 工具链与验证资产     project-capabilities.json 摘录（--capabilities-file 或任务目录
+//                          内探测；文件缺 → unknown，沿用 status.json 同款可选参数模式）
 //
 // 口径边界：产品运行成本由验收判据测量，不在本报告；跨任务度量（反例实现误判数、
 // 修复后同族缺陷复发数、终报与权威记录差异）不在单任务报告产出——终报由本脚本从
@@ -53,7 +68,7 @@ const SCRIPT_NAME = "generate-delivery-report";
 
 function usageFail(message) {
   process.stderr.write(`${SCRIPT_NAME}: ${message}\n`);
-  process.stderr.write(`用法：node ${SCRIPT_NAME}.mjs --task-dir <任务目录> [--status-file <dev-flow status.json>] [--out <输出路径>]\n`);
+  process.stderr.write(`用法：node ${SCRIPT_NAME}.mjs --task-dir <任务目录> [--status-file <dev-flow status.json>] [--capabilities-file <project-capabilities.json>] [--out <输出路径>]\n`);
   process.exit(2);
 }
 
@@ -82,7 +97,7 @@ for (const key of ["task-dir"]) {
   if (!(key in options)) usageFail(`缺少必填参数 --${key}。`);
 }
 for (const key of Object.keys(options)) {
-  if (!["task-dir", "status-file", "out"].includes(key)) usageFail(`未知参数 --${key}。`);
+  if (!["task-dir", "status-file", "capabilities-file", "out"].includes(key)) usageFail(`未知参数 --${key}。`);
 }
 const taskDir = resolve(options["task-dir"]);
 if (!isAbsolute(taskDir)) usageFail("--task-dir 须为任务目录绝对路径。");
@@ -133,6 +148,41 @@ const verdictSection =
         nextAction: typeof verdict.nextAction === "string" ? verdict.nextAction : null,
       }
     : { status: "unknown", reason: verdictFile.reason ?? "verdict.json 缺失" };
+
+// ── 首段披露：runtime readiness（设计《V6 运行可用性升级》§12.1，verdict.runtimeReadiness
+// 直读）──。readiness 是 accepted 判定的机器结论（overall 四态 + 逐契约能力状态），报告
+// 首段照登防止文字画像与机器结论脱节；verdict 缺失或字段缺失 → unknown（缺字段常见于
+// 升级前旧 verdict，恢复动作 = 重跑 evaluate），不猜 established。
+const runtimeReadinessSection = (() => {
+  if (verdictSection.status !== "ok" || verdict === null || typeof verdict !== "object") {
+    return { status: "unknown", reason: verdictSection.reason ?? "verdict.json 缺失" };
+  }
+  const readiness = verdict.runtimeReadiness;
+  if (readiness === null || readiness === undefined || typeof readiness !== "object" || typeof readiness.overall !== "string") {
+    return { status: "unknown", reason: "verdict.json 无 runtimeReadiness 字段（升级前旧 verdict 或 evaluate 版本过旧）——重跑 delivery-gate evaluate 后重新生成报告" };
+  }
+  const contracts = Array.isArray(readiness.contracts) ? readiness.contracts : [];
+  return {
+    status: "ok",
+    overall: readiness.overall,
+    overallLegal: ["established", "not-established", "unknown", "not-applicable"].includes(readiness.overall),
+    contracts: contracts.map((contract) => ({
+      contractId: contract?.contractId ?? "?",
+      essential: contract?.essential === true,
+      authorityHash: typeof contract?.authorityHash === "string" ? contract.authorityHash : null,
+      authorityStatus: contract?.authorityStatus ?? "unknown",
+      capabilities: Array.isArray(contract?.capabilities)
+        ? contract.capabilities.map((capability) => ({
+            id: capability?.id ?? "?",
+            state: capability?.state ?? "unknown",
+            reason: typeof capability?.reason === "string" ? capability.reason : null,
+            evidenceEventId: capability?.evidenceEventId ?? null,
+          }))
+        : [],
+    })),
+    ...(Array.isArray(readiness.nonEssentialGaps) && readiness.nonEssentialGaps.length > 0 ? { nonEssentialGaps: readiness.nonEssentialGaps } : {}),
+  };
+})();
 
 // ── 世界加载（分节 3/6 的事件流来源；早期任务无验收包时降级只读事件流）──
 // 事件流不可读不终止整个报告：分节 1/2/5/7 不依赖事件流，照常输出；依赖事件流的
@@ -447,6 +497,221 @@ const pendingSection = (() => {
   }
 })();
 
+// ── 证据 artifact 直读（分节 11/12 共用）──
+// EvidenceRecorded.artifact 两形态都合法：gate 意图命令登记 taskDir 相对路径，IA workflow
+// 落盘绝对路径。artifact 不可解析 → unknown 并记原因——证据文件坏了不冒充「无环境」。
+function readEvidenceArtifactDoc(artifact) {
+  if (typeof artifact !== "string" || artifact === "") return { status: "unknown", reason: "事件缺 artifact 字段" };
+  const path = isAbsolute(artifact) ? artifact : join(taskDir, artifact);
+  return readJsonIfPresent(path, `证据 artifact ${artifact}`);
+}
+
+// ── 分节 10：外部契约清单（acceptance.externalContracts × 环境契约快照）──
+// 契约 id 与 essential 的唯一权威 = 验收包声明；resolver 状态与 aggregateHash 唯一权威 =
+// environment-contracts.current.json 指针指向的按哈希分文件快照（resolve-external-contracts
+// --write 产物）。声明了契约但快照缺条目 → resolver 状态 unknown（不冒充 resolved，也不
+// 冒充 unavailable——「未解析」与「解析后不可用」语义不同）。未声明 externalContracts
+// 是确定事实（contracts: []），不是缺数据。
+const externalContractsSection = (() => {
+  if (acceptanceFile.status !== "ok") {
+    return { status: "unknown", reason: acceptanceFile.reason ?? "acceptance.json 缺失", declaredCount: null, contracts: null, snapshotAvailable: false, snapshotReason: null };
+  }
+  const declared = Array.isArray(acceptanceFile.value?.externalContracts) ? acceptanceFile.value.externalContracts : [];
+  let snapshotAvailable = false;
+  let snapshotReason = null;
+  let snapshotSha256 = null;
+  let snapshotContracts = [];
+  const pointer = readJsonIfPresent(join(taskDir, "environment-contracts.current.json"), "environment-contracts.current.json");
+  if (pointer.status !== "ok") {
+    snapshotReason = `${pointer.reason}（未运行 resolve-external-contracts --write）`;
+  } else if (typeof pointer.value?.snapshotPath !== "string" || pointer.value.snapshotPath === "") {
+    snapshotReason = "current 指针缺 snapshotPath 字段（指针损坏）——重跑 resolve-external-contracts --write 重建";
+  } else {
+    const snapshotFile = readJsonIfPresent(join(taskDir, pointer.value.snapshotPath), `环境契约快照 ${pointer.value.snapshotPath}`);
+    if (snapshotFile.status !== "ok" || !Array.isArray(snapshotFile.value?.contracts)) {
+      // 快照手改/损坏的恢复动作（§4.3）：重跑 resolve --write 重建，不手工修复
+      snapshotReason = snapshotFile.status !== "ok"
+        ? `${snapshotFile.reason}——重跑 resolve-external-contracts --write 重建`
+        : "快照 contracts 缺失或非数组（快照损坏）——重跑 resolve-external-contracts --write 重建";
+    } else {
+      snapshotAvailable = true;
+      snapshotSha256 = typeof pointer.value.snapshotSha256 === "string" ? pointer.value.snapshotSha256 : null;
+      snapshotContracts = snapshotFile.value.contracts;
+    }
+  }
+  return {
+    status: "ok",
+    declaredCount: declared.length,
+    snapshotAvailable,
+    snapshotReason,
+    snapshotSha256,
+    contracts: declared.map((contract) => {
+      const entry = snapshotContracts.find((item) => item !== null && typeof item === "object" && item.id === contract?.id);
+      return {
+        id: contract?.id ?? "?",
+        essential: contract?.essential === true,
+        resolverStatus: entry === undefined ? "unknown" : entry.status ?? "unknown",
+        resolverKind: entry?.resolver?.kind ?? null,
+        // 快照文件字段名 aggregateHash（resolve --write 落盘形态）；stdout 摘要形态叫
+        // authorityAggregateHash——两形态并存兼容，避免消费端断裂
+        aggregateHash: entry?.aggregateHash ?? entry?.authorityAggregateHash ?? null,
+      };
+    }),
+  };
+})();
+
+// ── 分节 11：runtime probe 统计（EvidenceRecorded runtimeProbe=true × probe artifact）──
+// 次数 = 事件数；通过率与 skipped 由 artifact cases 实算（观察值不只 passed 布尔，failed
+// case 的 observed 是契约形态的定位线索——失败 case 是正常发现入口，逐条披露不隐藏）。
+// artifact 不可读的 probe 单独计数，不计入 cases 汇总（不冒充 0 cases）。
+const runtimeProbeSection = (() => {
+  if (!eventsReadable) {
+    return { status: "unknown", reason: `events.jsonl 不可读：${worldError}`, probes: null, totals: null };
+  }
+  const probeEvents = records.filter((record) => record.type === "EvidenceRecorded" && record.runtimeProbe === true);
+  const probes = probeEvents.map((event) => {
+    const base = {
+      eventId: event.eventId ?? null,
+      artifact: event.artifact ?? null,
+      contractCapabilityIds: Array.isArray(event.contractCapabilityIds) ? event.contractCapabilityIds : [],
+    };
+    const doc = readEvidenceArtifactDoc(event.artifact);
+    if (doc.status !== "ok") {
+      return { ...base, artifactReadable: false, artifactUnknownReason: doc.reason, caseStats: { status: "unknown", reason: doc.reason } };
+    }
+    const cases = Array.isArray(doc.value?.cases) ? doc.value.cases : [];
+    const caseStats = { status: "ok", total: cases.length, passed: 0, failed: 0, withoutVerdict: 0 };
+    const failingCases = [];
+    for (const item of cases) {
+      if (item?.passed === true) caseStats.passed += 1;
+      else {
+        // passed=false 或无 passed 判定都进披露明细；无判定不计失败（不冒充 failed）
+        if (item?.passed === false) caseStats.failed += 1;
+        else caseStats.withoutVerdict += 1;
+        failingCases.push({
+          capabilityId: item?.capabilityId ?? "?",
+          judged: item?.passed === false,
+          operation: typeof item?.operation === "string" ? item.operation : "",
+          observed: item?.observed !== null && item?.observed !== undefined && typeof item.observed === "object" ? item.observed : null,
+        });
+      }
+    }
+    return {
+      ...base,
+      artifactReadable: true,
+      environmentKind: doc.value?.environment?.kind ?? null,
+      caseStats,
+      // 驱动自报 summary 直读（IA 校验纪律：跳过落为 failed case + observed 记理由，
+      // skipped 一般为 0；非 0 或缺 summary 都照实呈现）
+      summary: doc.value?.summary !== null && doc.value?.summary !== undefined && typeof doc.value.summary === "object" ? doc.value.summary : null,
+      ...(failingCases.length > 0 ? { failingCases } : {}),
+    };
+  });
+  const readable = probes.filter((probe) => probe.caseStats.status === "ok");
+  const totals = {
+    probeCount: probeEvents.length,
+    unreadableArtifacts: probes.length - readable.length,
+    cases: { total: 0, passed: 0, failed: 0, withoutVerdict: 0 },
+    skippedFromSummary: 0,
+  };
+  for (const probe of readable) {
+    totals.cases.total += probe.caseStats.total;
+    totals.cases.passed += probe.caseStats.passed;
+    totals.cases.failed += probe.caseStats.failed;
+    totals.cases.withoutVerdict += probe.caseStats.withoutVerdict;
+    totals.skippedFromSummary += typeof probe.summary?.skipped === "number" ? probe.summary.skipped : 0;
+  }
+  return { status: "ok", probes, totals };
+})();
+
+// ── 分节 12：证据环境计数（全部 EvidenceRecorded × artifact environment.kind）──
+// 三类分列是设计 §12.2 第 3 条（official-runner / real-host / fake-host）；kind 缺失或
+// 词表外的证据逐条披露（无法归类的证据不能悄悄计入任何一类）。
+const evidenceEnvironmentSection = (() => {
+  if (!eventsReadable) {
+    return { status: "unknown", reason: `events.jsonl 不可读：${worldError}`, total: null, counts: null, missingEnvironment: [] };
+  }
+  const evidenceEvents = records.filter((record) => record.type === "EvidenceRecorded");
+  const counts = { "official-runner": 0, "real-host": 0, "fake-host": 0 };
+  const missingEnvironment = [];
+  for (const event of evidenceEvents) {
+    const doc = readEvidenceArtifactDoc(event.artifact);
+    const kind = doc.status === "ok" ? doc.value?.environment?.kind : undefined;
+    if (typeof kind === "string" && kind in counts) counts[kind] += 1;
+    else {
+      missingEnvironment.push({
+        eventId: event.eventId ?? null,
+        artifact: event.artifact ?? null,
+        reason: doc.status !== "ok" ? doc.reason : kind === undefined ? "artifact 无 environment 字段" : `environment.kind=${JSON.stringify(kind)} 不在证据环境词表`,
+      });
+    }
+  }
+  return { status: "ok", total: evidenceEvents.length, counts, missingEnvironment };
+})();
+
+// ── 分节 13：fake-host parity 差异清单（IA 落盘 evidence/fake-host-parity-*.json）──
+// 落盘形态（independent-assurance-v6）：{records[], mismatches[], problems[]}。无文件 =
+// 无 parity 记录（IA 无 parity 义务或无记录时不落盘）——是确定事实，但「无记录」不等于
+// 「已验证无差异」，note 明示。差异样本（mismatches）不是立即失败：披露 + 处置指引（§8.3）。
+const paritySection = (() => {
+  const evidenceDir = join(taskDir, "evidence");
+  let files = [];
+  if (existsSync(evidenceDir)) {
+    try {
+      files = readdirSync(evidenceDir).filter((name) => name.startsWith("fake-host-parity-") && name.endsWith(".json")).sort();
+    } catch (error) {
+      return { status: "unknown", reason: `evidence 目录不可读：${error.message}`, files: null, records: null, mismatches: null, problems: null, unreadableFiles: [] };
+    }
+  }
+  const parityRecords = [];
+  const mismatches = [];
+  const problems = [];
+  const unreadableFiles = [];
+  for (const name of files) {
+    const parsed = readJsonIfPresent(join(evidenceDir, name), name);
+    if (parsed.status !== "ok") {
+      unreadableFiles.push({ file: name, reason: parsed.reason });
+      continue;
+    }
+    const doc = parsed.value;
+    if (Array.isArray(doc?.records)) parityRecords.push(...doc.records);
+    if (Array.isArray(doc?.mismatches)) mismatches.push(...doc.mismatches);
+    if (Array.isArray(doc?.problems)) problems.push(...doc.problems);
+  }
+  return {
+    status: "ok",
+    files: files.length,
+    records: parityRecords,
+    mismatches,
+    problems,
+    unreadableFiles,
+    ...(files.length === 0 ? { note: "无 fake-host parity 记录文件——IA 无 parity 义务或无 parity 记录时不落盘；无记录 ≠ 已验证无差异" } : {}),
+  };
+})();
+
+// ── 分节 14：工具链与验证资产状态（project-capabilities.json 摘录）──
+// 快照落 dev-flow 段 skill-data（寻址依赖 projectRoot 探针），报告不复制寻址算法——
+// --capabilities-file 显式传入（与 status.json 同款可选参数模式），缺省探测任务目录内
+// 副本；两者都缺 → unknown。toolchain/testConfig 是探测事实摘录，不缓存执行结果。
+const capabilitiesPath = options["capabilities-file"] !== undefined ? resolve(options["capabilities-file"]) : join(taskDir, "project-capabilities.json");
+const toolchainSection = (() => {
+  const file = readJsonIfPresent(capabilitiesPath, `project-capabilities.json（${capabilitiesPath}）`);
+  if (file.status !== "ok") {
+    return { status: "unknown", reason: file.reason, file: capabilitiesPath, toolchain: null, testConfig: null };
+  }
+  const value = file.value;
+  return {
+    status: "ok",
+    file: capabilitiesPath,
+    toolchain: Array.isArray(value?.toolchain)
+      ? value.toolchain.map((entry) => ({ id: entry?.id ?? "?", status: entry?.status ?? "unknown", command: entry?.command ?? null }))
+      : { status: "unknown", reason: "toolchain 缺失或非数组（快照版本过旧）——重跑 detect-project-capabilities 重建" },
+    testConfig: Array.isArray(value?.testConfig)
+      ? value.testConfig.map((entry) => ({ runner: entry?.runner ?? "?", zeroTestPassThrough: entry?.zeroTestPassThrough === true }))
+      : { status: "unknown", reason: "testConfig 缺失或非数组（快照版本过旧）——重跑 detect-project-capabilities 重建" },
+  };
+})();
+
 // ── 组装 JSON 对象与 markdown 渲染 ──
 const report = {
   taskDir,
@@ -455,6 +720,7 @@ const report = {
   generatedAt: new Date().toISOString(),
   disclaimer: "本报告由权威记录生成；叙事解释可由 agent 补充，数字与状态以本文件为准。缺少运行记录的项标 unknown，不按 0 或成功补齐。产品运行成本由验收判据测量，不在本报告；跨任务度量（反例实现误判数、修复后同族缺陷复发数、终报与权威记录差异）不在单任务报告产出——终报由本脚本从权威记录机器生成，差异结构性为零。",
   verdict: verdictSection,
+  runtimeReadiness: runtimeReadinessSection,
   loopAttempts: loopsSection,
   repairProgress: repairProgressSection,
   channels: channelsSection,
@@ -463,6 +729,11 @@ const report = {
   revisionProvenance: provenanceSection,
   hostEvidenceCoverage: hostCoverageSection,
   pendingActions: pendingSection,
+  externalContracts: externalContractsSection,
+  runtimeProbes: runtimeProbeSection,
+  evidenceEnvironments: evidenceEnvironmentSection,
+  parity: paritySection,
+  toolchainAssets: toolchainSection,
   counts: { increments: incrementsSection, dagNodes: nodeCountSection },
 };
 
@@ -485,8 +756,26 @@ if (verdictSection.status === "ok") {
   lines.push(`- 裁决 revision：${verdictSection.revision ?? "unknown"}；acceptanceVersion：${verdictSection.acceptanceVersion ?? "unknown"}`);
   lines.push(`- 判定时间：${verdictSection.generatedAt ?? "unknown"}（生成者 ${verdictSection.generatedBy ?? "unknown"}）`);
   if (verdictSection.nextAction !== null) lines.push(`- 下一步指引（nextAction 原文）：${verdictSection.nextAction}`);
+  // 首段 runtime readiness 披露（设计 §12.1）：机器结论照登，防文字画像与 verdict 脱节
+  if (runtimeReadinessSection.status === "ok") {
+    lines.push(`- 运行可用性（runtime readiness，verdict 直读）：overall=${runtimeReadinessSection.overall}${runtimeReadinessSection.overallLegal ? "" : "（词表外值，如实照登）"}`);
+    for (const contract of runtimeReadinessSection.contracts) {
+      lines.push(`  - 契约 ${contract.contractId}（${contract.essential ? "essential" : "非 essential"}）：authority=${contract.authorityStatus}${contract.authorityHash !== null ? `（hash ${contract.authorityHash.slice(0, 12)}…）` : ""}`);
+      for (const capability of contract.capabilities) {
+        lines.push(`    - 能力 ${capability.id}：${capability.state}${capability.reason !== null ? `（${capability.reason}）` : ""}${capability.evidenceEventId !== null ? `（证据 ${capability.evidenceEventId}）` : ""}`);
+      }
+    }
+    if (Array.isArray(runtimeReadinessSection.nonEssentialGaps)) {
+      for (const gap of runtimeReadinessSection.nonEssentialGaps) {
+        lines.push(`  - 非增强契约缺口（不进入 overall，逐条披露）：${gap.contractId ?? "?"} 能力 ${gap.capabilityId ?? "?"} 状态 ${gap.state ?? "unknown"}（${gap.reason ?? "无理由记录"}）`);
+      }
+    }
+  } else {
+    lines.push(`- 运行可用性（runtime readiness）：${fmtUnknown(runtimeReadinessSection.reason)}`);
+  }
 } else {
   lines.push(`- ${fmtUnknown(verdictSection.reason)}——先运行 delivery-gate evaluate 生成 verdict.json 后重跑本报告`);
+  lines.push(`- 运行可用性（runtime readiness）：${fmtUnknown(runtimeReadinessSection.reason)}`);
 }
 lines.push("");
 
@@ -637,6 +926,109 @@ if (pendingSection.status === "ok") {
   lines.push(`- open 待办 ${pendingSection.open} 条 / 总计 ${pendingSection.total} 条——open 待办即交付义务的 pending 类（accepted 前置），关闭走 delivery-core pending resolve`);
 } else {
   lines.push(`- ${fmtUnknown(pendingSection.reason)}`);
+}
+lines.push("");
+
+lines.push("## 10. 外部契约清单与权威哈希（acceptance.externalContracts × 环境契约快照）");
+lines.push("");
+if (externalContractsSection.status !== "ok") {
+  lines.push(`- ${fmtUnknown(externalContractsSection.reason)}`);
+} else if (externalContractsSection.declaredCount === 0) {
+  lines.push("- 验收包未声明 externalContracts：本任务无外部契约依赖（不是缺数据）");
+} else {
+  lines.push(externalContractsSection.snapshotAvailable
+    ? `- 环境契约快照：可用（snapshotSha256 ${externalContractsSection.snapshotSha256 ?? "unknown"}）`
+    : `- 环境契约快照：${fmtUnknown(externalContractsSection.snapshotReason)}`);
+  lines.push("");
+  lines.push("| 契约 | essential | resolver 状态 | resolver | aggregateHash |");
+  lines.push("|---|---|---|---|---|");
+  for (const contract of externalContractsSection.contracts) {
+    lines.push(`| ${contract.id} | ${contract.essential ? "是" : "否"} | ${contract.resolverStatus} | ${contract.resolverKind ?? "unknown"} | ${contract.aggregateHash ?? "unknown"} |`);
+  }
+}
+lines.push("");
+
+lines.push("## 11. runtime probe 统计（EvidenceRecorded runtimeProbe=true × probe artifact 直读）");
+lines.push("");
+if (runtimeProbeSection.status !== "ok") {
+  lines.push(`- ${fmtUnknown(runtimeProbeSection.reason)}`);
+} else if (runtimeProbeSection.totals.probeCount === 0) {
+  lines.push("- 无 runtime probe 证据事件（0 次——事件流可读，缺 probe 是确定事实；essential 契约的 runtime 义务因此保持 open，结论以 verdict.runtimeReadiness 为准）");
+} else {
+  for (const probe of runtimeProbeSection.probes) {
+    if (probe.caseStats.status !== "ok") {
+      lines.push(`- probe ${probe.eventId ?? "?"}（${probe.artifact}）：${fmtUnknown(probe.caseStats.reason)}`);
+      continue;
+    }
+    const stats = probe.caseStats;
+    const summaryNote = probe.summary !== null && typeof probe.summary.skipped === "number" ? `；驱动自报 summary skipped ${probe.summary.skipped}` : "";
+    lines.push(`- probe ${probe.eventId ?? "?"}（${probe.artifact}，环境 ${probe.environmentKind ?? "unknown"}）：cases ${stats.total}、passed ${stats.passed}、failed ${stats.failed}${stats.withoutVerdict > 0 ? `、无 passed 判定 ${stats.withoutVerdict}` : ""}${summaryNote}`);
+    for (const item of probe.failingCases ?? []) {
+      const observedText = item.observed === null ? "（无 observed 键值）" : JSON.stringify(item.observed);
+      lines.push(`  - ${item.judged ? "failed" : "无判定"} case（${item.capabilityId}）：${item.operation || "（无 operation）"} → observed ${observedText}`);
+    }
+  }
+  const totals = runtimeProbeSection.totals;
+  const passRate = totals.cases.total > 0 ? `${Math.round((totals.cases.passed / totals.cases.total) * 100)}%` : "unknown（无 cases）";
+  lines.push(`- 汇总：probe ${totals.probeCount} 次、cases ${totals.cases.total}、通过 ${totals.cases.passed}（通过率 ${passRate}）、failed ${totals.cases.failed}${totals.cases.withoutVerdict > 0 ? `、无 passed 判定 ${totals.cases.withoutVerdict}（按 unknown 披露，不计入通过/失败）` : ""}${totals.skippedFromSummary > 0 ? `、summary skipped ${totals.skippedFromSummary}` : ""}${totals.unreadableArtifacts > 0 ? `；artifact 不可读 ${totals.unreadableArtifacts} 个（未计入 cases 汇总）` : ""}`);
+}
+lines.push("");
+
+lines.push("## 12. 证据环境计数（全部 EvidenceRecorded × artifact environment.kind）");
+lines.push("");
+if (evidenceEnvironmentSection.status !== "ok") {
+  lines.push(`- ${fmtUnknown(evidenceEnvironmentSection.reason)}`);
+} else {
+  const counts = evidenceEnvironmentSection.counts;
+  lines.push(`- 证据事件 ${evidenceEnvironmentSection.total} 条：official-runner ${counts["official-runner"]}、real-host ${counts["real-host"]}、fake-host ${counts["fake-host"]}${evidenceEnvironmentSection.missingEnvironment.length > 0 ? `、无法归类 ${evidenceEnvironmentSection.missingEnvironment.length}` : ""}`);
+  for (const item of evidenceEnvironmentSection.missingEnvironment) {
+    lines.push(`  - 无法归类：${item.eventId ?? "?"}（${item.artifact}）——${item.reason}`);
+  }
+}
+lines.push("");
+
+lines.push("## 13. fake-host parity 差异清单（IA 落盘 fake-host-parity-*.json）");
+lines.push("");
+if (paritySection.status !== "ok") {
+  lines.push(`- ${fmtUnknown(paritySection.reason)}`);
+} else if (paritySection.files === 0) {
+  lines.push(`- ${paritySection.note}`);
+} else {
+  const sampleCount = paritySection.records.reduce((sum, record) => sum + (Array.isArray(record?.parity) ? record.parity.length : 0), 0);
+  lines.push(`- parity 记录文件 ${paritySection.files} 个：对照样本 ${sampleCount} 个、语义差异 ${paritySection.mismatches.length} 个`);
+  for (const mismatch of paritySection.mismatches) {
+    lines.push(`  - 差异：${mismatch?.mockAssetId ?? "?"} 样本 ${mismatch?.sampleId ?? "?"}——mock=${JSON.stringify(mismatch?.mockValue ?? null)} / real=${JSON.stringify(mismatch?.realValue ?? null)}（same=false 不是立即失败：该 mock 不得继续作为该语义的证明，处置 = 升级为真实环境断言或修 mock）`);
+  }
+  for (const problem of paritySection.problems) {
+    lines.push(`  - 校验问题：${problem}`);
+  }
+  for (const item of paritySection.unreadableFiles) {
+    lines.push(`  - 文件不可解析：${item.file}——${fmtUnknown(item.reason)}`);
+  }
+}
+lines.push("");
+
+lines.push("## 14. 工具链与验证资产状态（project-capabilities.json 摘录）");
+lines.push("");
+if (toolchainSection.status !== "ok") {
+  lines.push(`- ${fmtUnknown(toolchainSection.reason)}——dev-flow 段快照经 --capabilities-file 传入后可呈现本节`);
+} else {
+  const toolchain = toolchainSection.toolchain;
+  if (Array.isArray(toolchain)) {
+    lines.push(toolchain.length === 0
+      ? "- 工具链（toolchain）：项目未声明受管工具链（typescript / eslint）——未声明不是缺口，是项目事实"
+      : `- 工具链（toolchain）：${toolchain.map((entry) => `${entry.id}=${entry.status}${entry.command !== null ? `（${entry.command}）` : ""}`).join("、")}`);
+  } else {
+    lines.push(`- 工具链（toolchain）：${fmtUnknown(toolchain.reason)}`);
+  }
+  const testConfig = toolchainSection.testConfig;
+  if (Array.isArray(testConfig)) {
+    lines.push(testConfig.length === 0
+      ? "- 测试配置（testConfig）：未探测到测试 runner 配置"
+      : `- 测试配置（testConfig）：${testConfig.map((entry) => `${entry.runner}${entry.zeroTestPassThrough ? "（zeroTestPassThrough=true 空跑放行在册）" : ""}`).join("、")}`);
+  } else {
+    lines.push(`- 测试配置（testConfig）：${fmtUnknown(testConfig.reason)}`);
+  }
 }
 lines.push("");
 

@@ -77,6 +77,16 @@ function makeFixture(t, { taskId = "full-qual" } = {}) {
   return { root, projectDir, home, taskDir: output.taskDir, creds: output.credentials };
 }
 
+/** 空候选快照（设计 §4.5）：本文件 fixture 无外部契约，照 delivery-gate-v6 测试同款落空候选
+ * 快照文件，供 acceptance.json 的 externalContractReview.detectionSha256 绑定（该键 V6 新任务必填）。 */
+function writeEmptyCandidateSnapshot(fx, acceptanceVersion) {
+  const dir = join(fx.taskDir, "evidence", `acceptance-v${acceptanceVersion}`);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "external-contract-candidates.json");
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] }, null, 2)}\n`);
+  return sha256(readFileSync(path, "utf8"));
+}
+
 /** schema 2 最小验收包（含断言与反例场景）——形态同 delivery-core-v5.test.mjs 夹具 */
 function writeSchema2Package(fx) {
   writeFileSync(join(fx.taskDir, "acceptance.json"), `${JSON.stringify({
@@ -101,6 +111,8 @@ function writeSchema2Package(fx) {
     riskLevel: "high",
     exploratoryReview: "required",
     reviewDimensions: ["smoke"],
+    // delivery-gate 新检查（§5.1 检查 2）：V6 世代新任务 externalContractReview 键必填，空处置表合法
+    externalContractReview: { detectionSha256: writeEmptyCandidateSnapshot(fx, 1), dispositions: [] },
   }, null, 2)}\n`);
   writeFileSync(join(fx.taskDir, "increments.json"), `${JSON.stringify({
     schemaVersion: 1,

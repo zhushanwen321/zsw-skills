@@ -594,7 +594,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "6.4.0"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "6.5.0"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
 // ── W2 wave-executor-v6 ──
 // 语义权威：设计文档 §8.2（调度语义）/ §8.3（exec-plan schema）/ §6.2（D1/D3 时间线）。
 // 调度只看依赖边：deps 全 done 即派发；wave 字段完全不参与调度（仅 D0 侧展示标签）。
@@ -866,61 +866,109 @@ const RUN_IN_CWD =
 const GIT_DIFF_STAT =
   "try{const o=require('child_process').execFileSync('git',['diff','--stat'],{cwd:process.argv[1],encoding:'utf8',maxBuffer:33554432});process.stdout.write(o)}catch(e){process.stdout.write('(diff 不可用)')}";
 
-// argv 双布局：status 已存在路径 = [statusPath, projectRoot, commitTemplate, runId, ...devEntries]
-//   （布局与语义均不变）；初始态恢复路径 = [statusPath, projectRoot, commitTemplate, runId,
-//   "claimAnyRunId", ...devEntries]（旗标在 runId 与条目之间，条目起点随之右移一位——
-//   脚本按旗标有无选择 slice 起点，旧布局不受影响）→ 双向对账（§4.5 崩溃裁决，git 为准）：
+// argv 双布局：status 已存在路径 = [statusPath, projectRoot, commitTemplate, runId, ...devEntries]；
+// 初始态恢复路径 = [statusPath, projectRoot, commitTemplate, runId, "claimAnyRunId", ...devEntries]
+//   （旗标在 runId 与条目之间，条目起点随之右移一位——脚本按旗标有无选择 slice 起点）。
 //   devEntries 条目 = `<id>`（主仓节点）或 `<id>@<仓根绝对路径>`（跨仓节点，如子模块）——
 //   commit 存在性校验与 git log 反查都必须在 commit 所在仓执行：单 projectRoot 口径曾把
 //   子模块 commit 判「不在对象库」致已交付单元全部回 pending 重跑（实测 compute-asr
 //   run 二次发起时 U1/U3/U6b 空重跑）。
+// F4 收敛：本探针是只读核验器——git cat-file/log 查证后输出 JSON 判定，不写 status、
+//   不产事件。旧版在此内联改 nodes 并写词表外事件（reconcile-reset/reconcile-warn），
+//   绕过转移唯一入口；状态翻转回引擎 TS 侧统一经 applyNodeTransition 走注册边：
+//   reset 判定 → reconcile-pending（done→pending 既有边），restore 判定 → reconcile-done
+//   （pending→done 既有边；restore 前置归 pending 按当前态取注册边，见
+//   applyReconcileVerdicts）。无态变信息（无 baseline 警示等）走引擎日志，不进事件流。
+//   stdout = { warn: string|null, verdicts: [{ id, verdict, commit? }] }。
 //   claimAnyRunId = 字面量 "claimAnyRunId" 时反查不校验 Run-Id trailer（status.json 曾缺失
 //   的初始态恢复路径专用——该路径先生成全新 runId 写入初始 status 再反查，旧交付 commit
 //   带旧 Run-Id，trailer 精确匹配恒落空，已交付单元会被整节点重做）。认领语义 = subject
 //   前缀 + 词边界命中即认领，同一单元多个候选 commit 取 baseline..HEAD 中最新可达的一个
 //   （git log 新 commit 在前，find 首个命中即最新）。旗标缺省（status 已存在的双向对账
 //   路径）保持 Run-Id trailer 精确匹配语义。
-//   ①status=done 的节点：commit 不在其仓 git 对象库 → 回 pending；
-//   ②status≠done 的 dev 节点：git log 反查补写 done（commit 哈希 + 证据）。反查命中条件
-//     三重锚定：a) 时间窗 = baseline..HEAD——无 baseline 时反查禁用（不回退扫 HEAD 起
-//     500 条：跨 run 同模板同单元编号的历史 commit 会撞名误配，正是 431b898 修复的事故
-//     形态；禁用后未记录单元保持 pending 重跑，由引擎提交的幂等分支兜住，方向安全。
-//     baseline 固化（status.json 初建必写）后该分支只对旧格式 status.json 可达；
-//     b) Run-Id 锚定，三态：默认（旗标缺省）= commit trailer 的 Run-Id === 本 run 标识
-//     （构造性唯一：引擎渲染 message 时统一追加，AI 自由文本经单行化净化无法伪造 trailer
-//     段），本 run 的 commit 恒带 trailer，无 trailer 且前缀匹配的历史 commit 在 runId
-//     在场时不认；claimAnyRunId 认领语义 = 跳过该锚（见上）；status 无 runId（旧格式引擎
-//     写的）→ 兼容路径：只认无 trailer + 前缀 + 词边界（旧引擎 commit 恰好无 trailer，
-//     自洽）；
-//     c) subject 前缀锚定 = commitTemplate 按 {unitId} 切出的静态前段 + <id>，且 <id> 后继
+//   反查命中条件三重锚定：a) 时间窗 = baseline..HEAD——无 baseline 时反查禁用（不回退扫
+//     HEAD 起 500 条：跨 run 同模板同单元编号的历史 commit 会撞名误配，正是 431b898 修复
+//     的事故形态；禁用后未记录单元保持 pending 重跑，由引擎提交的幂等分支兜住，方向安全。
+//     baseline 固化（status.json 初建必写）后该分支只对旧格式 status.json 可达）；
+//   b) Run-Id 锚定，三态：默认（旗标缺省）= commit trailer 的 Run-Id === status 记录的
+//     run 标识（构造性唯一：引擎渲染 message 时统一追加，AI 自由文本经单行化净化无法
+//     伪造 trailer 段）；claimAnyRunId 认领语义 = 跳过该锚（见上）；status 无 runId（旧
+//     格式）→ 兼容路径：只认无 trailer + 前缀 + 词边界（旧引擎 commit 恰好无 trailer，自洽）；
+//   c) subject 前缀锚定 = commitTemplate 按 {unitId} 切出的静态前段 + <id>，且 <id> 后继
 //     字符非字母数字连字符（模板缺失时退化为 <id> 前缀 + 同一边界检查）——区分 run 内
-//     不同单元。stdout = 对账后的完整 status.json
-//     （保留 schema 外顶层字段；runId 缺失时以 argv 传入值补写，保证输出恒含）
-const RECONCILE_STATUS =
+//     不同单元。
+const RECONCILE_VERIFY =
   "try{const fs=require('fs');const sp=process.argv[1],root=process.argv[2],tpl=process.argv[3]||'',runIdArg=process.argv[4]||'',claimAny=process.argv[5]==='claimAnyRunId',ents=process.argv.slice(claimAny?6:5).map(function(s){var i=s.indexOf('@');return i<0?{id:s,cwd:root}:{id:s.slice(0,i),cwd:s.slice(i+1)};});" +
-  "const x=require('child_process').execFileSync;const st=JSON.parse(fs.readFileSync(sp,'utf8'));const nodes={};" +
-  "for(const k of Object.keys(st.nodes||{}))nodes[k]=st.nodes[k];const events=(st.events||[]).slice();" +
+  "const x=require('child_process').execFileSync;const st=JSON.parse(fs.readFileSync(sp,'utf8'));" +
   "const range=typeof st.baseline==='string'&&st.baseline?st.baseline+'..HEAD':null;" +
-  "if(!range)events.push({seq:events.length+1,node:'*',event:'reconcile-warn',detail:'status 无 baseline——反查禁用，未记录单元保持 pending 重跑（幂等核验兜底）。恢复动作：旧格式 status.json，重发起后引擎初建即固化 baseline'});" +
+  "const warn=range===null?'status 无 baseline——反查禁用，未记录单元保持 pending 重跑（幂等核验兜底）。恢复动作：旧格式 status.json，重发起后引擎初建即固化 baseline':null;" +
   "const logCache={};" +
   "const logOf=function(cwd){if(logCache[cwd]!==undefined)return logCache[cwd];var v='';if(range){try{v=String(x('git',['log','--format=%H%x1f%s%x1f%(trailers:key=Run-Id,valueonly)',range],{cwd:cwd,encoding:'utf8',maxBuffer:33554432}))}catch(err){}}logCache[cwd]=v;return v;};" +
   "const runId=typeof st.runId==='string'&&st.runId?st.runId:null;" +
   "const preOf=(id)=>(tpl.split('{unitId}')[0]||'')+id;" +
-  "for(const ent of ents){const id=ent.id,cwd=ent.cwd;const e=nodes[id]||{status:'pending',attempts:0};" +
+  "const verdicts=[];" +
+  "for(const ent of ents){const id=ent.id,cwd=ent.cwd;const e=(st.nodes||{})[id]||{status:'pending',attempts:0};" +
   "if(e.status==='done'){let ok=false;" +
   "if(typeof e.commit==='string'&&e.commit.length>=7){try{x('git',['cat-file','-e',e.commit+'^{commit}'],{cwd:cwd,encoding:'utf8'});ok=true}catch(err){}}" +
-  "if(ok)continue;nodes[id]={status:'pending',attempts:(e.attempts||0)};" +
-  "events.push({seq:events.length+1,node:id,event:'reconcile-reset',detail:'status done 但 commit 不在 git 对象库，按 git 为准回 pending'})}" +
+  "verdicts.push(ok?{id:id,verdict:'keep'}:{id:id,verdict:'reset-pending',commit:typeof e.commit==='string'?e.commit:''})}" +
   "else{const pre=preOf(id);" +
   "const hit=logOf(cwd).split('\\n').find((l)=>{const seg=l.split('\\x1f');if(seg.length<2)return false;const s=seg[1]||'';const t=(seg[2]||'').trim();" +
   "const subj=s.startsWith(pre)&&(s.length===pre.length||!/[A-Za-z0-9-]/.test(s.charAt(pre.length)));" +
   "if(!subj)return false;" +
   "return claimAny?true:(runId!==null?(t===runId):(t===''))});" +
-  "if(hit){const h=hit.slice(0,hit.indexOf('\\x1f'));nodes[id]={status:'done',attempts:Math.max(1,((e.attempts||0)+1)),commit:h,evidence:'恢复对账：git log 反查命中本单元 commit（'+(claimAny?'前缀+词边界认领（status 曾缺失，不校验 Run-Id）':'Run-Id '+(runId!==null?'精确匹配':'兼容路径：前缀+词边界（status 无 runId）'))+'，status 未记，按 git 为准补写 done；attempts=max(1,prior+1) 补记一次未记账完成派发）'};" +
-  "events.push({seq:events.length+1,node:id,event:'reconcile-done',detail:'status 未记但 git log 有本单元 commit，按 git 为准补写 done'})}}}" +
-  "const out={};for(const k of Object.keys(st))if(k!=='nodes'&&k!=='events')out[k]=st[k];out.baseline=st.baseline||null;out.runId=st.runId||runIdArg||null;out.nodes=nodes;out.events=events;" +
-  "process.stdout.write(JSON.stringify(out))}" +
-  "catch(e){process.stderr.write(String((e&&e.message)||'reconcile failed'));process.exit(1)}";
+  "verdicts.push(hit?{id:id,verdict:'restore-done',commit:hit.slice(0,hit.indexOf('\\x1f'))}:{id:id,verdict:'keep'})}}" +
+  "process.stdout.write(JSON.stringify({warn:warn,verdicts:verdicts}))}" +
+  "catch(e){process.stderr.write(String((e&&e.message)||'reconcile verify failed'));process.exit(1)}";
+
+/** 对账判定 → 注册边转移（F4 收敛后的唯一状态翻转通道）：只读核验器的 verdicts 在
+ *  TS 侧经 applyNodeTransition 落盘并追加注册事件，事件与 nodes 由同一笔写入产生，
+ *  node-project 按 events 重放可重建在盘 nodes（派生视图一致）。
+ *  reset 判定 → reconcile-pending（done→pending）；restore 判定 → 先按当前态取注册边
+ *  归 pending（done=reconcile-pending / blocked|failed=reset / in-progress=cascade-reset /
+ *  suspended=resume——等价复位），再 reconcile-done 补写 done（pending→done，commit 进
+ *  payload 供重放恢复）。返回 { restored, reset } 供对账日志计数。 */
+async function applyReconcileVerdicts(
+  verdicts: unknown,
+  claimAny: boolean,
+  scopeIds: string[],
+): Promise<{ restored: number; reset: number }> {
+  const none = { restored: 0, reset: 0 };
+  if (!Array.isArray(verdicts)) return none;
+  let restored = 0;
+  let reset = 0;
+  for (const raw of verdicts) {
+    if (!isRec(raw)) continue;
+    const id = typeof raw.id === "string" ? raw.id : "";
+    const verdict = typeof raw.verdict === "string" ? raw.verdict : "";
+    if (id === "" || !scopeIds.includes(id)) continue;
+    const commit = typeof raw.commit === "string" && raw.commit !== "" ? raw.commit : undefined;
+    if (verdict === "reset-pending") {
+      const applied = await applyNodeTransition(id, "reconcile-pending", {
+        detail: `恢复对账：status done 但 commit 不在 git 对象库（commit=${commit ?? "无记录"}），按 git 为准回 pending（attempts 保留）`,
+      });
+      if (applied) reset += 1;
+    } else if (verdict === "restore-done") {
+      if (commit === undefined) continue;
+      const from = nodeState(id);
+      if (from !== "pending") {
+        const preEvent =
+          from === "done" ? "reconcile-pending" : from === "blocked" || from === "failed" ? "reset" : from === "in-progress" ? "cascade-reset" : "resume";
+        const preApplied = await applyNodeTransition(id, preEvent, {
+          detail: `恢复对账前置：${from} 态先归 pending（注册边 ${preEvent}），随后按 git 反查结果补写 done`,
+        });
+        if (!preApplied) continue;
+      }
+      const anchor = claimAny ? "前缀+词边界认领（status 曾缺失，不校验 Run-Id）" : "Run-Id 精确匹配";
+      const applied = await applyNodeTransition(id, "reconcile-done", {
+        commit,
+        evidence: `恢复对账：git log 反查命中本单元 commit（${anchor}，status 未记，按 git 为准补写 done；attempts=max(1,prior+1) 补记一次未记账完成派发）`,
+        detail: `恢复对账：status 未记但 git log 有本单元 commit（${anchor}），按 git 为准补写 done`,
+      });
+      if (applied) restored += 1;
+    }
+  }
+  return { restored, reset };
+}
 
 // ── 纯工具函数 ──
 
@@ -1071,7 +1119,7 @@ function sanitizeSummary(summary: string): string {
 
 /** 完整 commit message = subject（模板渲染，summary 单行化）+ 空行 + Run-Id trailer。
  *  Run-Id = 引擎初建 status.json 时生成的运行唯一标识，同模板同单元编号的历史 commit
- *  没有本 run 的 Run-Id，反查（RECONCILE_STATUS）按 trailer 精确匹配构造性排除撞名。
+ *  没有本 run 的 Run-Id，反查（RECONCILE_VERIFY）按 trailer 精确匹配构造性排除撞名。
  *  trailer 是 git 标准惯例（同 Signed-off-by 的单独成行形态），git 原生
  *  %(trailers:key=Run-Id) 可解析，读侧不依赖手写字符串匹配 */
 function buildCommitMessage(template: string, unitId: string, summary: string, runId: string): string {
@@ -1558,10 +1606,14 @@ const NODE_TRANSITIONS: Array<{ event: string; from: string[]; to: string; attem
   { event: "reset", from: ["blocked", "failed"], to: "pending", attempts: "preserve" },
   { event: "suspend", from: ["pending"], to: "suspended", attempts: "preserve" },
   { event: "resume", from: ["suspended"], to: "pending", attempts: "preserve" },
-  // 以下三行本引擎不直接调用（恢复对账走启动内联脚本、人工处置走 delivery-core），
-  // 但表必须与内核 node 域完整一致——对拍测试按全表差分，缺行即红灯
   { event: "reconcile-pending", from: ["done"], to: "pending", attempts: "preserve" },
   { event: "reconcile-done", from: ["pending"], to: "done", attempts: "max-one-plus" },
+  // 级联失效（F5）：上游 done 被对账回 pending 时，已 done 的后继一并退回——与
+  // reconcile-pending 共享 done→pending 但业务原因不同，判定唯一性按 (from,event)
+  { event: "cascade-reset", from: ["done"], to: "pending", attempts: "preserve" },
+  { event: "cascade-reset", from: ["in-progress", "blocked", "failed"], to: "pending", attempts: "preserve" },
+  // 人工处置不在此通道——走 delivery-core node-transition manual-disposition --basis；
+  // 本表其余各行与内核 node 域完整一致（对拍测试按全表差分，缺行即红灯）
   { event: "manual-disposition", from: ["blocked", "failed", "suspended"], to: "done", attempts: "at-least-one" },
 ];
 
@@ -3127,7 +3179,7 @@ for (const c of allCwds) {
 // 不在则回 pending——§4.5 崩溃裁决以 git 为准），其余一律回 pending 重执行
 const existingStatus = await readStatusFile();
 // 运行唯一标识（本 run 新 commit 恒带的 trailer 锚）：初建时生成——初始态反查走 claimAny
-// 认领语义不校验它（见 RECONCILE_STATUS 注释）；恢复时沿用磁盘值，status 已存在的双向
+// 认领语义不校验它（见 RECONCILE_VERIFY 注释）；恢复时沿用磁盘值，status 已存在的双向
 // 对账路径按它精确匹配（旧格式无 runId → 生成新值，旧 commit 因 trailer 不匹配不再被
 // 反查认领，重跑由幂等核验兜住）
 const genRunId = async (): Promise<string> => {
@@ -3181,25 +3233,17 @@ if (existingStatus === null) {
   // commit 在 git——非 done 的 dev 节点按「前缀+词边界」反查补写 done，避免重跑已交付
   // 单元。此刻 status 里的 runId 是本 run 新生成的，旧交付 commit 带旧 Run-Id，trailer
   // 精确匹配恒落空，故此路径不校验 Run-Id；status 已存在的双向对账路径（else 分支）仍走
-  // 精确匹配，语义不变
+  // 精确匹配，语义不变。补写经 applyReconcileVerdicts 走转移唯一入口（reconcile-done
+  // 注册边），事件与 nodes 同笔落盘——内存 done 与磁盘不再漂移，重启不重复对账
   const freshDevIds = plan.nodes.filter((n) => n.kind === "dev").map((n) => n.id);
   if (freshDevIds.length > 0) {
-    const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, "claimAnyRunId", ...freshDevIds.map(devEntry)]);
+    const rec = await world.run("node", ["-e", RECONCILE_VERIFY, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, "claimAnyRunId", ...freshDevIds.map(devEntry)]);
     if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
       try {
         const parsed = JSON.parse(rec.stdout) as unknown;
-        if (isRec(parsed) && isRec(parsed.nodes)) {
-          for (const id of freshDevIds) {
-            const e = normalizeEntry(parsed.nodes[id]);
-            if (e.status === "done") state.set(id, { status: "done", attempts: e.attempts });
-          }
-          const recovered = freshDevIds.filter((id) => nodeState(id) === "done").length;
-          if (recovered > 0) {
-            // 对账结果写回磁盘（RECONCILE stdout 即完整 status.json）——只更新内存会造成
-            // 磁盘全 pending 与内存 done 漂移，重启后对账重复跑（曾实测：补 done 蒸发）
-            await writeTextViaNode(plan.statusPath, rec.stdout.trim());
-            log(`初始态对账：git log 反查补写 ${recovered} 个已提交单元为 done 并写回 status.json（status.json 曾缺失）`);
-          }
+        if (isRec(parsed)) {
+          const { restored } = await applyReconcileVerdicts(parsed.verdicts, true, freshDevIds);
+          if (restored > 0) log(`初始态对账：git log 反查补写 ${restored} 个已提交单元为 done（status.json 曾缺失，事件已随转移落盘）`);
         }
       } catch {
         // 对账输出解析失败：保持全 pending 重跑（安全方向——重复执行有幂等核验兜底）
@@ -3208,38 +3252,64 @@ if (existingStatus === null) {
   }
 } else {
   // 双向对账（§4.5 崩溃裁决，git 为准）：done 验证 commit 存在性（不在回 pending）；
-  // 非 done 的 dev 节点反查 git log（commitTemplate 渲染的单元锚）——有 commit 未记 → 补写 done
+  // 非 done 的 dev 节点反查 git log（commitTemplate 渲染的单元锚）——有 commit 未记 → 补写 done。
+  // F4/F5 收敛：核验只读（RECONCILE_VERIFY 输出判定），全部状态翻转经 applyNodeTransition
+  // 走注册边落盘（事件与 nodes 同笔写入，node-project 按 events 重放可重建在盘 nodes）。
+  // 旧版对账直改 aligned 后整文写回且不带事件（级联失效/inspect 锚还把 attempts 归零——
+  // V4 缺陷语义复辟），派生视图与在盘 nodes 从此对不上
   const allDevIds = plan.nodes.filter((n) => n.kind === "dev").map((n) => n.id);
-  let aligned: Record<string, StatusEntry> = {};
-  for (const n of plan.nodes) aligned[n.id] = existingStatus.nodes[n.id] ?? { status: "pending", attempts: 0 };
+  // 内存态先按在盘条目播种（applyNodeTransition 的转移判定读 state——播种晚于判定会把
+  // done 态误当 pending 收事件、被转移表拒绝，恢复对账整段失效）
+  for (const n of plan.nodes) {
+    const e = existingStatus.nodes[n.id] ?? { status: "pending", attempts: 0 };
+    state.set(n.id, {
+      status: e.status as NodeRt["status"],
+      attempts: e.attempts,
+      ...(e.commit !== undefined ? { commit: e.commit } : {}),
+    });
+  }
   // runId 恢复：沿用磁盘值保证跨重启 trailer 锚一致；旧格式无 runId → 换新值（本 run
   // 新 commit 带新 trailer，旧 commit 不被认领，兼容路径不再适用——重跑由幂等核验兜住）
   const prevRunId = existingStatus.extra["runId"];
   activeRunId = typeof prevRunId === "string" && prevRunId !== "" ? prevRunId : await genRunId();
+  if (typeof prevRunId !== "string" || prevRunId === "") {
+    // 旧格式补写 runId 顶层字段：反查锚跨 run 稳定依赖它落盘（旧版经整文写回顺带持久化，
+    // 收敛后写回点只剩 statusUpdate——它只动 nodes/events，runId 需在此单独落盘）
+    await serializedStatus(async () => {
+      const st = await readStatusFile();
+      if (st === null) return;
+      await writeTextViaNode(
+        plan.statusPath,
+        JSON.stringify({ ...st.extra, runId: activeRunId, baseline: st.baseline, nodes: st.nodes, events: st.events }, null, 2),
+      );
+    });
+  }
   if (allDevIds.length > 0) {
-    const rec = await world.run("node", ["-e", RECONCILE_STATUS, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, ...allDevIds.map(devEntry)]);
+    const rec = await world.run("node", ["-e", RECONCILE_VERIFY, plan.statusPath, plan.projectRoot, plan.commitTemplate, activeRunId, ...allDevIds.map(devEntry)]);
     if (rec.exitCode === 0 && rec.stdout.trim() !== "") {
       try {
         const parsed = JSON.parse(rec.stdout) as unknown;
-        if (isRec(parsed) && isRec(parsed.nodes)) {
-          for (const id of allDevIds) aligned[id] = normalizeEntry(parsed.nodes[id]);
-          log(`status.json 已存在，双向对账完成（dev 节点 ${allDevIds.length} 个：done 核验 commit 存在性 + git log 反查补写）`);
+        if (isRec(parsed)) {
+          if (typeof parsed.warn === "string" && parsed.warn !== "") log(`对账警示（无态变，不入事件流）：${parsed.warn}`);
+          const { restored, reset } = await applyReconcileVerdicts(parsed.verdicts, false, allDevIds);
+          if (restored > 0 || reset > 0) {
+            log(`双向对账：reconcile-done 补写 ${restored} 个、reconcile-pending 回退 ${reset} 个（事件已随转移落盘）`);
+          }
         }
       } catch {
         // 对账输出解析失败：保留原始记录，终态核验仍有 commit 证据可查
       }
+    } else if (rec.exitCode !== 0) {
+      log(`WARN: 对账核验器执行失败（exit ${rec.exitCode}）：${(rec.stderr || rec.stdout).trim()}——保留在盘记录继续，终态核验仍有 commit 证据可查`);
     }
   }
-  // 级联失效：dev 节点被对账回 pending（commit 不在 git 对象库）时，其已 done 的后继
-  //（直接/传递依赖它的节点，含 verify/inspect）一并回 pending——后继的验证结论基于已
-  // 消失的 commit，属陈旧验证（曾保持 done 被增量跳过，信任了不存在的历史）
+  // 级联失效（F5：cascade-reset 注册边，attempts 保留——归零是 V4 缺陷语义复辟）：
+  // dev 节点被对账回 pending（commit 不在 git 对象库）时，其已 done 的后继（直接/传递
+  // 依赖它的节点，含 verify/inspect）一并回 pending——后继的验证结论基于已消失的 commit，
+  // 属陈旧验证（曾保持 done 被增量跳过，信任了不存在的历史）
   const resetIds = new Set<string>();
   for (const n of plan.nodes) {
-    if (
-      n.kind === "dev" &&
-      (existingStatus.nodes[n.id]?.status ?? "pending") === "done" &&
-      aligned[n.id]?.status !== "done"
-    ) {
+    if (n.kind === "dev" && (existingStatus.nodes[n.id]?.status ?? "pending") === "done" && nodeState(n.id) !== "done") {
       resetIds.add(n.id);
     }
   }
@@ -3248,60 +3318,86 @@ if (existingStatus === null) {
     while (grew) {
       grew = false;
       for (const n of plan.nodes) {
-        if (aligned[n.id]?.status === "done" && n.deps.some((d) => resetIds.has(d)) && !resetIds.has(n.id)) {
+        if (nodeState(n.id) === "done" && n.deps.some((d) => resetIds.has(d)) && !resetIds.has(n.id)) {
           resetIds.add(n.id);
           grew = true;
         }
       }
     }
     for (const id of resetIds) {
-      if (aligned[id] !== undefined && aligned[id].status === "done") {
-        aligned[id] = { status: "pending", attempts: 0 };
-        log(`级联失效：${id} 依赖的单元被对账回 pending，其 done 结论基于已消失的 commit——一并回 pending`);
-      }
+      if (nodeState(id) !== "done") continue;
+      const applied = await applyNodeTransition(id, "cascade-reset", {
+        detail: "级联失效：依赖的单元被对账回 pending，其 done 结论基于已消失的 commit——回 pending（attempts 保留，修复环计数不丢）",
+      });
+      if (applied) log(`级联失效：${id} 一并回 pending（cascade-reset，attempts 保留）`);
     }
   }
   // inspect 节点的 done 无 commit 锚（上面的对账只核 dev 节点 git 存在性），单独核
   // verdict 判定文件——防上一 run 的假 done（结构化自报 pass、判定书实际 FAIL，或干脆
-  // 未经真实检查）被「按 status.json 增量跳过」继承（2026-10-04 taiji D3 A10 实证形态）
+  // 未经真实检查）被「按 status.json 增量跳过」继承（2026-10-04 taiji D3 A10 实证形态）。
+  // 翻转同走 cascade-reset 注册边（F5：不再直改内存 + 归零 attempts）
   for (const n of plan.nodes) {
     if (n.kind !== "inspect" || n.artifactsDir === "") continue;
-    if (aligned[n.id]?.status !== "done") continue;
+    if (nodeState(n.id) !== "done") continue;
     const v = await readVerdictAnchorVerdict(n.artifactsDir);
     if (v === null) {
-      aligned[n.id] = { status: "pending", attempts: 0 };
-      log(`inspect 锚核对：${n.id} 的 status.json 记 done，但 ${n.artifactsDir}/verdict.json 缺失、不可解析或结论非 pass/degraded——回 pending 重跑`);
+      const applied = await applyNodeTransition(n.id, "cascade-reset", {
+        detail: `inspect 锚核对：${n.artifactsDir}/verdict.json 缺失、不可解析或结论非 pass/degraded——回 pending 重跑（attempts 保留）`,
+      });
+      if (applied) log(`inspect 锚核对：${n.id} 回 pending 重跑（cascade-reset，attempts 保留）`);
     }
   }
+  // 内存态归一（保留既有语义）：done 保持，其余一律按 pending 重执行——对账未触及的
+  // 前 run 残留态（in-progress/blocked/failed/suspended，磁盘有事件背书、重放一致）只在
+  // 内存按 pending 重派，磁盘条目由该节点下次 begin 覆盖
   for (const n of plan.nodes) {
-    const e = aligned[n.id] ?? { status: "pending", attempts: 0 };
-    const st: NodeRt["status"] = e.status === "done" ? "done" : "pending";
-    state.set(n.id, { status: st, attempts: e.attempts });
+    const cur = state.get(n.id);
+    const st: NodeRt["status"] = cur?.status === "done" ? "done" : "pending";
+    if (cur === undefined || cur.status !== st) {
+      state.set(n.id, { status: st, attempts: cur?.attempts ?? 0, ...(cur?.commit !== undefined ? { commit: cur.commit } : {}) });
+    }
   }
-  // 对账结果写回磁盘（含反查补 done 与级联失效的最终态）——只更新内存会在重启后
-  // 重复对账且补 done 不落盘（RECONCILE 输出含 reconcile-done 事件，直接整文写回）。
-  // nodes 必须以既有条目为底、aligned 只覆盖当前 plan 节点：dev/acceptance 两 plan 可共用
-  // 同一 statusPath，aligned 只含当前 plan 节点集，整文替换会抹掉其他 plan 的条目
-  // （2026-09-26 W1 实测：u8 dev run 启动抹掉验收 v-* 条目；增量/终局回写均保留外部条目）
-  const alignedAny =
-    allDevIds.some((id) => (aligned[id]?.status ?? "pending") !== (existingStatus.nodes[id]?.status ?? "pending")) ||
-    resetIds.size > 0;
-  if (alignedAny) {
-    await writeTextViaNode(
-      plan.statusPath,
-      JSON.stringify(
-        {
-          ...existingStatus.extra,
-          baseline: existingStatus.baseline,
-          nodes: { ...existingStatus.nodes, ...aligned },
-          events: existingStatus.events,
-        },
-        null,
-        2,
-      ),
-    );
-    log(`对账结果已写回 ${plan.statusPath}（补 done / 级联失效条目落盘，重启不再重复对账）`);
+  const reconDoneCount = plan.nodes.filter((n) => nodeState(n.id) === "done").length;
+  log(`status.json 已存在，双向对账完成（dev 节点 ${allDevIds.length} 个：done 核验 commit 存在性 + git log 反查补写，事件随转移落盘；done ${reconDoneCount} 个按 status.json 增量跳过）`);
+}
+
+// ── D1 wave 尝试账（V5 完整性设计 §8.2：D1 循环与验收复审同语义登记 loop-attempts）──
+// taskDir 推导：交付体系编译的 exec-plan 把 processReviewPath 固定指向 <taskDir>/
+// process-review.jsonl（dev-flow-v6 compile.md 手拼契约），dirname 即交付任务目录；
+// 独立设计任务无该字段 → 不入账（无交付任务目录可挂，loop-attempts.jsonl 无落点）。
+// 进入执行即 started（§8.1：进入循环即计数，打回/失败/中断都算尝试），终局按 terminated
+// 补 finished outcome（completed=passed，blocked/core-failed=failed）——失败轮由此进统一
+// 尝试账，跨 run 累计。attemptKey = <activeRunId>:1，runId 每 run 唯一，重放幂等。
+// 登记是辅助账本：失败降级为终态披露（不阻断执行主流程——辅助故障不得拖垮核心）
+const coreCliPath = `${homeRes.stdout.trim()}/.agents/skills/delivery-v6/scripts/delivery-core.mjs`;
+const d1TaskDir = plan.mode === "dev" && plan.processReviewPath !== null ? plan.processReviewPath.replace(/\/[^/]+$/, "") : null;
+let d1AttemptNote = "";
+const recordD1Attempt = async (event: "started" | "finished", outcome?: string): Promise<void> => {
+  if (d1TaskDir === null) return;
+  const res = await world.run("node", [
+    coreCliPath,
+    "loop-attempt",
+    "--task-dir",
+    d1TaskDir,
+    "--loop",
+    "d1",
+    "--path",
+    "workflow",
+    "--run-id",
+    activeRunId,
+    "--round",
+    "1",
+    "--event",
+    event,
+    ...(event === "finished" && outcome !== undefined ? ["--outcome", outcome] : []),
+  ]);
+  if (res.exitCode !== 0) {
+    d1AttemptNote += `；loop-attempt ${event}（--loop d1，round 1）登记失败（exit ${res.exitCode}）：${(res.stderr || res.stdout).trim()}——该轮尝试未入账。恢复动作：按 delivery-core 输出修复任务目录状态后重发（同 runId 同轮重放幂等，不会双计）`;
+    log(`WARN: D1 尝试账登记失败（${event}）：${(res.stderr || res.stdout).trim()}`);
   }
+};
+if (d1TaskDir !== null) {
+  await recordD1Attempt("started");
 }
 
 const depEdgeCount = plan.nodes.reduce((s, n) => s + n.deps.length, 0);
@@ -3360,7 +3456,13 @@ const residualAll =
 const residualFiles = residualAll.filter((f) => !preExisting.has(f));
 const preExistingLeft = residualAll.filter((f) => preExisting.has(f));
 
-// 终局回写：挂起节点落 suspended + run-terminal 事件（status.json 即人读恢复入口）
+// 终局回写（status.json 即人读恢复入口）：挂起节点落 suspended + 终局事实落顶层 terminal
+// 字段。F6 收敛：suspend 翻转除 nodes 外必须追加 suspend 注册事件——旧版只直写 nodes
+// 不产事件，node-project 按 events 重放无法重建 suspended，派生视图与在盘 nodes 失真。
+// F7 收敛：run 级事实（run-terminal / commit-deferred-list / residual-files /
+// pre-existing-files）不属节点域事件流——旧版以 node:"-" 写词表外事件，重放侧只能当
+// 未知事件丢弃；改存 status 顶层 terminal 字段，readStatusFile 收进 extra 原样回写、
+// node-project --write 只重写 nodes 不动顶层——两条投影通道都无损保留
 // runManifestBase：顺带捕获固化 baseline（exec-plan 声明或初建时点 HEAD，经 rev-parse
 // 验证）——run manifest 的 baseCommit 数据源（本 run 全部 commit 的基线分界）
 let runManifestBase: string | null = null;
@@ -3368,58 +3470,44 @@ await serializedStatus(async () => {
   const st = (await readStatusFile()) ?? { baseline: plan.baseline, nodes: {}, events: [], extra: {} };
   runManifestBase = st.baseline;
   const nodes: Record<string, StatusEntry> = { ...st.nodes };
+  const events: StatusEvent[] = [...st.events];
   for (const n of plan.nodes) {
-    // V5 收敛：终局挂起按转移表口径（suspend：attempts 保留——V4 归零丢计数；本 run 未
-    // 派发过的节点 attempts 本就是 0，保留不改变其值）
-    if (nodeState(n.id) === "pending") {
-      const decision = computeNodeTransition(st.nodes[n.id] ?? { status: "pending", attempts: 0 }, "suspend");
-      if (decision.ok) nodes[n.id] = { ...st.nodes[n.id], ...decision.entry } as StatusEntry;
-    }
+    // 终局挂起按转移表口径（suspend：attempts 保留——V4 归零丢计数；本 run 未派发过的
+    // 节点 attempts 本就是 0，保留不改变其值）。挂起判定读在盘条目（与事件重放同源，
+    // 前 run 残留态以在盘为准，保持重放一致）
+    if (nodeState(n.id) !== "pending") continue;
+    const decision = computeNodeTransition(st.nodes[n.id] ?? { status: "pending", attempts: 0 }, "suspend");
+    if (!decision.ok) continue;
+    nodes[n.id] = { ...st.nodes[n.id], ...decision.entry } as StatusEntry;
+    events.push({
+      seq: events.length + 1,
+      node: n.id,
+      event: "suspend",
+      detail: "终局挂起：本 run 未派发的节点落 suspended（attempts 保留），恢复入口 resume 或 delivery-core node-transition manual-disposition",
+    });
   }
-  const residualNote =
-    residualFiles.length > 0
-      ? `; residual=${residualFiles.length}（清单外残留，判归属后处置：${residualFiles.slice(0, 5).join("、")}${residualFiles.length > 5 ? " 等" : ""}）`
-      : "";
-  const deferredNote =
-    deferredCommits.length > 0 ? `; commit-deferred=${deferredCommits.map((d) => d.id).join("、")}（主 agent 代提交）` : "";
-  const events: StatusEvent[] = [
-    ...st.events,
-    {
-      seq: st.events.length + 1,
-      node: "-",
-      event: "run-terminal",
-      detail: `terminated=${terminated}; done=${doneIds.length}; blocked=${blockedOut.length}; skipped=${skippedIds.length}${deferredNote}${residualNote}`,
-    },
-  ];
+  const terminal: Record<string, unknown> = {
+    terminated,
+    done: doneIds.length,
+    blocked: blockedOut.length,
+    skipped: skippedIds.length,
+  };
   if (deferredCommits.length > 0) {
-    events.push({
-      seq: events.length + 1,
-      node: "-",
-      event: "commit-deferred-list",
-      detail: deferredCommits.map((d) => `${d.id}：${d.message}`).join("\n"),
-    });
+    terminal.deferredCommits = deferredCommits.map((d) => ({ id: d.id, message: d.message }));
   }
-  if (residualFiles.length > 0) {
-    events.push({
-      seq: events.length + 1,
-      node: "-",
-      event: "residual-files",
-      detail: residualFiles.join("\n"),
-    });
-  }
-  if (preExistingLeft.length > 0) {
-    events.push({
-      seq: events.length + 1,
-      node: "-",
-      event: "pre-existing-files",
-      detail: `启动前既有未提交改动 ${preExistingLeft.length} 项（非本次 run 产生，是否处置按主 agent 语境判断）：\n${preExistingLeft.join("\n")}`,
-    });
-  }
-  await writeTextViaNode(plan.statusPath, JSON.stringify({ ...st.extra, baseline: st.baseline, nodes, events }, null, 2));
+  if (residualFiles.length > 0) terminal.residualFiles = residualFiles;
+  if (preExistingLeft.length > 0) terminal.preExistingFiles = preExistingLeft;
+  await writeTextViaNode(plan.statusPath, JSON.stringify({ ...st.extra, baseline: st.baseline, nodes, events, terminal }, null, 2));
 });
 
+// D1 尝试账收口：终局补 finished outcome（started 已在执行入口登记；§8.1 结果只在
+// finished 出现，failed 轮 = blocked/core-failed）
+if (d1TaskDir !== null) {
+  await recordD1Attempt("finished", terminated === "completed" ? "passed" : "failed");
+}
+
 log(
-  `调度终态：${terminated}（done ${doneIds.length} / 未竟 ${blockedOut.length} / 挂起 ${skippedIds.length}${deferredCommits.length > 0 ? ` / commit 待办 ${deferredCommits.length}` : ""}${residualFiles.length > 0 ? ` / 清单外残留 ${residualFiles.length}` : ""}）——状态文件 ${plan.statusPath}`,
+  `调度终态：${terminated}（done ${doneIds.length} / 未竟 ${blockedOut.length} / 挂起 ${skippedIds.length}${deferredCommits.length > 0 ? ` / commit 待办 ${deferredCommits.length}` : ""}${residualFiles.length > 0 ? ` / 清单外残留 ${residualFiles.length}` : ""}）——状态文件 ${plan.statusPath}${d1AttemptNote}`,
 );
 
 // 终态写入 ledger（未决事项与裁决处置档案——SKILL「运行记录」节）：主会话中断后
@@ -3431,6 +3519,7 @@ try {
   const coreFailureInfo = readCoreFail();
   if (coreFailureInfo) lgLines.push(`- [裁决] coreFailure：${coreFailureInfo.id}——${coreFailureInfo.detail.replace(/\n+/g, " ")}`);
   for (const b of blockedOut) lgLines.push(`- [裁决] ${b.id}（${b.reason}，attempts ${b.attempts}）——升级用户：采纳修复方案 / 放弃该单元`);
+  if (d1AttemptNote !== "") lgLines.push(`- [待办] D1 尝试账缺口${d1AttemptNote}`);
   for (const dc of deferredCommits) lgLines.push(`- [待办] 代提交 ${dc.id}：${dc.message}`);
   if (residualFiles.length > 0) lgLines.push(`- [待办] 清单外残留 ${residualFiles.length} 项（判归属后处置，禁静默丢弃）：${residualFiles.join("、")}`);
   lgLines.push(`状态指针：${plan.statusPath}（nodes/events 全量）`);

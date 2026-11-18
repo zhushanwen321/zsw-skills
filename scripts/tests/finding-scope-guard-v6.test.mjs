@@ -18,6 +18,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -72,6 +73,18 @@ function evidenceFile(fx, name, content) {
   return `evidence/${name}`;
 }
 
+const sha256Of = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+
+/** 空候选快照（设计 §4.5）：本文件 fixture 无外部契约，照 delivery-gate-v6 测试同款落空候选
+ * 快照文件，供 acceptance.json 的 externalContractReview.detectionSha256 绑定（该键 V6 新任务必填）。 */
+function writeEmptyCandidateSnapshot(fx, acceptanceVersion) {
+  const dir = join(fx.taskDir, "evidence", `acceptance-v${acceptanceVersion}`);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "external-contract-candidates.json");
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] }, null, 2)}\n`);
+  return sha256Of(readFileSync(path, "utf8"));
+}
+
 /** schema 2 验收包：R1 断言文本由调用方给定（词面初筛测试的变量——注意 given/when/then
  *  也参与词面初筛，无关键词用例须全字段避开检测/分流词）；schema 1 变体供对照 */
 function writeAcceptance(fx, { assertionStatement = "检索返回与当前工作相关的记忆", schemaVersion = 2, plainFields = false } = {}) {
@@ -99,6 +112,8 @@ function writeAcceptance(fx, { assertionStatement = "检索返回与当前工作
     riskLevel: "low",
     exploratoryReview: "not-required",
     reviewDimensions: [],
+    // delivery-gate 新检查（§5.1 检查 2）：V6 世代新任务 externalContractReview 键必填，空处置表合法
+    externalContractReview: { detectionSha256: writeEmptyCandidateSnapshot(fx, 1), dispositions: [] },
   };
   if (schemaVersion === 2) {
     acceptance.adversarialForms = plainFields

@@ -119,7 +119,9 @@ function parseOptions(args, specification) {
 //   ① from/to ∈ 状态词表（通配 "*" 只允许作 from）
 //   ② 从 initial 出发非通配边可达每个状态（不可达 = 建模遗漏）
 //   ③ 环检测：成环的边组必须含 repair:true 标记（修复回边），无标记环 = 顺序矛盾
-//   ④ 同一 (from,to) 至多一条转移（执行器唯一）
+//   ④ 同一 (from,event) 至多一条转移（判定唯一：node-transition 等查表按 event+from 定位，
+//      同状态同事件必须唯一去向与唯一执行器；同一 (from,to) 允许多事件并存——不同业务
+//      原因如恢复对账 reconcile-pending 与级联失效 cascade-reset 合法共享同一状态变化）
 //   ⑤ requires ∈ 谓词词表；actor ∈ 角色词表；terminalStates ⊆ states
 //   ⑥ 非终态非 initial 状态必须有出边（死端 = 流程走进去出不来）
 //   ⑦ eventDomains 域闭包且事件不重复登记；writeMatrix 角色/域/阶段在词表且 (actor,domain) 唯一
@@ -139,8 +141,11 @@ function validateRules(rules) {
       const tLabel = `${label} ${transition.from} -> ${transition.to} (${transition.event})`;
       if (transition.from !== "*" && !states.has(transition.from)) errors.push(`${tLabel}: from 不在状态词表`);
       if (!states.has(transition.to)) errors.push(`${tLabel}: to 不在状态词表`);
-      const pairKey = `${transition.from}\u0000${transition.to}`;
-      if (edges.has(pairKey)) errors.push(`${tLabel}: 与 ${edges.get(pairKey)} 重复定义同一 (from,to) 转移`);
+      // 判定唯一性按 (from,event)：查表入口（node-transition / 转移发起）以「某状态收某事件」
+      // 定位转移，同状态同事件出现两条边 = 判定歧义；(from,to) 不唯一是合法形态（同状态变化
+      // 可来自不同业务原因），不再拦截
+      const pairKey = `${transition.from}\u0000${transition.event}`;
+      if (edges.has(pairKey)) errors.push(`${tLabel}: 与 ${edges.get(pairKey)} 重复定义同一 (from,event) 转移`);
       else edges.set(pairKey, tLabel);
       if (!actorSet.has(transition.actor)) errors.push(`${tLabel}: actor ${transition.actor} 不在角色词表`);
       for (const predicate of transition.requires ?? []) {
@@ -398,7 +403,9 @@ function commandJudgment(command, args) {
     return;
   }
   if (command === "repair-budget") {
-    printJson({ taskDir: world.taskDir, ...repairBudgetFromEvents(recordsOf(world)) });
+    // 账本行传入 = 跨 run 保证预算走 started 尝试口径（V5 §8.1）；无账本时内核回退
+    // 成功事件口径并带 migrationNote 注记
+    printJson({ taskDir: world.taskDir, ...repairBudgetFromEvents(recordsOf(world), { attemptRows: readLoopAttemptRows(world.taskDir) }) });
     return;
   }
   usageFail(`未知判定命令 ${command}。`);
@@ -481,6 +488,10 @@ function acceptancePackageFacts(world) {
 }
 
 // ── 任务流状态推导（verdict 态 → 转移表流程态）──
+// 推导序（两断点修复后的终态口径）：verdict 裁决终态直接短路；实现段三态
+// （acceptance-approved=零登记 / implementing=部分登记或有未接受 blocker / candidate=登记后
+// 证据缺口常态）共用事件流主链——主链走不通（证据缺口）不等于流程没走到，此前 verdict=candidate
+// 直落 candidate 使 implementation-recorded/assuring 主链态与 assurance-start 边不可达
 function deriveFlowState(world, verdict, findingOpenIds, exploration) {
   if (verdict === null) return "acceptance-drafting";
   const schema2 = world.acceptance?.schemaVersion === 2;
@@ -500,25 +511,44 @@ function deriveFlowState(world, verdict, findingOpenIds, exploration) {
     case "design":
       return "design";
     case "acceptance-approved":
-    case "implementing": {
-      // verdict 输出不含 missingIncrementIds（gate 内部局部量）——按增量清单自算
-      const allIncrementIds = world.increments !== null ? world.increments.items.map((item) => item.id) : [];
-      const implemented = new Set(verdict.implementedIncrementIds ?? []);
-      const implementedAll = allIncrementIds.length > 0 && allIncrementIds.every((id) => implemented.has(id));
-      if (!implementedAll) return "implementing";
-      if (schema2 && exploration.due.due) return "candidate-formed";
-      if (findingOpenIds.size > 0) {
-        const lastAssurance = (world.fold?.assurances ?? []).at(-1);
-        const lastRepair = (world.fold?.repairs ?? []).at(-1);
-        if (lastRepair && (!lastAssurance || lastRepair.seq > lastAssurance.seq)) return "repairing";
-        return "assuring";
-      }
-      if ((world.fold?.assurances ?? []).length === 0) return "implementation-recorded";
-      return "candidate";
-    }
+    case "implementing":
+    case "candidate":
+      return deriveMainChainFlowState(world, verdict, findingOpenIds, exploration, schema2);
     default:
       return "candidate";
   }
+}
+
+// 实现段主链推导（以事件/登记进度为准，verdict 只决定进入本链与否）。推导序：
+//   增量未全登记：schema2 探索已完成（due=false）→ candidate-explored（D4 登记窗口：
+//     探索完成、增量未全登记——register-implementation 边在该态可达；旧口径恒落
+//     implementing 使 candidate-explored 永不产出）；否则 implementing（探索仍 due，
+//     explore-only 边合法——V4 死锁修复语义保留）
+//   增量全登记：schema2 探索 due → candidate-formed；open finding → assuring/repairing
+//     （seq 比较保留）；无保证 → implementation-recorded（assurance-start 边可达）；
+//     保证已完成 → finalizing（evaluate 边可达，终态裁决交给 verdict 短路）
+function deriveMainChainFlowState(world, verdict, findingOpenIds, exploration, schema2) {
+  // verdict 输出不含 missingIncrementIds（gate 内部局部量）——按增量清单自算
+  const allIncrementIds = world.increments !== null ? world.increments.items.map((item) => item.id) : [];
+  const implemented = new Set(verdict.implementedIncrementIds ?? []);
+  const implementedAll = allIncrementIds.length > 0 && allIncrementIds.every((id) => implemented.has(id));
+  if (!implementedAll) {
+    // D4 登记窗口：schema2 下探索已完成（due=false 即可用探索不早于最近判据变化）而
+    // 增量未全登记——流程态是 candidate-explored 而非 implementing
+    if (schema2 && !exploration.due.due) return "candidate-explored";
+    return "implementing";
+  }
+  if (schema2 && exploration.due.due) return "candidate-formed";
+  if (findingOpenIds.size > 0) {
+    const lastAssurance = (world.fold?.assurances ?? []).at(-1);
+    const lastRepair = (world.fold?.repairs ?? []).at(-1);
+    if (lastRepair && (!lastAssurance || lastRepair.seq > lastAssurance.seq)) return "repairing";
+    return "assuring";
+  }
+  if ((world.fold?.assurances ?? []).length === 0) return "implementation-recorded";
+  // 主链末段：增量全登记、无 open finding、保证已完成——finalizing 等 evaluate 裁决
+  // （旧口径此处返回 candidate，跳过了 finalizing→candidate 的 evaluate 主链边）
+  return "finalizing";
 }
 
 // 「下一步」唯一回答者。输出顺序 = 待办优先 → 五域状态 → 合法转移（含执行器与角色）→ 预算。
@@ -583,7 +613,8 @@ async function commandNext(args) {
   const pending = readPending(world.taskDir);
   const finding = findingFacts(world, revision);
   const exploration = await explorationFacts(world);
-  const budget = repairBudgetFromEvents(recordsOf(world));
+  // 账本行传入 = 跨 run 保证预算走 started 尝试口径（V5 §8.1），与 repair-budget 子命令同源
+  const budget = repairBudgetFromEvents(recordsOf(world), { attemptRows: readLoopAttemptRows(world.taskDir) });
   const regrades = findingRegrades(recordsOf(world));
   const flowState = deriveFlowState(world, verdict, finding.openIds, exploration);
 
@@ -719,7 +750,7 @@ function commandNodeTransition(args) {
   }
   const priorAttempts = typeof current.attempts === "number" ? current.attempts : 0;
   // attempts 语义（与 rules.json node 域 effect 注记同口径，wave-executor-v6 同表对拍）：
-  // 派发即计数（begin +1）；完成/阻塞/失败/重排队保留；reconcile-done 补记 +1（下限 1）
+  // 派发即计数（begin +1）；完成/阻塞/失败/重排队/级联失效保留；reconcile-done 补记 +1（下限 1）
   let entry;
   switch (eventName) {
     case "begin":
@@ -735,6 +766,7 @@ function commandNodeTransition(args) {
       entry = { status: "failed", attempts: priorAttempts, reason: options.reason };
       break;
     case "reset":
+    case "cascade-reset":
       entry = { status: "pending", attempts: priorAttempts };
       break;
     case "suspend":
@@ -850,7 +882,10 @@ function commandNodeProject(args) {
 
 // ── 事件时间线读侧合流（三-3：交付事件 domain 盖章 + 过程记录 process 域，单一读取口）──
 function domainOfType(eventType) {
+  // "//" 是 rules.json 的注释键（值是说明文字不是事件数组）：不过滤会被 String.prototype.includes
+  // 当子串匹配，注释文本命中事件名子串即错判 domain——与 validateRules 的注释键过滤同口径
   for (const [domain, types] of Object.entries(KERNEL_RULES.eventDomains)) {
+    if (domain.startsWith("//")) continue;
     if (types.includes(eventType)) return domain;
   }
   return "unknown";
@@ -1177,7 +1212,8 @@ async function runCoreCommand(args) {
         const options = parseOptions(commandArgs, { required: ["task-dir"], optional: [] });
         const world = loadWorldAuto(options["task-dir"]);
         const records = recordsOf(world);
-        printJson({ taskDir: world.taskDir, repair: repairBudgetFromEvents(records), findingRegrades: findingRegrades(records) });
+        // 账本行传入 = 跨 run 保证预算走 started 尝试口径（V5 §8.1），三个查询口同源
+        printJson({ taskDir: world.taskDir, repair: repairBudgetFromEvents(records, { attemptRows: readLoopAttemptRows(world.taskDir) }), findingRegrades: findingRegrades(records) });
         break;
       }
       case "open-findings":

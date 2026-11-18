@@ -107,12 +107,22 @@ export function explorationDue(records, usableList, { atSeq = Number.POSITIVE_IN
   return { due: false, reason: `最新可用探索（seq ${latestUsableSeq}）不早于最近判据变化（seq ${lastChangeSeqBefore}）` };
 }
 
+/** assurance 循环在 loop-attempts.jsonl 中的登记键（workflow/手工路径写 --loop assurance）。
+ * 跨 run 保证预算的账本口径按此键取 started 记录；导出供写入侧对齐键名。 */
+export const ASSURANCE_LOOP_KEY = "assurance";
+
 /** 修复轮预算（V4 双实现 + V5 新增跨 run 保证预算的收敛单源）。
  * perVersion 口径与 gate V4 一致：behavior 性质 RepairRoundRecorded + 首次保证之后的
  * DesignApproved / AcceptanceApproved 修订各按一轮（nature=environment|evidence 不计轮）。
- * crossRun 口径（V5 新增）：保证 run 次数（AssuranceCompleted）+ perVersion 轮数——
- * 每次 full/recheck 重入保证循环都消耗预算，超上限由 evaluate 判 process-failed 停回。 */
-export function repairBudgetFromEvents(records) {
+ * crossRun 口径（V5 新增 + §8.1 迁移）：保证循环尝试数 + perVersion 轮数——每次 full/recheck
+ * 重入保证循环都消耗预算，超上限由 evaluate 判 process-failed 停回。尝试数优先按账本
+ * （loop-attempts.jsonl，attemptRows 由调用方读盘传入，本函数保持 pure）中
+ * loop=assurance 的 started 行计数（含打回/失败/中断，(attemptKey,event) 去重复用
+ * loopAttemptsBudget 单源）；账本无该键记录（旧任务早于账本接入）或调用方未传行时，
+ * 回退按 AssuranceCompleted 成功事件计数并在 migrationNote 说明口径——成功事件口径
+ * 漏掉主要失败路径（设计 §2.4），migrationNote 非空即提示消费方当前读数偏低。
+ * 函数签名向后兼容：不传 attemptRows 行为与迁移前一致（仅多出 migrationNote 注记）。 */
+export function repairBudgetFromEvents(records, { attemptRows = null } = {}) {
   const budgets = KERNEL_RULES.budgets;
   const behaviorRepairRounds = records.filter(
     (record) => record.type === "RepairRoundRecorded" && (record.nature ?? "behavior") === "behavior",
@@ -129,7 +139,17 @@ export function repairBudgetFromEvents(records) {
         ).length;
   const perVersionUsed = behaviorRepairRounds + offLoopRevisions;
   const assuranceRuns = assuranceSeqs.length;
-  const crossRunUsed = assuranceRuns + perVersionUsed;
+  // 跨 run 保证尝试数：账本 started 口径（V5 §8.1）优先，回退成功事件口径并注记
+  const ledgerStarted = Array.isArray(attemptRows)
+    ? loopAttemptsBudget(attemptRows, { loop: ASSURANCE_LOOP_KEY }).started
+    : null;
+  const ledgerActive = ledgerStarted !== null && ledgerStarted > 0;
+  const migrationNote = ledgerActive
+    ? null
+    : `assurance 跨 run 预算当前按 AssuranceCompleted 成功事件计数（回退口径，读数偏低：漏掉打回/失败/中断的尝试）：${
+        ledgerStarted === null ? "调用方未传入 loop-attempts 账本行" : `账本无 loop=${ASSURANCE_LOOP_KEY} 的 started 记录（旧任务）`
+      }；V5 §8.1 目标口径 = 账本 started 尝试计数`;
+  const crossRunUsed = (ledgerActive ? ledgerStarted : assuranceRuns) + perVersionUsed;
   return {
     behaviorRepairRounds,
     offLoopRevisions,
@@ -138,10 +158,12 @@ export function repairBudgetFromEvents(records) {
     perVersionRemaining: Math.max(0, budgets.repairPerVersionCap - perVersionUsed),
     nextBehaviorRoundAllowed: perVersionUsed + 1 <= budgets.repairPerVersionCap,
     assuranceRuns,
+    ...(ledgerStarted !== null ? { assuranceAttemptsLedger: ledgerStarted } : {}),
     crossRunUsed,
     crossRunCap: budgets.assuranceCrossRunCap,
     crossRunRemaining: Math.max(0, budgets.assuranceCrossRunCap - crossRunUsed),
     crossRunExceeded: crossRunUsed > budgets.assuranceCrossRunCap,
+    migrationNote,
   };
 }
 
@@ -215,6 +237,24 @@ export function findingRegrades(records) {
     .filter(([, grades]) => grades.size > halt)
     .map(([root, grades]) => ({ root, grades: [...grades] }));
   return { halt, offenders };
+}
+
+/** criterionChanged 谓词的 finding 域语义（finding 域 reopen 边 requires=criterionChanged 的
+ * 机器判定单源；rules.json predicates 登记为 decider=core，此前无实现）。判据变化 = finding
+ * 最近一次解决侧事件（FindingResolved / ResolutionReaffirmed，取 seq 最新）发生时的
+ * acceptanceVersion ≠ 当前裁决 acceptanceVersion——解决发生在旧验收版本，当前判据已随
+ * 版本递进变化，旧结论（关闭/重认领/风险接受）失效，reopen 合法。同一版本 → false（版本
+ * 未变则无判据变化依据）；无任何解决侧事件 → false（无解决时点可比，不能凭空宣称判据
+ * 变化）。gate 侧接线由 delivery-gate 消费本函数，禁止复刻第二份。 */
+export function criterionChangedSinceResolution(records, { findingId, currentAcceptanceVersion }) {
+  const resolutions = records
+    .filter((record) =>
+      (record.type === "FindingResolved" || record.type === "ResolutionReaffirmed") &&
+      record.findingId === findingId)
+    .map((record) => ({ seq: seqOf(record), acceptanceVersion: record.acceptanceVersion }))
+    .sort((left, right) => left.seq - right.seq);
+  if (resolutions.length === 0) return false;
+  return resolutions[resolutions.length - 1].acceptanceVersion !== currentAcceptanceVersion;
 }
 
 /** 任务阶段推导（writeMatrix「角色 × 当前状态 × 目标域」的当前状态单源）。
@@ -832,6 +872,7 @@ export function projectNodeEvents(events, nodeTable) {
         break;
       case "reset":
       case "resume":
+      case "cascade-reset":
         entry = { status: "pending", attempts: priorAttempts };
         break;
       case "suspend":

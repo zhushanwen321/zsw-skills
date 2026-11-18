@@ -32,11 +32,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+// stripNpmEnv：resolver 真实 spawn 的夹具隔离——npm 上下文注入的 npm_config_cache 会把
+// resolver 的 npm config get cache 引到真实用户缓存（读到隔离外内容）
+import { stripNpmEnv } from "./helpers/mjs-runner.mjs";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { gzipSync } from "node:zlib";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V6 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6");
@@ -283,15 +287,58 @@ function installFakeDetector(home) {
   );
 }
 
-/** 把假 tarball 内容写进 HOME 下的 npm cacache，返回 lockfile 用的 integrity 串。 */
-function plantNpmCache(home, content) {
-  const digest = createHash("sha512").update(content).digest();
+/** 手写最小 ustar 头（512 字节）：resolver 现按真实 tarball 解析（缓存条目 = gzipped ustar，
+ * 权威内容源 = 缓存 tarball 本体），裸字符串假内容会被 fail-closed 拒绝——fixture 不引第三方
+ * tar 依赖，字段布局照 external-contract-resolve-v6 测试同款 */
+function ustarHeader(entryName, size) {
+  const header = Buffer.alloc(512);
+  header.write(entryName, 0, 100, "utf8"); // name
+  header.write("0000644\0", 100, "utf8"); // mode
+  header.write("0000000\0", 108, "utf8"); // uid
+  header.write("0000000\0", 116, "utf8"); // gid
+  header.write(`${size.toString(8).padStart(11, "0")}\0`, 124, "utf8"); // size（八进制）
+  header.write("00000000000\0", 136, "utf8"); // mtime
+  header.write("        ", 148, "utf8"); // chksum 占位 8 空格
+  header.write("0", 156, "utf8"); // typeflag：普通文件
+  header.write("ustar\0", 257, "utf8"); // magic
+  header.write("00", 263, "utf8"); // version
+  let sum = 0;
+  for (const byte of header) sum += byte;
+  header.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "utf8"); // chksum：6 位八进制 + \0 + 空格
+  return header;
+}
+
+/** 构造 npm registry 同形态的包 tarball（gzipped ustar，条目带 package/ 根前缀） */
+function buildPackageTarball(name, version, files) {
+  const manifest = `${JSON.stringify({ name, version, main: "dist/index.js" }, null, 2)}\n`;
+  const entries = [
+    { name: "package/package.json", content: Buffer.from(manifest) },
+    ...Object.entries(files).map(([rel, content]) => ({ name: `package/${rel}`, content: Buffer.from(content) })),
+  ];
+  const blocks = [];
+  for (const entry of entries) {
+    blocks.push(ustarHeader(entry.name, entry.content.length), entry.content, Buffer.alloc((512 - (entry.content.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024)); // tar 结束双零块
+  return gzipSync(Buffer.concat(blocks));
+}
+
+/** 把 tarball 字节写进 HOME 下的 npm cacache（内容文件 = tarball 本体），返回 lockfile 用的 integrity 串。 */
+function plantNpmCache(home, tarball) {
+  const digest = createHash("sha512").update(tarball).digest();
   const hex = digest.toString("hex");
   const dir = join(home, ".npm", "_cacache", "content-v2", "sha512", hex.slice(0, 2));
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, hex.slice(2)), content);
+  writeFileSync(join(dir, hex.slice(2)), tarball);
   return `sha512-${digest.toString("base64")}`;
 }
+
+// 缓存 tarball 与 node_modules 解包副本共用这一份事实源（resolver 会从缓存 tarball 提取
+// surface 并与 node_modules 对账，两侧不一致即 fail-closed）
+const NPM_SURFACE_FILES = {
+  "dist/types.d.ts": "export interface ToolDefinition { name: string }\n",
+  "dist/index.js": "module.exports = {};\n",
+};
 
 const NPM_CONTRACT = {
   id: "EC-npm",
@@ -353,12 +400,15 @@ function makeCompileFixture(t, { snapshot = true, realDetector = false } = {}) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content);
   };
-  // npm 假包项目（resolver 的 installed-npm-package 信任链输入）
+  // npm 假包项目（resolver 的 installed-npm-package 信任链输入）；node_modules 副本与缓存
+  // tarball 条目共用 NPM_SURFACE_FILES 一份事实源（resolver 双侧对账）
   write(join(projReal, "package.json"), `${JSON.stringify({ name: "fixture-proj", version: "1.0.0", dependencies: { "fake-host-sdk": "^1.0.0" } }, null, 2)}\n`);
   write(join(projReal, "node_modules", "fake-host-sdk", "package.json"), `${JSON.stringify({ name: "fake-host-sdk", version: "1.0.0", main: "dist/index.js" }, null, 2)}\n`);
-  write(join(projReal, "node_modules", "fake-host-sdk", "dist", "types.d.ts"), "export interface ToolDefinition { name: string }\n");
-  write(join(projReal, "node_modules", "fake-host-sdk", "dist", "index.js"), "module.exports = {};\n");
-  const integrity = plantNpmCache(home, "TARBALL:fake-host-sdk@1.0.0");
+  for (const [rel, content] of Object.entries(NPM_SURFACE_FILES)) {
+    write(join(projReal, "node_modules", "fake-host-sdk", rel), content);
+  }
+  // resolver 现从 npm 缓存 tarball 提取 surface：种真实 gzipped ustar 形态（裸字符串会被 fail-closed 拒绝）
+  const integrity = plantNpmCache(home, buildPackageTarball("fake-host-sdk", "1.0.0", NPM_SURFACE_FILES));
   write(join(projReal, "package-lock.json"), `${JSON.stringify({
     name: "fixture-proj",
     lockfileVersion: 3,
@@ -447,7 +497,7 @@ test("指针布局集成（P0-1）：真实 resolver --write → 指针在 taskD
   const f = makeCompileFixture(t, { snapshot: false });
   const write = spawnSync(process.execPath, [RESOLVER, "--task-dir", f.taskDir, "--project-root", f.proj, "--write"], {
     encoding: "utf8",
-    env: { ...process.env, HOME: f.home },
+    env: stripNpmEnv({ ...process.env, HOME: f.home }),
   });
   assert.equal(write.status, 0, `resolver --write 应成功：${write.stderr}`);
   // 终态锚 1：current 指针落 taskDir 根（设计 §4.3；全部消费端读根路径）
@@ -466,7 +516,7 @@ test("指针布局集成（P0-1 兼容读）：旧布局（只有子目录指针
   const f = makeCompileFixture(t, { snapshot: false });
   const write = spawnSync(process.execPath, [RESOLVER, "--task-dir", f.taskDir, "--project-root", f.proj, "--write"], {
     encoding: "utf8",
-    env: { ...process.env, HOME: f.home },
+    env: stripNpmEnv({ ...process.env, HOME: f.home }),
   });
   assert.equal(write.status, 0, `resolver --write 应成功：${write.stderr}`);
   // 模拟升级前旧布局：根指针搬进 environment-contracts/ 子目录（升级前 resolver 的落点）
@@ -479,7 +529,7 @@ test("指针布局集成（P0-1 兼容读）：旧布局（只有子目录指针
   // 重跑 --write：兼容读旧布局指针并把指针迁回根
   const second = spawnSync(process.execPath, [RESOLVER, "--task-dir", f.taskDir, "--project-root", f.proj, "--write"], {
     encoding: "utf8",
-    env: { ...process.env, HOME: f.home },
+    env: stripNpmEnv({ ...process.env, HOME: f.home }),
   });
   assert.equal(second.status, 0, `迁移重跑应成功：${second.stderr}`);
   assert.ok(existsSync(rootPointer), "重跑 --write 后指针应迁回 taskDir 根");

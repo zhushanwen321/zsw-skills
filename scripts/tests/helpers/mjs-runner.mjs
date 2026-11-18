@@ -65,7 +65,10 @@ function buildExecutionContext(fileReal, args, { env = process.env, cwd = proces
   let exitCodeValue;
   let exited = false;
   let failed = false;
-  const mergedEnv = { ...process.env, ...env };
+  // 夹具隔离：宿主 npm 上下文（npm test / npm run）注入的 npm_* 一律剥离——npm_config_cache
+  // 指向真实用户缓存，会把被测脚本内部的 npm 子命令（config get cache）从 fixture HOME 引到
+  // 隔离外读内容（resolver 互核对上真实缓存的先例）。显式传入的 env 覆盖在后，不受影响
+  const mergedEnv = { ...stripNpmEnv(process.env), ...env };
   const localRequire = createRequire(pathToFileURL(fileReal).href);
   const ctxRequire = (id) => {
     if (id === "node:child_process" || id === "child_process") {
@@ -145,6 +148,15 @@ function buildExecutionContext(fileReal, args, { env = process.env, cwd = proces
   };
 }
 
+/** 剥掉 npm 上下文注入键（npm_config_* 等）——夹具隔离用，真实 CLI 语义里这些键本不存在 */
+export function stripNpmEnv(env) {
+  const out = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!key.startsWith("npm_")) out[key] = value;
+  }
+  return out;
+}
+
 /**
  * 注入 env 的宿主临时应用：把调用方显式传入的 env 键值写到真实 process.env，返回恢复函数。
  * 为什么需要：沙箱内脚本经 require(esm) 加载的本地依赖（如 v6 复扫库）运行在真实模块层，
@@ -155,6 +167,15 @@ function buildExecutionContext(fileReal, args, { env = process.env, cwd = proces
  */
 function applyEnvToHost(envOverrides) {
   const saved = [];
+  // 桥接窗口同时剥离宿主 npm 上下文注入的 npm_*——孙进程继承的是真实 process.env，
+  // 沙箱 mergedEnv 的剥离到不了这里（npm_config_cache 把 npm 子命令引到真实用户缓存的
+  // 失真曾在 contract-rescan 接缝用例复现）
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("npm_")) {
+      saved.push([key, process.env[key]]);
+      delete process.env[key];
+    }
+  }
   for (const [k, v] of Object.entries(envOverrides)) {
     saved.push([k, Object.hasOwn(process.env, k) ? process.env[k] : undefined]);
     process.env[k] = v;

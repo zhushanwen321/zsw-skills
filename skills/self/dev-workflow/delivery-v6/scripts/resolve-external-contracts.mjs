@@ -7,15 +7,20 @@
 // 快照的环境契约快照；evaluate 前的权威重解析与 sourceHash 核对都以它为准。
 //
 // 信任规则（§4.4，实现要点）：
-//   1. 项目外权威来源优先：全局 npm root、pnpm store 直接采信（登记版本与真实路径）；
-//   2. 项目内 node_modules 只能作为线索：必须经 lockfile 完整性哈希 + 包缓存（npm cacache）
-//      元数据互核后才作为只读快照复制进 taskDir，三者不一致拒绝；
+//   1. 项目外权威来源优先（规则 1 原文「优先使用项目外权威来源」）：全局 npm root、
+//      pnpm store 直接采信（登记版本与真实路径）；项目依赖是最后候选；
+//   2. 项目内 node_modules 只能作为定位线索（规则 2）：必须经 lockfile 完整性哈希 + 包缓存
+//      （npm cacache）互核，surface 内容一律从缓存内的官方 tarball 提取——integrity 只证
+//      缓存 tarball 未变，不证 node_modules 解包文件未被改动，直接哈希 node_modules 会把
+//      安装后被篡改的内容伪造进权威快照；node_modules 上的同名文件另与 tarball 内容对账，
+//      不一致即拒绝（重装依赖恢复）；tarball 内找不到 surfaceRef 即 fail-closed 拒绝；
 //   3. local-path 与 executable 权威必须用 user 凭据登记的 ExternalAuthorityDeclared 事件
 //      认可；local-path 按 git 仓库身份覆盖全部 worktree，路径位于同仓库可写范围内即拒绝；
 //   4. resolver 只读文件与计算哈希，绝不执行外部包安装脚本；唯一的子进程执行是
 //      `npm root -g` / `pnpm root -g` 查询、`which` 查询与 executable 的 `--version` 版本自报；
 //   5. 离线 fail-closed：registry / 包缓存不可达时，不把项目内可变副本当 resolved——只能
-//      使用 user 登记的本地权威，或把契约保持 declared-unavailable / unresolved。
+//      使用 user 登记的本地权威，或把契约保持 declared-unavailable / unresolved；
+//      executable 无法哈希的动态 bundle 退化形态登记版本自报 + 可复现观察输出（规则 5）。
 //
 // 用法：
 //   node resolve-external-contracts.mjs --task-dir <绝对路径> --project-root <绝对路径>
@@ -38,7 +43,8 @@
 //   是快照身份（只对 contracts 的稳定解析事实做规范哈希，resolvedAt / resolvedPath 不参与）。
 //
 // 快照产物（--write 时）：
-//   taskDir/environment-contracts/<snapshotSha256>.json   按哈希分文件，不覆盖旧快照
+//   taskDir/environment-contracts/<snapshotSha256>.json   按哈希分文件，不覆盖旧快照（chmod 0444；
+//                                                         已存在文件落盘前按稳定事实哈希对账，篡改件报错拒绝）
 //   taskDir/environment-contracts.current.json             派生指针（可重建），落任务目录根
 //   taskDir/environment-contracts/surfaces/<snapshotSha256>/<contractId>/<surface 相对路径>
 //                                                          权威 surface 文件的只读副本（chmod 0444）
@@ -59,6 +65,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
+import { gunzipSync } from "node:zlib";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -297,7 +304,93 @@ function verifyCacheIntegrity(integrity) {
   if (actual !== match[1]) {
     return { ok: false, reason: "包缓存内容与 lockfile integrity 不一致" };
   }
-  return { ok: true };
+  // contentPath 即官方 tarball 本体（cacache 内容文件按 sha512 地址存原字节）：
+  // project-dependency 的 surface 内容从这个 tarball 提取，而不是读 node_modules
+  return { ok: true, tarballPath: contentPath };
+}
+
+// ---------------------------------------------------------------------------
+// 缓存 tarball 解析：§4.4 规则 2 的权威内容源（node:zlib + 手写最小 ustar 遍历，不引依赖）
+// ---------------------------------------------------------------------------
+
+/** 解析 tar 字节流为「条目路径 -> 内容」映射（普通文件条目）。
+ * npm registry 的包 tarball 是 gzipped ustar（实测缓存样本解压后 offset 257 为 magic
+ * "ustar"、条目带 package/ 前缀）；裸 tar 无 gzip 形态以 2 字节魔数探测后直接按 tar 解析。
+ * 只登记普通文件（typeflag '0' 或 '\0'）；目录跳过；GNU longname（'L'）合并进下一个条目名；
+ * pax 扩展头（'x'/'g'）跳过——npm pack 不产生 pax path 覆盖，遇到时该条目按原 name 落不进
+ * 映射，后续查找自然 fail-closed（找不到即拒绝，不会误放行）；链接类条目不作为内容源。 */
+function parseTarEntries(bytes) {
+  if (bytes.subarray(257, 262).toString("latin1") !== "ustar") {
+    throw new Error("不是 ustar tar 形态（offset 257 缺 ustar magic）");
+  }
+  const entries = new Map();
+  let offset = 0;
+  let longName = null; // GNU longname（'L' 条目）等待被下一个 header 消费
+  while (offset + 512 <= bytes.length) {
+    const header = bytes.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break; // 结束块（两个全零块）
+    const rawName = header.subarray(0, 100).toString().replace(/\0[\s\S]*$/, "");
+    const sizeField = header.subarray(124, 136).toString().replace(/\0[\s\S]*$/, "").trim();
+    const size = /^\d+$/.test(sizeField) ? parseInt(sizeField, 8) : 0;
+    const typeflag = header.subarray(156, 157).toString();
+    const prefix = header.subarray(345, 500).toString().replace(/\0[\s\S]*$/, "");
+    const dataStart = offset + 512;
+    const dataEnd = dataStart + size;
+    // 下一 header = 512 头 + 数据块（数据补齐到 512 倍数）
+    const nextOffset = offset + 512 + Math.ceil(size / 512) * 512;
+    if (typeflag === "L") {
+      longName = bytes.subarray(dataStart, dataEnd).toString().replace(/\0[\s\S]*$/, "");
+      offset = nextOffset;
+      continue;
+    }
+    const name = longName ?? (prefix !== "" ? `${prefix}/${rawName}` : rawName);
+    longName = null;
+    if ((typeflag === "0" || typeflag === "\0") && size > 0) {
+      entries.set(name, bytes.subarray(dataStart, dataEnd));
+    }
+    offset = nextOffset;
+  }
+  return entries;
+}
+
+/** 从缓存 tarball 提取各 surface 文件的内容哈希（权威内容源 = 官方 tarball）。
+ * tarballPath 为 npm cacache 内容文件（字节级互核已通过）；先剥 npm pack 约定的 package/
+ * 根前缀再匹配 surfaceRef 的相对路径；任一文件在 tarball 内找不到即失败（fail-closed，
+ * 恢复动作指向重装依赖或修正 surfaceRef）。返回 file -> sha256 映射。 */
+function extractTarballSurfaceHashes(tarballPath, files) {
+  let raw;
+  try {
+    raw = readFileSync(tarballPath);
+  } catch (error) {
+    return { ok: false, reason: `包缓存 tarball 不可读（${tarballPath}，${error.message}）——重装依赖后重跑 resolve` };
+  }
+  let bytes = raw;
+  if (raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b) {
+    try {
+      bytes = gunzipSync(raw);
+    } catch (error) {
+      return { ok: false, reason: `包缓存 tarball gzip 解压失败（${error.message}）——缓存内容损坏，重装依赖后重跑 resolve` };
+    }
+  }
+  let entries;
+  try {
+    entries = parseTarEntries(bytes);
+  } catch (error) {
+    return { ok: false, reason: `包缓存 tarball 解析失败（${error.message}）——缓存内容形态异常，重装依赖后重跑 resolve` };
+  }
+  const byRelative = new Map();
+  for (const [name, content] of entries) {
+    byRelative.set(name.startsWith("package/") ? name.slice("package/".length) : name, content);
+  }
+  const hashes = new Map();
+  for (const file of files) {
+    const content = byRelative.get(file);
+    if (content === undefined) {
+      return { ok: false, reason: `权威 tarball 内找不到 surface 文件（${file}）——重装依赖（如 npm ci）或修正 acceptance 的 surfaceRef 后重跑 resolve` };
+    }
+    hashes.set(file, sha256(content));
+  }
+  return { ok: true, hashes };
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +420,22 @@ function globalRootOf(program) {
 
 function resolveInstalledNpmPackage(projectRoot, locator) {
   const attempts = [];
-  // 候选 1：项目依赖（线索，必须互核）
+  // 候选 1/2：项目外权威来源（全局 npm root、pnpm store）——直接采信，登记版本与真实路径。
+  // 顺序依据设计 §4.4 规则 1「优先使用项目外权威来源」：项目内依赖是最后候选
+  for (const [program, resolution] of [["npm", "npm-root-global"], ["pnpm", "pnpm-store"]]) {
+    const root = globalRootOf(program);
+    if (!root) {
+      attempts.push(`${program} root -g 查询失败（命令不可用或输出为空），跳过该来源`);
+      continue;
+    }
+    const candidate = join(root, locator);
+    if (!existsSync(candidate) || !statSync(candidate).isDirectory()) continue;
+    const identity = readPackageIdentity(candidate);
+    if (!identity) continue;
+    // pnpm 全局目录通常是指向 store 的符号链接：登记穿透后的真实路径，快照身份才对得上
+    return { ok: true, resolvedPath: realpathSync(candidate), resolution, identity, version: identity.version };
+  }
+  // 候选 3：项目依赖（定位线索，必须互核；surface 内容从缓存 tarball 提取——§4.4 规则 2）
   const projectCandidate = join(projectRoot, "node_modules", locator);
   if (existsSync(projectCandidate) && statSync(projectCandidate).isDirectory()) {
     const identity = readPackageIdentity(projectCandidate);
@@ -346,24 +454,12 @@ function resolveInstalledNpmPackage(projectRoot, locator) {
         if (!cache.ok) {
           attempts.push(`项目内副本互核失败：${cache.reason}`);
         } else {
-          return { ok: true, resolvedPath: projectCandidate, resolution: "project-dependency", identity, version: identity.version };
+          // resolvedPath 仍登记 node_modules（runtime 实际装载位置，本机观测信息，不参与
+          // 快照身份）；权威内容源是 tarballPath（互核通过的缓存 tarball 本体）
+          return { ok: true, resolvedPath: projectCandidate, tarballPath: cache.tarballPath, resolution: "project-dependency", identity, version: identity.version };
         }
       }
     }
-  }
-  // 候选 2/3：项目外权威来源（全局 npm root、pnpm store）——直接采信，登记版本与真实路径
-  for (const [program, resolution] of [["npm", "npm-root-global"], ["pnpm", "pnpm-store"]]) {
-    const root = globalRootOf(program);
-    if (!root) {
-      attempts.push(`${program} root -g 查询失败（命令不可用或输出为空），跳过该来源`);
-      continue;
-    }
-    const candidate = join(root, locator);
-    if (!existsSync(candidate) || !statSync(candidate).isDirectory()) continue;
-    const identity = readPackageIdentity(candidate);
-    if (!identity) continue;
-    // pnpm 全局目录通常是指向 store 的符号链接：登记穿透后的真实路径，快照身份才对得上
-    return { ok: true, resolvedPath: realpathSync(candidate), resolution, identity, version: identity.version };
   }
   return { ok: false, reason: attempts.join("；") || `未在项目依赖、全局 npm root、pnpm store 中定位到 ${locator}` };
 }
@@ -398,6 +494,9 @@ function resolveExecutable(declaration) {
   const whichReal = whichPath && existsSync(whichPath) ? realpathSync(whichPath) : null;
   const versionRun = spawnSync(declaredReal, ["--version"], { encoding: "utf8", timeout: VERSION_PROBE_TIMEOUT_MS });
   const versionLine = String(versionRun.stdout || versionRun.stderr || "").split("\n").map((line) => line.trim()).find((line) => line !== "");
+  // §4.4 规则 5 的「一个可复现观察输出」：重跑登记命令 `<路径> --version` 应得到同一行
+  // stdout（与版本自报同源，但只取纯 stdout——stderr 文案不可复现核对的形态不冒充观察输出）
+  const observedOutput = String(versionRun.stdout || "").split("\n").map((line) => line.trim()).find((line) => line !== "") ?? null;
   if (versionRun.error || versionRun.status !== 0) {
     // 版本自报失败：不可哈希/不可自报的形态按 §4.4 规则 5 退化处理，仍算 resolved
     //（真实路径与存在性已核实），version 记 null 并在 surfaces 之外不伪造观察输出
@@ -405,22 +504,29 @@ function resolveExecutable(declaration) {
   }
   let sha = null;
   let hashNote = null;
+  let degraded = false; // 不可哈希 → 降级形态（§4.4 规则 5：至少登记版本自报 + 可复现观察输出）
   try {
     const size = statSync(declaredReal).size;
     if (size > EXECUTABLE_MAX_HASH_BYTES) {
       hashNote = `文件超过 ${EXECUTABLE_MAX_HASH_BYTES} 字节，不读全量哈希（动态 bundle 退化形态）`;
+      degraded = true;
     } else {
       sha = sha256File(declaredReal);
     }
   } catch (error) {
     hashNote = `文件不可读，无法哈希：${error.message}`;
+    degraded = true;
+  }
+  if (degraded && observedOutput === null) {
+    // 降级且无观察输出 = 规则 5 的两个最低记录要素缺一，须出声说明而不是静默留空
+    hashNote = `${hashNote ?? ""}${hashNote ? "；" : ""}版本自报失败（--version 无 stdout），无可复现观察输出`;
   }
   return {
     ok: true,
     resolvedPath: declaredReal,
     resolution: "executable",
     identity: { name: command, version: versionLine ?? null },
-    executable: { sha256: sha, hashNote, whichPath: whichReal, whichMatchesDeclaration: whichReal === declaredReal },
+    executable: { sha256: sha, hashNote, observedOutput, whichPath: whichReal, whichMatchesDeclaration: whichReal === declaredReal },
     version: versionLine ?? null,
   };
 }
@@ -487,26 +593,62 @@ function splitSurfaceRef(ref) {
   return { file: ref.slice(0, hash), symbol: ref.slice(hash + 1) };
 }
 
-/** 解析全部 surface 文件内容哈希；任一缺失即失败（fail-closed，不伪造 resolved） */
-function resolveSurfaces(contract, authorityRoot) {
+/** 解析全部 surface 文件内容哈希；任一缺失即失败（fail-closed，不伪造 resolved）。
+ * options.tarballPath 存在 = project-dependency 权威形态：内容源是互核通过的缓存 tarball
+ * （integrity 只证缓存 tarball 未变，不证 node_modules 解包文件未被改动，直接哈希
+ * node_modules 会把安装后篡改的内容伪造进权威快照）；authorityRoot（node_modules 包目录）
+ * 退为定位线索，但它是 runtime 实际装载位置——surface 文件必须在此存在且与 tarball 内容
+ * 一致：不一致 = 安装后被改动（登记哪边哈希都是伪造权威闭环），缺失 = 契约 surface 在
+ * 运行时实际不可用，均 fail-closed 拒绝（恢复动作：重装依赖）。 */
+function resolveSurfaces(contract, authorityRoot, options = {}) {
   const surfaces = [];
   const fileCache = new Map();
-  for (const ref of collectSurfaceRefs(contract)) {
+  const refs = collectSurfaceRefs(contract);
+  // 前置校验全部 surfaceRef 形态（相对路径、无 .. 逃逸）：绝对形态或以 .. 逃逸权威根的
+  // 形态一律拒绝（防借 surfaceRef 把权威快照引到项目内可写文件上）
+  for (const ref of refs) {
+    const { file } = splitSurfaceRef(ref);
+    if (isAbsolute(file) || file.split(/[/\\]/).includes("..")) {
+      return { ok: false, reason: `surfaceRef「${ref}」不是权威根内的相对文件路径` };
+    }
+  }
+  let tarballHashes = null;
+  if (options.tarballPath) {
+    const uniqueFiles = [...new Set(refs.map((ref) => splitSurfaceRef(ref).file))];
+    const extracted = extractTarballSurfaceHashes(options.tarballPath, uniqueFiles);
+    if (!extracted.ok) return extracted;
+    tarballHashes = extracted.hashes;
+    for (const file of uniqueFiles) {
+      const installedPath = resolve(authorityRoot, file);
+      if (!existsSync(installedPath) || !statSync(installedPath).isFile()) {
+        return { ok: false, reason: `项目内 node_modules 缺 surface 文件（${file}，权威 tarball 内存在）——安装不完整，恢复动作：重装依赖（如 npm ci）后重跑 resolve` };
+      }
+      if (sha256File(installedPath) !== tarballHashes.get(file)) {
+        return {
+          ok: false,
+          reason:
+            `项目内 node_modules 的 surface 文件与官方 tarball 内容不一致（${file}）——` +
+            "安装后可能被改动，不采信（缓存 integrity 只证 tarball 未变）；恢复动作：重装依赖（如 npm ci）后重跑 resolve",
+        };
+      }
+    }
+  }
+  for (const ref of refs) {
     const { file } = splitSurfaceRef(ref);
     if (fileCache.has(file)) {
       surfaces.push({ surfaceRef: ref, sha256: fileCache.get(file) });
       continue;
     }
-    // surfaceRef 是相对权威根的文件路径：绝对形态或以 .. 逃逸权威根的形态一律拒绝
-    // （防借 surfaceRef 把权威快照引到项目内可写文件上）
-    if (isAbsolute(file) || file.split(/[/\\]/).includes("..")) {
-      return { ok: false, reason: `surfaceRef「${ref}」不是权威根内的相对文件路径` };
+    let sha;
+    if (tarballHashes !== null) {
+      sha = tarballHashes.get(file);
+    } else {
+      const absPath = resolve(authorityRoot, file);
+      if (!existsSync(absPath) || !statSync(absPath).isFile()) {
+        return { ok: false, reason: `surface 文件不存在（${ref} -> ${absPath}）` };
+      }
+      sha = sha256File(absPath);
     }
-    const absPath = resolve(authorityRoot, file);
-    if (!existsSync(absPath) || !statSync(absPath).isFile()) {
-      return { ok: false, reason: `surface 文件不存在（${ref} -> ${absPath}）` };
-    }
-    const sha = sha256File(absPath);
     fileCache.set(file, sha);
     surfaces.push({ surfaceRef: ref, sha256: sha });
   }
@@ -561,7 +703,7 @@ function resolveContract(contract, declarations) {
   if (!resolution.ok) {
     return { unresolved: { contractId: id, reason: resolution.reason } };
   }
-  const surfaceResult = resolveSurfaces(contract, resolution.resolvedPath);
+  const surfaceResult = resolveSurfaces(contract, resolution.resolvedPath, resolution.tarballPath ? { tarballPath: resolution.tarballPath } : {});
   if (!surfaceResult.ok) {
     return { unresolved: { contractId: id, reason: surfaceResult.reason } };
   }
@@ -650,6 +792,41 @@ function readCurrentPointer(taskDir) {
   return null;
 }
 
+/** 在盘快照对账：文件名哈希 vs 在盘内容的稳定事实重算哈希 vs 本次解析哈希，三者不一致
+ * 即快照被改动或损坏——报错退出非零，恢复动作是删除后重跑 --write 重建（不手工修复） */
+function verifySnapshotOnDisk(snapshotPath, snapshot) {
+  let onDisk;
+  try {
+    onDisk = JSON.parse(readFileSync(snapshotPath, "utf8"));
+  } catch (error) {
+    failRun(
+      `在盘快照不是合法 JSON，无法对账（${snapshotPath}，${error.message}）`,
+      `删除该文件后重跑 resolve --write 重建（如 rm ${snapshotPath}），不要手工修复快照`,
+    );
+  }
+  if (!Array.isArray(onDisk?.contracts) || typeof onDisk.snapshotSha256 !== "string") {
+    failRun(
+      `在盘快照结构损坏（${snapshotPath}：缺 contracts 数组或 snapshotSha256 字段）`,
+      `删除该文件后重跑 resolve --write 重建（如 rm ${snapshotPath}），不要手工修复快照`,
+    );
+  }
+  let onDiskHash;
+  try {
+    onDiskHash = sha256(canonicalJson(onDisk.contracts.map(stableContractFacts)));
+  } catch (error) {
+    failRun(
+      `在盘快照契约条目结构损坏，稳定事实无法重算（${snapshotPath}，${error.message}）`,
+      `删除该文件后重跑 resolve --write 重建（如 rm ${snapshotPath}），不要手工修复快照`,
+    );
+  }
+  if (onDiskHash !== snapshot.snapshotSha256 || onDisk.snapshotSha256 !== snapshot.snapshotSha256) {
+    failRun(
+      `在盘快照内容与文件名哈希不一致（${snapshotPath}：文件名 ${snapshot.snapshotSha256.slice(0, 12)}…，在盘稳定事实重算 ${onDiskHash.slice(0, 12)}…）——快照已被改动或损坏，不能静默采信`,
+      `删除该文件后重跑 resolve --write 重建（如 rm ${snapshotPath}），不要手工修复快照`,
+    );
+  }
+}
+
 function writeSnapshot(taskDir, snapshot) {
   const dir = join(taskDir, CONTRACTS_DIRNAME);
   mkdirSync(dir, { recursive: true });
@@ -657,8 +834,15 @@ function writeSnapshot(taskDir, snapshot) {
   if (!existsSync(snapshotPath)) {
     // 按哈希分文件、不覆盖旧快照；同一权威内容重复解析得到同一哈希时不生成新文件
     writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+    // taskDir 权威快照对 builder 只读（§4.4 规则 6），与 surfaces 副本同形态
+    chmodSync(snapshotPath, 0o444);
     console.error(`OK: 环境契约快照已写入 ${snapshotPath}`);
   } else {
+    // 已存在不覆盖，但不静默采信：文件名声称的哈希与在盘内容的稳定事实哈希可能已经
+    // 脱节（快照被手改 = 篡改件顶着原哈希留存，规则 7「不能通过重写 taskDir 快照静默
+    // 通过」）。对账口径 = 在盘 contracts 的稳定事实重算哈希（resolvedAt 等本机观测
+    // 信息不参与身份，重算不受其漂移影响）；对不上即报错退出非零
+    verifySnapshotOnDisk(snapshotPath, snapshot);
     console.error(`OK: 环境契约快照已存在（同哈希不重复生成）：${snapshotPath}`);
   }
   // current 指针落任务目录根（设计 §4.3：taskDir/environment-contracts.current.json）——
@@ -723,6 +907,9 @@ function main() {
       surfaces: contract.surfaces,
       aggregateHash: contract.aggregateHash,
       resolvedAt: contract.resolvedAt,
+      // executable 观测信息（版本自报 / 可复现观察输出，§4.4 规则 5）随快照落盘供审计；
+      // 仅 executable 契约携带（其余契约不新增键），不参与 stableContractFacts 快照身份
+      ...(contract.executable ? { executable: contract.executable } : {}),
     })),
     snapshotSha256,
   };

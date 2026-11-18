@@ -11,6 +11,15 @@
 //   4. 超限循环如实呈现：acceptance-review 登记 7 次 started（> cap 6）→ exceeded=true
 //   5. D1 失败与恢复：status.json 含 fail→reconcile 序列 → 分节 4 呈现序列与终态
 //   6. 观测目录存在时按 execution 文件计数（可选数据源的正路）
+//   7. runtime readiness 首段披露（V6 §12.1）：verdict 直读 overall + 逐契约状态；
+//      verdict 缺失 / 旧形态 verdict 无 runtimeReadiness 字段 → unknown
+//   8. 外部契约清单（V6 §12.2）：声明 × 环境契约快照（resolver 状态 + aggregateHash）；
+//      快照缺 → unknown；未声明契约 → contracts: []
+//   9. runtime probe 统计 + 证据环境计数（V6 §12.2）：cases 实算通过率、failed observed
+//      披露、artifact 不可读不冒充 0；official-runner / real-host / fake-host 三类分列
+//  10. parity 差异清单（V6 §12.2 / §8.3）：mismatches 逐条披露 + 处置指引；无记录文件 note
+//  11. 工具链与验证资产（V6 §12.2）：project-capabilities.json 摘录；--capabilities-file
+//      传入；文件缺 → unknown
 //
 // 运行：node --test scripts/tests/delivery-report-v6.test.mjs
 
@@ -18,7 +27,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -82,10 +91,27 @@ function makeFixture(t, { taskId = "report-v6" } = {}) {
   return { root, projectDir, home, taskDir: output.taskDir, creds: output.credentials };
 }
 
+/** 空候选快照（§4.5：无外部候选的新任务也生成，使 externalContractReview.detectionSha256
+ * 有可绑定对象；写法与 delivery-gate-v6.test.mjs 同款）。返回文件内容 sha256。 */
+function writeEmptyCandidateSnapshot(fx, acceptanceVersion) {
+  const dir = join(fx.taskDir, "evidence", `acceptance-v${acceptanceVersion}`);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "external-contract-candidates.json");
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] }, null, 2)}\n`);
+  return sha256(readFileSync(path, "utf8"));
+}
+
 /** 推进到设计批准（有 verdict.json 可读的实现前形态）——比 loop-attempts 测试少走实现段。
- * hostAssertion=true 时 A1 带宿主环境声明（报告宿主覆盖分节的断言数据源）。 */
-function driveToDesignApproved(t, { hostAssertion = false } = {}) {
+ * hostAssertion=true 时 A1 带宿主环境声明（报告宿主覆盖分节的断言数据源）。
+ * externalContracts 非空时同时落对应的空处置表绑定的候选快照由调用方给（见
+ * writeEmptyCandidateSnapshot）——本骨架缺省走「无外部契约」形态。 */
+function driveToDesignApproved(t, { hostAssertion = false, externalContractReview = true } = {}) {
   const fx = makeFixture(t);
+  // externalContractReview 键必填（V6 gate 新约束，§5.1 检查 2）：无外部候选也生成空候选
+  // 快照，处置表绑其内容哈希——先落快照再写 acceptance.json（校验对账哈希）
+  const externalContractReviewField = externalContractReview
+    ? { externalContractReview: { detectionSha256: writeEmptyCandidateSnapshot(fx, 1), dispositions: [] } }
+    : {};
   writeFileSync(join(fx.taskDir, "acceptance.json"), `${JSON.stringify({
     schemaVersion: 2,
     acceptanceVersion: 1,
@@ -109,6 +135,7 @@ function driveToDesignApproved(t, { hostAssertion = false } = {}) {
     riskLevel: "high",
     exploratoryReview: "required",
     reviewDimensions: ["smoke"],
+    ...externalContractReviewField,
   }, null, 2)}\n`);
   writeFileSync(join(fx.taskDir, "increments.json"), `${JSON.stringify({
     schemaVersion: 1,
@@ -422,6 +449,237 @@ test("pending 直读：open 计数与损坏 unknown；无宿主声明验收包�
   assert.equal(noVerdictReport.repairProgress.repairRounds.status, "unknown");
   assert.equal(noVerdictReport.hostEvidenceCoverage.status, "unknown");
   assert.match(noVerdictReport.hostEvidenceCoverage.reason, /verdict\.json 缺失/);
+});
+
+test("runtime readiness 首段披露：verdict 直读；verdict 缺失与旧形态降级 unknown", (t) => {
+  // 正路：gate evaluate 产出 runtimeReadiness（无外部契约任务 → overall=not-applicable、contracts 空）
+  const fx = driveToDesignApproved(t);
+  ok(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home));
+  const markdown = generate(fx);
+  const report = reportJson(markdown);
+  assert.equal(report.runtimeReadiness.status, "ok");
+  assert.equal(report.runtimeReadiness.overall, "not-applicable", "无外部契约任务的 readiness 由 gate 判为 not-applicable（直读，不另算）");
+  assert.deepEqual(report.runtimeReadiness.contracts, []);
+  assert.match(markdown, /运行可用性（runtime readiness，verdict 直读）：overall=not-applicable/, "首段披露（分节 1 内紧随终态）");
+
+  // verdict 缺失：readiness 同源 unknown（不按 established 补齐）
+  const fxNoVerdict = driveToDesignApproved(t);
+  const noVerdictReport = reportJson(generate(fxNoVerdict));
+  assert.equal(noVerdictReport.runtimeReadiness.status, "unknown");
+  assert.match(noVerdictReport.runtimeReadiness.reason, /verdict\.json 缺失/);
+  assert.match(generate(fxNoVerdict), /运行可用性（runtime readiness）：unknown/);
+
+  // 旧形态 verdict（字段缺失）：恢复动作指向重跑 evaluate
+  const fxLegacy = driveToDesignApproved(t);
+  writeFileSync(join(fxLegacy.taskDir, "verdict.json"), `${JSON.stringify({ state: "accepted", revision: "r1" })}\n`);
+  const legacyReport = reportJson(generate(fxLegacy));
+  assert.equal(legacyReport.runtimeReadiness.status, "unknown");
+  assert.match(legacyReport.runtimeReadiness.reason, /无 runtimeReadiness 字段/);
+  assert.match(generate(fxLegacy), /重跑 delivery-gate evaluate/);
+});
+
+test("外部契约清单：声明 × 快照直读；快照缺条目 unknown；未声明契约如实为零", (t) => {
+  const fx = driveToDesignApproved(t);
+  ok(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home));
+  // 报告直读盘上 acceptance.json（不校验验收包哈希——那是 gate 的职责）：补声明 + 快照。
+  // 批准流程把验收包冻结为只读（gate chmod 0o444），测试改写前先恢复可写
+  const acceptancePath = join(fx.taskDir, "acceptance.json");
+  const acceptance = JSON.parse(readFileSync(acceptancePath, "utf8"));
+  acceptance.externalContracts = [
+    { id: "EC-host", essential: true, authorityRequest: { resolverKind: "installed-npm-package", locator: "@scope/host" }, capabilities: [] },
+  ];
+  chmodSync(acceptancePath, 0o644);
+  writeFileSync(acceptancePath, `${JSON.stringify(acceptance, null, 2)}\n`);
+  const snapshotSha = sha256("snapshot-body");
+  mkdirSync(join(fx.taskDir, "environment-contracts"), { recursive: true });
+  writeFileSync(join(fx.taskDir, "environment-contracts", `${snapshotSha}.json`), `${JSON.stringify({
+    schemaVersion: 1,
+    contracts: [{ id: "EC-host", status: "resolved", resolver: { kind: "installed-npm-package", locator: "@scope/host", resolution: "project-dependency" }, aggregateHash: "a".repeat(64) }],
+    snapshotSha256: snapshotSha,
+  }, null, 2)}\n`);
+  writeFileSync(join(fx.taskDir, "environment-contracts.current.json"), `${JSON.stringify({
+    schemaVersion: 1, snapshotSha256: snapshotSha, snapshotPath: `environment-contracts/${snapshotSha}.json`, updatedAt: "2026-01-01T00:00:00Z",
+  }, null, 2)}\n`);
+
+  const markdown = generate(fx);
+  const report = reportJson(markdown);
+  assert.equal(report.externalContracts.status, "ok");
+  assert.equal(report.externalContracts.declaredCount, 1);
+  assert.equal(report.externalContracts.snapshotAvailable, true);
+  assert.deepEqual(report.externalContracts.contracts, [
+    { id: "EC-host", essential: true, resolverStatus: "resolved", resolverKind: "installed-npm-package", aggregateHash: "a".repeat(64) },
+  ], "契约 id/essential 来自验收包声明，resolver 状态与 hash 来自快照");
+  assert.match(markdown, /\| EC-host \| 是 \| resolved \| installed-npm-package \|/);
+
+  // 快照文件损坏（指针在、快照坏）：resolver 状态 unknown + 重建指引，不冒充 resolved
+  writeFileSync(join(fx.taskDir, "environment-contracts", `${snapshotSha}.json`), "{broken");
+  const corruptReport = reportJson(generate(fx));
+  assert.equal(corruptReport.externalContracts.snapshotAvailable, false);
+  assert.match(corruptReport.externalContracts.snapshotReason, /不是合法 JSON/);
+  assert.equal(corruptReport.externalContracts.contracts[0].resolverStatus, "unknown");
+  assert.equal(corruptReport.externalContracts.contracts[0].aggregateHash, null);
+  assert.match(generate(fx), /重跑 resolve-external-contracts --write 重建/);
+
+  // 未声明 externalContracts：contracts 空 + 如实标注（不是缺数据）
+  const fxNoContracts = driveToDesignApproved(t);
+  ok(runGate(["evaluate", "--task-dir", fxNoContracts.taskDir], fxNoContracts.home));
+  const noContractsReport = reportJson(generate(fxNoContracts));
+  assert.deepEqual(
+    { status: noContractsReport.externalContracts.status, declaredCount: noContractsReport.externalContracts.declaredCount, contracts: noContractsReport.externalContracts.contracts },
+    { status: "ok", declaredCount: 0, contracts: [] },
+  );
+  assert.match(generate(fxNoContracts), /未声明 externalContracts/);
+});
+
+test("runtime probe 统计与证据环境计数：cases 实算、failed observed 披露、artifact 不可读不冒充 0", (t) => {
+  const fx = driveToDesignApproved(t);
+  ok(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home));
+  const revision0 = runGate(["revision", "--project-root", fx.projectDir], fx.home).stdout.trim();
+  mkdirSync(join(fx.taskDir, "evidence"), { recursive: true });
+
+  // probe artifact：2 cases（1 过 1 败带 observed）+ 驱动自报 summary
+  const probeArtifact = {
+    summary: "runtime probe",
+    environment: { kind: "official-runner", name: "host", version: "1.1.0", source: "@scope/host" },
+    subject: { revision: revision0, entrypoint: "src/extension.ts" },
+    cases: [
+      { capabilityId: "load-extension", operation: "装载扩展", observed: { loaded: true }, passed: true },
+      { capabilityId: "dispatch-command", operation: "分发命令", observed: { registered: false }, passed: false },
+    ],
+    summary: { passed: 1, failed: 1, skipped: 0 },
+  };
+  writeFileSync(join(fx.taskDir, "evidence", "runtime-probe.json"), `${JSON.stringify(probeArtifact, null, 2)}\n`);
+  ok(runGate(["record-evidence", "--task-dir", fx.taskDir, "--requirement-id", "R1", "--kind", "command", "--result", "verified",
+    "--summary", "probe 取证", "--artifact", "evidence/runtime-probe.json", "--revision", revision0,
+    "--assertion-ids", JSON.stringify(["A1"]),
+    "--runtime-probe", "--credential", fx.creds.assurance], fx.home), "probe 证据登记应成功");
+
+  // fake-host 证据（无 runtime-probe 标记）：进环境计数、不进 probe 统计
+  writeFileSync(join(fx.taskDir, "evidence", "mock-ev.json"), `${JSON.stringify({
+    summary: "mock 取证", environment: { kind: "fake-host", name: "mock-host" },
+    cases: [{ capabilityId: "x", operation: "mock 观察", observed: {}, passed: true }],
+  }, null, 2)}\n`);
+  ok(runGate(["record-evidence", "--task-dir", fx.taskDir, "--requirement-id", "R1", "--kind", "inspection", "--result", "verified",
+    "--summary", "mock 取证", "--artifact", "evidence/mock-ev.json", "--revision", revision0,
+    "--assertion-ids", JSON.stringify(["A1"]),
+    "--credential", fx.creds.assurance], fx.home), "fake-host 证据登记应成功");
+
+  // probe 标记但 artifact 非 JSON：cases 统计 unknown，不冒充 0（计数并入 unreadable）
+  writeFileSync(join(fx.taskDir, "evidence", "broken-probe.md"), "# 不是 JSON\n");
+  ok(runGate(["record-evidence", "--task-dir", fx.taskDir, "--requirement-id", "R1", "--kind", "command", "--result", "verified",
+    "--summary", "artifact 损坏 probe", "--artifact", "evidence/broken-probe.md", "--revision", revision0,
+    "--assertion-ids", JSON.stringify(["A1"]),
+    "--runtime-probe", "--credential", fx.creds.assurance], fx.home), "损坏 artifact 的 probe 证据登记应成功");
+
+  const markdown = generate(fx);
+  const report = reportJson(markdown);
+  // probe 统计：2 次 probe（1 可读实算 + 1 不可读单独计数），通过率 1/2
+  assert.equal(report.runtimeProbes.status, "ok");
+  assert.deepEqual(
+    { probeCount: report.runtimeProbes.totals.probeCount, unreadable: report.runtimeProbes.totals.unreadableArtifacts, cases: report.runtimeProbes.totals.cases },
+    { probeCount: 2, unreadable: 1, cases: { total: 2, passed: 1, failed: 1, withoutVerdict: 0 } },
+    "不可读 artifact 的 probe 不计入 cases 汇总",
+  );
+  assert.equal(report.runtimeProbes.probes[0].environmentKind, "official-runner");
+  assert.deepEqual(report.runtimeProbes.probes[0].failingCases, [
+    { capabilityId: "dispatch-command", judged: true, operation: "分发命令", observed: { registered: false } },
+  ], "failed case 的 observed 键值逐条披露（失败是发现入口，不隐藏）");
+  assert.equal(report.runtimeProbes.probes[1].caseStats.status, "unknown");
+  assert.match(markdown, /通过率 50%/);
+  assert.match(markdown, /"registered":false/, "markdown 应含 observed 键值原文");
+
+  // 环境计数：3 条 EvidenceRecorded → official-runner 1、fake-host 1、无法归类 1
+  assert.equal(report.evidenceEnvironments.status, "ok");
+  assert.equal(report.evidenceEnvironments.total, 3);
+  assert.deepEqual(report.evidenceEnvironments.counts, { "official-runner": 1, "real-host": 0, "fake-host": 1 });
+  assert.equal(report.evidenceEnvironments.missingEnvironment.length, 1);
+  assert.match(report.evidenceEnvironments.missingEnvironment[0].reason, /不是合法 JSON/);
+  assert.match(markdown, /official-runner 1、real-host 0、fake-host 1/);
+
+  // 无 probe 事件对照：0 次是确定事实（事件流可读），如实标注并指向 readiness 判定
+  const fxNoProbe = driveToDesignApproved(t);
+  ok(runGate(["evaluate", "--task-dir", fxNoProbe.taskDir], fxNoProbe.home));
+  const noProbeReport = reportJson(generate(fxNoProbe));
+  assert.equal(noProbeReport.runtimeProbes.totals.probeCount, 0);
+  assert.match(generate(fxNoProbe), /无 runtime probe 证据事件/);
+});
+
+test("parity 差异清单：mismatches 逐条披露与处置指引；无记录文件 note", (t) => {
+  const fx = driveToDesignApproved(t);
+  ok(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home));
+  // IA 落盘形态（independent-assurance-v6）：{records[], mismatches[], problems[]}
+  writeFileSync(join(fx.taskDir, "evidence", "fake-host-parity-abc123.json"), `${JSON.stringify({
+    revision: "r1", acceptanceVersion: 1, mode: "full",
+    records: [{
+      mockAssetId: "mock-host-context", realProbeArtifact: "evidence/runtime-probe.json",
+      sampleIds: ["context-basic", "command-dispatch"],
+      parity: [
+        { sampleId: "context-basic", mockObserved: { artifact: "test/mock.log", caseId: "context-basic", value: "message-appended" }, realObserved: { artifact: "evidence/runtime-probe.json", caseId: "context-basic", value: "message-appended" }, same: true },
+        { sampleId: "command-dispatch", mockObserved: { artifact: "test/mock.log", caseId: "command-dispatch", value: "full-name-match" }, realObserved: { artifact: "evidence/runtime-probe.json", caseId: "command-dispatch", value: "first-space-truncate" }, same: false },
+      ],
+    }],
+    mismatches: [{ mockAssetId: "mock-host-context", sampleId: "command-dispatch", mockValue: "full-name-match", realValue: "first-space-truncate" }],
+    problems: [],
+  }, null, 2)}\n`);
+
+  const markdown = generate(fx);
+  const report = reportJson(markdown);
+  assert.equal(report.parity.status, "ok");
+  assert.equal(report.parity.files, 1);
+  assert.equal(report.parity.records.length, 1);
+  assert.deepEqual(report.parity.mismatches, [
+    { mockAssetId: "mock-host-context", sampleId: "command-dispatch", mockValue: "full-name-match", realValue: "first-space-truncate" },
+  ]);
+  assert.match(markdown, /对照样本 2 个、语义差异 1 个/);
+  assert.match(markdown, /mock-host-context 样本 command-dispatch/);
+  assert.match(markdown, /不得继续作为该语义的证明/, "差异披露带 §8.3 处置指引");
+
+  // 无 parity 文件：无记录是确定事实，但 note 明示「无记录 ≠ 已验证无差异」
+  const fxNoParity = driveToDesignApproved(t);
+  ok(runGate(["evaluate", "--task-dir", fxNoParity.taskDir], fxNoParity.home));
+  const noParityReport = reportJson(generate(fxNoParity));
+  assert.equal(noParityReport.parity.files, 0);
+  assert.match(noParityReport.parity.note, /无记录 ≠ 已验证无差异/);
+  assert.match(generate(fxNoParity), /无 fake-host parity 记录文件/);
+});
+
+test("工具链与验证资产：project-capabilities.json 摘录；--capabilities-file 传入；缺失 unknown", (t) => {
+  // 正路：任务目录内快照（dev-flow 段快照的副本形态）直读 toolchain/testConfig
+  const fx = driveToDesignApproved(t);
+  ok(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home));
+  writeFileSync(join(fx.taskDir, "project-capabilities.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    toolchain: [{ id: "typescript", status: "missing", command: "tsc --noEmit", source: "devDependencies + node_modules/.bin" }],
+    testConfig: [{ runner: "vitest", zeroTestPassThrough: true, source: "vitest.config.ts" }],
+  }, null, 2)}\n`);
+  const markdown = generate(fx);
+  const report = reportJson(markdown);
+  assert.equal(report.toolchainAssets.status, "ok");
+  assert.deepEqual(report.toolchainAssets.toolchain, [{ id: "typescript", status: "missing", command: "tsc --noEmit" }]);
+  assert.deepEqual(report.toolchainAssets.testConfig, [{ runner: "vitest", zeroTestPassThrough: true }]);
+  assert.match(markdown, /typescript=missing（tsc --noEmit）/);
+  assert.match(markdown, /vitest（zeroTestPassThrough=true 空跑放行在册）/);
+
+  // --capabilities-file 显式传入：摘录来自参数路径（dev-flow 段 skill-data 路径不复制寻址）
+  const externalPath = join(fx.root, "dev-flow-segment", "project-capabilities.json");
+  mkdirSync(dirname(externalPath), { recursive: true });
+  writeFileSync(externalPath, `${JSON.stringify({
+    schemaVersion: 1,
+    toolchain: [{ id: "eslint", status: "available", command: "eslint .", source: "devDependencies + node_modules/.bin" }],
+    testConfig: [],
+  }, null, 2)}\n`);
+  const externalReport = reportJson(generate(fx, ["--capabilities-file", externalPath]));
+  assert.deepEqual(externalReport.toolchainAssets.toolchain, [{ id: "eslint", status: "available", command: "eslint ." }]);
+  assert.deepEqual(externalReport.toolchainAssets.testConfig, []);
+  assert.match(generate(fx, ["--capabilities-file", externalPath]), /未探测到测试 runner 配置/);
+
+  // 缺失：unknown + 传参指引（不冒充「无工具链」）
+  const fxMissing = driveToDesignApproved(t);
+  ok(runGate(["evaluate", "--task-dir", fxMissing.taskDir], fxMissing.home));
+  const missingReport = reportJson(generate(fxMissing));
+  assert.equal(missingReport.toolchainAssets.status, "unknown");
+  assert.match(missingReport.toolchainAssets.reason, /project-capabilities\.json（.*） 缺失/);
+  assert.match(generate(fxMissing), /--capabilities-file/);
 });
 
 test("参数校验：缺 --task-dir / 未知参数 / 目录不存在", () => {

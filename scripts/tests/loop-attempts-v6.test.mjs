@@ -78,6 +78,17 @@ function makeFixture(t, { taskId = "loop-attempt" } = {}) {
   return { root, projectDir, home, taskDir: output.taskDir, creds: output.credentials };
 }
 
+/** 空候选快照（gate §5.1 检查 2：V6 世代新任务无外部契约也必须带 externalContractReview 键，
+ * detectionSha256 绑定候选快照内容；无外部候选时生成空候选快照）。形态对齐
+ * delivery-gate-v6.test.mjs 同名 helper。返回文件内容 sha256。 */
+function writeEmptyCandidateSnapshot(fx, acceptanceVersion) {
+  const dir = join(fx.taskDir, "evidence", `acceptance-v${acceptanceVersion}`);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "external-contract-candidates.json");
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] }, null, 2)}\n`);
+  return sha256(readFileSync(path, "utf8"));
+}
+
 /** schema 2 最小验收包 + review/approve/design 三连（推进到实现段，形态同 delivery-core-v6 夹具） */
 function driveToImplementing(t) {
   const fx = makeFixture(t);
@@ -103,6 +114,7 @@ function driveToImplementing(t) {
     riskLevel: "high",
     exploratoryReview: "required",
     reviewDimensions: ["smoke"],
+    externalContractReview: { detectionSha256: writeEmptyCandidateSnapshot(fx, 1), dispositions: [] },
   }, null, 2)}\n`);
   writeFileSync(join(fx.taskDir, "increments.json"), `${JSON.stringify({
     schemaVersion: 1,
@@ -304,4 +316,48 @@ test("acceptance-design 源码结构：started 在轮内退出路径之前，des
   assert.match(designerFailBlock, /recordLoopAttempt\("finished", round, \{ outcome: "failed" \}\)/, "designer 失败路径登记 finished(failed)");
   const versionGateBlock = source.slice(versionGateAt, reviewerAt);
   assert.match(versionGateBlock, /recordLoopAttempt\("finished", round, \{ outcome: "rejected" \}\)/, "版本未递增打回路径登记 finished(rejected)");
+});
+
+// ── 8. assurance 跨 run 预算迁移（V5 完整性设计 §8.1：预算读 started，不读成功事件）──
+
+test("repairBudgetFromEvents 迁移：账本 assurance started 计数优先；无账本记录回退成功事件并带 migrationNote", async () => {
+  const records = [
+    { type: "AssuranceCompleted", seq: 1 },
+    { type: "RepairRoundRecorded", seq: 2, round: 1 },
+    { type: "AssuranceCompleted", seq: 3 },
+  ];
+  // 账本 3 次 assurance started（含打回重试）：成功事件只有 2 个，旧口径漏计打回的尝试
+  const rows = [
+    { loop: "assurance", attemptKey: "a:1", event: "started" },
+    { loop: "assurance", attemptKey: "a:2", event: "started" },
+    { loop: "assurance", attemptKey: "a:2", event: "finished", outcome: "rejected" },
+    { loop: "assurance", attemptKey: "a:3", event: "started" },
+    { loop: "acceptance-review", attemptKey: "r:1", event: "started" },
+  ];
+  const withLedger = KERNEL.repairBudgetFromEvents(records, { attemptRows: rows });
+  assert.equal(withLedger.assuranceAttemptsLedger, 3, "账本口径：started 按 (attemptKey,event) 去重后计 3");
+  assert.equal(withLedger.crossRunUsed, 4, "跨 run = 账本 started 3 + perVersion 1（不再按 2 个成功事件计）");
+  assert.equal(withLedger.assuranceRuns, 2, "成功事件数保留披露（assuranceRuns 字段口径不变）");
+  assert.equal(withLedger.migrationNote ?? null, null, "账本口径生效时无迁移注记");
+  assert.equal(withLedger.crossRunExceeded, false, "4 ≤ cap 6 未超");
+  // 未传账本行（调用方未接线，如 gate 迁移前）：回退 AssuranceCompleted 计数 + migrationNote
+  const fallback = KERNEL.repairBudgetFromEvents(records);
+  assert.equal(fallback.crossRunUsed, 3, "回退口径 = AssuranceCompleted 2 + perVersion 1（与迁移前行为一致）");
+  assert.match(fallback.migrationNote, /回退口径/, "回退必须在 migrationNote 披露（读数偏低提示）");
+  assert.match(fallback.migrationNote, /未传入/, "未传行与账本无记录两种成因分别说明");
+  // 账本存在但无 assurance 键记录（旧任务早于账本接入）：同样回退并注记
+  const oldTask = KERNEL.repairBudgetFromEvents(records, { attemptRows: [rows[4]] });
+  assert.equal(oldTask.crossRunUsed, 3);
+  assert.match(oldTask.migrationNote, /旧任务/, "旧任务成因须在注记中可辨");
+});
+
+test("repair-budget CLI：core 侧读账本，assurance started 计入跨 run 且无回退注记", async (t) => {
+  const fx = makeFixture(t);
+  ok(await attempt(fx, { runId: "as-1", round: 1, event: "started", loop: "assurance" }));
+  ok(await attempt(fx, { runId: "as-2", round: 1, event: "started", loop: "assurance" }));
+  const budget = JSON.parse(parseStdout(await runCore(["repair-budget", "--task-dir", fx.taskDir], fx.home)));
+  assert.equal(budget.assuranceRuns, 0, "无 AssuranceCompleted 成功事件");
+  assert.equal(budget.assuranceAttemptsLedger, 2, "账本口径：assurance started 计数");
+  assert.equal(budget.crossRunUsed, 2, "跨 run 按账本 started 计数（V5 §8.1），不依赖成功事件");
+  assert.equal(budget.migrationNote ?? null, null, "账本口径生效时无迁移注记");
 });
