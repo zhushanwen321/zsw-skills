@@ -7,6 +7,7 @@
 1. 设计包章节 JSON 已带 conformance 绑定（`design-doc-schema.md` §9b；覆盖率分母 = 全部绑定义务，无绑定叙述不进分母）。未绑定 legacy 包走「legacy 只读期收尾」节（下方）。
 2. 该包未切换：带 cutover 标记的包由 v2 管辖（标记是旧引擎的拒启信号，v2 正常运行）。
 3. 交付体系任务：D4 收尾的增量实现登记已完成（逐增量 ImplementationRecorded 落交付任务事件流，`flow/acceptance.md` 收尾节第 3 步）——终态同步不替代实现登记，两者独立成环；前置与合法转移由 delivery-core next 裁决（转移表唯一权威），缺登记按其恢复动作回 D4 补。
+4. **交付判定衔接**：D5 收敛（四层结论 engineOutcome=completed 且覆盖义务达收敛判据）或用户显式豁免（明示跳过并记录）是 accepted 前置——未收敛且未豁免不得声明交付完成；交付结论仍只由裁决器（delivery-gate evaluate）给出，本阶段的 deliveryOutcome 只表达引擎侧状态。
 
 ## cutover 拒启检查（workflow 与手工路径共用，[MANDATORY]）
 

@@ -502,7 +502,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "6.2.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "6.3.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -985,6 +985,10 @@ if (eventsRes.exitCode !== 0 || eventsError !== "") {
 // 一致，工件被篡改的 full 在预检即拦下，避免跑完全程才被裁决器判白跑）。不查回执红绿：
 // 红 = full 发现缺陷，正是修复循环的输入
 let coreFullQualification = {};
+// revision 来源对账（设计 §7.2，本轮只读消费）：保证开始时读取 provenance，
+// unknownCount>0 时在保证报告终态块如实披露（本 workflow 不阻塞、不改判定——
+// 未知 revision 的交付判定由裁决器阻断）
+let coreProvenance = {};
 // 可用探索集：判定走内核单源（delivery-core usable-explorations——唯一实现在
 // kernel-judgments.mjs；V4 此处与 ARL/gate 折叠三处复刻、口径靠注释人工同步，V5 收敛
 // 为一份）。due 判定与 full/recheck 的探索引用必须用它而非原始事件流——引用失效探索
@@ -997,6 +1001,7 @@ try {
     coreDue = await runCoreJson(corePath, ["exploration-due", "--task-dir", taskDir]);
     coreOpen = await runCoreJson(corePath, ["open-findings", "--task-dir", taskDir, "--revision", revision]);
     coreFullQualification = await runCoreJson(corePath, ["full-qualification", "--task-dir", taskDir]);
+    coreProvenance = await runCoreJson(corePath, ["revision-provenance", "--task-dir", taskDir]);
 }
 catch (e) {
     await releaseLease();
@@ -1009,6 +1014,9 @@ catch (e) {
 }
 const usableExplorations = (coreExplorations.usable ?? []).map((entry) => ({ ...entry, type: "ExplorationCompleted" }));
 const latestUsableExplorationId = String(coreExplorations.latestUsableId ?? "none");
+// 未知 revision 变化数（设计 §7.2 只读消费）：>0 只在保证报告披露、不阻塞不改判定
+//——未知 revision 的交付判定由裁决器阻断，本 workflow 不越权
+const provenanceUnknownCount = Number(coreProvenance.unknownCount ?? 0);
 if (mode === "recheck" && coreFullQualification.qualified !== true) {
     const priorFullInspections = Array.isArray(coreFullQualification.inspections)
         ? coreFullQualification.inspections
@@ -1442,6 +1450,83 @@ if (!coverageGuard.ok || coverageGuard.value === null) {
     return failAssurance(`独立保证角色调用失败：${coverageGuard.error}${salvageableFindingsNote(coverageGuard.raw?.findings)}`);
 }
 const coverage = coverageGuard.value;
+// ── 独立保证的环境事实责任（设计 §6.3）──
+// 宿主类断言（assertion.requiredEnvironment 非空）的证据 artifact 须含 environment
+// 元数据且 kind/capability 满足要求：缺失或 fake-host（或不满足要求的 kind）→ 该断言
+// 结论如实降级（verified→partial），不阻塞其他断言（分级降级，不整体 fail）。直接改写
+// coverage.evidence 本体——后续 EvidenceRecorded、coverage-manifest、保证总结全部携带
+// 降级后结论，单一改写点不产生双源
+const requiredEnvByAssertionId = new Map();
+for (const requirement of requirements) {
+    for (const assertion of requirement.assertions ?? []) {
+        if (assertion.requiredEnvironment !== undefined && assertion.requiredEnvironment !== null && typeof assertion.requiredEnvironment === "object") {
+            requiredEnvByAssertionId.set(assertion.id, assertion.requiredEnvironment);
+        }
+    }
+}
+// 证据 artifact 的 environment 元数据解析：JSON artifact 顶层或其 environment 字段；
+// 非 JSON 或缺 kind 视为缺失（无法证明环境身份 = 如实降级，不猜）
+async function environmentMetaOf(artifactPath) {
+    const res = await runNode([NODE_READ_FILE, artifactPath]);
+    if (res.exitCode !== 0)
+        return null;
+    try {
+        const doc = JSON.parse(res.stdout);
+        if (doc === null || typeof doc !== "object" || Array.isArray(doc))
+            return null;
+        const container = doc;
+        const meta = container.environment !== undefined ? container.environment : container;
+        if (meta === null || typeof meta !== "object" || Array.isArray(meta))
+            return null;
+        const record = meta;
+        return typeof record.kind === "string" ? record : null;
+    }
+    catch {
+        return null;
+    }
+}
+// kind/capability 满足判定：证据 kind 须等于要求 kind；real-host 证据可满足
+// official-runner 要求（真实宿主强于官方 runner）；fake-host 不满足任何宿主要求。
+// capability 依赖元数据声明：声明了（capabilities 数组或 capability 单值）且不含要求
+// 值 → 不满足；未声明时无法证伪，按 kind 已满足放行——capability 级终判归 gate
+function satisfiesRequiredEnvironment(meta, required) {
+    if (meta === null)
+        return false;
+    const kind = String(meta.kind);
+    if (kind !== required.kind && !(required.kind === "official-runner" && kind === "real-host"))
+        return false;
+    if (required.capability !== undefined && required.capability !== "") {
+        const declared = Array.isArray(meta.capabilities)
+            ? meta.capabilities.map(String)
+            : typeof meta.capability === "string" ? [meta.capability] : null;
+        if (declared !== null && !declared.includes(required.capability))
+            return false;
+    }
+    return true;
+}
+const degradedEnvironmentEvidence = [];
+if (requiredEnvByAssertionId.size > 0) {
+    for (const conclusion of coverage.evidence) {
+        const hostAssertionIds = (conclusion.assertionIds ?? []).filter((id) => requiredEnvByAssertionId.has(id));
+        if (hostAssertionIds.length === 0 || conclusion.result !== "verified")
+            continue;
+        // 同一结论覆盖的每个宿主类断言的环境要求都要满足（同一 artifact 元数据对全部
+        // 宿主类断言核对；任一不满足即降级）
+        let allHostRequirementsSatisfied = true;
+        for (const assertionId of hostAssertionIds) {
+            const meta = await environmentMetaOf(conclusion.artifact);
+            const required = requiredEnvByAssertionId.get(assertionId);
+            if (!satisfiesRequiredEnvironment(meta, required)) {
+                allHostRequirementsSatisfied = false;
+                break;
+            }
+        }
+        if (!allHostRequirementsSatisfied) {
+            conclusion.result = "partial";
+            degradedEnvironmentEvidence.push(`${conclusion.requirementId}/${conclusion.kind}（断言 ${hostAssertionIds.join("、")}：证据 artifact 缺 environment 元数据或环境不满足要求）`);
+        }
+    }
+}
 await obsEnd("review", 1);
 // 中间心跳点：coverage 与 explorer 两个顺序长调用只靠阶段边界心跳会超 LEASE_STALE_MS；
 // 残余窗口（单次调用超 120s）后果有界——接管后 append 被代次复核拒，响亮失败不双写
@@ -1579,6 +1664,16 @@ try {
         if (processFailedAfterExploration !== null)
             return processFailedAfterExploration;
     }
+    // 终态披露行（设计 §6.3/§7.2）：环境降级与未知 revision 变化如实进保证报告——缺口
+    // 可见，不静默；零降级零未知时不加行（正常路径不加噪音）
+    const disclosureLines = [
+        ...(degradedEnvironmentEvidence.length > 0
+            ? [`环境事实降级（verified→partial）：${degradedEnvironmentEvidence.length} 条证据未满足宿主类断言的环境要求——${degradedEnvironmentEvidence.join("；")}`]
+            : []),
+        ...(provenanceUnknownCount > 0
+            ? [`存在 ${provenanceUnknownCount} 个来源不明的 revision 变化（revision-provenance unknownCount=${provenanceUnknownCount}）：交付判定由裁决器阻断，本保证结论不含对未知变化的背书`]
+            : []),
+    ];
     const summaryLines = [
         "# 独立保证总结",
         "",
@@ -1590,6 +1685,7 @@ try {
         `本轮解决旧发现：${coverage.resolvedFindingIds.length > 0 ? coverage.resolvedFindingIds.join("、") : "无"}`,
         `本轮确认仍未修复（排除自动重认领）：${coverage.unresolvedFindingIds.length > 0 ? coverage.unresolvedFindingIds.join("、") : "无"}`,
         "旧发现解决结论只来自 coverage reviewer 的逐项确认与具体回归测试，不凭全量测试绿自动重认领。",
+        ...disclosureLines,
         "",
         "本总结只表示保证活动完成，不表示交付已接受；最终状态以 delivery-gate evaluate 为准。",
     ];
@@ -1763,6 +1859,6 @@ const result = {
     revision,
     findingIds,
     verdict: finalVerdict,
-    message: `独立保证活动已完成，返回值携带 delivery-gate 生成的 verdict；workflow 本身不宣告 accepted；${triageNote}；本任务累计保证轮次 ${assuranceRoundsTotal}（重发前先核对累计成本再决定）${repairSummary()}${statsTailNote()}`,
+    message: `独立保证活动已完成，返回值携带 delivery-gate 生成的 verdict；workflow 本身不宣告 accepted；${triageNote}；本任务累计保证轮次 ${assuranceRoundsTotal}（重发前先核对累计成本再决定）${degradedEnvironmentEvidence.length > 0 ? `；环境事实降级 ${degradedEnvironmentEvidence.length} 条（verified→partial，明细见保证总结）` : ""}${provenanceUnknownCount > 0 ? `；来源不明的 revision 变化 ${provenanceUnknownCount} 个（本保证结论不含对未知变化的背书，明细见保证总结）` : ""}${repairSummary()}${statsTailNote()}`,
 };
 return result;

@@ -13,3 +13,4 @@
 9. 新发现只申报 summary/requirementIds/severity，不分配 findingId；suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不得只按字面合规降级。must-fix 同时申报 origin、expectedStage、regressionTestRef；仅当亲自确认旧 finding 已修复时才把其 id 列入 resolvedFindingIds。
 10. 完成以覆盖报告文件落盘为证据；summary 说明核对范围与亲自执行的验证。
 11. 不逐步叙述过程，直接给逐项结论与证据。
+12. 独立环境责任：独立保证不能只复用 builder 的契约类型与模拟环境。验收断言带 requiredEnvironment（宿主类断言）时，必须独立取得至少一份权威环境事实（真实 runner、宿主源码或正式文档）支撑核对，或在覆盖报告中明确登记无法取得的缺口；模拟环境（fake-host）证据不能独立证明宿主契约——宿主类断言不得仅凭模拟环境证据记 verified。

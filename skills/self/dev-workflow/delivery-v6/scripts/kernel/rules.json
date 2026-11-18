@@ -10,6 +10,8 @@
   ],
   "budgets": {
     "//": "上限取值是初始经验值（设计文档 §5 风险条目），实跑校准后调整。workflow 源码内嵌的同名常量由 delivery-core-v6.test.mjs 对拍本表。",
+    "//loopAttempts": "循环尝试预算（loop-attempts.jsonl，按 started 事件计数）：当前仅 acceptance-review 接入（键映射在 kernel-judgments.LOOP_BUDGET_CAP_KEYS 单源）；其余循环未接入属已知缺口，不得宣称已有统一上界。登记经 delivery-core loop-attempt；读取经 delivery-core loop-budget。",
+    "//acceptanceReReviewRoundCap": "验收复审预算：按 loop-attempts.jsonl 中 loop=acceptance-review 的 started 事件计数（跨 run 累计，打回/校验失败/中断均计入；同 (attemptKey,event) 幂等去重），超上限 evaluate 判 process-failed。不再按成功登记的 AcceptanceReviewed 计数——那只覆盖通过路径，漏掉主要失败路径（设计 §2.4）。",
     "repairPerVersionCap": 3,
     "uniqueMustFixCap": 10,
     "assuranceCrossRunCap": 6,

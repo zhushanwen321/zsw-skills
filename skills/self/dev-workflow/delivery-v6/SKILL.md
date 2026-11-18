@@ -1,7 +1,7 @@
 ---
 name: delivery-v6
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 6.2.0
+version: 6.3.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -22,7 +22,7 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 1. **目标与验收先于并独立于方案**：acceptance.json 定义外部可观察的正确行为；方案可以换，验收不跟着方案改。
 2. **实现完成不等于接受交付**：`implemented`、`contract-ready`、workflow `completed` 都是过程状态；技能③产出只是候选。
 3. **唯一交付判定**：只有 `delivery-gate evaluate` 能写 `verdict.json`；自动和手工路径使用同一判据。
-4. **独立保证**：由不参与实现的角色核对验收覆盖，并按风险进行探索性审查——主动寻找验收与测试遗漏。
+4. **独立保证**：由不参与实现的角色核对验收覆盖，并按风险进行探索性审查——主动寻找验收与测试遗漏。独立保证不得只复用实现方的契约解释与模拟环境：须独立取得权威环境事实（真实 SDK、宿主源码或正式文档），无法取得时登记为证据缺口（详细责任在 coverage-reviewer 提示词，此处不重复）。
 5. **未知不等于通过**：`partial` 不是 `verified`；用户接受风险也不改写成已验证。schema 2 缺口逐「断言×证据类型」判定，schema 1 保持「需求×证据类型」兼容语义。
 
 ## 交付事务内核（delivery-core）
@@ -36,8 +36,9 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 - **status.json 派生视图**：节点状态以 status.events 为源（事件带结构化 payload），`node-project` 按事件重新推算并比对在盘 nodes——绕过转移入口的改动被检出，`--write` 以事件恢复。
 - **过程记录读侧合流**：交付事件带 domain 章，过程记录（process-review.jsonl）带 process 域章；`delivery-core events` 输出统一时间线（签名流与观测流分储、读侧单口——签名完整性不因观测数据稀释）。
 - **定级护栏**：关联需求已有断言级判据明文覆盖的发现禁止归 boundary；non-blocker 必须附 consequenceRefutation 三类论证；同一条目定级组合超过 2 种熔断停回用户；T2 聚合分级与 D2 聚合定性的改判必附理由留痕，同一 ref/条目连续改判达上限停回（aggregateRegradeHalt）。护栏只拦新写入；历史记录违规在加载折算时留档 guardrailWarnings（旧任务目录可读）。
-- **循环预算三档**：perVersion 修复 ≤3、不同 must-fix ≤10、跨 run 保证总轮 ≤6——超限 evaluate 判 process-failed 停回（`quality.budgets` 报用量）。
+- **循环预算**：perVersion 修复 ≤3、不同 must-fix ≤10、跨 run 保证总轮 ≤6、验收复审轮 ≤6（按 started 尝试计数——打回、失败、中断全部计入，跨 run 与手工路径累计不重置）——超限判 process-failed 停回（`quality.budgets` 报用量）。尝试登记与查询走 `delivery-core loop-attempt` / `loop-budget`（记录文件 loop-attempts.jsonl，非签名事件）。
 - **待办实体**（pending-actions）：善后 / 待恢复 / 待登记 / 待裁决 / 待复盘落盘，`next` 优先回答；中断恢复 = 读待办 + 合法转移，不依赖会话记忆。
+- **交付义务与 revision 来源对账**：accepted 判定从「事件是否齐」扩展——`delivery-core obligations` 从验收断言 / 必需阶段 / 修复轮 / blocking 待办派生义务清单（不建人工总表），必需义务无 open 才可 accepted（`explicitly-waived` 须绑用户裁决，豁免通道按义务类型映射现有命令）；`delivery-core revision-provenance` 只读派生候选形成后每次 revision 变化的来源，来源不明（unknown）的代际不得被后续保证覆盖、不得 accepted，恢复动作 = 补做合法修复登记 / 恢复已知基线 / 用户确认外部基线（external-baseline 显式登记通道待建立）。
 - **人工处置显式转移**：DAG 节点人工改判 done 的唯一合法通道 `node-transition --event manual-disposition --basis <依据> --task-dir <taskDir>`（自动登记待复盘待办）；禁止词表外事件与直改状态文件。
 - **验证体系**：转移表静态校验 + 编排链已知答案样例 + golden 任务端到端（`scripts/tests/delivery-golden-v6.test.mjs`：正常流与预置缺陷流，断言拦截阶段/定级/轮次；agent 语义行为的 golden 需活跑，见 dev-flow-v6 题库分级）+ 历史任务回放（`delivery-core replay --task-dir`：真实事件序列对转移表的可表达性核验）+ 全量机制单测，全部进 CI。
 
@@ -67,7 +68,7 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 | 候选实现 | — | 入口门校验批准与 DesignApproved；schema 2 登记实现前必须已有当前 revision 探索（探索通道不要求实现先登记——转移表死锁防护）且 must-fix 清零 |
 | 独立保证 | — | full/recheck/explore-only 三模式语义门；探索 due 与 open 集由内核单源判定 |
 | 有限修复 | **预算耗尽停回**（perVersion >3 / 不同 must-fix >10 / 跨 run 保证 >6） | 轮次预判走内核 repair-budget；reopenOf 根去重；environment/evidence 不计轮 |
-| 判定 | **风险接受逐项裁决** | 只有 evaluate 写 verdict；accepted / accepted_with_risk 才可交付；process-failed 不得作为成功交付 |
+| 判定 | **风险接受逐项裁决** | 只有 evaluate 写 verdict；accepted / accepted_with_risk 才可交付；process-failed 不得作为成功交付；evaluate 前置机器核对：`obligations` 必需义务无 open、`revision-provenance` 无 unknown 来源代际、`loop-budget` 未超限 |
 
 收尾质量指标：交付终态确定后运行 `node ~/.agents/skills/delivery-v6/scripts/delivery-quality-stats.mjs <taskDir> --json` 输出 11 项交付质量指标（uniqueMustFix、repairRounds、findings、reopenedFindings、expectedStageAccuracy、escapedByStage、assuranceMustFixFirstRun、targetedReviewRate、finalExplorations、evidenceIntegrityFailures、stuckContinuationCount），呈报用户并存档。卡住续跑次数由主会话按 dev-flow 执行记录统计后经 `--stuck-continuation-count N` 传入。过程审查统计：taskDir 含 process-review.jsonl（dev-flow-v6 渐进式 review 的过程记录）时追加输出 processReview 字段，缺失不影响既有指标。
 

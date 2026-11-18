@@ -41,7 +41,19 @@ import { fileURLToPath } from "node:url";
 // 判定单源库（V6 内核）：发现 open 集、修复轮与跨 run 预算、定级改判统计只此一份实现，
 // 本文件与 delivery-core.mjs 同进程复用；workflow 侧经 delivery-core CLI 的 JSON 子命令消费，
 // 禁止在别处复刻同口径判定
-import { KERNEL_RULES, findingRegrades, openFindingsFromEvents, priorFullQualification, repairBudgetFromEvents, taskPhaseFromEvents } from "./lib/kernel-judgments.mjs";
+import {
+  KERNEL_RULES,
+  LOOP_BUDGET_CAP_KEYS,
+  deriveObligations,
+  deriveRevisionProvenance,
+  findingRegrades,
+  loopAttemptsBudget,
+  openFindingsFromEvents,
+  parseLoopAttemptsText,
+  priorFullQualification,
+  repairBudgetFromEvents,
+  taskPhaseFromEvents,
+} from "./lib/kernel-judgments.mjs";
 
 const GATE_COMMAND = "node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs";
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -591,6 +603,10 @@ function validatePolicySources(sources) {
   const kinds = sources["evidence-kinds.json"];
   requireRecord(kinds, "evidence-kinds.json");
   requireStringArray(kinds.evidenceKinds ?? kinds.kinds ?? [], "evidence-kinds.json 词表", { nonEmptyItems: true, unique: true });
+  // 证据环境词表（机制二 §6.1）：fake-host | official-runner | real-host。缺省空 = 旧快照
+  // 无该词表，环境检查按「不在词表」拒绝（带 requiredEnvironment 的断言在旧快照下取不了证
+  // ——词表属验收契约的一部分，升级走策略升级通道）
+  requireStringArray(kinds.environmentKinds ?? [], "evidence-kinds.json 环境词表", { nonEmptyItems: true, unique: true });
   const categories = sources["finding-categories.json"];
   requireRecord(categories, "finding-categories.json");
   if (!Array.isArray(categories.categories) || categories.categories.length === 0) {
@@ -798,13 +814,15 @@ function validateAcceptance(acceptance, task) {
         const assertion = requirement.assertions[assertionIndex];
         const assertionLabel = `${label}.assertions[${assertionIndex}]`;
         requireRecord(assertion, assertionLabel);
-        // 可选键（合并稿 §4.1「允许记录不适用理由」+ §10.2 断言依赖声明）：
+        // 可选键（合并稿 §4.1「允许记录不适用理由」+ §10.2 断言依赖声明 + 机制二 §6.1 环境要求）：
         // qualifierNotApplicable = 限定条件不适用登记（带非空理由，豁免该限定条件的反例场景要求）；
-        // dependsOn = 断言声明依赖的实现增量/机制条款/测试资产（修复轮影响范围机器推导的输入）
+        // dependsOn = 断言声明依赖的实现增量/机制条款/测试资产（修复轮影响范围机器推导的输入）；
+        // requiredEnvironment = 宿主类断言的结构化环境要求（additive 可选字段，不改 schemaVersion；
+        //   缺省不限制；变更仍随验收包递增 acceptanceVersion 走既有修订通道）
         requireEventKeys(
           assertion,
-          ["id", "statement", "qualifiers", "given", "when", "then", "adversarialFormRefs", "testAssetRefs", "qualifierNotApplicable", "dependsOn"],
-          ["qualifierNotApplicable", "dependsOn"],
+          ["id", "statement", "qualifiers", "given", "when", "then", "adversarialFormRefs", "testAssetRefs", "qualifierNotApplicable", "dependsOn", "requiredEnvironment"],
+          ["qualifierNotApplicable", "dependsOn", "requiredEnvironment"],
           assertionLabel,
         );
         requireNonEmptyString(assertion.id, `${assertionLabel}.id`);
@@ -854,6 +872,23 @@ function validateAcceptance(acceptance, task) {
           requireStringArray(dependsOn.incrementIds, `${dependsOnLabel}.incrementIds`, { nonEmptyItems: true, unique: true });
           requireStringArray(dependsOn.mechanismRefs, `${dependsOnLabel}.mechanismRefs`, { nonEmptyItems: true, unique: true });
           requireStringArray(dependsOn.testAssetRefs, `${dependsOnLabel}.testAssetRefs`, { nonEmptyItems: true, unique: true });
+        }
+        // 环境要求（机制二 §6.1）：kind ∈ official-runner | real-host（环境词表见策略包
+        // evidence-kinds.json 的 environmentKinds，含 fake-host 共三档）；capability 可选。
+        // official-runner 证明官方命令解析/注册/事件语义；完整用户交互或进程行为要求 real-host。
+        if (Object.hasOwn(assertion, "requiredEnvironment")) {
+          const requiredEnvironment = assertion.requiredEnvironment;
+          const requiredEnvironmentLabel = `${assertionLabel}.requiredEnvironment`;
+          requireRecord(requiredEnvironment, requiredEnvironmentLabel);
+          // capability 可选（requireExactKeys 不区分可选键，键集合手工校验）
+          const unknownEnvironmentKeys = Object.keys(requiredEnvironment).filter((key) => !["kind", "capability"].includes(key));
+          if (unknownEnvironmentKeys.length > 0) {
+            fail(`${requiredEnvironmentLabel} 含未知字段 ${unknownEnvironmentKeys.join(", ")}。`, `按契约删除未知字段后重试；${requiredEnvironmentLabel} 允许的字段为 kind（必填）、capability（可选）。`);
+          }
+          requireEnum(requiredEnvironment.kind, ["official-runner", "real-host"], `${requiredEnvironmentLabel}.kind`);
+          if (Object.hasOwn(requiredEnvironment, "capability")) {
+            requireNonEmptyString(requiredEnvironment.capability, `${requiredEnvironmentLabel}.capability`);
+          }
         }
       }
     }
@@ -2032,6 +2067,85 @@ function requirementEvidenceStatus(kindEntries) {
   return "missing";
 }
 
+// ── 循环尝试预算（机制四 §8.1 gate 侧）：读任务目录 loop-attempts.jsonl 的 started 计数 ──
+// 文件缺失 = 无尝试登记（返回零计数）；解析容错与去重走 kernel-judgments 单源
+function readLoopAttemptsBudget(taskDirValue, loop) {
+  const filePath = join(taskDirValue, "loop-attempts.jsonl");
+  const capKey = LOOP_BUDGET_CAP_KEYS[loop];
+  const cap = capKey !== undefined ? KERNEL_RULES.budgets[capKey] : null;
+  if (!existsSync(filePath)) return { started: 0, byOutcome: {}, cap, exceeded: false, loop };
+  return { loop, ...loopAttemptsBudget(parseLoopAttemptsText(readFileSync(filePath, "utf8")), { loop, cap }) };
+}
+
+// pending-actions.json 的 open 条目读取（义务派生输入；文件缺失/损坏 → 无待办——
+// pending 实体由 delivery-core pending 命令管理，gate 只读不写）
+function readPendingItems(taskDirValue) {
+  const filePath = join(taskDirValue, "pending-actions.json");
+  if (!existsSync(filePath)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8"));
+    const items = Array.isArray(parsed.items) ? parsed.items : [];
+    return items.filter((item) => item !== null && typeof item === "object" && item.status === "open");
+  } catch {
+    return [];
+  }
+}
+
+// ── 证据环境元数据（机制二 §6.1/§6.2 gate 侧）──
+// 宿主类证据的 artifact 为 JSON，内含 environment: {kind, name, version, source, sourceHash, driver}。
+// 环境词表（fake-host | official-runner | real-host）落策略包 evidence-kinds.json（environmentKinds），
+// 随策略快照受冻结保护——执行者不能靠自造 kind 词表放宽要求。
+function readEvidenceEnvironment(world, event) {
+  // artifact 缺失/不可解析/无 environment 对象 → null（无环境元数据 = 模拟环境同级处理）
+  if (typeof event.artifact !== "string" || event.artifact === "") return null;
+  const filePath = isAbsolute(event.artifact) ? resolve(event.artifact) : resolve(world.taskDir, event.artifact);
+  if (!existsSync(filePath)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const environment = parsed.environment;
+  if (environment === null || typeof environment !== "object" || Array.isArray(environment)) return null;
+  return environment;
+}
+
+function environmentSatisfies(world, environment, required) {
+  const vocabulary = world.policy["evidence-kinds.json"].environmentKinds ?? [];
+  if (typeof environment.kind !== "string" || !vocabulary.includes(environment.kind)) {
+    return { ok: false, reason: `environment.kind=${JSON.stringify(environment.kind ?? null)} 不在策略环境词表（${vocabulary.join(" / ") || "空"}）内` };
+  }
+  // kind 匹配：real-host 要求必须真机证据；official-runner 要求接受 official-runner 或
+  // real-host（真实环境是官方运行器的超集——强证据不因要求较宽而降级，§6.2 分层规则）
+  const kindOk = required.kind === "real-host" ? environment.kind === "real-host" : environment.kind === "official-runner" || environment.kind === "real-host";
+  if (!kindOk) {
+    return { ok: false, reason: `证据环境 kind=${environment.kind} 不满足断言要求 ${required.kind}（模拟环境不能独立证明宿主类断言）` };
+  }
+  if (typeof environment.source !== "string" || environment.source.trim() === "") {
+    return { ok: false, reason: "environment.source 缺失（须登记权威来源：真实 SDK / 宿主源码 / 正式文档）" };
+  }
+  // sourceHash 只登记不核对：其权威源内容的哈希比对通道不存在（本仓无权威源索引），
+  // 核哈希会伪造确定性——如实不核，环境身份靠 kind + source 登记与人工可核查
+  return { ok: true, reason: null };
+}
+
+/** 断言环境要求检查（机制二）：断言带 requiredEnvironment 时，其 verified 证据必须携带
+ * 满足要求的环境元数据；不满足 → 证据最多 partial（真实环境不可用时只能 unknown/partial，
+ * EVIDENCE_RESULTS 无 unknown，落地为 partial 并附 gapId 走既有风险通道）。 */
+function assertionEnvironmentGap(world, assertion, evidenceEvent) {
+  const required = assertion.requiredEnvironment;
+  if (required === undefined) return null; // 缺省不限制
+  if (evidenceEvent === undefined || evidenceEvent === null) return null; // 缺证据由既有 missing 判定负责
+  const environment = readEvidenceEnvironment(world, evidenceEvent);
+  if (environment === null) {
+    return { requirement: required.kind, reason: `证据 artifact 无可解析的环境元数据（宿主类断言要求 ${required.kind}；模拟环境或无元数据不能独立证明）` };
+  }
+  const verdictOf = environmentSatisfies(world, environment, required);
+  return verdictOf.ok ? null : { requirement: required.kind, reason: verdictOf.reason };
+}
+
 // ── 交付判定（redesign 3.7 完整判定式 + 3.9 失效范围）──
 function buildVerdict(world, revision, revisionSource = "computed") {
   requireNonEmptyString(revision, "--revision");
@@ -2241,7 +2355,11 @@ function buildVerdict(world, revision, revisionSource = "computed") {
       assertionResults = requirement.assertions.map((assertion) => {
         const evidence = requirement.evidenceKinds.map((kind) => {
           const event = latestAssertionEvidence.get(`${assertion.id}\0${kind}`);
-          const result = event ? event.result : "missing";
+          // 环境要求检查（机制二 §6.2）：带 requiredEnvironment 的断言，其 verified 证据
+          // 必须携带满足要求的环境元数据；不满足降级 partial——真实环境不可用时只能
+          // unknown/partial，不能 verified（模拟环境不能独立证明宿主类契约）
+          const environmentGap = assertionEnvironmentGap(world, assertion, event);
+          const result = event === undefined || event === null ? "missing" : environmentGap !== null && event.result === "verified" ? "partial" : event.result;
           const gapId = result === "verified" ? null : missingGapId(currentVersion, assertion.id, kind, revision);
           if (result !== "verified") missingAssertionIds.push({ assertionId: assertion.id, requirementId: requirement.id, kind, result, gapId });
           return {
@@ -2251,6 +2369,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
             artifact: event ? event.artifact : null,
             gapId,
             riskAccepted: false,
+            ...(environmentGap !== null ? { environmentGap } : {}),
           };
         });
         return { id: assertion.id, status: requirementEvidenceStatus(evidence), evidence };
@@ -2335,11 +2454,22 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     repairPerVersion: { used: budget.perVersionUsed, cap: budget.perVersionCap, remaining: budget.perVersionRemaining },
     assuranceCrossRun: { used: budget.crossRunUsed, cap: budget.crossRunCap, remaining: budget.crossRunRemaining },
     uniqueMustFix: { count: uniqueMustFix.size, cap: KERNEL_RULES.budgets.uniqueMustFixCap },
+    // 验收复审尝试预算（机制四 §8.1）：按 loop-attempts.jsonl 的 started 计数（跨 run 累计，
+    // 打回/失败/中断均计），不再按成功登记的 AcceptanceReviewed 计数——后者漏掉主要失败路径
+    acceptanceReReviewLoop: (() => {
+      const loopBudget = readLoopAttemptsBudget(world.taskDir, "acceptance-review");
+      return { used: loopBudget.started, cap: loopBudget.cap, exceeded: loopBudget.exceeded };
+    })(),
   };
+  // revision 来源对账（机制三 §7.2）：候选形成锚点存在时，每次 revision 变化必须有合法
+  // 来源；无法解释的区间（手工直改 / 外部进程写入）记 unknown——不得进入交付终态
+  const provenance = deriveRevisionProvenance(world.entries.map((entry) => entry.record), { currentRevision: revision });
+  const revisionUnknown = provenance.unknownCount > 0;
   const processFailed =
     uniqueMustFix.size > KERNEL_RULES.budgets.uniqueMustFixCap ||
     budget.perVersionUsed > budget.perVersionCap ||
-    budget.crossRunExceeded;
+    budget.crossRunExceeded ||
+    budgetsBlock.acceptanceReReviewLoop.exceeded;
   // 循环外实现性修复呈报（不硬拦，显式披露不静默）：同验收版本最后一次保证之后
   // revision 前进，且其间无 RepairRoundRecorded（受控修复循环）、无新增
   // ImplementationRecorded（candidate-build 补增量）、无 AssuranceRevisionDrift（保证
@@ -2381,6 +2511,32 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   );
   const unacceptedDefects = openDefects.filter((finding) => !finding.riskAccepted);
 
+  // 交付义务派生（机制三 §7.1）：断言/阶段 state 全部复用上方既有缺口判定（聚合派生，
+  // 不另立第二套判定）；受控修复轮与 blocking 待办从事件流与 pending-actions 派生。
+  // 输入用与 missing 组装同源的局部事实构造 verdict 视图（判定本体只有 buildVerdict 一份）
+  const missingFacts = {
+    designApproval: !designApproved,
+    incrementIds: missingIncrementIds,
+    assuranceCompleted: !assuranceCompleted,
+    explorationCompleted:
+      (usesAssertions ? fold.explorations.length === 0 : acceptance.exploratoryReview === "required") && !explorationCompleted,
+  };
+  const obligationJudgment = deriveObligations({
+    verdict: { requirements, missing: missingFacts },
+    acceptance,
+    records: world.entries.map((entry) => entry.record),
+    pendingItems: readPendingItems(world.taskDir),
+    verificationOnly: world.task.verificationOnly === true,
+    // design 阶段是否必需与状态路由同一判定源（requireDesignApproved 策略开关）——
+    // 策略允许跳过 design 时不得把它判成 open 义务阻断 accepted（义务视图不覆盖策略裁决）
+    designStageRequired: rules.requireDesignApproved !== false,
+  });
+  const openObligations = obligationJudgment.openRequired;
+  // accepted 前置（机制三）：存在 open 必需义务不得 accepted；revision 来源不明的区间
+  // 同样阻断（两个交付终态一并阻断——用户裁决豁免只适用于既有规则允许的事项，
+  // 无法解释的代码变化不在可豁免范围内，出路是补登记 / 恢复基线 / 用户确认新基线）
+  const obligationsBlock = openObligations.length > 0;
+
   // accepted 要求全部必需证据 verified、无未决 defect（不是「全部缺口被接受」——被接受的缺口只通往 accepted_with_risk）
   const accepted =
     !processFailed &&
@@ -2390,7 +2546,9 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     assuranceCompleted &&
     explorationSatisfied &&
     openDefects.length === 0 &&
-    unconfirmedBoundaries.length === 0;
+    unconfirmedBoundaries.length === 0 &&
+    !obligationsBlock &&
+    !revisionUnknown;
 
   // accepted_with_risk：在 accepted 之外逐项豁免——每个缺口独立判定，两类证据缺口各自需有效接受
   const acceptableWithRisk =
@@ -2402,7 +2560,9 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     unacceptedEvidenceGaps.length === 0 &&
     unacceptedDefects.length === 0 &&
     (evidenceGaps.length > 0 || openDefects.length > 0) &&
-    unconfirmedBoundaries.length === 0;
+    unconfirmedBoundaries.length === 0 &&
+    !obligationsBlock &&
+    !revisionUnknown;
 
   // ── 状态路由（redesign 3.7 优先级表，自上而下首条命中）──
   const unacceptedFailed = requirements.filter(
@@ -2468,6 +2628,44 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     missingArtifacts: [...fold.missingArtifacts],
     assertions: missingAssertionIds,
     processFailure: processFailed ? { uniqueMustFix: uniqueMustFix.size, repairRounds } : null,
+    // 验收复审尝试预算超限（机制四 §8.1）：与既有预算超限同型（process-failed 停回）；
+    // 计数含打回/校验失败/中断（started 事件），恢复 = 停回用户裁决，不以重开 run 重置
+    loopAttempts: budgetsBlock.acceptanceReReviewLoop.exceeded
+      ? {
+          loop: "acceptance-review",
+          started: budgetsBlock.acceptanceReReviewLoop.used,
+          cap: budgetsBlock.acceptanceReReviewLoop.cap,
+          recovery: `验收复审已尝试 ${budgetsBlock.acceptanceReReviewLoop.used} 次（上限 ${budgetsBlock.acceptanceReReviewLoop.cap}，按 loop-attempts.jsonl started 计数，打回/失败/中断均计）：停止继续重发，停回用户裁决验收方案；确需继续时由用户显式批准新的复审预算并登记说明`,
+        }
+      : null,
+    // revision 来源对账缺口（机制三 §7.2）：unknown 区间 = 无登记来源的代码变化。
+    // 恢复三选一：补做合法修复登记 / 恢复已知基线 / 由用户确认新的外部基线
+    //（confirm-baseline 为既有命令；其确认事件 RevisionBaselineConfirmed 会作为
+    // external-baseline 来源进入对账链条）
+    revisionProvenance: revisionUnknown
+      ? {
+          unknownCount: provenance.unknownCount,
+          unknowns: provenance.revisions.filter((item) => item.source === "unknown"),
+          explainedRevision: provenance.explainedRevision,
+          recovery: "存在来源不明的 revision 变化，不得交付：①属真实修复 → 回 assurance-repair-loop-v6 补做带 from/to revision 的受控修复登记（record-repair-round）；②属无关改动 → 恢复项目内容到已解释的基线（git 恢复）；③属合法外部基线前进 → 由用户执行 delivery-gate confirm-baseline 确认新基线后重新 evaluate",
+        }
+      : null,
+    // open 必需义务清单（机制三 §7.1）：accepted 前置——非空即不得进入交付终态。
+    // 恢复动作按义务类型指向既有裁决命令；stage/repair/pending 类的显式豁免通道尚未
+    // 登记（现有豁免只有 accept-risk 绑定断言缺口），不得凭空 waived
+    openObligations: openObligations.map((obligation) => ({
+      id: obligation.id,
+      kind: obligation.kind,
+      sourceRef: obligation.sourceRef,
+      recovery:
+        obligation.kind === "assertion"
+          ? "补齐证据至 verified（重新取证），或对允许风险的缺口执行 accept-risk（用户裁决）"
+          : obligation.kind === "pending"
+            ? "执行 delivery-core pending resolve 关闭该待办（或按其 note 完成事项后 resolve）"
+            : obligation.kind === "stage"
+              ? "按 verdict.missing 对应条目的恢复动作推进该阶段（阶段无独立豁免通道，走正常交付流程）"
+              : "核对修复轮登记完整性（受控修复轮须带 from/to revision 与全量回执）",
+    })),
     assuranceFullFirst:
       recheckWithoutFull.length > 0
         ? {
@@ -2579,7 +2777,13 @@ function buildNextAction({
     const budgetDetail = budgets === null
       ? `rounds=${repairRounds}，含修复轮与保证后的方案/验收修订`
       : `修复轮预算 ${budgets.repairPerVersion.used}/${budgets.repairPerVersion.cap}、跨 run 保证预算 ${budgets.assuranceCrossRun.used}/${budgets.assuranceCrossRun.cap}、不同 must-fix ${budgets.uniqueMustFix.count}/${budgets.uniqueMustFix.cap}`;
-    return `预算耗尽停回用户（${budgetDetail}）：停止继续补丁与重取证，由用户裁决——按 finding 的 origin 与 expectedStage 回验收、设计或实现阶段重做，或使用任务替换并完整披露本任务失败原因。`;
+    // 验收复审尝试超限（机制四 §8.1）时在既有预算明细后追加成因段（仅超限场景追加，
+    // 不改动其他 process-failed 场景的既有文案）
+    const loopNote =
+      budgets !== null && budgets.acceptanceReReviewLoop?.exceeded === true
+        ? `；验收复审尝试 ${budgets.acceptanceReReviewLoop.used}/${budgets.acceptanceReReviewLoop.cap}（loop-attempts started 计数，含打回/失败/中断）`
+        : "";
+    return `预算耗尽停回用户（${budgetDetail}${loopNote}）：停止继续补丁与重取证，由用户裁决——按 finding 的 origin 与 expectedStage 回验收、设计或实现阶段重做，或使用任务替换并完整披露本任务失败原因。`;
   }
   if (unacceptedFailed.length > 0) {
     return `修复需求 ${unacceptedFailed.join(", ")} 的 failed 证据并运行 delivery-v6/candidate-build-v6 + independent-assurance-v6（taskDir=${taskArg}）；仅对允许风险的缺口执行 accept-risk，然后执行 ${evaluate}。`;

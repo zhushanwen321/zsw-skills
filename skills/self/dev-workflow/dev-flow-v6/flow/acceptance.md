@@ -41,10 +41,25 @@ schema 2 交付任务的候选反例审查运行 `independent-assurance-v6`（ar
 - D4 实现登记的合法性判定（当前 revision 探索可用性、must-fix open 集）为内核判定单源，见 kernel-judgments（经 delivery-core CLI 消费），不在本文复述。
 - schema 1 老任务不触发本阶段；schema 2 全部任务（与 exploratoryReview 风险字段无关）无条件触发，没有 not-required 豁免分支。
 
+## 验收复审轮的尝试记录与反馈隔离（交付体系任务）
+
+验收复审轮 = 交付体系验收环的审查循环（验收设计 workflow 的起草-审查轮、open-revision 修订后的重批审查；workflow 与手工路径同口径，登记入口见 delivery-v6 `references/operations.md` §0）：
+
+- **触发即记录**：每轮复审发起前经 `delivery-core loop-attempt --loop acceptance-review --event started --run-id <runId> --round <本地轮次> --path workflow`（手工复审同命令 --path manual） 登记；轮终态补 `--event finished --outcome passed|rejected|failed|interrupted`。打回、机器校验失败、designer 失败、中断全部计入（预算按 started 计数，不按通过事件数）；attemptKey = runId:round 幂等去重，崩溃重放不重复计数。
+- **反馈隔离**：审查反馈 artifact 按 `acceptanceVersion + runId + round` 隔离存放，禁止只按 round 覆盖历史报告——每轮打回意见都可追溯。
+- **下轮读取**：打回后下一轮 designer 发起前必须读取最新反馈 artifact 按意见修订，不靠主 agent 会话转述。
+- **预算上界**：`delivery-core loop-budget` 按 started 计数对照 `acceptanceReReviewRoundCap`（6，跨 run 累计、重开 run 不重置），超限判 process-failed 停回用户。
+
 ## D4 收尾（主 agent，不 workflow 化）
 
 1. 全绿交付汇总：目标达成对照表 + 合理偏差登记表 + 残留风险 + 覆盖概览 + 剧本分流结果
-2. 最终 commit（可复用 e2e spec、文档登记；impl-plan/exec-plan/status 落 `~/.agents/skill-data/`，HOME 下天然不入 git）
+2. 最终 commit（可复用 e2e spec、文档登记；impl-plan/exec-plan/status 落 `~/.agents/skill-data/`，HOME 下天然不入 git）。commit 前跑仓外路径检查，违例未清禁止 commit：
+
+   ```bash
+   node ~/.agents/skills/dev-flow-v6/scripts/check-commit-scope.mjs --repo-root <项目根绝对路径> --staged
+   ```
+
+   检查暂存区全部路径（`--paths <路径...>` 可追加显式路径集；相对路径一律按 `--repo-root` 解析，不参考调用 cwd）。拦截四类仓外入口：`..` 相对路径逃逸、仓外绝对路径、symlink 解析逃逸（词法落点在仓内、磁盘真实落点在仓外）、不同 cwd 下相对路径解析歧义。退出码：0 = 干净（stdout 单行 PASS），commit 放行；1 = 存在违例（stdout 逐行 `FAIL: <路径> -> <违例类型>: <说明>` + 末尾恢复动作段）；2 = 用法错误；3 = 运行错误（git 不可用 / 非 git 仓）。违例处置按脚本恢复动作段执行：路径写错 → 修正后重新 git add 并复跑至 PASS；文件确属本仓 → 移入仓库内再提交；确有依赖仓外路径的真实需求 → 停下交用户裁决（本检查无豁免机制），禁止绕过继续提交。
 3. **增量实现登记（交付体系任务 [MANDATORY]；独立设计任务跳过本步）**：把候选实现按增量经意图命令 `record-implementation` 登记进交付任务事件流——裁决器与独立保证（independent-assurance-v6）都消费 ImplementationRecorded（缺登记时任务无法向交付终态推进，转移合法性由交付事务内核裁决）。与 candidate-build-v6 通道的分工：两通道最终落到同一事件流——candidate-build-v6 是无设计包的直建通道（引擎逐增量登记），本技能按设计包执行后由主 agent 在本步逐增量登记，命令与回执口径与其一致。逐增量（increments.json items[].id，增量归属单元以 D0 核对的 nodes[].incrementId 为准）执行；事件信封（type/actor/acceptanceVersion/revision）由 gate 构造，调用方只提交语义内容，不手工拼事件 JSON：
 
    ```bash

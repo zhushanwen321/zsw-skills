@@ -19,6 +19,10 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs next --task-dir <tas
 | `open-findings` / `usable-explorations` / `exploration-due` / `repair-budget` | 判定单源 JSON 出口（唯一实现在 `scripts/lib/kernel-judgments.mjs`） | workflow（IA/ARL 经此消费，禁复刻） |
 | `node-transition` | DAG 节点状态转移唯一判定（`--dry-run` 供引擎串行写链内先判后写；`manual-disposition --basis <依据> --task-dir <taskDir>` 为人工处置唯一合法通道，自动登记待复盘待办） | wave-executor-v6 / 主 agent |
 | `node-project [--write]` | status.json 派生视图：从 status.events 按事件重新推算节点状态、比对在盘 nodes（绕过转移入口的改动被检出）；`--write` 以事件恢复 | 主 agent / 断点恢复 |
+| `loop-attempt` | 循环尝试登记：进入循环即追加 `started`，退出补 `finished --outcome passed\|rejected\|failed\|interrupted`（追加写任务目录 loop-attempts.jsonl；attemptKey = runId:round 幂等去重，崩溃重放不重复计数；打回、校验失败、中断全部计入） | workflow / 主 agent |
+| `loop-budget` | 循环尝试预算查询：按 `started` 计数（不读结果事件）对照各循环上限，输出用量与剩余；超限即停回判 process-failed | workflow / 主 agent |
+| `revision-provenance` | revision 来源对账（只读派生）：候选形成后每次 revision 变化的来源（cause + 事件引用 + actor）；无法推断来源的代际标 unknown | 主 agent / gate |
+| `obligations` | 交付义务清单派生（只读）：从验收断言 / 必需阶段 / 修复轮 / blocking 待办派生 `{id, kind: assertion\|stage\|repair\|pending\|asset, state: open\|satisfied\|explicitly-waived}`；不新增人工总表 | 主 agent / workflow |
 | `events [--domain D]` | 事件时间线读侧合流：交付事件（domain 章）+ 过程记录（process 域）统一输出 | 主 agent / 复盘 |
 | `replay` | 历史任务回放：真实事件序列对转移表的可表达性核验（不可表达即建模缺口或词表外操作） | 主 agent / 内核演进 |
 
@@ -34,6 +38,29 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs open-revision \
 ```
 
 **定级护栏**（新写入当时执行；历史记录违规在加载折算时留档 guardrailWarnings，不阻塞旧任务目录读取）：关联需求已有断言级判据明文覆盖的发现禁止归 boundary；non-blocker 必须附 consequenceRefutation（三类枚举）；同一条目（reopenOf 根）定级组合超过 2 种即熔断停回用户裁决；T2 聚合分级与 D2 聚合定性的改判必附理由留痕，连续改判达上限停回（aggregateRegradeHalt）。
+
+**循环尝试记录**（workflow 与手工路径同一记录，只追加不回写历史行）：
+
+```bash
+node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs loop-attempt \
+  --task-dir <taskDir> --loop acceptance-review --event started \
+  --run-id <runId> --round <本地轮次> --path workflow|manual [--input-hash <输入哈希>]
+# finished 事件必须带 --outcome passed|rejected|failed|interrupted；started 不携带结果
+node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs loop-budget \
+  --task-dir <taskDir> --loop acceptance-review
+```
+
+预算语义 = 按 `started` 计数（结果事件不作工作量依据）：进入循环即计数，打回、校验失败、designer 失败、整次重发与中断全部计入；跨 run、跨 workflow 与手工路径累计，重开 run 不重置。恢复时按 attemptKey + event 去重，同一尝试的完成事件不增加次数。首个接入循环为验收复审（`--loop acceptance-review`，上限 `acceptanceReReviewRoundCap` = 6，超限判 process-failed）；其余循环（修复、保证、手工修复）按既有预算执行，接入同一记录前的循环属已知缺口，不宣称已有统一上界。
+
+**revision 来源对账**（候选形成后的每次 revision 变化必须有合法来源）：`revision-provenance` 从既有事件与合并回执只读派生逐代来源（cause ∈ implementation / candidate-repair / assurance-repair / environment / external-baseline，附 eventRef 与 actor）。存在 unknown（来源不明）代际时的恢复动作 = 补做合法修复登记（如 `record-repair-round`）或恢复已知基线；恢复不了且变化来自外部进程或用户操作时，由用户确认新的外部基线（external-baseline 的显式登记通道待建立——未确认前 unknown 不得静默消除）。unknown 未消除不得 accepted；后续保证完成不把来源不明代际变成正常历史。
+
+**交付义务派生**（accepted 前置的判定输入，从现有权威数据派生，不建人工总表）：
+
+```bash
+node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs obligations --task-dir <taskDir>
+```
+
+输出义务清单（kind：assertion 验收断言 / stage 必需阶段 / repair 受控修复 / pending blocking 待办 / asset 用户要求的交付资产；state：open / satisfied / explicitly-waived）。**accepted 前置 = 必需义务无 open**；`explicitly-waived` 必须绑定用户裁决。豁免通道按义务类型映射现状：assertion 类走 `accept-risk`（绑 gapId；boundary 与 riskAcceptable=false 不可豁免）；finding 类 non-blocker 走 `preauthorize-risk`（预授权范围内）；stage 与节点类走显式用户豁免（跳过须记录留痕；DAG 节点人工处置走 `node-transition --event manual-disposition --basis`）。无映射通道的义务类型不得豁免，只能完成或停回用户裁决。
 
 ## 1. 初始化（init：意图 + 凭据 + 血统）
 
@@ -62,7 +89,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs init \
 
 zcode：`CreateWorkflow saved: acceptance-design-v6`，args `{ projectRoot, taskDir, objective, assuranceCredentialId, taskId?, executionId?, sampleType?, runId? }`；pi：运行技能上级 `workflows/pi/acceptance-design-v6.js`。
 
-workflow 完成 designer 起草 → assurance 独立审查 → 机器校验，双通过后以 assurance 凭据登记 `record-review --conclusion pass`（自动绑验收包/intent/快照哈希）。审查与校验语义、修订轮对照上一版草稿差异的机制见 workflow 契约（delivery-v6 SKILL「Workflow 契约」节）。**验收复审轮预算**：既有审查轮 + 本 run 轮次合计 ≤6，超限 workflow 停回用户裁决。
+workflow 完成 designer 起草 → assurance 独立审查 → 机器校验，双通过后以 assurance 凭据登记 `record-review --conclusion pass`（自动绑验收包/intent/快照哈希）。审查与校验语义、修订轮对照上一版草稿差异的机制见 workflow 契约（delivery-v6 SKILL「Workflow 契约」节）。**验收复审轮预算**：按 `delivery-core loop-budget` 的 started 计数执行（进入复审即 `loop-attempt` 登记 started；打回、校验失败、designer 失败、中断全部计入，跨 run 累计），超 `acceptanceReReviewRoundCap`（6）判 process-failed 停回用户。审查反馈 artifact 按 `acceptanceVersion + runId + round` 隔离存放，禁止只按 round 覆盖历史报告；打回后下一轮 designer 发起前必须读取最新反馈 artifact（不靠主 agent 转述）。
 
 呈报关键目标、非目标、风险与覆盖对照，用户明确批准后：
 
@@ -122,7 +149,8 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs accept-risk \
 ```
 
 - accept-risk 缺口绑定：单缺口缺省自动绑定当前 gapId（missing 缺口为确定性派生 id；partial/failed 绑对应证据事件 id）；同一需求存在多个未接受缺口时必须 `--gap-id` 指定其一（缺省执行会列出全部候选 gapId）——多缺口不允许自动绑定，防登记项与用户批准项错位。boundary 类与 riskAcceptable=false 需求拒绝。
-- 按 `nextAction` 处理；预算耗尽的 process-failed 带 `quality.budgets` 三档用量与停回指引。
+- evaluate 前的机器核对（内核只读命令，任一不过按其恢复动作处置）：`obligations` 必需义务无 open；`revision-provenance` 候选形成后无 unknown 来源代际；`loop-budget` 各循环 started 计数未超上限。
+- 按 `nextAction` 处理；预算耗尽的 process-failed 带用量明细（修复三档 + 各循环 started 计数）与停回指引。
 
 ## 8. 写事务租约（workflow run 级）
 

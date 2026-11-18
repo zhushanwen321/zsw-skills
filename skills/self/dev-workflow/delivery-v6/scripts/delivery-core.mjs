@@ -17,26 +17,37 @@
 //     node-transition  DAG 节点状态转移（wave-executor 六写入点收敛后的唯一判定；
 //                      --dry-run 供引擎在串行写链内先判定后自写，非 dry-run 直接落盘；
 //                      manual-disposition 带 --task-dir 时自动登记待复盘待办）
-//     node-project     status.json 派生视图：从 status.events 重投影节点状态，比对在盘
+//     node-project     status.json 派生视图：按 status.events 重算节点状态视图，比对在盘
 //                      nodes（篡改/漂移检测），--write 以事件为准重建（恢复通道）
 //     events           事件时间线读侧合流：交付事件（domain 盖章）+ 过程记录
 //                      （process-review.jsonl，process 域）按序合并输出
 //     replay           历史任务回放：逐事件前缀推算阶段，报告转移表无法表达的
 //                      事件序列（定义期矛盾检测对真实数据的补充）
+//     loop-attempt     循环尝试登记（loop-attempts.jsonl 执行记录；started/finished，
+//                      按 attemptKey 幂等，打回/失败/中断均计数）
+//     loop-budget      循环尝试预算查询（started 计数 vs rules.json 上限；未接入循环 cap=null）
+//     revision-provenance revision 来源对账（只读派生：每次 revision 变化的来源清单 +
+//                      unknown 区间计数）
+//     obligations      交付义务派生（verdict/事件流/pending 聚合视图 + open 必需义务清单）
 //
 // 单源纪律：判定逻辑一律 import lib/kernel-judgments.mjs 或读 kernel/rules.json，
 // 本文件不另立判定副本。gate 内部函数经 delivery-gate.mjs 导入复用（同一份实现）。
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   KERNEL_RULES,
+  LOOP_BUDGET_CAP_KEYS,
+  deriveObligations,
+  deriveRevisionProvenance,
   explorationDue,
   findingRegrades,
+  loopAttemptsBudget,
   openFindingsFromEvents,
+  parseLoopAttemptsText,
   priorFullQualification,
   projectNodeEvents,
   repairBudgetFromEvents,
@@ -427,7 +438,7 @@ async function commandExploration(command, args) {
   usageFail(`未知探索命令 ${command}。`);
 }
 
-// ── 验收包冻结态（写入防护的观测面：chmod 位 + 哈希绑定 + 篡改检出）──
+// ── 验收包冻结态（写入防护的检查事实：chmod 位 + 哈希绑定 + 篡改检出）──
 function acceptancePackageFacts(world) {
   if (world.acceptance === null) return { state: "absent" };
   const frozen = world.fold?.approvals?.length > 0;
@@ -742,7 +753,7 @@ function commandNodeTransition(args) {
   }
   status.nodes[options.node] = entry;
   const events = Array.isArray(status.events) ? status.events : [];
-  // payload = 结构化字段（node-project 派生视图无损重投影依赖它；detail 保持人读）
+  // payload = 结构化字段（node-project 派生视图的无损重算依赖它；detail 保持人读）
   const payload = {};
   if (options.commit !== undefined) payload.commit = options.commit;
   if (options.evidence !== undefined) payload.evidence = options.evidence;
@@ -776,7 +787,7 @@ function commandNodeTransition(args) {
   printJson({ ok: true, node: options.node, event: eventName, from: fromStatus, to: entry.status, entry, written: true, reviewRegistered });
 }
 
-// ── status.json 派生视图（二-1：事件为源，nodes 是投影；篡改/漂移检测 + 恢复通道）──
+// ── status.json 派生视图（二-1：事件为源，nodes 是派生视图；篡改/漂移检测 + 恢复通道）──
 function commandNodeProject(args) {
   const options = parseOptions(args, { required: ["status"], optional: [], flags: ["write"] });
   if (!existsSync(options.status)) fail(`status 文件不存在：${options.status}`, "核对 --status 路径后重试。");
@@ -810,7 +821,7 @@ function commandNodeProject(args) {
     mismatches,
   };
   if (mismatches.length > 0) {
-    result.recovery = "以事件为源恢复：delivery-core node-project --status <path> --write（nodes 按事件重投影重建；events 不动）；mismatches 非零 = 在盘 nodes 与事件流不一致（写入绕过转移入口或手工编辑）";
+    result.recovery = "以事件为源恢复：delivery-core node-project --status <path> --write（nodes 按事件重算重建；events 不动）；mismatches 非零 = 在盘 nodes 与事件流不一致（写入绕过转移入口或手工编辑）";
   }
   if (options.write === "true") {
     status.nodes = projection.nodes;
@@ -938,6 +949,167 @@ function commandReplay(args) {
   });
 }
 
+// ── 循环尝试记录（机制四 §8.1：执行记录落盘，不签名、只追加不回写）──
+// workflow 与手工路径共用同一记录；attemptKey = <runId>:<round> 由内核拼装，登记侧
+// 不自行拼 key（口径漂移防线）。幂等：同 (attemptKey, event) 重复提交跳过——崩溃恢复
+// 后重放登记不产生重复计数（读取端 loopAttemptsBudget 再按同键去重兜底双写竞态）。
+const LOOP_PATHS = ["workflow", "manual"];
+const LOOP_EVENTS = ["started", "finished"];
+const LOOP_OUTCOMES = ["passed", "rejected", "failed", "interrupted"];
+
+function loopAttemptsPath(taskDir) {
+  return join(taskDir, "loop-attempts.jsonl");
+}
+
+function readLoopAttemptRows(taskDir) {
+  const filePath = loopAttemptsPath(taskDir);
+  if (!existsSync(filePath)) return [];
+  return parseLoopAttemptsText(readFileSync(filePath, "utf8"));
+}
+
+function commandLoopAttempt(args) {
+  const options = parseOptions(args, {
+    required: ["task-dir", "loop", "path", "run-id", "round", "event"],
+    optional: ["outcome", "input-hash"],
+  });
+  if (!LOOP_PATHS.includes(options.path)) {
+    fail(`--path 必须是 ${LOOP_PATHS.join(" / ")} 之一（workflow 与手工路径同表记录）。`, "按发起通道选 path 后重试。");
+  }
+  if (!LOOP_EVENTS.includes(options.event)) {
+    fail(`--event 必须是 ${LOOP_EVENTS.join(" / ")} 之一。`, "进入循环登记 started，离开（含打回/失败/中断）登记 finished。");
+  }
+  const round = Number(options.round);
+  if (!Number.isInteger(round) || round < 1) {
+    fail(`--round 必须是正整数（attemptKey = <runId>:<round> 的本地轮次）。`, "以 1 起计的本地轮次重试。");
+  }
+  if (options.event === "finished" && !LOOP_OUTCOMES.includes(options.outcome ?? "")) {
+    fail(`finished 必须带 --outcome（${LOOP_OUTCOMES.join(" / ")} 之一）。`, "按本次尝试的实际结果补 --outcome 后重试。");
+  }
+  if (options.event === "started" && options.outcome !== undefined) {
+    fail("started 不携带结果（outcome 只在 finished 出现）。", "去掉 --outcome 后重试；结果在 finished 时登记。");
+  }
+  if (options["input-hash"] !== undefined && options["input-hash"].trim() === "") {
+    fail("--input-hash 为空字符串。", "提供本次尝试的输入哈希，或省略该参数。");
+  }
+  const core = loadTaskCore(options["task-dir"]);
+  const attemptKey = `${options["run-id"]}:${round}`;
+  const duplicate = readLoopAttemptRows(core.taskDir).some(
+    (row) => row.attemptKey === attemptKey && row.event === options.event,
+  );
+  if (duplicate) {
+    printJson({ recorded: false, duplicate: true, attemptKey, event: options.event, loop: options.loop });
+    return;
+  }
+  const row = {
+    taskId: core.task.taskId,
+    loop: options.loop,
+    path: options.path,
+    runId: options["run-id"],
+    attemptKey,
+    event: options.event,
+    ...(options["input-hash"] !== undefined ? { inputHash: options["input-hash"] } : {}),
+    at: new Date().toISOString(),
+    ...(options.event === "finished" ? { outcome: options.outcome } : {}),
+  };
+  const filePath = loopAttemptsPath(core.taskDir);
+  const prefix = existsSync(filePath) && readFileSync(filePath, "utf8").length > 0 && !readFileSync(filePath, "utf8").endsWith("\n") ? "\n" : "";
+  appendFileSync(filePath, `${prefix}${JSON.stringify(row)}\n`, "utf8");
+  printJson({ recorded: true, attemptKey, event: options.event, loop: options.loop });
+}
+
+function commandLoopBudget(args) {
+  const options = parseOptions(args, { required: ["task-dir", "loop"], optional: [] });
+  const core = loadTaskCore(options["task-dir"]);
+  // 上限键由 kernel-judgments.LOOP_BUDGET_CAP_KEYS 单源登记；未登记的循环 cap=null、
+  // exceeded=false——「未接入的循环属已知缺口」（§8.2），如实返回而不是猜上限
+  const capKey = LOOP_BUDGET_CAP_KEYS[options.loop];
+  const cap = capKey !== undefined ? KERNEL_RULES.budgets[capKey] : null;
+  const budget = loopAttemptsBudget(readLoopAttemptRows(core.taskDir), { loop: options.loop, cap });
+  printJson({
+    taskDir: core.taskDir,
+    loop: options.loop,
+    started: budget.started,
+    byOutcome: budget.byOutcome,
+    cap: budget.cap,
+    exceeded: budget.exceeded,
+    ...(capKey === undefined ? { note: `循环 ${options.loop} 未接入尝试预算（已知缺口）：cap=null 表示尚无机器上界，不表示无限制` } : {}),
+  });
+}
+
+// ── revision 来源对账（机制三 §7.2：只读派生，无写入）──
+function commandRevisionProvenance(args) {
+  const options = parseOptions(args, { required: ["task-dir"], optional: ["revision"] });
+  const world = loadWorldAuto(options["task-dir"]);
+  const revision = options.revision ?? computeRevision(world.task.projectRoot);
+  const provenance = deriveRevisionProvenance(recordsOf(world), { currentRevision: revision });
+  printJson({
+    taskDir: world.taskDir,
+    revision,
+    revisions: provenance.revisions,
+    unknownCount: provenance.unknownCount,
+    explainedRevision: provenance.explainedRevision,
+    enabled: provenance.enabled,
+  });
+}
+
+// ── 交付义务派生（机制三 §7.1：聚合派生视图，accepted 前置的数据源）──
+function commandObligations(args) {
+  const options = parseOptions(args, { required: ["task-dir"], optional: ["revision"] });
+  const world = loadWorldAuto(options["task-dir"]);
+  const revision = options.revision ?? computeRevision(world.task.projectRoot);
+  const pendingItems = readPending(world.taskDir).items.filter((item) => item.status === "open");
+  if (world.acceptance === null) {
+    // 无验收包：断言/阶段义务无判定源（不猜），只报 pending 义务——查询类命令不因包缺失崩溃
+    const pendingObligations = pendingItems.map((item) => ({
+      id: `pending-${item.id}`,
+      kind: "pending",
+      sourceRef: `pending-actions.json#${item.id}`,
+      required: true,
+      state: "open",
+      evidenceRefs: [],
+    }));
+    printJson({
+      taskDir: world.taskDir,
+      revision,
+      acceptanceVersion: null,
+      obligations: pendingObligations,
+      openRequired: pendingObligations,
+      reason: "无验收包（acceptance.json 缺失）：断言与阶段义务暂无判定源，仅 pending 待办参与义务清单",
+    });
+    return;
+  }
+  let verdict;
+  try {
+    verdict = buildVerdict(world, revision);
+  } catch (error) {
+    // verdict 组装失败（早期任务缺批准等）：义务视图判定源不可用，如实报缺而非按 0 补齐
+    printJson({
+      taskDir: world.taskDir,
+      revision,
+      acceptanceVersion: world.acceptance.acceptanceVersion,
+      obligations: pendingItems.map((item) => ({ id: `pending-${item.id}`, kind: "pending", sourceRef: `pending-actions.json#${item.id}`, required: true, state: "open", evidenceRefs: [] })),
+      openRequired: pendingItems.map((item) => ({ id: `pending-${item.id}`, kind: "pending", sourceRef: `pending-actions.json#${item.id}`, required: true, state: "open", evidenceRefs: [] })),
+      reason: `verdict 判定暂不可用（${error.message}）：断言与阶段义务暂无判定源，仅 pending 待办参与义务清单`,
+    });
+    return;
+  }
+  const result = deriveObligations({
+    verdict,
+    acceptance: world.acceptance,
+    records: recordsOf(world),
+    pendingItems,
+    verificationOnly: world.task.verificationOnly === true,
+    designStageRequired: world.policy["verdict-rules.json"].requireDesignApproved !== false,
+  });
+  printJson({
+    taskDir: world.taskDir,
+    revision,
+    acceptanceVersion: world.acceptance.acceptanceVersion,
+    obligations: result.obligations,
+    openRequired: result.openRequired,
+  });
+}
+
 // ── main 分发 ──
 const command = process.argv[2];
 const commandArgs = process.argv.slice(3);
@@ -999,9 +1171,21 @@ try {
     case "replay":
       commandReplay(commandArgs);
       break;
+    case "loop-attempt":
+      commandLoopAttempt(commandArgs);
+      break;
+    case "loop-budget":
+      commandLoopBudget(commandArgs);
+      break;
+    case "revision-provenance":
+      commandRevisionProvenance(commandArgs);
+      break;
+    case "obligations":
+      commandObligations(commandArgs);
+      break;
     default:
       usageFail(
-        `未知命令 ${JSON.stringify(command ?? "")}。合法命令：validate / rules / next / pending / budget / open-findings / usable-explorations / exploration-due / repair-budget / full-qualification / node-transition / node-project / events / replay。`,
+        `未知命令 ${JSON.stringify(command ?? "")}。合法命令：validate / rules / next / pending / budget / open-findings / usable-explorations / exploration-due / repair-budget / full-qualification / node-transition / node-project / events / replay / loop-attempt / loop-budget / revision-provenance / obligations。`,
       );
   }
 } catch (error) {

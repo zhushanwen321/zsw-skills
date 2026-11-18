@@ -252,6 +252,275 @@ export function taskPhaseFromEvents(records, { incrementsCount = null } = {}) {
   return "finalizing";
 }
 
+// ── 循环尝试记录（V5 交付完整性改造机制四·§8.1）──
+// loop-attempts.jsonl 的词表与预算口径单源。该文件是执行记录（不是审查结论事件、不签名、
+// 只追加不回写），workflow 与手工路径共用；预算读 started 事件而非成功事件——打回、
+// 校验失败、中断都计数（设计 §2.4：按成功结果计数漏掉主要失败路径）。
+
+/** 循环名 → rules.json budgets 的上限键。只登记已接入的循环；其余循环未接入属已知缺口
+ * （设计 §8.2），不得宣称已有统一上界。新增接入 = 在此登记 + gate/core 自动生效。 */
+export const LOOP_BUDGET_CAP_KEYS = {
+  "acceptance-review": "acceptanceReReviewRoundCap",
+};
+
+/** loop-attempts.jsonl 文本解析（调用方读文件，本函数只做容错解析）：
+ * 逐行 JSON.parse，不可解析行（崩溃时的半行）跳过不抛错——预算读取不得因半行崩溃。
+ * 返回行对象数组（含 loop 字段的才参与统计，由 loopAttemptsBudget 过滤）。 */
+export function parseLoopAttemptsText(text) {
+  const rows = [];
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed !== null && typeof parsed === "object") rows.push(parsed);
+    } catch {
+      // 半行（追加被中断）跳过：预算按已完整落盘的行计
+    }
+  }
+  return rows;
+}
+
+/** 循环尝试预算（甲机制单源）。rows = parseLoopAttemptsText 输出；cap = 该循环上限
+ * （未接入循环传 null）。按 (attemptKey, event) 去重——崩溃恢复后同一次尝试的重复
+ * 登记不重复计数；started 跨 run、跨 workflow 与手工路径按任务累计。 */
+export function loopAttemptsBudget(rows, { loop, cap = null } = {}) {
+  const seen = new Set();
+  const started = [];
+  const byOutcome = {};
+  for (const row of rows) {
+    if (row.loop !== loop) continue;
+    if (typeof row.attemptKey !== "string" || typeof row.event !== "string") continue;
+    const key = `${row.attemptKey}\u0000${row.event}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (row.event === "started") started.push(row);
+    if (row.event === "finished" && typeof row.outcome === "string") {
+      byOutcome[row.outcome] = (byOutcome[row.outcome] ?? 0) + 1;
+    }
+  }
+  return {
+    started: started.length,
+    byOutcome,
+    cap,
+    exceeded: cap !== null && started.length > cap,
+  };
+}
+
+// ── revision 来源对账（V5 交付完整性改造机制三·§7.2）──
+// 只读派生单源：从折算后世界（事件流）派生每次 revision 变化的来源。来源载体 = 现有
+// 事件与回执（ImplementationRecorded.mergeReceipt / RepairRoundRecorded.from/to revision /
+// RevisionBaselineConfirmed），禁止发明新事件。合法来源枚举见 REVISION_PROVENANCE_SOURCES；
+// 无法推断来源的区间记 source="unknown"，不得进入交付终态（gate 阻断 accepted）。
+
+export const REVISION_PROVENANCE_SOURCES = [
+  "implementation",
+  "candidate-repair",
+  "assurance-repair",
+  "environment",
+  "external-baseline",
+  "unknown",
+];
+
+function provenanceAnchorOf(record, firstAssuranceSeq) {
+  // ImplementationRecorded：mergeReceipt 是实现写入的权威回执（from→to）
+  if (record.type === "ImplementationRecorded" && record.mergeReceipt !== null && typeof record.mergeReceipt === "object") {
+    const { fromRevision, toRevision } = record.mergeReceipt;
+    if (typeof fromRevision === "string" && typeof toRevision === "string" && toRevision !== "") {
+      return { claimedFrom: fromRevision, to: toRevision, source: "implementation" };
+    }
+    return null;
+  }
+  // RepairRoundRecorded：from/to revision 是受控修复轮的溯源（V6 起可选字段——缺 from 的
+  // 轮次无法确认修复前基线，来源记 unknown 而非猜链）；nature=environment|evidence 是
+  // 环境/证据采集重试（设计 §7.2 environment 来源）；behavior 轮按首个保证事件前后分
+  // 候选修复与保证修复（与 repairBudget 的 offLoop 口径同一分界）
+  if (record.type === "RepairRoundRecorded" && typeof record.toRevision === "string" && record.toRevision !== "") {
+    const nature = record.nature ?? "behavior";
+    const source =
+      nature === "environment" || nature === "evidence"
+        ? "environment"
+        : firstAssuranceSeq === null || (typeof record.seq === "number" && record.seq < firstAssuranceSeq)
+          ? "candidate-repair"
+          : "assurance-repair";
+    return {
+      claimedFrom: typeof record.fromRevision === "string" && record.fromRevision !== "" ? record.fromRevision : null,
+      to: record.toRevision,
+      source,
+    };
+  }
+  // 用户确认外部基线（现有 confirm-baseline 命令 / RevisionBaselineConfirmed 事件）：
+  // 用户裁决「当前项目内容是新基线」——不声称 from，链条从确认点续接
+  if (record.type === "RevisionBaselineConfirmed" && typeof record.confirmedRevision === "string" && record.confirmedRevision !== "") {
+    return { claimedFrom: null, to: record.confirmedRevision, source: "external-baseline" };
+  }
+  return null;
+}
+
+/** revision 来源对账（乙机制单源）。records = 世界事件记录数组；currentRevision = 当前
+ * 裁决 revision（evaluate 的 revision 参数 / core 子命令的 computeRevision 结果）。
+ * 返回 {revisions, unknownCount, explainedRevision, enabled}：
+ *   revisions  = 按事件序排列的来源清单（含 unknown 区间），元素
+ *                {fromRevision, toRevision, source, eventRef, actor, recordedAt}
+ *   unknownCount = source="unknown" 的区间数（>0 时 gate 不得判 accepted）
+ *   enabled    = 事件流是否存在候选形成锚点（无锚点 = 候选未形成，不做对账——
+ *                实现/修复/基线确认之前项目树变化属验收起草期，不判）。
+ * AssuranceRevisionDrift 不产来源记录：它登记的是「保证期间发现漂移」现象而非合法来源，
+ * 若把它当来源会把无来源改动洗成 environment——设计 §7.2 明令禁止这种覆盖。 */
+export function deriveRevisionProvenance(records, { currentRevision = null } = {}) {
+  const sorted = [...records].sort((left, right) => (typeof left.seq === "number" ? left.seq : 0) - (typeof right.seq === "number" ? right.seq : 0));
+  const assuranceSeqs = sorted.filter((record) => record.type === "AssuranceCompleted").map((record) => (typeof record.seq === "number" ? record.seq : 0));
+  const firstAssuranceSeq = assuranceSeqs.length > 0 ? Math.min(...assuranceSeqs) : null;
+  const revisions = [];
+  let explained = null;
+  let enabled = false;
+  for (const record of sorted) {
+    const anchor = provenanceAnchorOf(record, firstAssuranceSeq);
+    if (anchor === null) continue;
+    enabled = true;
+    const eventRef = typeof record.eventId === "string" ? record.eventId : null;
+    if (explained === null) {
+      // 首个锚点（候选形成）：锚定起点，不回溯判候选形成前的缺口（验收/设计起草期变化不属对账范围）
+      if (anchor.claimedFrom !== null && anchor.claimedFrom !== anchor.to) {
+        revisions.push({ fromRevision: anchor.claimedFrom, toRevision: anchor.to, source: anchor.source, eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
+      }
+      explained = anchor.to;
+      continue;
+    }
+    if (anchor.to === explained) continue; // 无 revision 变化（如 from===to 的实现回执、同基线重复确认）
+    if (anchor.claimedFrom !== null && anchor.claimedFrom !== explained) {
+      // 断链：事件声称从 claimedFrom 续接，但链条当前在 explained——中间存在无来源变化
+      revisions.push({ fromRevision: explained, toRevision: anchor.claimedFrom, source: "unknown", eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
+    }
+    const from = anchor.claimedFrom ?? explained;
+    revisions.push({ fromRevision: from, toRevision: anchor.to, source: anchor.claimedFrom === null && anchor.source === "external-baseline" ? "external-baseline" : anchor.source, eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
+    explained = anchor.to;
+  }
+  if (explained !== null && currentRevision !== null && currentRevision !== explained) {
+    // 尾部缺口：链条最新解释 revision 与当前裁决 revision 不一致——当前内容无任何登记来源
+    //（典型：候选受验树被主会话/外部进程直改）。eventRef=null（无事件可归因）
+    revisions.push({ fromRevision: explained, toRevision: currentRevision, source: "unknown", eventRef: null, actor: null, recordedAt: null });
+  }
+  return {
+    revisions,
+    unknownCount: revisions.filter((item) => item.source === "unknown").length,
+    explainedRevision: explained,
+    enabled,
+  };
+}
+
+// ── 交付义务派生（V5 交付完整性改造机制三·§7.1）──
+// 聚合派生单源：从现有权威数据（verdict 缺口判定 / 事件流 / pending-actions）派生义务清单，
+// 不另立第二套断言判定、不新增人工总表。state 词表 = open | satisfied | explicitly-waived；
+// explicitly-waived 只来自 verdict 的 riskAccepted 标记（其数据源头是签名 RiskAccepted 事件，
+// 豁免绑定由 fold 校验保证，不存在凭空 waived）。
+
+/** 交付义务派生（丁机制单源）。输入全部为调用方已算好的权威数据：
+ *   verdict         = delivery-gate buildVerdict 输出（断言/阶段状态唯一依据——义务视图
+ *                     是聚合派生，不重复实现任何缺口判定）
+ *   acceptance      = 当前验收包（schemaVersion 决定断言/需求两级粒度）
+ *   records         = 世界事件记录数组（受控修复轮披露）
+ *   pendingItems    = pending-actions.json 中 status="open" 的条目（blocking 待办）
+ *   verificationOnly = task.json.verificationOnly（只核验模式无 design 阶段，不生成该义务）
+ *   designStageRequired = 策略 requireDesignApproved !== false（与状态路由同一判定源——
+ *                     策略允许跳过 design 时该阶段不是必需义务，不生成；缺省 true）
+ * 返回 {obligations, openRequired}；openRequired = required 且 state="open" 的义务
+ * （accepted 前置：非空即不得 accepted）。 */
+export function deriveObligations({ verdict, acceptance, records = [], pendingItems = [], verificationOnly = false, designStageRequired = true } = {}) {
+  const obligations = [];
+  const usesAssertions = acceptance !== null && acceptance.schemaVersion === 2;
+  // ① 断言/需求证据义务：state 逐条复用 verdict 缺口判定（verified→satisfied；
+  //    已接受风险→explicitly-waived；其余→open）
+  for (const requirement of verdict.requirements ?? []) {
+    const sourceRef = `acceptance.json#${requirement.id}`;
+    const evidenceEntries = [];
+    if (usesAssertions && Array.isArray(requirement.assertions)) {
+      for (const assertion of requirement.assertions) {
+        for (const entry of assertion.evidence ?? []) {
+          evidenceEntries.push({ id: `${assertion.id}-${entry.kind}`, sourceRef: `${sourceRef}/assertions/${assertion.id}`, entry });
+        }
+      }
+      // 断言级条目的 riskAccepted 恒 false（风险接受语义在需求级判定）——豁免标记复用
+      // 需求级同 kind 条目的接受结果，保证义务视图与 verdict 的豁免语义单源；
+      // requirementGapId 记录裁决锚点（RiskAccepted.gapId = 需求级 gapId）
+      for (const item of evidenceEntries) {
+        const requirementEntry = (requirement.evidence ?? []).find((kindEntry) => kindEntry.kind === item.entry.kind);
+        item.waived = item.entry.riskAccepted === true || requirementEntry?.riskAccepted === true;
+        item.requirementGapId = requirementEntry?.gapId ?? null;
+      }
+    } else {
+      for (const entry of requirement.evidence ?? []) {
+        evidenceEntries.push({ id: `${requirement.id}-${entry.kind}`, sourceRef, entry, waived: entry.riskAccepted === true, requirementGapId: entry.gapId ?? null });
+      }
+    }
+    for (const item of evidenceEntries) {
+      const state = item.entry.result === "verified" ? "satisfied" : item.waived ? "explicitly-waived" : "open";
+      // evidenceRefs 锚点：satisfied 绑证据事件 id；open 绑断言级缺口 id（与
+      // verdict.missing.assertions 同源）；waived 绑需求级缺口 id——RiskAccepted.gapId
+      // 是用户裁决的对账锚点，豁免必须可回溯到裁决事件
+      const evidenceRef = state === "satisfied"
+        ? item.entry.eventId
+        : state === "explicitly-waived"
+          ? (item.requirementGapId ?? item.entry.gapId ?? item.entry.eventId)
+          : (item.entry.gapId ?? item.requirementGapId ?? item.entry.eventId);
+      obligations.push({
+        id: `assert-${item.id}`,
+        kind: "assertion",
+        sourceRef: item.sourceRef,
+        required: requirement.required,
+        state,
+        evidenceRefs: [evidenceRef].filter((ref) => typeof ref === "string" && ref !== ""),
+      });
+    }
+  }
+  // ② 阶段义务：直接复用 verdict.missing 的既有判定字段（同一来源，无第二套判定）
+  const stageOf = (id, label, missing) => {
+    obligations.push({
+      id,
+      kind: "stage",
+      sourceRef: label,
+      required: true,
+      state: missing ? "open" : "satisfied",
+      evidenceRefs: [],
+    });
+  };
+  if (!verificationOnly && designStageRequired) {
+    stageOf("stage-design-approval", "task 域转移表 design→implementing（DesignApproved）", verdict.missing?.designApproval === true);
+  }
+  stageOf("stage-implementation", "increments.json 全部增量登记（ImplementationRecorded）", (verdict.missing?.incrementIds ?? []).length > 0);
+  stageOf("stage-assurance", "独立保证完成（AssuranceCompleted，当前 revision 有效）", verdict.missing?.assuranceCompleted === true);
+  stageOf("stage-exploration", "候选探索证据（ExplorationCompleted，按验收版本触发词表）", verdict.missing?.explorationCompleted === true);
+  // ③ 受控修复轮义务：登记即完成（satisfied 披露视图）——修复无痕由 revision 来源对账抓，
+  //    本清单只呈报已走受控通道的轮次
+  for (const record of records) {
+    if (record.type !== "RepairRoundRecorded") continue;
+    obligations.push({
+      id: `repair-${record.eventId ?? `seq${record.seq}`}`,
+      kind: "repair",
+      sourceRef: `events.jsonl#${record.seq ?? "?"} RepairRoundRecorded`,
+      required: true,
+      state: "satisfied",
+      evidenceRefs: [record.eventId].filter((ref) => typeof ref === "string" && ref !== ""),
+    });
+  }
+  // ④ blocking 待办义务：pending-actions.json 的 open 条目全部计入（登记即义务，
+  //    resolve 后闭环——与 pending 实体的既有生命周期同一口径）
+  for (const item of pendingItems) {
+    if (typeof item.id !== "string") continue;
+    obligations.push({
+      id: `pending-${item.id}`,
+      kind: "pending",
+      sourceRef: `pending-actions.json#${item.id}`,
+      required: true,
+      state: "open",
+      evidenceRefs: [],
+    });
+  }
+  return {
+    obligations,
+    openRequired: obligations.filter((item) => item.required && item.state === "open"),
+  };
+}
+
 /** 节点事件视图重建 projectNodeEvents（status.json 派生视图单源）：按事件序列重放 node 域转移表重建节点条目。
  * events = status.events 数组（{seq,node,event,detail,payload?}）；payload 为结构化字段
  * （commit/evidence/reason/basis），缺 payload 的历史事件只能重建 status+attempts（partial）。

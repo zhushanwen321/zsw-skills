@@ -299,6 +299,9 @@ if (inputProblems.length > 0) {
 
 const gatePath = `${homeDir}/.agents/skills/delivery-v6/scripts/delivery-gate.mjs`;
 const corePath = `${homeDir}/.agents/skills/delivery-v6/scripts/delivery-core.mjs`;
+// 仓外路径检查器（设计路线 A-4，实现在 dev-flow-v6/scripts）：修复提交前检查 git
+// 暂存区全部路径，越界/..逃逸/symlink 逃逸时 exit 1 并输出三段式错误
+const checkCommitScopePath = `${homeDir}/.agents/skills/dev-flow-v6/scripts/check-commit-scope.mjs`;
 const coverageRolePath = `${homeDir}/.agents/skills/delivery-v6/references/roles/coverage-reviewer.md`;
 const builderRolePath = `${homeDir}/.agents/skills/delivery-v6/references/roles/repair-builder.md`;
 // 韧性登记启用（taskDir 已校验）：self-repairs.jsonl 落任务目录，终态 message 携带汇总
@@ -976,12 +979,31 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
 
   // 提交按精确文件路径 --only 提交：git add 仅为让 untracked 新文件可被 commit 识别，
   // commit --only 只纳入 builder 申报路径的工作区内容——暂存区里预先存在的无关内容
-  // 不会被卷进修复笔
+  // 不会被卷进修复笔。add 与 commit 拆为两步：仓外路径检查（下一段）必须在 add 之后、
+  // commit 之前检查暂存区——提前到 add 前只能看到历史遗留暂存，查不到本笔路径
+  const stageScript = "const cp=require('child_process');const root=process.argv[1],files=JSON.parse(process.argv[2]);" +
+    "const bad=files.filter(f=>typeof f!=='string'||f.length===0||f.startsWith('/')||f.split('/').includes('..'));if(bad.length){console.error('非法文件路径 '+bad.join(','));process.exit(2)}" +
+    "for(const f of files){const r=cp.spawnSync('git',['-C',root,'add','--',f],{encoding:'utf8'});if(r.status!==0){console.error(r.stderr);process.exit(r.status??1)}}";
   const commitScript = "const cp=require('child_process');const root=process.argv[1],files=JSON.parse(process.argv[2]),message=process.argv[3];" +
     "const bad=files.filter(f=>typeof f!=='string'||f.length===0||f.startsWith('/')||f.split('/').includes('..'));if(bad.length){console.error('非法文件路径 '+bad.join(','));process.exit(2)}" +
-    "for(const f of files){const r=cp.spawnSync('git',['-C',root,'add','--',f],{encoding:'utf8'});if(r.status!==0){console.error(r.stderr);process.exit(r.status??1)}}" +
     "const r=cp.spawnSync('git',['-C',root,'commit','--only','-m',message,'--'].concat(files),{encoding:'utf8'});process.stdout.write(r.stdout);process.stderr.write(r.stderr);process.exit(r.status??1)";
   const fromRevision = revision;
+  const staged = await runNode([stageScript, projectRoot, JSON.stringify(built.filesChanged)]);
+  if (staged.exitCode !== 0) return failAssurance(`修复暂存失败：${staged.stderr.trim() || staged.stdout.trim()}。恢复动作：核对 builder 申报的改动路径后重试，不允许 git add -A`);
+  // 提交前仓外路径检查（设计路线 A-4）：检查暂存区全部路径，越界/..逃逸/symlink 逃逸
+  // → exit 1 + 三段式错误（错误/权威源/恢复动作）；exit 2 = 用法错误。非零即本步
+  // fail、提交不执行，检查器输出原样透传——恢复动作（修正路径/移入仓内/用户确认外部
+  // 基线）以检查器输出为准。检查器只读（git 暂存区扫描），可包 spawn 级重试
+  const scopeCheck = await retryOnSpawnFailure(
+    () => runGate(checkCommitScopePath, ["--repo-root", projectRoot, "--staged"]),
+    { workflow: "assurance-repair-loop-v6", step: "fix", round: repairRound, command: "check-commit-scope" },
+  );
+  if (scopeCheck.exitCode !== 0) {
+    return failAssurance(
+      `提交前仓外路径检查未通过（exit ${scopeCheck.exitCode}）：${(scopeCheck.stderr || scopeCheck.stdout).trim() || "检查器无输出"}` +
+        "。恢复动作：按上方检查器输出的恢复指引处理后重发；本笔 add 已落暂存区，调整路径前可先 git reset 清点暂存",
+    );
+  }
   const committed = await runNode([commitScript, projectRoot, JSON.stringify(built.filesChanged), `fix(delivery): repair round ${repairRound}`]);
   if (committed.exitCode !== 0) return failAssurance(`修复提交失败：${committed.stderr.trim() || committed.stdout.trim()}。恢复动作：核对工作区归属与 pre-commit 输出后重试，不允许 git add -A`);
 

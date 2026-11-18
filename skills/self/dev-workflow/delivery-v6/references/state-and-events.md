@@ -10,7 +10,7 @@
 | AcceptanceApproved | user | 某版验收被批准；四元组同上 + reviewEventId（指向通过的审查） |
 | DesignApproved | user | 方案包确认；绑包文件哈希清单（packageFiles）与决策参照 |
 | ImplementationRecorded | builder | 增量在某指纹下实现完成；附合并回执（起始指纹、合并后指纹、补丁哈希） |
-| EvidenceRecorded | assurance | 某需求或断言某证据类型的结论；schema 2 附 assertionIds/adversarialFormIds；绑 artifact 内容哈希（禁止覆盖写） |
+| EvidenceRecorded | assurance | 某需求或断言某证据类型的结论；schema 2 附 assertionIds/adversarialFormIds；绑 artifact 内容哈希（禁止覆盖写）；宿主类证据的 JSON artifact 附 environment 元数据（kind/name/version/source/sourceHash/driver，见「宿主类断言与证据环境」节） |
 | FindingRaised | builder/assurance | 登记发现；category=defect/boundary、severity、关联需求（可空）；非 blocker 附 consequenceRefutation；重开附 reopenOf；可附来源阶段与回归测试 |
 | FindingResolved | assurance | 发现解决（当前指纹有效）；boundary 的确认也走此事件，附对照论证 |
 | ResolutionReaffirmed | assurance | 原解决事件在当前 revision 的逐项重认领；必须有原解决事件与复核依据，不允许只凭全量测试绿 |
@@ -44,8 +44,8 @@
 
 ## 判定式（两个终态）
 
-- **accepted** = 批准有效（四元组一致 + 审查未被 reject 击穿）＋ 全部增量实现 ＋ 每条必需断言的**每类证据** verified（schema 1 仍为每条必需需求）＋ 当前指纹的保证完成（回执覆盖全部增量、退出码 0、绑定事件可追溯、按策略附干净构建）＋ 探索完成（如要求）＋ 无未决 defect ＋ 无未确认 boundary ＋ 未进入 process-failed。
-- **accepted_with_risk** = 上述条件中，逐缺口豁免：每个未 verified 的「需求×证据类型」都有绑定该缺口 gapId 的有效接受（且需求 riskAcceptable=true），每个未决 defect 有有效接受；boundary 不可接受风险；至少存在一项具体接受。两类证据缺口各自需独立接受。
+- **accepted** = 批准有效（四元组一致 + 审查未被 reject 击穿）＋ 全部增量实现 ＋ 每条必需断言的**每类证据** verified（schema 1 仍为每条必需需求）＋ 当前指纹的保证完成（回执覆盖全部增量、退出码 0、绑定事件可追溯、按策略附干净构建）＋ 探索完成（如要求）＋ 无未决 defect ＋ 无未确认 boundary ＋ 候选形成后全部 revision 变化有合法来源（`revision-provenance` 无 unknown 代际）＋ 必需交付义务无 open（`obligations` 派生；`explicitly-waived` 须绑用户裁决）＋ 循环尝试未超预算（`loop-budget` 按 started 计数）＋ 未进入 process-failed。
+- **accepted_with_risk** = 上述条件中，逐缺口豁免：每个未 verified 的「需求×证据类型」都有绑定该缺口 gapId 的有效接受（且需求 riskAcceptable=true），每个未决 defect 有有效接受；boundary 不可接受风险；至少存在一项具体接受。两类证据缺口各自需独立接受。来源不明的 revision 与无豁免通道的 open 义务不在可接受范围内——豁免只作用于现有规则允许接受风险的事项。
 
 缺口 gapId：完全缺失 = (acceptanceVersion, requirementId, evidenceKind, revision, "missing") 确定性派生；partial/failed = 对应证据事件 id；finding = findingId。
 
@@ -59,7 +59,7 @@
 | 2 | 无有效批准 | draft |
 | 3 | 已批准、完整路径、无 DesignApproved（非只核验） | design |
 | 4 | 漂移链超上限 | revision-unstable |
-| 4.5 | 需要第 4 轮实现性修复，或累计不同 must-fix 达到第 11 条 | process-failed（停止正常修复，不得交付） |
+| 4.5 | 需要第 4 轮实现性修复，或累计不同 must-fix 达到第 11 条，或验收复审 started 计数超 acceptanceReReviewRoundCap（6） | process-failed（停止正常修复，不得交付） |
 | 5 | 必需需求存在未接受 failed 证据 | implementing |
 | 6 | 存在未接受 blocker defect（无关联需求者触发全量增量修复） | implementing |
 | 7 | 已批准且零实现 | acceptance-approved |
@@ -76,6 +76,32 @@
 ## 漂移链计数
 
 连续漂移链 = 前一条 finalize 等于后一条 setup、且最新一条 finalize 等于当前 revision 的漂移序列长度；只统计最近一次 RevisionBaselineConfirmed（或任务起点）之后、最近一次成功 AssuranceCompleted 之后的漂移。**预期修复豁免**：当前 revision 等于最新实现事件合并回执的 toRevision 时（builder 合并后的稳定状态）不计漂移；当前 revision 超出实现指纹且无衔接链时计一次失败保证（按 (实现事件, revision) 去重）。链超策略 maxDriftChain（默认 2）进 revision-unstable。
+
+## 宿主类断言与证据环境
+
+断言可通过可选字段 `requiredEnvironment` 声明宿主环境要求（缺省不限制；字段定义见 `references/acceptance.md`）：
+
+```jsonc
+{ "assertionId": "R4-A1", "requiredEnvironment": { "kind": "official-runner | real-host", "capability": "<能力名，可选>" } }
+```
+
+宿主类证据（声明了 requiredEnvironment 的断言的取证 artifact）使用 JSON artifact，附 environment 元数据：
+
+```jsonc
+{ "kind": "official-runner | real-host | fake-host", "name": "<宿主或执行器名>", "version": "<版本>", "source": "<权威来源>", "sourceHash": "<来源内容哈希>", "driver": "<实际驱动入口>" }
+```
+
+判定规则（delivery-gate evaluate 执行）：
+
+1. gate 对宿主类断言核对证据 artifact 的 environment 是否满足该断言的 requiredEnvironment——不满足时该证据最多判 partial/unknown，**不得 verified**。
+2. 模拟环境（fake-host）不能独立证明宿主契约：宿主专属语义（命令解析、注册、回执、事件语义）必须至少一条 official-runner 或 real-host 证据；真实环境不可用只能 unknown/partial，用户是否接受该风险走既有裁决通道。
+3. environment 的 `sourceHash` 用于核对证据来源身份；其与权威来源内容的一致性核对通道待建立——当前 gate 只读取与绑定元数据，不核 sourceHash 内容（如实声明，不虚报核对能力）。
+
+## 循环尝试记录与预算
+
+任务目录执行记录 `loop-attempts.jsonl`（append-only，不回写历史行）承载全部循环的尝试事实：进入循环即追加 `started`（attemptKey = runId:round，恢复重放按 attemptKey + event 去重），退出补 `finished --outcome passed|rejected|failed|interrupted`（`started` 不携带结果，同一尝试的完成事件不增加次数）。它不是签名事件（不进事件词表、不改变 AcceptanceReviewed 语义），workflow 与手工路径写同一份记录。
+
+预算读取 `started` 计数，不读结果事件数——打回、校验失败、designer 失败、整次重发与中断全部计入，跨 run、跨 workflow 与手工路径累计，重开 run 不重置。验收复审（loop=acceptance-review）上限 = `acceptanceReReviewRoundCap`（6，`rules.json` budgets），超限进 process-failed（nextAction 优先级 4.5）；查询入口 `delivery-core loop-budget`，登记入口 `delivery-core loop-attempt`。审查反馈 artifact 按 `acceptanceVersion + runId + round` 隔离存放，禁止只按 round 覆盖历史报告。其余循环接入同一记录前进度属已知缺口，不宣称统一上界。
 
 ## 信任边界（如实声明）
 

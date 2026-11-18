@@ -418,8 +418,13 @@ test("循环上限常量对拍：T/D/AD 源码内嵌常量与内核 rules.json �
   assert.equal(new RegExp(/rewritesUsed >= (\d+)/).exec(tSrc)[1], String(RULES.budgets.t2RewriteAttemptCap), "T2 重写上限与 rules.json 一致");
   assert.match(dSrc, /reflowsSoFar >= (\d+)/);
   assert.equal(new RegExp(/reflowsSoFar >= (\d+)/).exec(dSrc)[1], String(RULES.budgets.d2ItemReflowCap), "D2 回流上限与 rules.json 一致");
-  assert.match(adSrc, /priorReviewRounds \+ round > (\d+)/);
-  assert.equal(new RegExp(/priorReviewRounds \+ round > (\d+)/).exec(adSrc)[1], String(RULES.budgets.acceptanceReReviewRoundCap), "AD 复审预算与 rules.json 一致");
+  // AD 复审预算语义升级（设计 §8.1）：不再内嵌轮上限常量按成功事件数预判——改经
+  // delivery-core loop-budget 按 started 尝试记录判定（打回/校验失败/中断均计入），
+  // 上限键映射在 kernel-judgments.LOOP_BUDGET_CAP_KEYS 单源对拍本表
+  assert.ok(!/priorReviewRounds \+ round > \d+/.test(adSrc), "AD 源码不得残留本地轮上限复刻");
+  assert.ok(/loop-budget/.test(adSrc) && /loop-attempt/.test(adSrc), "AD 复审预算应经 core loop-budget 判定、尝试经 loop-attempt 登记");
+  assert.equal(KERNEL.LOOP_BUDGET_CAP_KEYS["acceptance-review"], "acceptanceReReviewRoundCap", "验收复审预算键映射与 rules.json 一致");
+  assert.equal(RULES.budgets.acceptanceReReviewRoundCap, 6, "验收复审尝试上限取值保持内核登记值");
   // 改判熔断上限（T2 分级改判 / D2 定性改判共用一档）
   assert.match(tSrc, /AGGREGATE_REGRADE_HALT = (\d+)/);
   assert.equal(new RegExp(/AGGREGATE_REGRADE_HALT = (\d+)/).exec(tSrc)[1], String(RULES.budgets.aggregateRegradeHalt), "T2 改判熔断上限与 rules.json 一致");
