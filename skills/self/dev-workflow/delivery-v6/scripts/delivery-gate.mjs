@@ -1597,6 +1597,12 @@ const ARTIFACT_HASH_CAPABLE_TYPES = new Set(["EvidenceRecorded", "Implementation
 function validateArtifactNotOverwritten(world, event) {
   const artifact = event.artifact;
   const artifactSha256 = Object.hasOwn(event, "artifactSha256") ? event.artifactSha256 : null;
+  // 不可携哈希的事件类型（FindingRaised 等）引用已被哈希登记的证据文件属常态
+  // （上方注释语义：发现类不要求携带哈希、本身也不登记哈希）——检查②只约束可携
+  // 哈希类型的再登记；发现类跳过既有绑定对账，覆盖写防线①③与磁盘可读校验不受
+  // 影响。实测：candidate-build 的 builder 自报发现按设计排在 ImplementationRecorded
+  // 之后（同一报告路径），被检查②误拦致 build-failed
+  if (artifactSha256 === null && !ARTIFACT_HASH_CAPABLE_TYPES.has(event.type)) return;
   const filePath = isAbsolute(artifact) ? resolve(artifact) : resolve(world.taskDir, artifact);
   for (const entry of world.entries) {
     const prior = entry.record;
