@@ -953,7 +953,7 @@ function validateExploration(value: ExplorationOutcome): string {
 // 意图提交（信封由 gate 构造）：本地事件对象 → 意图命令参数；--revision 显式锁定
 // run 的 setup revision（漂移语义保持显式），artifactSha256 由 gate 按盘上文件计算
 function intentArgsFor(event: DeliveryEvent): string[] {
-  const base = ["--task-dir", taskDir];
+  const base = ["--task-dir", taskDir, "--channel", "workflow"];
   const rev = event.revision !== undefined ? ["--revision", String(event.revision)] : [];
   const opt = (key: string, flag: string): string[] => (event[key] !== undefined ? [flag, String(event[key])] : []);
   switch (event.type) {

@@ -109,3 +109,14 @@ test("ARL 产物：waiver 逻辑零引用；在盘存在性核对（含路径 + 
   assert.ok(PI.includes("NODE_CHECK_FILES, ...refPaths"), "存在性核对经 NODE_CHECK_FILES 逐文件核对");
   assert.ok(PI.includes("#用例名"), "prompt 须约定 greenAfterFix 的 路径#用例名 条目形态（机器可核对前提）");
 });
+
+test("workflow 写入方通道旗标静态守卫：v6 意图命令调用点全部携带 --channel workflow", () => {
+  // V5 完整性设计 §7.3 事件来源记录义务：workflow 侧写入的事件必须自报通道——丢旗标会把
+  // workflow 事件错记为 manual。基线计数防回潮（新调用点须同步更新计数）
+  const base = join(ROOT, "skills", "self", "dev-workflow", "workflows", "src");
+  const counts = (file) => readFileSync(join(base, file), "utf8").split('"--channel", "workflow"').length - 1;
+  assert.equal(counts("assurance-repair-loop-v6.shared.ts"), 3, "ARL：intentArgsFor base + 2 处 record-repair-round 直拼");
+  assert.equal(counts("independent-assurance-v6.shared.ts"), 1, "IA：intentArgsFor base");
+  assert.equal(counts("candidate-build-v6.shared.ts"), 3, "candidate-build：intentArgsFor base + record-finding/record-exploration 直拼");
+  assert.equal(counts("acceptance-design-v6.shared.ts"), 1, "acceptance-design：record-review");
+});

@@ -44,10 +44,10 @@
 // 修复后同族缺陷复发数、终报与权威记录差异）不在单任务报告产出——终报由本脚本从
 // 权威记录机器生成，差异结构性为零（头部声明同文）。
 //
-// 事件级通道归属的诚实边界：events.jsonl 事件 schema（gate EVENT_SCHEMAS）不含 runId
-// 字段——gate 意图命令的 --run-id 只做写租约代次复核、不写入事件记录。因此「某条保证
-// 事件由 workflow 还是手工路径登记」无法从权威记录判定，报告对该归属如实标 unknown；
-// 通道区分只在 loop-attempts.jsonl 的 path 字段（覆盖已接入登记的循环）。
+// 事件级通道归属：事件信封 channel 字段（workflow|manual，V5 完整性设计 §7.3 记录义务；
+// gate 意图命令 --channel，workflow 写入方显式携带，缺省 manual）。历史事件无该键计入
+// legacy，不回填猜测。loop-attempts.jsonl 的 path 字段继续覆盖循环级通道统计。
+// （--run-id 只做写租约代次复核、不写入事件记录，故 runId 不作归属依据。）
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -252,10 +252,16 @@ const repairProgressSection = {
 };
 
 // ── 分节 3：执行通道统计（workflow 与手工补登记分开）──
-// 判定依据：loop-attempts.jsonl 的 path 字段（workflow|manual，登记时由通道自报并经
-// CLI 词表校验）。事件级归属 unknown——events.jsonl 事件 schema 无 runId 字段（见文件
-// 头注释），无法判定单条保证事件出自哪条通道。
-const channelsSection = { loops: loopsSection.status === "ok" ? [] : null, assuranceEvents: null, eventChannelAttribution: "unknown" };
+// 判定依据 1：loop-attempts.jsonl 的 path 字段（workflow|manual，登记时由通道自报并经
+// CLI 词表校验）。判定依据 2：事件信封 channel 字段（workflow|manual——V5 完整性设计
+// §7.3 事件来源记录义务；历史事件无该键计入 legacy，不回填猜测）。
+const eventChannelCounts = { workflow: 0, manual: 0, legacy: 0 };
+for (const record of records) {
+  if (record.channel === "workflow") eventChannelCounts.workflow += 1;
+  else if (record.channel === "manual") eventChannelCounts.manual += 1;
+  else eventChannelCounts.legacy += 1;
+}
+const channelsSection = { loops: loopsSection.status === "ok" ? [] : null, assuranceEvents: null, eventChannelAttribution: eventChannelCounts };
 if (loopsSection.status === "ok") {
   for (const loopRow of loopsSection.loops) {
     const byPath = { workflow: { started: 0, byOutcome: {} }, manual: { started: 0, byOutcome: {} } };
@@ -829,7 +835,9 @@ lines.push(
     : `- 保证事件数（events.jsonl AssuranceCompleted 直读）：${channelsSection.assuranceEvents.total}（${fmtOutcomeMap(channelsSection.assuranceEvents.byMode)}）`,
 );
 lines.push(
-  `- 单条保证事件的通道归属：unknown——events.jsonl 事件 schema 不含 runId 字段（--run-id 只做写租约复核、不写入事件），无法从权威记录判定该事件由 workflow 还是手工路径登记`,
+  channelsSection.eventChannelAttribution === null
+    ? `- 事件通道归属（信封 channel 字段）：${fmtUnknown(worldError)}`
+    : `- 事件通道归属（信封 channel 字段）：workflow ${channelsSection.eventChannelAttribution.workflow} 条 / manual ${channelsSection.eventChannelAttribution.manual} 条 / legacy（历史事件无该键）${channelsSection.eventChannelAttribution.legacy} 条`,
 );
 if (observability.status === "ok") {
   const bySkillText = Object.entries(observability.bySkill).map(([skill, count]) => `${skill} ${count}`).join(" / ");

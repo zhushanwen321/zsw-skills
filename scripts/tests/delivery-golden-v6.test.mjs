@@ -491,16 +491,19 @@ test("golden-defect：boundary 越权 / 非 blocker 无后果论证 / 改判熔�
   assertOk(raiseFinding(fx, revision, {
     findingId: "F-G0", category: "defect", severity: "blocker", requirementIds: ["R1"],
   }), "根发现 F-G0 应登记成功（reopenOf 需指向已存在的 finding）");
-  // finding 域状态机：reopen 只作用于已关闭发现（open→open 表外拒绝），先解决 F-G0 再走重开链
+  // finding 域状态机：reopen 只作用于已关闭发现（open→open 表外拒绝），先解决 F-G0 再走重开链；
+  // reopen 谓词（criterionChanged）要求判据环境变化——修复尝试提交使 revision 变化后重开在表内
   assertOk(resolveFinding(fx, "F-G0"), "根发现先关闭——重开链的表内起点");
-  assertOk(raiseFinding(fx, revision, {
+  spawnSync("git", ["commit", "--allow-empty", "-qm", "fix attempt for F-G0"], { cwd: fx.projectDir });
+  const regradeRevision = currentRevision(fx);
+  assertOk(raiseFinding(fx, regradeRevision, {
     findingId: "F-G1", category: "defect", severity: "blocker", requirementIds: ["R1"], reopenOf: "F-G0",
   }), "组合 1/3（defect/blocker 重开，未新增组合）应放行");
-  assertOk(raiseFinding(fx, revision, {
+  assertOk(raiseFinding(fx, regradeRevision, {
     findingId: "F-G2", category: "defect", severity: "non-blocker", requirementIds: ["R1"],
     reopenOf: "F-G0", consequenceRefutation: "该行为用户不可观察：仅内部计数变化",
   }), "组合 2/3（defect/non-blocker，共 2 种未超上限）应放行");
-  const halted = raiseFinding(fx, revision, {
+  const halted = raiseFinding(fx, regradeRevision, {
     findingId: "F-G3", category: "boundary", severity: "non-blocker", requirementIds: [],
     reopenOf: "F-G0", consequenceRefutation: "该行为用户不可观察：仅内部计数变化",
     // 空关联 boundary 的新合法形态：携带不影响任何需求的论证，使其抵达改判熔断检查

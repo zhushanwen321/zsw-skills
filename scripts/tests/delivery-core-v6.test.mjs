@@ -216,6 +216,24 @@ test("criterionChangedSinceResolution：解决时验收版本 ≠ 当前 → tru
     false,
     "无解决侧事件 → false（无解决时点可比，不能凭空宣称判据变化）",
   );
+  // revision 维度（修复后复发）：同版本但代码已变 → 判据环境已变化
+  assert.equal(
+    KERNEL.criterionChangedSinceResolution(records, { findingId: "F-1", currentAcceptanceVersion: 2, currentRevision: "r3" }),
+    true,
+    "同版本、revision 已变（最近重认领 r2 ≠ r3）→ true",
+  );
+  assert.equal(
+    KERNEL.criterionChangedSinceResolution(records, { findingId: "F-1", currentAcceptanceVersion: 2, currentRevision: "r2" }),
+    false,
+    "同版本同 revision → false（无变化重开）",
+  );
+  // RiskAccepted 也是关闭锚（风险接受的发现重开走同一谓词）
+  const riskRecords = [
+    { type: "FindingRaised", acceptanceVersion: 1, seq: 1, findingId: "F-9" },
+    { type: "RiskAccepted", acceptanceVersion: 1, seq: 2, findingId: "F-9", revision: "r1" },
+  ];
+  assert.equal(KERNEL.criterionChangedSinceResolution(riskRecords, { findingId: "F-9", currentAcceptanceVersion: 1, currentRevision: "r1" }), false, "风险接受为关闭锚：同版本同 revision → false");
+  assert.equal(KERNEL.criterionChangedSinceResolution(riskRecords, { findingId: "F-9", currentAcceptanceVersion: 1, currentRevision: "r2" }), true, "风险接受后 revision 变化 → true（风险接受发现的重开通道）");
 });
 
 // ── 真实任务夹具：next 样例 + CLI 判定 + pending 实体 ──

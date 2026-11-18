@@ -818,15 +818,17 @@ test("finding 表外转移拒绝：已 resolved 再 resolve、open 态 reopenOf 
   writeFileSync(join(fx.taskDir, "evidence", "resolved-again.md"), "# 再解决\n");
   denied(runGate(["resolve-finding", "--task-dir", fx.taskDir, "--finding-id", "F-1", "--summary", "再次解决", "--artifact", "evidence/resolved-again.md", "--credential", fx.creds.assurance], fx.home, fx.env),
     /表外转移.*resolved 态.*FindingResolved/, "已关闭发现不能重复解决");
-  // 合法 reopen：resolved → open（record-finding --reopen-of 生成新条目）
-  ok(raise("F-1-RE", ["--reopen-of", "F-1"]), "reopen 已解决发现应放行");
   // 表外 open → open：open 态条目被 reopenOf 重报（原条目照样 open，凭空多出重报条目）
   ok(raise("F-2"), "登记 F-2");
   denied(raise("F-2-RE", ["--reopen-of", "F-2"]), /表外转移.*open 态/, "open 态发现重报应被拒");
-  // 表外：关闭仍有效（同 revision）时重认领
+  // 表外：关闭仍有效（同 revision）时重认领——须在 revision 前进前验证
   const events = readFileSync(join(fx.taskDir, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
   const resolutionId = events.find((event) => event.type === "FindingResolved" && event.findingId === "F-1").eventId;
   denied(runGate(["reaffirm-resolution", "--task-dir", fx.taskDir, "--finding-id", "F-1", "--original-resolution-event-id", resolutionId,
     "--basis", "修复仍有效", "--summary", "重认领", "--artifact", "evidence/resolved.md", "--credential", fx.creds.assurance], fx.home, fx.env),
     /表外转移.*不接受事件 ResolutionReaffirmed/, "关闭仍有效时重认领应被拒（重认领只用于 revision 前进使旧关闭失效的场景）");
+  // 合法 reopen：resolved → open（record-finding --reopen-of 生成新条目）——reopen 谓词
+  // 要求判据环境变化，先提交修复尝试使 revision 前进
+  spawnSync("git", ["commit", "--allow-empty", "-qm", "fix attempt for F-1"], { cwd: fx.projectDir });
+  ok(raise("F-1-RE", ["--reopen-of", "F-1"]), "判据环境变化后 reopen 已解决发现应放行");
 });

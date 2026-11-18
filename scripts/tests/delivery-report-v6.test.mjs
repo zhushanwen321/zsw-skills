@@ -209,6 +209,11 @@ test("双通道统计分开 + 缺观测与缺 status.json 时 unknown 不冒充 
     "manual 通道独立计数",
   );
   assert.equal(report.channels.assuranceEvents.total, 0, "保证事件数直读事件流（本任务无 AssuranceCompleted）");
+  // 事件通道归属（信封 channel 字段）：本 fixture 为混合形态——手写事件（无该键 → legacy）
+  // 与 gate 直写（缺省 manual）并存，workflow 为 0（fixture 不走 workflow 通道）
+  const attribution = report.channels.eventChannelAttribution;
+  assert.ok(attribution.manual >= 1 && attribution.legacy >= 1 && attribution.workflow === 0,
+    `事件通道归属应为 manual+legacy 混合、无 workflow：${JSON.stringify(attribution)}`);
 
   // 修复进度：repairRounds 直读 verdict.quality；首次通过轮次 = 首个 passed 尝试序号
   assert.equal(report.repairProgress.repairRounds, 0, "无修复轮 → quality.repairRounds=0 直读");

@@ -397,7 +397,7 @@ if (leaseRunId !== "") {
 // 意图提交（信封由 gate 构造）：把本地事件对象翻译为意图命令参数——revision 锁定用
 // --revision 显式传入（保证 run 在途的 setup revision 语义保持），artifactSha256 由 gate 计算
 function intentArgsFor(event: DeliveryEvent): string[] {
-  const base = ["--task-dir", taskDir];
+  const base = ["--task-dir", taskDir, "--channel", "workflow"];
   const rev = ["--revision", event.revision];
   const opt = (key: string, flag: string): string[] => (event[key] !== undefined ? [flag, String(event[key])] : []);
   switch (event.type) {
@@ -791,7 +791,7 @@ for (let index = 0; index < increments.length; index += 1) {
       }
       findingSequence += 1;
       const appended = await runGate(gatePath, [
-        "record-finding", "--task-dir", taskDir,
+        "record-finding", "--task-dir", taskDir, "--channel", "workflow",
         "--summary", event.summary, "--category", String(event.category), "--severity", String(event.severity),
         "--requirement-ids", JSON.stringify(event.requirementIds), "--artifact", String(event.artifact),
         "--finding-id", String(event.findingId), "--revision", postRevision,
@@ -820,7 +820,7 @@ for (let index = 0; index < increments.length; index += 1) {
       coverageManifestSha256: explorationReportSha, artifactSha256: explorationReportSha, artifact: explorationReportPath,
     };
     const explorationAppended = await runGate(gatePath, [
-      "record-exploration", "--task-dir", taskDir,
+      "record-exploration", "--task-dir", taskDir, "--channel", "workflow",
       "--summary", exploration.summary, "--dimensions", JSON.stringify(exploration.dimensions),
       "--coverage-manifest-sha256", explorationReportSha, "--artifact", explorationReportPath, "--revision", postRevision,
       "--credential", assuranceCredentialId,

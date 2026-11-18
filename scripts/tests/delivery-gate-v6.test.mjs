@@ -766,6 +766,8 @@ test("任务替换：prepare 占用 → 二次 prepare 拒 → commit 前任 sup
     "--finding-id", "F-KEEP", "--summary", "修复继承发现", "--artifact", resolveArtifact.artifact,
     "--credential", `${fx.slug}/task-succ/assurance`,
   ));
+  // reopen 谓词（criterionChanged）：修复尝试提交使 revision 变化——判据环境变化后复发重开在表内
+  spawnSync("git", ["commit", "--allow-empty", "-qm", "fix attempt for F-KEEP"], { cwd: fx.projectDir });
   const reopenArtifact = evidenceFile(successorDir, "inherited-reopen.md");
   assertOk(fx.gate(
     "record-finding", "--task-dir", successorDir,
@@ -776,6 +778,61 @@ test("任务替换：prepare 占用 → 二次 prepare 拒 → commit 前任 sup
   ));
   const reopenedVerdict = JSON.parse(parseStdout(fx.gate("evaluate", "--task-dir", successorDir)));
   assert.equal(reopenedVerdict.quality.uniqueMustFix, 1, "继承问题经 reopenOf 重开不重复计数（根 id 折叠）");
+});
+
+test("reopen 谓词：同版本同 revision 无变化重开拒绝；revision 变化后放行（状态机设计 criterionChanged 接线）", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  const revision = driveToAssuranceStage(fx);
+  const artifact = evidenceFile(fx.taskDir, "predicate-finding.md");
+  assertOk(appendEvent(fx, {
+    type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision,
+    summary: "谓词用例发现", findingId: "F-PRED", category: "defect", severity: "blocker",
+    requirementIds: ["R1"], artifact: artifact.artifact,
+  }, "assurance"));
+  assertOk(fx.gate("resolve-finding", "--task-dir", fx.taskDir, "--finding-id", "F-PRED",
+    "--summary", "修复", "--artifact", artifact.artifact, "--credential", fx.creds.assurance,
+    "--revision", revision));
+  // 同版本同 revision：判据环境无变化，重开被拒
+  const rejected = fx.gate("record-finding", "--task-dir", fx.taskDir,
+    "--summary", "复发", "--category", "defect", "--severity", "blocker",
+    "--requirement-ids", JSON.stringify(["R1"]), "--finding-id", "F-PRED-RE",
+    "--reopen-of", "F-PRED", "--artifact", artifact.artifact,
+    "--revision", revision, "--credential", fx.creds.assurance);
+  assertFailure(rejected);
+  assert.match(rejected.stderr, /reopen 谓词不满足/);
+  // 修复尝试提交（revision 变化）后：修复后复发走重开在表内（缺陷族 reopenOf 不重复计数通道）
+  spawnSync("git", ["commit", "--allow-empty", "-qm", "fix attempt for F-PRED"], { cwd: fx.projectDir });
+  const reopened = fx.gate("record-finding", "--task-dir", fx.taskDir,
+    "--summary", "修复后复发", "--category", "defect", "--severity", "blocker",
+    "--requirement-ids", JSON.stringify(["R1"]), "--finding-id", "F-PRED-RE2",
+    "--reopen-of", "F-PRED", "--artifact", artifact.artifact,
+    "--revision", currentRevision(fx), "--credential", fx.creds.assurance);
+  assertOk(reopened);
+});
+
+test("事件信封 channel：--channel=workflow 落信封、缺省 manual、非法值拒绝（V5 完整性设计 §7.3 来源记录）", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  const revision = driveToAssuranceStage(fx);
+  const artifact = evidenceFile(fx.taskDir, "channel-finding.md");
+  assertOk(appendEvent(fx, {
+    type: "FindingRaised", actor: "assurance", acceptanceVersion: 1, revision,
+    summary: "通道用例", findingId: "F-CH", category: "defect", severity: "blocker",
+    requirementIds: ["R1"], artifact: artifact.artifact,
+  }, "assurance"));
+  assertOk(fx.gate("resolve-finding", "--task-dir", fx.taskDir, "--finding-id", "F-CH",
+    "--summary", "解决", "--artifact", artifact.artifact, "--credential", fx.creds.assurance,
+    "--channel", "workflow"));
+  const events = readFileSync(join(fx.taskDir, "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(events.find((record) => record.type === "FindingResolved").channel, "workflow", "显式 --channel=workflow 应落信封");
+  assert.equal(events.find((record) => record.type === "FindingRaised").channel, "manual", "CLI 缺省按 manual 记录");
+  const bad = fx.gate("record-finding", "--task-dir", fx.taskDir,
+    "--summary", "非法通道", "--category", "defect", "--severity", "blocker",
+    "--requirement-ids", JSON.stringify(["R1"]), "--artifact", artifact.artifact,
+    "--finding-id", "F-CH2", "--channel", "bogus", "--credential", fx.creds.assurance);
+  assertFailure(bad);
+  assert.match(bad.stderr, /--channel 取值非法/);
 });
 
 // ── 8. 写事务租约 ──

@@ -705,7 +705,7 @@ function validateCoverage(value: CoverageOutcome): string {
 // artifactSha256 由 gate 按盘上文件计算。assurance 凭据走本辅助，builder 事件（修复轮）
 // 在调用点直接拼意图参数（凭证不同）
 function intentArgsFor(event: DeliveryEvent): string[] {
-  const base = ["--task-dir", taskDir];
+  const base = ["--task-dir", taskDir, "--channel", "workflow"];
   const rev = event.revision !== undefined ? ["--revision", String(event.revision)] : [];
   const opt = (key: string, flag: string): string[] => (event[key] !== undefined ? [flag, String(event[key])] : []);
   switch (event.type) {
@@ -982,7 +982,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
       round: repairRound, triggerFindingIds, affectedAssertionIds: [], artifact,
     };
     const appended = await runGate(gatePath, [
-      "record-repair-round", "--task-dir", taskDir,
+      "record-repair-round", "--task-dir", taskDir, "--channel", "workflow",
       "--round", String(repairRound), "--summary", event.summary,
       "--trigger-finding-ids", JSON.stringify(triggerFindingIds), "--affected-assertion-ids", "[]",
       "--artifact", artifact, "--revision", revision,
@@ -1233,7 +1233,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
   };
   const repairAppended = await retryOnSpawnFailure(
     () => runGate(gatePath, [
-      "record-repair-round", "--task-dir", taskDir,
+      "record-repair-round", "--task-dir", taskDir, "--channel", "workflow",
       "--round", String(repairRound), "--summary", repairEvent.summary,
       "--trigger-finding-ids", JSON.stringify(triggerFindingIds),
       "--affected-assertion-ids", JSON.stringify(repairEvent.affectedAssertionIds),

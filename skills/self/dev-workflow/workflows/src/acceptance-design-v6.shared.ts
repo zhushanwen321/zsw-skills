@@ -977,7 +977,7 @@ for (let round = 1; round <= maxRounds; round += 1) {
   // --authority-snapshot-sha256 是设计 §4.4 的审计字段（审查时刻环境快照哈希）
   const reviewRecorded = await runGate(gatePath, [
     "record-review",
-    "--task-dir", taskDir,
+    "--task-dir", taskDir, "--channel", "workflow",
     "--conclusion", "pass",
     "--summary", review.summary,
     "--artifact", reviewReportPath,

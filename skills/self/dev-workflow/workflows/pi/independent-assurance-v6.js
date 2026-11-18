@@ -563,7 +563,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "7.4.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "7.5.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -1447,7 +1447,7 @@ function validateExploration(value) {
 // 意图提交（信封由 gate 构造）：本地事件对象 → 意图命令参数；--revision 显式锁定
 // run 的 setup revision（漂移语义保持显式），artifactSha256 由 gate 按盘上文件计算
 function intentArgsFor(event) {
-    const base = ["--task-dir", taskDir];
+    const base = ["--task-dir", taskDir, "--channel", "workflow"];
     const rev = event.revision !== undefined ? ["--revision", String(event.revision)] : [];
     const opt = (key, flag) => (event[key] !== undefined ? [flag, String(event[key])] : []);
     switch (event.type) {

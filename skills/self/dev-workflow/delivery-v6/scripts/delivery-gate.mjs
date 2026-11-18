@@ -44,6 +44,7 @@ import { fileURLToPath } from "node:url";
 import {
   KERNEL_RULES,
   LOOP_BUDGET_CAP_KEYS,
+  criterionChangedSinceResolution,
   deriveObligations,
   deriveRevisionProvenance,
   deriveRuntimeObligations,
@@ -75,7 +76,9 @@ const FINDING_CATEGORIES = ["defect", "boundary"];
 const FINDING_SEVERITIES = ["blocker", "non-blocker"];
 const EVIDENCE_RESULTS = ["verified", "partial", "failed"];
 // 任务级事件（替换/声明/基线/策略）允许在验收包出现前登记，此时 acceptanceVersion 为 0
-const COMMON_EVENT_FIELDS = ["type", "actor", "acceptanceVersion", "revision", "summary"];
+// channel 进公共字段（信封+内容身份双投影：写入侧整事件哈希、读取侧 eventFields 投影
+// 必须一致——历史事件无该键时投影自然不含，哈希向后兼容）
+const COMMON_EVENT_FIELDS = ["type", "actor", "acceptanceVersion", "revision", "channel", "summary"];
 const EVENT_SCHEMAS = {
   AcceptanceReviewed: {
     actors: ["assurance"],
@@ -1279,7 +1282,10 @@ function validateEventShape(event, { record = false } = {}) {
   if (record) allowed.push("seq", "recordedAt", "eventId", "signature");
   // domain = 写入目标域章（appendEvent 写入时盖；可选——读侧对无章历史事件按 eventDomains 补判）
   allowed.push("domain");
-  const optional = [...(OPTIONAL_EVENT_FIELDS[event.type] ?? []), "domain"];
+  // channel = 事件来源（workflow|manual，信封字段；历史事件无该键按 legacy 读）
+  allowed.push("channel");
+  if (Object.hasOwn(event, "channel")) requireEnum(event.channel, ["workflow", "manual"], "event.channel");
+  const optional = [...(OPTIONAL_EVENT_FIELDS[event.type] ?? []), "domain", "channel"];
   // TaskSuperseded 条件字段：非 committed 段出现 prepareEventId 即形态错误
   if (event.type === "TaskSuperseded" && event.phase !== "committed") {
     if (Object.hasOwn(event, "prepareEventId")) {
@@ -1981,6 +1987,20 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
             fail(
               `${lineLabel} 表外转移：被重开的发现 ${event.reopenOf} 当前处于 open 态，不接受 reopen（该态合法事件：${findingLegalEventsOf("open").join(" / ")}）。`,
               `open 态的发现直接继续处置（${GATE_COMMAND} resolve-finding --finding-id ${event.reopenOf} 或 accept-risk）；重报只用于已关闭/已接受风险的发现在判据变化后复发。`,
+            );
+          }
+          // reopen 谓词接线（状态机设计：reopen 边 requires criterionChanged，decider=core）。
+          // 判据环境两维：验收版本变化（判据本身变）或代码 revision 变化（修复后复发——
+          // 缺陷族 reopenOf 不重复计数通道）；同版本同 revision 重开 = 无变化重开，拒绝
+          if (
+            !criterionChangedSinceResolution(
+              world.entries.map((entry) => entry.record),
+              { findingId: event.reopenOf, currentAcceptanceVersion: event.acceptanceVersion, currentRevision: event.revision },
+            )
+          ) {
+            fail(
+              `${lineLabel} 的 reopen 谓词不满足：被重开的发现 ${event.reopenOf} 关闭后判据环境未变化（同验收版本且同代码 revision）——criterionChanged=false（状态机设计 finding 域 reopen 边机器谓词）。`,
+              `判据变化后（验收版本递增或代码 revision 变化）重开；同版本同 revision 的新问题登记为新发现（不带 --reopen-of）。`,
             );
           }
         }
@@ -5460,8 +5480,11 @@ function commandSnapshotPolicy(args) {
 function commandRecordReview(args) {
   const options = parseOptions(args, {
     required: ["task-dir", "conclusion", "summary", "credential"],
-    optional: ["artifact", "authority-snapshot-sha256"],
+    optional: ["artifact", "authority-snapshot-sha256", "channel"],
   });
+  if (options.channel !== undefined && options.channel !== "workflow" && options.channel !== "manual") {
+    fail(`--channel 取值非法（${options.channel}）。`, "使用 workflow | manual；缺省按 manual 处理。");
+  }
   const world = loadWorld(options["task-dir"], { requirePackage: true });
   const privateKey = loadCredentialPrivateKey(world, options.credential, "assurance");
   // 审查绑定验收包时执行血统包对账（与 validate-acceptance 同口径，双时点拦复制）
@@ -5473,6 +5496,7 @@ function commandRecordReview(args) {
     actor: "assurance",
     acceptanceVersion: world.acceptance.acceptanceVersion,
     revision,
+    channel: options.channel ?? "manual",
     summary: options.summary,
     acceptancePackageSha256: world.packageSha256,
     intentSha256: world.intentSha256 ?? "",
@@ -5791,7 +5815,11 @@ const INTENT_SPECS = {
 
 function commandIntent(commandName, args) {
   const spec = INTENT_SPECS[commandName];
-  const options = parseOptions(args, { required: spec.required, optional: spec.optional, flags: spec.flags ?? [] });
+  // --channel 全意图命令通用（信封字段，workflow|manual——V5 完整性设计 §7.3 事件来源记录义务）
+  const options = parseOptions(args, { required: spec.required, optional: [...spec.optional, "channel"], flags: spec.flags ?? [] });
+  if (options.channel !== undefined && options.channel !== "workflow" && options.channel !== "manual") {
+    fail(`--channel 取值非法（${options.channel}）。`, "使用 workflow | manual；缺省按 manual（人工经 CLI 直接提交）处理。");
+  }
   const parsed = {};
   for (const [optionKey] of Object.entries(spec.jsonFields ?? {})) {
     if (options[optionKey] !== undefined) parsed[optionKey] = parseJsonOption(options[optionKey], `--${optionKey}`, commandName);
@@ -5809,6 +5837,9 @@ function commandIntent(commandName, args) {
       actor,
       acceptanceVersion: world.acceptance !== null ? world.acceptance.acceptanceVersion : 0,
       revision,
+      // 事件来源（V5 完整性设计 §7.3：终态报告不得把工作流执行与手工补登记混为一谈）。
+      // 历史事件无该键——读侧按 legacy 处理，不回填猜测
+      channel: options.channel ?? "manual",
       summary: options.summary,
       ...content,
     };

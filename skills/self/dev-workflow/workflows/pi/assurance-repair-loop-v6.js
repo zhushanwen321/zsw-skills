@@ -545,7 +545,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "7.4.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "7.5.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -1239,7 +1239,7 @@ function validateCoverage(value) {
 // artifactSha256 由 gate 按盘上文件计算。assurance 凭据走本辅助，builder 事件（修复轮）
 // 在调用点直接拼意图参数（凭证不同）
 function intentArgsFor(event) {
-    const base = ["--task-dir", taskDir];
+    const base = ["--task-dir", taskDir, "--channel", "workflow"];
     const rev = event.revision !== undefined ? ["--revision", String(event.revision)] : [];
     const opt = (key, flag) => (event[key] !== undefined ? [flag, String(event[key])] : []);
     switch (event.type) {
@@ -1502,7 +1502,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
             round: repairRound, triggerFindingIds, affectedAssertionIds: [], artifact,
         };
         const appended = await runGate(gatePath, [
-            "record-repair-round", "--task-dir", taskDir,
+            "record-repair-round", "--task-dir", taskDir, "--channel", "workflow",
             "--round", String(repairRound), "--summary", event.summary,
             "--trigger-finding-ids", JSON.stringify(triggerFindingIds), "--affected-assertion-ids", "[]",
             "--artifact", artifact, "--revision", revision,
@@ -1752,7 +1752,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
         artifact: repairReportPath,
     };
     const repairAppended = await retryOnSpawnFailure(() => runGate(gatePath, [
-        "record-repair-round", "--task-dir", taskDir,
+        "record-repair-round", "--task-dir", taskDir, "--channel", "workflow",
         "--round", String(repairRound), "--summary", repairEvent.summary,
         "--trigger-finding-ids", JSON.stringify(triggerFindingIds),
         "--affected-assertion-ids", JSON.stringify(repairEvent.affectedAssertionIds),

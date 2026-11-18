@@ -246,15 +246,20 @@ export function findingRegrades(records) {
  * 版本递进变化，旧结论（关闭/重认领/风险接受）失效，reopen 合法。同一版本 → false（版本
  * 未变则无判据变化依据）；无任何解决侧事件 → false（无解决时点可比，不能凭空宣称判据
  * 变化）。gate 侧接线由 delivery-gate 消费本函数，禁止复刻第二份。 */
-export function criterionChangedSinceResolution(records, { findingId, currentAcceptanceVersion }) {
+export function criterionChangedSinceResolution(records, { findingId, currentAcceptanceVersion, currentRevision = null }) {
   const resolutions = records
     .filter((record) =>
-      (record.type === "FindingResolved" || record.type === "ResolutionReaffirmed") &&
+      (record.type === "FindingResolved" || record.type === "ResolutionReaffirmed" || record.type === "RiskAccepted") &&
       record.findingId === findingId)
-    .map((record) => ({ seq: seqOf(record), acceptanceVersion: record.acceptanceVersion }))
+    .map((record) => ({ seq: seqOf(record), acceptanceVersion: record.acceptanceVersion, revision: record.revision }))
     .sort((left, right) => left.seq - right.seq);
   if (resolutions.length === 0) return false;
-  return resolutions[resolutions.length - 1].acceptanceVersion !== currentAcceptanceVersion;
+  const last = resolutions[resolutions.length - 1];
+  // 判据环境两维：验收版本（判据本身变化）或代码 revision（判据未变但被判对象已变——
+  // 修复后复发走 reopen 不重复计数的缺陷族通道）。currentRevision 缺省退化为仅版本维
+  if (last.acceptanceVersion !== currentAcceptanceVersion) return true;
+  if (currentRevision !== null && last.revision !== currentRevision) return true;
+  return false;
 }
 
 /** 任务阶段推导（writeMatrix「角色 × 当前状态 × 目标域」的当前状态单源）。
