@@ -22,7 +22,10 @@ import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const RENDERER_VERSION = "1.0.0";
+// 渲染器版本（观测性元数据，写入生成视图头部注释）：MINOR = 渲染行为新增——1.1.0 加
+// units[].kind=contract-spike 的 Unit 列后缀标注（additive，无 kind 字段的存量计划
+// 渲染结果逐字节不变，映射表 §1.2 登记该字段）
+const RENDERER_VERSION = "1.1.0";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const MAPPING_DOC = "skills/self/dev-workflow/tech-design-v6/references/impl-plan-mapping.md";
 const META_PREFIX = "<!-- 生成视图：";
@@ -268,7 +271,11 @@ push(
         })
         .join("、");
       return [
-        u.id,
+        // 契约 spike 单元（kind=contract-spike）在 Unit 列加后缀标注——DAG 根与业务
+        // 单元依赖关系由 deps 承载，标注只是让人读视图一眼看出哪个是契约 spike
+        // （additive：无 kind 或非该值的单元渲染逐字节不变；转义交给 table 的 cell
+        // 统一做一次，不在此预转义）
+        u.kind === "contract-spike" ? `${u.id}（契约 spike）` : u.id,
         u.responsibility,
         joinList(u.territory),
         isEmpty(deps) ? "—" : deps,

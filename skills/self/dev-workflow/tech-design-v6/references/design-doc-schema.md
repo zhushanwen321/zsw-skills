@@ -39,6 +39,7 @@
 | reviewNav | object 数组 | 必填 | 人工审核导航，每条 A/B 级决策一行；全部 decisionId 的集合必须与 `s3-solution.json` decisions 的 id 集合完全一致（A/B 级决策不得缺导航行） |
 | skillVersion | string | 可选 | 产出本设计的技能版本（semver `MAJOR.MINOR.PATCH`），值读本技能 SKILL.md frontmatter `version`（唯一权威，T1 创建 meta.json 时写入——写入义务见 `flow/write.md`「meta.json skillVersion 写入」节）。产物溯源字段：回答「本设计包由哪个技能版本产出」，只读溯源不参与任何执行裁决；机器检查校验 semver 形态（有则查、无则放行——存量设计目录零影响） |
 | acceptanceBinding | object | 交付体系任务必填；独立设计任务省略 | 验收绑定 `{ acceptanceVersion, acceptancePackageSha256, taskDir }`（子字段见下表）——T1 入口门（`flow/write.md` Step 0）在验收批准检查通过后写入；绑定交付任务目录的当前批准（dev-flow-v6 入口门核对其与当前批准一致）；验收版本变化后旧设计包不可直接进 T3 / dev-flow-v6 入口，须重新影响审查。机器检查按「有则核形态与子字段齐全，无则 warning 提示（独立设计任务合法省略）」处理 |
+| environmentBinding | object | 可选（外部契约任务必填） | 环境契约快照绑定 `{ snapshotSha256 }`（子字段见下表）——T1 入口门（`flow/write.md` Step 0）在任务目录存在 `environment-contracts.current.json` 时写入；绑定设计引用的权威快照身份（T3 入口自检比对现行性，方案包哈希清单计入该哈希——环境漂移即清单不再覆盖当前设计包）。无外部契约的任务整字段省略 |
 | relatedDocs | object 数组 | 可选（默认空数组） | 关联登记清单：本设计触及、修改、推翻的项目内存量权威文档（决策记录 ADR、产品定义、领域模型等），供下游终态同步（design-code-sync）核对回写——登记了没同步 = 可立项的遗漏。纯语义登记，不强制非空（无关联时空数组，校验只查数组形态）；渲染为头部表「关联登记」行（空数组不渲染该行） |
 
 **reviewNav 行内字段**：
@@ -59,6 +60,12 @@
 | acceptanceVersion | number（正整数） | 必填 | 绑定的验收版本号（delivery-v6 `approve-acceptance` 后的当前 acceptanceVersion） |
 | acceptancePackageSha256 | string | 必填 | 绑定的验收包哈希（64 位 sha256 十六进制） |
 | taskDir | string | 必填 | 交付任务目录绝对路径（`~/.agents/skill-data/delivery/<分组 slug>/<taskId>/`） |
+
+**environmentBinding 行内字段**：
+
+| 字段 | 类型 | 必填 | 填写要求 |
+|---|---|---|---|
+| snapshotSha256 | string | 必填 | 环境契约快照身份哈希（64 位 sha256 十六进制，取自任务目录 `environment-contracts.current.json` 指向的快照；该文件是权威工件解析产物，缺失即权威工件未解析） |
 
 **relatedDocs 行内字段**：
 
@@ -188,6 +195,9 @@ P7 上游约束原则的产物表（触发条件：设计依赖非本项目代�
 | dependency | string | 必填 | 依赖了上游的什么行为，一句话 |
 | nature | string 枚举 | 必填 | `contract`（契约级，附上游文档出处）/ `observed`（观察级）/ `bet`（押注） |
 | exitCondition | string | 必填 | 押注行：失效信号与替代路径；观察级行：填「已转前提清单 #N」；契约级行填「—」 |
+| capabilityRef | string | 外部契约任务必填（其余任务省略） | 契约能力引用，形态 `<契约 id>:<能力 id>`——与验收包 `externalContracts` 的能力 id 一一对应（每个契约能力一行）；契约事实的来源只能是权威快照（任务目录 `environment-contracts.current.json` 的 surface 内容） |
+| observation | string | 外部契约任务必填（其余任务省略） | 该能力的观察方式：官方 runner / 真实宿主上的可观察点（装载、注册、调用、分发、状态转移），写到能在 runtime 义务取证时复现 |
+| risk | string | 外部契约任务必填（其余任务省略） | 该能力的风险一句话（契约漂移、环境不可得、mock 与真实行为分歧等） |
 
 ## 6. s3-solution.json —— §3 解决方案
 

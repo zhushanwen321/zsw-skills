@@ -10,7 +10,7 @@
 //   1. 接口契约：三份产物均含 counterImplementations 五字段（obligationId /
 //      counterImplementation / violatesIntent / discriminatingScenarioRef /
 //      wouldPassCurrentCriteria）与布尔校验
-//   2. artifact 落盘：审查隔离目录下的 r<round>-counter-implementations.json
+//   2. artifact 落盘：审查隔离目录下的 r<round>-contract-check.json（反例记录并入契约审查 artifact）
 //   3. 打回语义：wouldPass=true 的反例触发「判据判别力不足」独立打回理由（与 problems 并列）
 //   4. 推荐档定位：构造反例输入是鼓励项不强制（轻量档 = 书面反例即满足）
 //   5. reviewer.md 角色责任：反例实现检查 + 检测/分流硬判定 + 产品运行成本判据
@@ -51,11 +51,15 @@ test("接口契约：三份产物同步携带 counterImplementations 五字段�
   }
 });
 
-test("artifact 落盘：审查隔离目录下 r<round>-counter-implementations.json（与反馈 artifact 同目录形态）", () => {
+test("artifact 落盘：审查隔离目录下 r<round>-contract-check.json（反例+riskCoverage+判别力申报三合一 artifact）", () => {
   for (const [label, source] of [["shared 源", SHARED], ["zcode 产物", ZCODE], ["pi 产物", PI]]) {
-    assert.match(source, /r\$\{round\}-counter-implementations\.json/, `${label} 缺反例 artifact 落盘路径`);
+    // 2026-11-18 运行可用性升级：反例记录并入 r<n>-contract-check.json（契约反例最低记录
+    // + riskCoverage 十类 + contractDiscrimination 同盘），原 standalone 数组文件名退役
+    assert.match(source, /r\$\{round\}-contract-check\.json/, `${label} 缺审查 artifact 落盘路径`);
     // 与审查报告同按 acceptanceVersion+runId+round 隔离（§8.2 防覆盖历史报告）
     assert.ok(source.includes("evidence/acceptance-review/v"), `${label} 缺隔离目录前缀`);
+    // 旧文件名不得残留（防双落点）
+    assert.ok(!source.includes("counter-implementations.json"), `${label} 残留旧 artifact 文件名`);
   }
 });
 
@@ -87,7 +91,7 @@ test("reviewer.md 角色责任：反例实现检查、检测/分流硬判定、�
 
 test("pi 壳 SCHEMA 与 shared 接口对齐：counterImplementations 列入 required 且五字段齐备", () => {
   const PI_TPL = readFileSync(join(WORKFLOWS, "src", "acceptance-design-v6.pi.tpl.js"), "utf8");
-  assert.match(PI_TPL, /required: \["summary", "problems", "counterImplementations"\]/, "pi SCHEMA required 须含 counterImplementations");
+  assert.match(PI_TPL, /required: \["summary", "problems", "counterImplementations", "riskCoverage"\]/, "pi SCHEMA required 须含 counterImplementations 与 riskCoverage（运行可用性升级后契约审查四必填）");
   for (const field of COUNTER_FIELDS) {
     assert.ok(PI_TPL.includes(field), `pi SCHEMA 缺字段 ${field}`);
   }

@@ -249,6 +249,20 @@ interface PrepInfo {
   /** 启动前已存在的已跟踪改动（porcelain 非 ?? 条目，流程外资产）——settle 收编的排除集：
    *  这些改动的归属判断在主 agent/用户，引擎收编曾把用户的在途诊断代码卷进 fix 笔（实测） */
   preExistingTracked: string[];
+  /** D2 范围降档事实（设计 §13 deliveryProfile=a）：null = 未降档；否则记录 profile、
+   *  契约相关单元数、保留/移出文件数与移出清单（或「无降档依据」note）。降档只减审查分区，
+   *  Gate A 全量测试不降 */
+  d2Downgrade: {
+    profile: string;
+    contractUnitCount: number;
+    retainedFileCount?: number;
+    droppedFileCount?: number;
+    droppedFiles?: string[];
+    note?: string;
+  } | null;
+  /** 外部契约快照指针绝对路径（验收包契约感知且 <taskDir>/environment-contracts.current.json
+   *  在场；否则 null）——D2 契约对照的权威输入（设计 §7.3 D2） */
+  contractSnapshotPath: string | null;
 }
 
 interface FinalResult {
@@ -278,6 +292,16 @@ interface FinalResult {
    *  数；fallback = 索引回退标注（无 = null）；note = 人读说明。仅统计附加字段——终态
    *  处置与 message 语义不变；作为后续审查降载决策的实测输入，本轮不据此降载任何审查 */
   indexUsage: IndexUsage;
+  /** D2 范围降档事实（设计 §13 deliveryProfile=a）：null = 未降档；否则记录契约相关单元数、
+   *  保留/移出文件数与移出清单（或「无降档依据」note）。仅披露——Gate A 不降档 */
+  d2Downgrade: {
+    profile: string;
+    contractUnitCount: number;
+    retainedFileCount?: number;
+    droppedFileCount?: number;
+    droppedFiles?: string[];
+    note?: string;
+  } | null;
   /** 一句话终态说明（含恢复动作） */
   message: string;
 }

@@ -249,6 +249,20 @@ interface PrepInfo {
   /** 启动前已存在的已跟踪改动（porcelain 非 ?? 条目，流程外资产）——settle 收编的排除集：
    *  这些改动的归属判断在主 agent/用户，引擎收编曾把用户的在途诊断代码卷进 fix 笔（实测） */
   preExistingTracked: string[];
+  /** D2 范围降档事实（设计 §13 deliveryProfile=a）：null = 未降档；否则记录 profile、
+   *  契约相关单元数、保留/移出文件数与移出清单（或「无降档依据」note）。降档只减审查分区，
+   *  Gate A 全量测试不降 */
+  d2Downgrade: {
+    profile: string;
+    contractUnitCount: number;
+    retainedFileCount?: number;
+    droppedFileCount?: number;
+    droppedFiles?: string[];
+    note?: string;
+  } | null;
+  /** 外部契约快照指针绝对路径（验收包契约感知且 <taskDir>/environment-contracts.current.json
+   *  在场；否则 null）——D2 契约对照的权威输入（设计 §7.3 D2） */
+  contractSnapshotPath: string | null;
 }
 
 interface FinalResult {
@@ -278,6 +292,16 @@ interface FinalResult {
    *  数；fallback = 索引回退标注（无 = null）；note = 人读说明。仅统计附加字段——终态
    *  处置与 message 语义不变；作为后续审查降载决策的实测输入，本轮不据此降载任何审查 */
   indexUsage: IndexUsage;
+  /** D2 范围降档事实（设计 §13 deliveryProfile=a）：null = 未降档；否则记录契约相关单元数、
+   *  保留/移出文件数与移出清单（或「无降档依据」note）。仅披露——Gate A 不降档 */
+  d2Downgrade: {
+    profile: string;
+    contractUnitCount: number;
+    retainedFileCount?: number;
+    droppedFileCount?: number;
+    droppedFiles?: string[];
+    note?: string;
+  } | null;
   /** 一句话终态说明（含恢复动作） */
   message: string;
 }
@@ -658,7 +682,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "6.2.1"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "6.3.0"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
 // W3 dev-consistency-loop-v6 — dev-flow-v6 D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：
@@ -982,6 +1006,71 @@ const NODE_PREP = [
   "  }",
   "}",
   "if (total !== files.length) die('分区守恒校验失败: ' + total + ' != ' + files.length);",
+  // deliveryProfile=a 降档（设计《V6 运行可用性与外部契约守门升级》§13「D2 只做契约与改动
+  // 对照」）：exec-plan.deliveryProfile=a 时，分区过滤到契约相关单元（unitKind=contract-spike
+  // 及其传递依赖者）territory 覆盖的文件，其余分区不审——降档只减审查分区，不减 Gate A
+  // 全量测试（必做机器门不降）。字段缺失/非法值缺省 b（不降档）；无契约 spike 单元时无降档
+  // 依据，保持全部分区（fail-open：缺依据不静默删审查）。diff 空（全仓对照分区）不过滤。
+  // 契约相关判定只用 exec-plan 既有字段（unitKind + deps + territory），不读 impl-plan 原件。
+  "var d2Profile = (ep.deliveryProfile === 'a' || ep.deliveryProfile === 'b' || ep.deliveryProfile === 'c') ? ep.deliveryProfile : 'b';",
+  "var d2Downgrade = null;",
+  "if (d2Profile === 'a' && files.length > 0) {",
+  "  var devNodesAll = Array.isArray(ep.nodes) ? ep.nodes.filter(function (n) { return n && n.kind === 'dev'; }) : [];",
+  "  var nodeById = {};",
+  "  devNodesAll.forEach(function (n) { nodeById[n.id] = n; });",
+  "  var spikeCache = {};",
+  "  var reachesSpike = function (id) {",
+  "    if (Object.prototype.hasOwnProperty.call(spikeCache, id)) return spikeCache[id];",
+  "    spikeCache[id] = false;", // 访问中置 false——环由 checkPlan 拦，这里只保证终止
+  "    var n = nodeById[id];",
+  "    var hit = !!n && n.unitKind === 'contract-spike';",
+  "    if (!hit && n && Array.isArray(n.deps)) {",
+  "      for (var di = 0; di < n.deps.length; di++) { if (reachesSpike(n.deps[di])) { hit = true; break; } }",
+  "    }",
+  "    spikeCache[id] = hit;",
+  "    return hit;",
+  "  };",
+  "  var contractUnits = devNodesAll.filter(function (n) { return reachesSpike(n.id); });",
+  "  if (contractUnits.length > 0) {",
+  "    var coveredByContract = function (file) {",
+  "      for (var ci = 0; ci < contractUnits.length; ci++) {",
+  "        var ts = Array.isArray(contractUnits[ci].territory) ? contractUnits[ci].territory : [];",
+  "        for (var ti = 0; ti < ts.length; ti++) {",
+  "          var t = ts[ti];",
+  "          if (file === t || file.indexOf(t.charAt(t.length - 1) === '/' ? t : t + '/') === 0) return true;",
+  "        }",
+  "      }",
+  "      return false;",
+  "    };",
+  "    var keptParts = [], droppedFiles = [], keptCount = 0;",
+  "    for (var pi = 0; pi < partitions.length; pi++) {",
+  "      var keep = [];",
+  "      for (var pfi = 0; pfi < partitions[pi].files.length; pfi++) {",
+  "        var pf = partitions[pi].files[pfi];",
+  "        if (coveredByContract(pf)) keep.push(pf); else droppedFiles.push(pf);",
+  "      }",
+  "      if (keep.length > 0) { keptParts.push({ name: partitions[pi].name, files: keep }); keptCount += keep.length; }",
+  "    }",
+  "    partitions = keptParts;",
+  "    d2Downgrade = { profile: 'a', contractUnitCount: contractUnits.length, retainedFileCount: keptCount, droppedFileCount: droppedFiles.length, droppedFiles: droppedFiles };",
+  "  } else {",
+  "    d2Downgrade = { profile: 'a', contractUnitCount: 0, note: '无契约 spike 单元——无降档依据，保持全部分区' };",
+  "  }",
+  "}",
+  // 外部契约对照输入（设计 §7.3 D2）：验收包绑定任务且契约感知（externalContracts /
+  // externalContractReview 在场）时，解析环境契约快照指针供审查上下文注入；指针缺失显式
+  // 登记（不静默降级——契约对照缺权威输入必须披露）。升级前旧任务不适用。
+  "var contractSnapshotPath = null;",
+  "if (acceptancePath) {",
+  "  try {",
+  "    var accJson = JSON.parse(fs.readFileSync(acceptancePath, 'utf8'));",
+  "    var contractAware = !!accJson && (Array.isArray(accJson.externalContracts) || (accJson.externalContractReview && typeof accJson.externalContractReview === 'object'));",
+  "    if (contractAware) {",
+  "      var csCandidate = path.join(path.dirname(acceptancePath), 'environment-contracts.current.json');",
+  "      if (fs.existsSync(csCandidate)) contractSnapshotPath = csCandidate;",
+  "    }",
+  "  } catch (e) { /* 验收包不可读已由 accStatus=invalid 披露，契约对照按不适用处理 */ }",
+  "}",
   "var statusDir = path.dirname(statusAbs);",
   "var baseName = path.basename(statusAbs).replace(/\\.status\\.json$/, '');",
   "var attemptNo = parseInt(process.argv[3] || '1', 10) || 1;",
@@ -1014,7 +1103,7 @@ const NODE_PREP = [
   "  gateALog: gateALog, reviewerTemplate: tplAbs, partitions: partitions,",
   "  diffChurn: churn, diffFileCount: files.length, unitCount: unitCount,",
   "  incremental: incr, fullSuite: { program: fsuite.program, args: fsuite.args }, artifacts: artifacts,",
-  "  preExistingTracked: preExisting,",
+  "  preExistingTracked: preExisting, d2Downgrade: d2Downgrade, contractSnapshotPath: contractSnapshotPath,",
   "}));",
 ].join("\n");
 // templateArgRaw 是 NODE_PREP 内引用的第三个 argv（见下方调用：execPlanArg 之后传入）。
@@ -1569,6 +1658,9 @@ async function finish(terminated: FinalResult["terminated"], roundsDone: number,
     // 机器候选定位使用计数（设计 §9.2）：统计附加字段，终态处置与 message 语义不变——
     // 作为后续审查降载决策的实测输入，本轮不据此降载任何审查
     indexUsage,
+    // D2 范围降档事实（设计 §13）：分区已按契约相关单元收窄时随终态披露（移出文件清单
+    // 供主 agent 核对「降档范围外」登记）；null = 未降档
+    d2Downgrade: info.d2Downgrade,
     message: `${message}${attemptNote}`,
   };
   // §4.5：W3 终态回写 status.json events——consistency 终态一笔 + Gate A 结果一笔
@@ -1744,6 +1836,22 @@ toRel = makeToRel(info.projectRoot);
   };
 }
 gateALogPath = null; // Gate A phase 开跑时才赋值——未执行到 Gate A 的终态必须带 null（字段契约）
+
+// ── D2 范围降档披露（设计 §13 deliveryProfile=a「D2 只做契约与改动对照」）──
+// 分区已在 NODE_PREP 过滤到契约相关单元范围声明覆盖的文件；此处只披露事实（保留/移出
+// 计数与移出文件清单进日志与终态统计），不改变审查语义。无降档依据（无 spike 单元）时
+// 按 fail-open 保持全部分区并披露 note。
+if (info.d2Downgrade !== null) {
+  const dg = info.d2Downgrade;
+  if (dg.contractUnitCount > 0) {
+    log(
+      `D2 范围降档（deliveryProfile=${dg.profile}）：分区过滤到契约相关单元 ${dg.contractUnitCount} 个的范围声明覆盖文件` +
+        `（保留 ${dg.retainedFileCount ?? 0} / 移出 ${dg.droppedFileCount ?? 0} 个文件；Gate A 全量测试不降档）`,
+    );
+  } else {
+    log(`D2 范围降档未生效（deliveryProfile=${dg.profile}）：${dg.note ?? "无降档依据"}`);
+  }
+}
 
 // ── 循环尝试记录（设计 §8.1 D2 接入；finish 内统一登记 finished）──
 // 绑定交付任务才登记（PREP 探针的 acceptanceBindingStatus=bound → 任务目录 = 验收包
@@ -1929,6 +2037,23 @@ const ctxBlock = [
   ...(info.acceptanceBindingStatus === "invalid"
     ? [
         "- WARN 验收绑定异常：设计目录 meta.json 声明了交付绑定（acceptanceBinding.taskDir）但对应 acceptance.json 不可读——本次对账退回设计↔实现两方口径，交付判据（断言限定条件与反例场景）对照缺失；该事实必须写入审查报告（每份报告开头登记一行），终态由主 agent 呈报用户修复绑定后重跑受影响审查。",
+      ]
+    : []),
+  // 外部契约对照输入（设计 §7.3 D2）：契约感知任务的 D2 必须核对实现接口与设计契约快照
+  // 漂移、手写外部 API 类型与权威 surface 高重叠。指针缺失时显式 WARN（不静默降级）；
+  // a 级降档任务的审查范围已收窄到契约相关分区，该行同时交代收窄事实
+  ...(info.contractSnapshotPath !== null
+    ? [
+        `- 外部契约快照（指针，D2 契约对照权威输入）：${info.contractSnapshotPath}——实现接口与该指针指向的环境契约快照（权威 surface）漂移核对；手写外部 API 类型与权威 surface 高重叠列为审查输入（判据见审查契约模板「外部契约对照」节）。`,
+      ]
+    : info.acceptancePath !== null
+      ? [
+          "- WARN 外部契约快照指针缺失（<任务目录>/environment-contracts.current.json 不存在）——契约对照缺权威输入；该事实必须写入审查报告（每份报告开头登记一行），终态由主 agent 呈报修复后重跑受影响审查。",
+        ]
+      : []),
+  ...(info.d2Downgrade !== null && info.d2Downgrade.contractUnitCount > 0
+    ? [
+        `- D2 范围降档（deliveryProfile=${info.d2Downgrade.profile}，设计 §13）：本次审查只做契约与改动对照——分区已过滤到契约相关单元（契约 spike 单元及其传递依赖者）的范围声明覆盖文件（移出 ${info.d2Downgrade.droppedFileCount ?? 0} 个文件不在本次审查范围）；审出范围外问题时登记 reasonable 并注明「降档范围外」，不回修复批次。`,
       ]
     : []),
 ].join("\n");

@@ -27,11 +27,14 @@
 // 用法：node check-exec-plan.mjs <exec-plan.json 绝对路径> [--task-dir <交付任务目录>]
 // 输出契约（--check 风格）：全部通过 → stdout `PASS`，exit 0；失败 → 每条错误一行
 //   `FAIL: <分类>: <明细>`（全部报完再退出），exit 1；用法错误 exit 2（含恢复动作）。
-// --task-dir（交付体系任务必传，独立设计任务不传）：附加执行三段核对——①增量契约核对：
+// --task-dir（交付体系任务必传，独立设计任务不传）：附加执行四段核对——①增量契约核对：
 //   读交付任务目录 increments.json，核 exec-plan dev 节点的增量归属与测试命令（判据见下方
 //   checkIncrementContract 段）；②验收绑定核对：读设计包 meta.json（路径从 exec-plan
 //   designDocPath 推导）与交付任务目录 acceptance.json，核 acceptanceBinding 与当前批准
-//   一致（判据见下方 checkAcceptanceBinding 段）；③质量契约核对：主校验与①②全过后调
+//   一致（判据见下方 checkAcceptanceBinding 段）；③runtime-probe 能力对账：acceptance.nodes
+//   带 runtimeProbe 的节点核规格形态（contractExtras，无 --task-dir 也跑）+ capabilityIds
+//   必须存在于验收包 externalContracts 的 capabilities（判据见下方 runtime-probe 段）；
+//   ④质量契约核对：主校验与①②③全过后调
 //   delivery-v6 check-quality-contract（--task-dir + --exec-plan；designDocPath 可解析时
 //   追加 --design-dir 设计目录——机制对账 criterionMechanisms 与测试绑定 verificationBindings
 //   只在该分支核对，缺传则漏检）。不传时三段跳过，主校验行为不变。
@@ -47,7 +50,10 @@
 //     并更新 meta.json acceptanceBinding——验收版本/验收包内容变化属交付体系变更（技能①
 //     裁决域），不在 exec-plan 侧改；
 //   quality（质量契约）→ check-quality-contract 的机制对账/测试绑定缺口，回 tech-design-v6
-//     T2 修设计包 s4-accept.json（criterionMechanisms / verificationBindings 是 T2 产物）。
+//     T2 修设计包 s4-accept.json（criterionMechanisms / verificationBindings 是 T2 产物）；
+//   probe/whitelist/noop（runtime-probe 规格）→ 回 tech-design-v6 T3 修 acceptancePlan 的
+//     runtime-probe 行（command / artifact / capabilityIds）；能力 id 不在验收包时回
+//     delivery-v6 修订 externalContracts。
 //
 // 验收绑定段的 canonicalJson / acceptancePackageSha256 与 delivery-v6 裁决器 delivery-gate.mjs
 // 逐字同源（该脚本是直跑 CLI、无 export，故此处复刻）——改任一侧必须同步另一侧；哈希口径
@@ -477,6 +483,11 @@ function contractExtras(raw, rawNodes) {
         });
       }
     }
+    // runtime-probe 节点规格形态（无验收包也核；能力 id 对账在 --task-dir 段的
+    // checkRuntimeProbeNodes——与 compile-exec-plan 行级校验同源）
+    if (isRec(rn.runtimeProbe)) {
+      for (const e of probeSpecErrors(rn.runtimeProbe, `runtime-probe 节点 ${rn.id}`, null)) errors.push(e);
+    }
     if (isStr(rn.cwd) && !rn.cwd.startsWith("/")) {
       errors.push({
         category: "cwd",
@@ -623,6 +634,124 @@ function checkIncrementContract(raw, increments) {
   return errors;
 }
 
+// ── runtime-probe 行/节点校验（设计《V6 运行可用性与外部契约守门升级》§7.3 D3） ──
+// 同源声明：impl-plan acceptancePlan 的 runtime-probe 行由 compile-exec-plan.mjs 写盘前调
+// checkRuntimeProbeRows（行级，内存对象）校验；exec-plan 验收节点的同款字段由本脚本
+// contractExtras（形态，无验收包时也跑）与 --task-dir 段的 checkRuntimeProbeNodes（形态 +
+// 能力 id 对账）承担——单一实现，防「编译放行、校验拒」或反向漂移。
+// 字段契约（impl-plan 行与 exec-plan 节点逐字同构）：
+//   command        {program, args}——driver 启动命令（program 受 TEST_WHITELIST 约束、禁恒绿形态）
+//   artifact       probe artifact 落点（行声明为任务目录相对 evidence 路径；节点上为绝对路径）
+//   capabilityIds  非空字符串数组——probe 观察的契约能力 id（裸 id 或 <contractId>:<capabilityId>）
+
+/** capability id 是否存在于验收包 externalContracts 的 capabilities（支持限定形态） */
+function capabilityExists(contracts, id) {
+  if (!Array.isArray(contracts) || !isStr(id)) return false;
+  const sep = id.indexOf(":");
+  if (sep > 0) {
+    const contractId = id.slice(0, sep);
+    const capId = id.slice(sep + 1);
+    return contracts.some(
+      (c) => isRec(c) && c.id === contractId && Array.isArray(c.capabilities) && c.capabilities.some((x) => isRec(x) && x.id === capId),
+    );
+  }
+  return contracts.some((c) => isRec(c) && Array.isArray(c.capabilities) && c.capabilities.some((x) => isRec(x) && x.id === id));
+}
+
+/**
+ * runtime-probe 规格（行或节点的 runtimeProbe 字段）校验。
+ * @param {unknown} spec command / artifact / capabilityIds 的载体
+ * @param {string} label 错误消息里的定位前缀
+ * @param {unknown[]|null} contracts 验收包 externalContracts（null = 只核形态，能力对账跳过）
+ * @returns {{category: string, message: string}[]}
+ */
+function probeSpecErrors(spec, label, contracts) {
+  const errors = [];
+  const cmd = isRec(spec?.command) ? spec.command : null;
+  if (cmd === null || !isStr(cmd.program) || !isStrArr(cmd.args)) {
+    errors.push({
+      category: "probe",
+      message: `${label} 缺 command 或形态非法（需 {program, args[]}——driver 启动命令）`,
+    });
+  } else {
+    if (!TEST_WHITELIST.includes(cmd.program)) {
+      errors.push({
+        category: "whitelist",
+        message: `${label} 的 command.program "${cmd.program}" 不在白名单（${TEST_WHITELIST.join("/")}）——driver 启动程序受引擎命令白名单约束（恢复：改用白名单内程序，或整体走 bash -c 封装）`,
+      });
+    }
+    const noopErr = noopCommandError(`${label} 的 driver 命令`, cmd.program, cmd.args);
+    if (noopErr !== null) errors.push({ category: "noop", message: noopErr });
+  }
+  const artifact = spec?.artifact;
+  if (!isStr(artifact)) {
+    errors.push({
+      category: "probe",
+      message: `${label} 缺 artifact（probe artifact 落点——driver stdout JSON 的落盘处，evaluate 与独立保证消费该文件）`,
+    });
+  }
+  const ids = spec?.capabilityIds;
+  if (!isStrArr(ids) || ids.length === 0) {
+    errors.push({
+      category: "probe",
+      message: `${label} 缺 capabilityIds 或为空数组（需非空字符串数组——probe 观察的契约能力 id）`,
+    });
+  } else if (contracts !== null) {
+    for (const id of ids) {
+      if (!capabilityExists(contracts, id)) {
+        errors.push({
+          category: "probe",
+          message: `${label} 的 capability id「${id}」不在验收包 externalContracts 的 capabilities 中——probe 只能观察已声明契约能力（恢复：回 delivery-v6 修订 externalContracts，或回 tech-design-v6 T3 修正该行 capabilityIds）`,
+        });
+      }
+    }
+  }
+  return errors;
+}
+
+/**
+ * impl-plan acceptancePlan 行级校验（compile-exec-plan.mjs 写盘前调用，吃内存对象）。
+ * 只核 type="runtime-probe" 的行；无该字段的行不适用（向后兼容）。
+ * @param {unknown} rows acceptancePlan 数组
+ * @param {unknown[]|null} contracts 验收包 externalContracts
+ */
+function checkRuntimeProbeRows(rows, contracts) {
+  const errors = [];
+  if (!Array.isArray(rows)) return errors;
+  rows.forEach((row, i) => {
+    if (!isRec(row) || row.type !== "runtime-probe") return;
+    const label = `runtime-probe 行 ${isStr(row.id) ? row.id : `#${i}`}`;
+    if (!isStr(row.id)) {
+      errors.push({ category: "probe", message: `${label} 缺 id（验收计划行 id 必填）` });
+      return;
+    }
+    errors.push(...probeSpecErrors(row, label, contracts));
+  });
+  return errors;
+}
+
+/**
+ * exec-plan 验收节点级校验（--task-dir 段调用）：acceptance.nodes 中带 runtimeProbe 的节点
+ * 核形态 + 能力 id 对账。acceptance 不可用（无 externalContracts）时只核形态。
+ * @param {unknown} raw exec-plan 解析对象
+ * @param {unknown} acceptance 验收包解析对象（可 null）
+ */
+function checkRuntimeProbeNodes(raw, acceptance) {
+  const errors = [];
+  if (!isRec(raw) || raw.mode !== "acceptance" || !isRec(raw.acceptance) || !Array.isArray(raw.acceptance.nodes)) return errors;
+  const contracts = isRec(acceptance) && Array.isArray(acceptance.externalContracts) ? acceptance.externalContracts : null;
+  for (const n of raw.acceptance.nodes) {
+    if (!isRec(n) || n.runtimeProbe === undefined) continue;
+    if (!isStr(n.id)) continue; // 节点缺 id 已由 schema 主段报
+    if (!isRec(n.runtimeProbe)) {
+      errors.push({ category: "probe", message: `runtime-probe 节点 ${n.id} 的 runtimeProbe 必须是对象 {capabilityIds, command, artifact}` });
+      continue;
+    }
+    errors.push(...probeSpecErrors(n.runtimeProbe, `runtime-probe 节点 ${n.id}`, contracts));
+  }
+  return errors;
+}
+
 // ── 验收包联合哈希（delivery-gate.mjs 同源复刻，改任一侧须同步——见头部同源声明）──
 // 语义 = 对 acceptance.json 与 increments.json **解析后**的规范 JSON（键排序、无空白）做
 // 联合 sha256：绑定的不是文件字节而是解析内容，手工重排 JSON 键序/空白不改变哈希。
@@ -716,13 +845,19 @@ function realpathSafe(p) {
 // 与 W2 validatePlan 逐字对账的移植侧；checkPlan = 整门判定（schema + 附加契约段）；
 // checkIncrementContract / checkAcceptanceBinding = --task-dir 附加段（差分测试不覆盖，
 // 由 CLI 行为承载）
-export { validatePlanSchema, checkPlan, checkAssociations, checkIncrementContract, checkAcceptanceBinding };
+// 差分测试（scripts/tests/check-exec-plan-parity.test.mjs）消费：validatePlanSchema =
+// 与 W2 validatePlan 逐字对账的移植侧；checkPlan = 整门判定（schema + 附加契约段）；
+// checkIncrementContract / checkAcceptanceBinding / checkRuntimeProbeRows /
+// checkRuntimeProbeNodes = --task-dir 附加段与编译期同源校验（差分测试不覆盖，
+// 由 CLI 行为与 compile-contract-gate-v6 测试承载）
+export { validatePlanSchema, checkPlan, checkAssociations, checkIncrementContract, checkAcceptanceBinding, checkRuntimeProbeRows, checkRuntimeProbeNodes };
 
 // ── CLI（被差分测试 import 时跳过） ──
 
-/** --task-dir 附加段第二环：读设计包 meta.json 与交付任务目录 acceptance.json，调
- *  checkAcceptanceBinding 做验收绑定一致性核对（读盘失败按 FAIL 行报并 exit 1） */
-function checkBindingFromDisk(raw, taskDir, incRaw) {
+/** --task-dir 附加段第二环：读设计包 meta.json，调 checkAcceptanceBinding 做验收绑定
+ *  一致性核对（读盘失败按 FAIL 行报并 exit 1）。acceptance.json 由 main 预先读入传入
+ *  （runtime-probe 能力对账共用同一份，避免同文件两处读取口径漂移）。 */
+function checkBindingFromDisk(raw, taskDir, incRaw, accRaw) {
   // designDocPath 缺失/非字符串已由 contractExtras 报 field 错误，此处不叠加重复报
   if (!isRec(raw) || !isStr(raw.designDocPath)) return [];
   const metaPath = designMetaPath(raw.designDocPath);
@@ -731,13 +866,6 @@ function checkBindingFromDisk(raw, taskDir, incRaw) {
     metaRaw = JSON.parse(readFileSync(metaPath, "utf8"));
   } catch (e) {
     console.log(`FAIL: binding: 无法读取设计包 ${metaPath}（${e.message}）——exec-plan designDocPath 须指向渲染视图（<name>.rendered.md，meta.json 在同级 <name>/ 目录）或设计目录本身，核对路径后重跑本门`);
-    process.exit(1);
-  }
-  let accRaw;
-  try {
-    accRaw = JSON.parse(readFileSync(join(taskDir, "acceptance.json"), "utf8"));
-  } catch (e) {
-    console.log(`FAIL: binding: 无法读取 ${join(taskDir, "acceptance.json")}（${e.message}）——核对 --task-dir 指向的交付任务目录（delivery-v6 验收设计产出）`);
     process.exit(1);
   }
   // taskDir 判据两侧同口径 realpath 归一（--task-dir 侧在 main 已归一）：binding.taskDir
@@ -803,7 +931,17 @@ function main() {
       process.exit(1);
     }
     incErrors.push(...checkIncrementContract(raw, incRaw));
-    incErrors.push(...checkBindingFromDisk(raw, taskDir, incRaw));
+    let accRaw;
+    try {
+      accRaw = JSON.parse(readFileSync(join(taskDir, "acceptance.json"), "utf8"));
+    } catch (e) {
+      console.log(`FAIL: binding: 无法读取 ${join(taskDir, "acceptance.json")}（${e.message}）——核对 --task-dir 指向的交付任务目录（delivery-v6 验收设计产出；runtime-probe 能力对账与验收绑定共用该文件）`);
+      process.exit(1);
+    }
+    incErrors.push(...checkBindingFromDisk(raw, taskDir, incRaw, accRaw));
+    // runtime-probe 节点能力 id 对账（设计 §7.3 D3）：验收节点 runtimeProbe.capabilityIds
+    // 必须存在于验收包 externalContracts 的 capabilities——与编译期行级校验同源
+    incErrors.push(...checkRuntimeProbeNodes(raw, accRaw));
   }
   if (result.ok && incErrors.length === 0 && taskDir !== null) {
     const checker = join(dirname(fileURLToPath(import.meta.url)), "../../delivery-v6/scripts/check-quality-contract.mjs");

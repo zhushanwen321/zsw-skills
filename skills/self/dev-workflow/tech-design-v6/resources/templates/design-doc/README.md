@@ -18,4 +18,14 @@ meta.json 的 `relatedDocs` 是关联登记清单：本设计触及、修改、�
 
 写入义务与判据见 `flow/write.md` Step 0 交付体系入口门（验收批准检查通过后写入）；子字段规格见 schema §3；渲染视图头部呈现为「验收绑定」行。
 
+验收包顶层 `externalContracts` 非空（外部契约任务）时，另加 `environmentBinding` 字段，记录设计引用的环境契约快照身份（T3 入口自检比对现行性，方案包哈希清单计入该哈希；无外部契约的任务不写该字段）。示例形态：
+
+```json
+"environmentBinding": {
+  "snapshotSha256": "<64 位 sha256：环境契约快照身份哈希>"
+}
+```
+
+写入义务见 `flow/write.md` Step 0 外部契约现状装载（任务目录存在 `environment-contracts.current.json` 时写入）；子字段规格见 schema §3。
+
 决策含守护 / 命令 / 正则类可执行内容时，登记在该决策的 `guards` 字段（id / text / note，单一登记），其他章节的文本字段内联完整标记 `{{G1}}` 引用——渲染自动展开为登记全文（字段规格见 schema §6.3，引用语法见 §9）。

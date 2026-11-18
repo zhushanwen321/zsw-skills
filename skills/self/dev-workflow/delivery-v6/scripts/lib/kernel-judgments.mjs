@@ -434,9 +434,12 @@ export function deriveRevisionProvenance(records, { currentRevision = null } = {
  *   verificationOnly = task.json.verificationOnly（只核验模式无 design 阶段，不生成该义务）
  *   designStageRequired = 策略 requireDesignApproved !== false（与状态路由同一判定源——
  *                     策略允许跳过 design 时该阶段不是必需义务，不生成；缺省 true）
+ *   runtimeObligations = deriveRuntimeObligations 输出（外部契约运行可用性义务；由调用方
+ *                     先构造 runtimeFacts 后传入——本函数不做磁盘读取，保持 pure）
  * 返回 {obligations, openRequired}；openRequired = required 且 state="open" 的义务
- * （accepted 前置：非空即不得 accepted）。 */
-export function deriveObligations({ verdict, acceptance, records = [], pendingItems = [], verificationOnly = false, designStageRequired = true } = {}) {
+ * （accepted 前置：非空即不得 accepted）。runtime 义务无 explicitly-waived 态：
+ * 它不来自 verdict.riskAccepted，也不被 accept-risk / preauthorize-risk 消化（§6.2）。 */
+export function deriveObligations({ verdict, acceptance, records = [], pendingItems = [], verificationOnly = false, designStageRequired = true, runtimeObligations = [] } = {}) {
   const obligations = [];
   const usesAssertions = acceptance !== null && acceptance.schemaVersion === 2;
   // ① 断言/需求证据义务：state 逐条复用 verdict 缺口判定（verified→satisfied；
@@ -526,10 +529,205 @@ export function deriveObligations({ verdict, acceptance, records = [], pendingIt
       evidenceRefs: [],
     });
   }
+  // ⑤ 外部契约 runtime 义务（V6 运行可用性升级）：原样并入（state 已由
+  //    deriveRuntimeObligations 按 §6.1 六条件判定）。不可豁免——此处不做任何
+  //    riskAccepted 折算，accept-risk / preauthorize-risk 都到不了这一支
+  for (const obligation of runtimeObligations) {
+    if (obligation === null || typeof obligation !== "object" || typeof obligation.id !== "string") continue;
+    obligations.push({
+      id: obligation.id,
+      kind: "runtime",
+      sourceRef: typeof obligation.sourceRef === "string" ? obligation.sourceRef : "acceptance.externalContracts",
+      required: obligation.required === true,
+      // 防御性收敛：runtime 义务永不被标成 explicitly-waived（上游若误传也按 open 处理）
+      state: obligation.state === "satisfied" ? "satisfied" : "open",
+      evidenceRefs: Array.isArray(obligation.evidenceRefs) ? obligation.evidenceRefs : [],
+      ...(obligation.readiness !== undefined ? { readiness: obligation.readiness } : {}),
+      ...(obligation.reason !== undefined && obligation.reason !== null ? { reason: obligation.reason } : {}),
+      ...(obligation.contractId !== undefined ? { contractId: obligation.contractId } : {}),
+      ...(obligation.capabilityId !== undefined ? { capabilityId: obligation.capabilityId } : {}),
+      ...(obligation.authorityHash !== undefined ? { authorityHash: obligation.authorityHash } : {}),
+    });
+  }
   return {
     obligations,
     openRequired: obligations.filter((item) => item.required && item.state === "open"),
   };
+}
+
+// ── 外部契约运行可用性（V6 运行可用性升级 §4.1/§6.1/§12.1）──
+// runtime 义务派生单源：从验收包 externalContracts、当前权威解析快照与 runtime probe 证据
+// 派生 kind=runtime 的义务。gate（evaluate/accepted 前置）与 delivery-core（obligations
+// 子命令）共同消费，禁止各自复刻判定。
+//
+// 环境档位序（策略包 evidence-kinds.json 的 environmentKinds 三档）：fake-host 是自写模拟
+// 宿主，永远不能满足任何能力底线（底线只可能是 official-runner 或 real-host）；real-host
+// 是 official-runner 的超集——强证据不因要求较宽而降级。
+export const ENVIRONMENT_RANK = { "fake-host": 0, "official-runner": 1, "real-host": 2 };
+
+/** 证据环境档位是否满足要求档位（pure）。 */
+export function environmentKindSatisfies(evidenceKind, requiredKind) {
+  const evidence = ENVIRONMENT_RANK[evidenceKind];
+  const required = ENVIRONMENT_RANK[requiredKind];
+  if (evidence === undefined || required === undefined) return false;
+  return evidence >= required;
+}
+
+/** 能力 id 的合法形态：契约内裸 id 或「契约id:能力id」限定 id。 */
+export function qualifiedCapabilityId(contractId, capabilityId) {
+  return `${contractId}:${capabilityId}`;
+}
+
+function declaredCapabilitiesOf(environment) {
+  const declared = [];
+  if (typeof environment?.capability === "string") declared.push(environment.capability);
+  else if (Array.isArray(environment?.capability)) declared.push(...environment.capability.filter((item) => typeof item === "string"));
+  if (Array.isArray(environment?.capabilities)) declared.push(...environment.capabilities.filter((item) => typeof item === "string"));
+  return declared;
+}
+
+/** runtime 义务派生（§6.1 六条件 + §12.1 readiness 单源）。
+ * 输入 runtimeFacts（调用方已完成磁盘读取，本函数保持 pure）：
+ *   acceptance        = 当前验收包（含 externalContracts；无该字段返回空数组）
+ *   environmentSnapshot = { available, contracts: [{id, status, authorityAggregateHash}] }
+ *   evidence          = 当前版本有效证据记录数组，元素形态
+ *                       { eventId, actor, revision, runtimeProbe, contractCapabilityIds,
+ *                         environment, cases, subject, artifactReadable, driverHashOk }
+ *   currentRevision   = 当前裁决 revision
+ *   forcedEssential   = Set<「契约id:能力id」>（断言引用或源码 strong 信号命中时机器强制
+ *                       按 essential 处理，不看契约自报 essential——设计 §4.1 字段规则）
+ *   chainOkContracts  = Set<contractId>（环境历史链完好：当前 aggregateHash 等于批准时哈希，
+ *                       或有覆盖该 contractId 的 EnvironmentBaselineConfirmed 接链）。
+ *                       传入该参数时，链断裂契约的全部能力记 unknown（环境变化未经用户确认，
+ *                       任何证据都不能证明新环境）——设计 §4.3/§10
+ * 输出义务数组：id 形态 runtime-<contractId>-<capabilityId>，kind=runtime，
+ * required = 契约 effectiveEssential，state ∈ satisfied|open（无 explicitly-waived——
+ * runtime 义务不可豁免，§6.2），readiness ∈ established|not-established|unknown。 */
+export function deriveRuntimeObligations(runtimeFacts = {}) {
+  const {
+    acceptance,
+    environmentSnapshot = { available: false, contracts: [] },
+    evidence = [],
+    currentRevision = null,
+    forcedEssential = new Set(),
+    chainOkContracts = null,
+  } = runtimeFacts;
+  const contracts = Array.isArray(acceptance?.externalContracts) ? acceptance.externalContracts : [];
+  if (contracts.length === 0) return [];
+  const snapshotContracts = new Map(
+    (environmentSnapshot.contracts ?? []).map((contract) => [contract.id, contract]),
+  );
+  // 单契约包内允许裸能力 id 认领（无跨契约歧义）；多契约包必须用限定 id
+  const singleContract = contracts.length === 1;
+  const obligations = [];
+  for (const contract of contracts) {
+    const snapshotEntry = snapshotContracts.get(contract.id);
+    const authorityHash = typeof snapshotEntry?.authorityAggregateHash === "string" ? snapshotEntry.authorityAggregateHash : null;
+    const authorityResolved = environmentSnapshot.available === true && snapshotEntry !== undefined && snapshotEntry.status === "resolved" && authorityHash !== null;
+    for (const capability of Array.isArray(contract.capabilities) ? contract.capabilities : []) {
+      const qualified = qualifiedCapabilityId(contract.id, capability.id);
+      const claims = (record) => {
+        const ids = Array.isArray(record.contractCapabilityIds) ? record.contractCapabilityIds : [];
+        if (ids.includes(qualified)) return true;
+        return singleContract && ids.includes(capability.id);
+      };
+      // ① 当前 revision 的 assurance 登记、runtimeProbe=true 且认领该能力的证据
+      const claiming = evidence.filter((record) =>
+        record.actor === "assurance" &&
+        record.revision === currentRevision &&
+        record.runtimeProbe === true &&
+        claims(record));
+      const reasons = [];
+      let readiness = "not-established";
+      if (chainOkContracts !== null && !chainOkContracts.has(contract.id)) {
+        // 环境历史链断裂：当前权威与批准时不一致且无 EnvironmentBaselineConfirmed 接链——
+        // 环境变化未经用户确认，任何证据都不能证明新环境（设计 §4.3）
+        readiness = "unknown";
+        reasons.push(`契约 ${contract.id} 环境历史链断裂（当前权威哈希与批准时不一致且无覆盖该契约的 EnvironmentBaselineConfirmed 接链）`);
+      } else if (!authorityResolved) {
+        // 权威不可解析 = 无法判定（不是「观察失败」）：essential 契约保持 open 并停回
+        readiness = "unknown";
+        reasons.push(environmentSnapshot.available === true && snapshotEntry === undefined
+          ? `当前权威解析快照不含契约 ${contract.id}`
+          : snapshotEntry !== undefined && snapshotEntry.status !== "resolved"
+            ? `契约 ${contract.id} 权威状态=${snapshotEntry.status}（不可解析）`
+            : `权威解析不可用（${environmentSnapshot.reason ?? "未说明"}）`);
+      }
+      let satisfiedEvidence = null;
+      for (const record of claiming) {
+        const failure = runtimeEvidenceFailure(record, capability, authorityHash, contract.id);
+        if (failure === null) {
+          satisfiedEvidence = record;
+          break;
+        }
+        reasons.push(`证据 ${record.eventId}：${failure}`);
+      }
+      if (satisfiedEvidence === null && claiming.length > 0 && readiness !== "unknown") {
+        readiness = "not-established";
+      }
+      if (claiming.length === 0 && readiness !== "unknown") {
+        // 缺记录 = 未建立（§7.3 D5「缺记录写 unknown」指权威侧不可判定；能力侧无 probe 证据
+        // 是确定的未建立，按 not-established 披露，不写成 0 或成功）
+        readiness = "not-established";
+        reasons.push(`当前 revision 无 assurance 登记、runtimeProbe=true 且认领能力 ${capability.id} 的证据`);
+      }
+      if (satisfiedEvidence !== null && readiness !== "unknown") {
+        readiness = "established";
+        reasons.length = 0;
+      }
+      const state = satisfiedEvidence !== null && readiness !== "unknown" ? "satisfied" : "open";
+      obligations.push({
+        id: `runtime-${contract.id}-${capability.id}`,
+        kind: "runtime",
+        sourceRef: `acceptance.externalContracts[${contract.id}].capabilities[${capability.id}]`,
+        contractId: contract.id,
+        capabilityId: capability.id,
+        required: contract.essential === true || forcedEssential.has(qualified) || forcedEssential.has(capability.id),
+        state,
+        readiness,
+        reason: reasons.length > 0 ? reasons.join("；") : null,
+        requiredEnvironment: { kind: capability.minEnvironment, capability: capability.id },
+        authorityHash,
+        evidenceRefs: satisfiedEvidence !== null ? [satisfiedEvidence.eventId] : [],
+      });
+    }
+  }
+  return obligations;
+}
+
+/** 单条 runtime probe 证据对某能力的失败原因（null = 六条件全满足）。
+ * 六条件（§6.1）：有效证据 / 环境档位满足 minEnvironment / 环境声明含该能力 /
+ * sourceHash 与当前权威 aggregateHash 一致 / probe artifact 记录该能力观察通过 /
+ * probe subject.revision 与事件 revision 一致。driver 缺失或 driverHash 不一致同样不满足
+ * （§8.1 第 6 条）。 */
+function runtimeEvidenceFailure(record, capability, authorityHash, contractId) {
+  if (record.artifactReadable !== true) return "probe artifact 不可读或不是 JSON 对象";
+  if (record.driverHashOk !== true) return "environment.driver 缺失或 driverHash 与驱动文件内容不一致";
+  const environment = record.environment;
+  if (environment === null || environment === undefined) return "artifact 无 environment 元数据";
+  if (typeof environment.sourceHash !== "string" || environment.sourceHash === "") return "environment.sourceHash 缺失";
+  if (authorityHash !== null && environment.sourceHash !== authorityHash) {
+    return `environment.sourceHash 与当前权威 aggregateHash 不一致（证据 ${environment.sourceHash.slice(0, 12)}…，权威 ${authorityHash.slice(0, 12)}…）`;
+  }
+  if (!environmentKindSatisfies(environment.kind, capability.minEnvironment)) {
+    return `环境档位 ${environment.kind ?? "缺失"} 不满足能力底线 ${capability.minEnvironment}`;
+  }
+  if (!declaredCapabilitiesOf(environment).some((id) => id === capability.id || id === qualifiedCapabilityId(contractId, capability.id))) {
+    return `environment 未声明能力覆盖 ${capability.id}`;
+  }
+  const subjectRevision = typeof record.subject?.revision === "string" ? record.subject.revision : null;
+  if (subjectRevision === null || subjectRevision !== record.revision) {
+    return `probe subject.revision（${subjectRevision ?? "缺失"}）与证据事件 revision（${record.revision}）不一致——早期 spike 不能替代 final`;
+  }
+  const cases = Array.isArray(record.cases) ? record.cases : [];
+  const probeCase = cases.find((item) => item?.capabilityId === capability.id);
+  if (probeCase === undefined) return `probe artifact 无能力 ${capability.id} 的观察 case`;
+  if (probeCase.skipped === true) return `probe case 被 skipped（${typeof probeCase.skipReason === "string" && probeCase.skipReason !== "" ? probeCase.skipReason : "未给理由"}）`;
+  if (probeCase.passed !== true) {
+    const observed = probeCase.observed !== undefined && probeCase.observed !== null ? JSON.stringify(probeCase.observed) : "无观察值";
+    return `probe case 未通过（${typeof probeCase.operation === "string" && probeCase.operation !== "" ? probeCase.operation : "未记操作"}；observed=${observed}）`;
+  }
+  return null;
 }
 
 /** 节点事件视图重建 projectNodeEvents（status.json 派生视图单源）：按事件序列重放 node 域转移表重建节点条目。

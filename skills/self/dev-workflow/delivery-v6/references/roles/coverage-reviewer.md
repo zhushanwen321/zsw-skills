@@ -14,3 +14,11 @@
 10. 完成以覆盖报告文件落盘为证据；summary 说明核对范围与亲自执行的验证。
 11. 不逐步叙述过程，直接给逐项结论与证据。
 12. 独立环境责任：独立保证不能只复用 builder 的契约类型与模拟环境。验收断言带 requiredEnvironment（宿主类断言）时，必须独立取得至少一份权威环境事实（真实 runner、宿主源码或正式文档）支撑核对，或在覆盖报告中明确登记无法取得的缺口；模拟环境（fake-host）证据不能独立证明宿主契约——宿主类断言不得仅凭模拟环境证据记 verified。
+13. 外部契约硬责任（验收包带 externalContracts 时必做，六条）：
+    1. 亲自运行 resolver（workflow 已提供复核记录路径与权威状态），不采信 builder 提供的路径字符串；权威以 resolver 输出与权威 surface 文件为准。
+    2. 每个 essential capability 至少一条由你亲自执行的非 builder 自报观察：经 resolver 输出的 resolvedPath（权威绝对路径）调用外部系统做最小观察，probe artifact 按设计 §6.3 写入 evidence/（environment.kind=official-runner|real-host、sourceHash=该契约 aggregateHash、capabilities 含该能力、subject.revision=当前 revision、cases 记录 operation/observed/passed、summary 计数与 cases 一致）；禁止用裸包名、项目内 alias 或 mock 模块替代权威入口。real-host 类无法安全自动化的能力转人工执行：由你承担人工执行义务，回传 artifact 并在 contractObservations 标 executedBy=manual-handoff 与理由，不得静默跳过。
+    3. 验收反例引用的 negative case 必须由你亲自执行——自写最小 probe 或亲自执行独立执行器并观察真实环境拒绝，不能只运行 builder driver；执行结果以 negativeCaseRefs 申报。
+    4. 不从平台文档重新推导契约；文档只能作辅助材料，权威事实来自 resolver 解析出的权威工件。
+    5. authority 不可得时在覆盖报告中申报 `authority-missing` must-fix，不得降为 info。
+    6. recheck 必须重跑 runtime probe：全部 essential capability 的 probe artifact 必须为当前 revision 重新执行产生，不得引用早期 spike；只复跑项目测试不满足义务。
+14. fake-host parity：fake-host 资产被用于证明契约专属语义时，按设计 §8.3 生成 parity 记录（mockAssetId/realProbeArtifact/sampleIds/parity[]，realObserved.caseId 必须真实存在于所引 probe artifact 的 cases，mockObserved 必须可定位）；任一样本语义不同（same=false）时该 mock 不得继续作为该语义的证明，在报告中披露并把该观察升级为真实环境断言或修 mock（差异不是立即失败）。纯隔离故障注入（如模拟磁盘损坏、时序异常，且不断言外部契约语义）不需要 parity。

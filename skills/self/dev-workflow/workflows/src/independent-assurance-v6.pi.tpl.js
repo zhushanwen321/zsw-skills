@@ -133,6 +133,67 @@ const SCHEMA_CoverageOutcome = {
       items: { type: "string" },
       description: "V6 代：亲自核对后确认仍未修复的既有 open finding（排除自动重认领；与 resolvedFindingIds 不得重叠）",
     },
+    contractObservations: {
+      type: "array",
+      description: "外部契约能力的 IA 亲自观察申报（设计 §8.2；无 externalContracts 时给空数组）",
+      items: {
+        type: "object",
+        properties: {
+          contractId: { type: "string", description: "验收 externalContracts 的契约 id" },
+          capabilityId: { type: "string", description: "该契约声明的能力 id" },
+          artifact: { type: "string", description: "probe artifact 或观察记录 JSON（evidence/ 内绝对路径，形态对齐设计 §6.3）" },
+          executedBy: { type: "string", enum: ["assurance-agent", "manual-handoff"], description: "assurance-agent=IA 侧亲自执行（自写最小 probe 或亲自执行独立执行器）；manual-handoff=real-host 类无法安全自动化，转人工执行并回传 artifact" },
+          negativeCaseRefs: { type: "array", items: { type: "string" }, description: "本次观察亲自执行了的 negative case 引用（必须存在于 counter-implementations.json 清单）" },
+          manualHandoffReason: { type: "string", description: "manual-handoff 必填：为什么无法安全自动化" },
+        },
+        required: ["contractId", "capabilityId", "artifact", "executedBy"],
+      },
+    },
+    parityRecords: {
+      type: "array",
+      description: "fake-host 用于契约专属语义时的 parity 记录（设计 §8.3；无此类 mock 时给空数组）",
+      items: {
+        type: "object",
+        properties: {
+          mockAssetId: { type: "string", description: "mock 资产标识" },
+          realProbeArtifact: { type: "string", description: "对照的真实 runtime probe artifact（evidence/ 内）" },
+          sampleIds: { type: "array", items: { type: "string" }, description: "样本 id 清单（去重非空）" },
+          parity: {
+            type: "array",
+            description: "逐样本对照（必须覆盖 sampleIds 全部样本）",
+            items: {
+              type: "object",
+              properties: {
+                sampleId: { type: "string", description: "样本 id（必须属于 sampleIds）" },
+                mockObserved: {
+                  type: "object",
+                  description: "mock 侧观察（artifact 可定位、caseId 是 mock 测试记录内的 case 引用）",
+                  properties: {
+                    artifact: { type: "string" },
+                    caseId: { type: "string" },
+                    value: { type: "string" },
+                  },
+                  required: ["artifact", "caseId", "value"],
+                },
+                realObserved: {
+                  type: "object",
+                  description: "真实侧观察（caseId 必须真实存在于 realProbeArtifact 的 cases）",
+                  properties: {
+                    artifact: { type: "string" },
+                    caseId: { type: "string" },
+                    value: { type: "string" },
+                  },
+                  required: ["artifact", "caseId", "value"],
+                },
+                same: { type: "boolean", description: "两侧语义是否相同（false = mock 不得继续作为该语义证明）" },
+              },
+              required: ["sampleId", "mockObserved", "realObserved", "same"],
+            },
+          },
+        },
+        required: ["mockAssetId", "realProbeArtifact", "sampleIds", "parity"],
+      },
+    },
   },
   required: ["summary", "evidence", "findings", "resolvedFindingIds", "unresolvedFindingIds"],
 };

@@ -35,6 +35,8 @@ meta.json acceptanceBinding 再进下游。无任务目录或未批准 → 停�
 「什么算对」，本技能的 §4 验收章节与验收判据对齐并细化可执行的验证场景——发现判据遗漏或缩窄，
 回 delivery-v6 递增版本，不在设计文档内改判据。
 
+**外部契约现状装载（交付体系任务，条件触发）**：验收包顶层 `externalContracts` 非空时，读任务目录的 `environment-contracts.current.json`（权威工件解析产物：指向当前环境契约快照的派生指针）——问题定义与 §2 现状的契约事实（签名 / 参数个数与形态 / 字段名 / 返回对象 / 命令分发规则）只能引用该快照内的 surface 内容并附 surfaceRef 与快照身份哈希，平台文档与文字概述只能作背景、不得单独作为事实来源。同时把快照身份哈希写进 `meta.json` 的 `environmentBinding.snapshotSha256`（additive 可选字段，规格见 `references/design-doc-schema.md` §3；无外部契约的任务不写该字段，T3 入口自检与方案包哈希清单消费它）。验收声明了外部契约而 current.json 缺失 = 权威工件未解析——停止并回 delivery-v6 走权威解析（essential 契约的权威工件不可得时不得进入实现），不在本技能内臆造契约事实。
+
 动笔前先过**前置探明门**，再过**产品最小形态三问**，最后回答三个问题：
 
 **前置探明门**：问题是否已探明——症状、触发条件、复现路径三者清楚？未探明 → **先做调研再回来**：复现实验、日志采集、探针观察都是前置步骤，产物落 `.tmp/` 留档，不进设计文档。把「加日志看看再定方案」写成设计内容 = 问题未探明的设计，不合格。例外：探针体系本身复杂到需要设计（多探针编排/结果归因），独立成章并论证复杂度。
@@ -113,6 +115,8 @@ SCQA 开篇 + 系统是什么 + 设计目标（从使用者体验倒推）+ in/o
 **Step D 产物表落字段 [MANDATORY]**：Step D 触发生成的产物表写入本章对应字段——修复史判定表 → `artifactTables.repairHistory`、状态副本清单 → `artifactTables.stateCopies`、信号-蕴涵表 → `artifactTables.signalImplications`（列级规格见 `references/principles.md`、字段定义见 `references/design-doc-schema.md`；触发了才有行，未触发的表为空数组、不补空表行）。前提清单用 **assumptions 字段**（**前提清单（增强版）**形态，P5 产物）：每条前提标注分类（事实 / 推断 / 知识 / 决策）与状态——✅ **必须附核实动作**（读了什么文件的什么位置、跑了什么探针；留空 = 未核实，未核实的推断不得作为设计依据）；⏳ 待裁决附「若不成立的影响」；**否定性断言**（「无 X」「没有任何 Y」形态）另附排除记录：先枚举「谁可能在写、谁可能持有」（跨包跨进程、含写者侧），再逐个排除留档——只查读侧不算核实；排除记录落 `assumptionExclusions` 字段（字段规格见 `references/design-doc-schema.md`）。**穷举断言可复算（字段声明制）**：断言属穷举（「唯一 / 全集 / 限于」式前提、排除已覆盖全部候选）时，该行声明 `exhaustive: true` 并在 `searchCmd` 字段登记取得该断言的检索命令（含路径范围）与命中清单——穷举而缺 searchCmd 的行被 check-design-doc.mjs 判 warning（规则 8，不阻塞），方向审按 must-fix 处置；R2+ 方向审重跑 searchCmd 登记的命令对账新增命中。
 
 **领域与架构现状加载 [MANDATORY]**：本 Step 动笔前加载 architecture-clean-domain-design（zcode 用 Skill 工具；pi / 无 Skill 工具环境直接 Read `~/.agents/skills/architecture-clean-domain-design/SKILL.md` 及其 references）——该技能以 DDD 与六边形为**分析视角**（不改项目结构）：按其领域建模协议梳理现状的领域模型（统一语言、上下文边界、聚合不变量），按六边形性质判定产出圈层性质映射（现状逻辑的性质与依赖方向，映射到项目现有分层）；梳理结果作为 §2 现状素材与 §3 方案的领域/分层依据，**不得据此输出改名、目录重组等结构改造建议**（确需整体改造属 §3 方案设计，须用户裁决）。项目已有 `docs/domain-model.md` 与 `CONTEXT.md` 登记时先消费再增补（登记优先于现场重建）；本次改动不触及领域模型与模块归属时（纯流程/配置类改动）可跳过并在 Step 6 自检记一句跳过理由。
+
+**外部契约现状（交付体系任务且任务目录有 `environment-contracts.current.json` 时 [MANDATORY]）**：契约事实逐条引用权威快照内的 surface 内容并附 surfaceRef 与快照身份哈希，按四分类标「事实」；平台文档、实现方自写类型、mock 行为只能作背景材料引用，不得单独支撑契约陈述。`artifactTables.upstreamDeps`（P7 上游依赖清单）中每个契约能力占一行：`dependency` 写该能力的行为依赖，`capabilityRef` 填 `<契约 id>:<能力 id>`（与验收包 externalContracts 的能力 id 一一对应），`observation` 写观察方式（官方 runner / 真实宿主上的可观察点：装载、注册、调用、分发、状态转移），`risk` 写该能力的风险——字段规格见 `references/design-doc-schema.md` §5.7。
 
 ## Step 3：解决方案
 

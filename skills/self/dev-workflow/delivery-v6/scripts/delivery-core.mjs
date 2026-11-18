@@ -59,6 +59,7 @@ import {
   computeRevision,
   loadTaskCore,
   loadWorld,
+  runtimeObligationsOf,
 } from "./delivery-gate.mjs";
 
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -1117,6 +1118,9 @@ function commandObligations(args) {
     pendingItems,
     verificationOnly: world.task.verificationOnly === true,
     designStageRequired: world.policy["verdict-rules.json"].requireDesignApproved !== false,
+    // 外部契约 runtime 义务（§6.1）：判定单源 kernel-judgments.deriveRuntimeObligations，
+    // 组装（权威重解析 + probe artifact 读取）经 gate 导出侧同一实现，不在此复刻
+    runtimeObligations: runtimeObligationsOf(world, revision).obligations,
   });
   printJson({
     taskDir: world.taskDir,
@@ -1237,13 +1241,19 @@ if (invokedPath !== null && invokedPath === realpathSync(fileURLToPath(import.me
 // spawnSync 同口径的结构化结果 { status, stdout, stderr }。usageFail 的 process.exit(2)
 // 硬退出经临时替换 process.exit 捕获为退出码（子进程语义 = 进程退出，垫片内 = 返回值）。
 // node --test 用例串行执行，临时替换全局口径安全；函数保证恢复现场 ──
-async function runCoreCommandInProcess(argv) {
+async function runCoreCommandInProcess(argv, env) {
   const previousArgv = process.argv;
   const previousExitCode = process.exitCode;
   const previousStdoutWrite = process.stdout.write;
   const previousStderrWrite = process.stderr.write;
   const previousExit = process.exit;
   const chunks = { stdout: [], stderr: [] };
+  const previousEnv = {};
+  const overriddenKeys = env === undefined || env === null ? [] : Object.keys(env);
+  for (const key of overriddenKeys) {
+    previousEnv[key] = process.env[key];
+    process.env[key] = env[key];
+  }
   process.argv = [previousArgv[0], previousArgv[1], ...argv];
   process.exitCode = 0;
   process.stdout.write = (chunk) => { chunks.stdout.push(chunk); return true; };
@@ -1259,6 +1269,10 @@ async function runCoreCommandInProcess(argv) {
     exitSignal = error;
   } finally {
     process.argv = previousArgv;
+    for (const key of overriddenKeys) {
+      if (previousEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = previousEnv[key];
+    }
     process.stdout.write = previousStdoutWrite;
     process.stderr.write = previousStderrWrite;
     process.exit = previousExit;

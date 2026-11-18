@@ -13,7 +13,7 @@ node ~/.agents/skills/dev-flow-v6/scripts/compile-exec-plan.mjs --impl-plan <tec
 node ~/.agents/skills/dev-flow-v6/scripts/compile-exec-plan.mjs --impl-plan <tech-design 段>/<slug>/<name>.impl-plan.json --task-dir <交付任务目录>
 ```
 
-编译器一次完成（顺序即依赖）：①渲染一致性前置门（spawn `tech-design-v6/scripts/render-impl-plan.mjs <plan> --check`——渲染视图与 JSON 不同源即中止，FAIL 形态按渲染器错误消息路由）；②寻址探测派生产物根；③读 dev-flow-v6 SKILL.md frontmatter version 实值作 `skillVersion`、`git rev-parse HEAD` 作 `baseline`；④units → dev 节点（testCommand 从 `testPlan.incrementalCommands[]` 提取归一 `{program,args}`、wave 拓扑分层）+ `processReviews[]` 声明 → review 节点（无声明不生成）；⑤逐单元任务书与过程 reviewer 任务书生成；⑥初始 status.json / runlog / ledger 初始化；⑦`--task-dir` 的增量契约与验收绑定核对在写盘前执行（归属不全 / 绑定陈旧 = 语义缺口，不落盘任何产物）；⑧写盘前按 check-exec-plan 同口径预检 + 写盘后 spawn 真校验器（`--task-dir` 透传 quality 段核对），PASS 后自动重建 verification-index.json（exec-plan 同目录，禁手改——设计 §5.2「每次 exec-plan 生成后重建」；索引构建失败按语义缺口上报）并输出编译摘要 exit 0。exec-plan 带 `generatedBy`（生成器版本 + 输入哈希 + 生成命令），任务书头部带重新生成命令——生成物禁手改。
+编译器一次完成（顺序即依赖）：①渲染一致性前置门（spawn `tech-design-v6/scripts/render-impl-plan.mjs <plan> --check`——渲染视图与 JSON 不同源即中止，FAIL 形态按渲染器错误消息路由）；②寻址探测派生产物根；③读 dev-flow-v6 SKILL.md frontmatter version 实值作 `skillVersion`、`git rev-parse HEAD` 作 `baseline`；④units → dev 节点（testCommand 从 `testPlan.incrementalCommands[]` 提取归一 `{program,args}`、wave 拓扑分层、`units[].kind` 角色标记转抄）+ `processReviews[]` 声明 → review 节点（无声明不生成）；⑤逐单元任务书与过程 reviewer 任务书生成；⑥初始 status.json / runlog / ledger 初始化；⑦`--task-dir` 的增量契约与验收绑定核对在写盘前执行（归属不全 / 绑定陈旧 = 语义缺口，不落盘任何产物）；⑧**外部契约门**（`--task-dir` 且验收包契约感知时：权威快照 / essential 契约的契约冒烟增量与 spike DAG / D0 复扫 / runtime-probe 行校验——判据见下文「外部契约守门」节，拒绝条件全部落在写盘前）；⑨写盘前按 check-exec-plan 同口径预检 + 写盘后 spawn 真校验器（`--task-dir` 透传 quality 段核对），PASS 后自动重建 verification-index.json（exec-plan 同目录，禁手改——设计 §5.2「每次 exec-plan 生成后重建」；索引构建失败按语义缺口上报）并输出编译摘要 exit 0。exec-plan 带 `generatedBy`（生成器版本 + 输入哈希 + 生成命令），任务书头部带重新生成命令——生成物禁手改。
 
 **dev 重编译判据**：盘上 status.json 含非 pending 节点（已有执行进度）时编译器缺省拒绝（重初始化会清零 status/runlog/ledger 的执行记录），确认放弃进度才带 `--reinit`；保留进度的修订走手修 exec-plan 对应字段 + ledger 登记（手工段同理：已有进度不能回重编译，按校验门路由手修后重跑校验门）。
 
@@ -31,6 +31,9 @@ node ~/.agents/skills/dev-flow-v6/scripts/compile-exec-plan.mjs --impl-plan <tec
 | wrapper 调用契约不完整（runner/scenario 未声明、flags 超界） | 回 T3 对照项目 verification skill API 契约文档登记后重编译；契约不明的行改判 inspect-only |
 | 依赖环 / territory 重叠无依赖路径 / 增量归属与命令不一致（校验器 cycle / overlap / increments 类） | 回 tech-design-v6 T3 修 impl-plan；增量增删改回 delivery-v6 递增验收版本重批 |
 | 验收绑定不一致（binding 类） | 回 tech-design-v6 T1 入口门（flow/write.md Step 0）重新影响审查并更新 meta.json acceptanceBinding |
+| 外部契约门（缺权威快照 / essential 非 resolved / 缺契约冒烟增量 / DAG 未达 spike / D0 复扫拒绝） | 快照类跑 `resolve-external-contracts.mjs --write` 重建；增量与 DAG 类回 delivery-v6 递增验收版本补契约冒烟增量、再回 tech-design-v6 T3 拆 spike 单元 / 补 deps；复扫类（未登记调用类 / 未处置候选 / unresolved 外部访问）按明细回 delivery-v6 修订验收包或修掉未登记外部调用后重新编译——本地 re-export 穿透归因是探测线职责，编译门只消费其输出 |
+| runtime-probe 行 / 节点规格（probe / whitelist / noop 类） | 回 tech-design-v6 T3 修 acceptancePlan 的 runtime-probe 行（command / artifact / capabilityIds）；能力 id 不在验收包时回 delivery-v6 修订 externalContracts |
+| task.json deliveryProfile 非法 / 损坏 | 跑 delivery-v6 set-delivery-profile 修正（或修 task.json）后重新编译 |
 | 关联声明未落 territory / 分属不同 dev 节点 / exempt 缺理由（assoc 类） | 回 tech-design-v6 T3 修 impl-plan.json associations（归并同节点 / 补 territory / 补 rationale）后重编译——手修 exec-plan 会在重编译时复现 |
 | 单字段形态错（territory 形态 / ref 引用 / 白名单 / noop 命令 / cwd / script / testPlan / 路径占位符，field 类） | 无执行进度 → 手修 exec-plan 对应字段后重跑校验门（值转抄自 impl-plan 的须同步修上游，否则重编译复现）；已有执行进度 → 不能回重编译（重初始化清零执行记录），手修 + ledger 登记；结构性缺漏（schema、缺数组类 field）→ 回编译器重编译 |
 | 质量契约缺口（quality 类） | 回 tech-design-v6 T2 修设计包 s4-accept.json（criterionMechanisms / verificationBindings） |
@@ -74,6 +77,7 @@ node ~/.agents/skills/dev-flow-v6/scripts/compile-exec-plan.mjs --impl-plan <tec
 |---|---|
 | `units[].designRef` | 设计章节锚（任务书「单元目标」段；缺省空串，编译摘要警告） |
 | `units[].cwd` | isolation=worktree 单元的 worktree 绝对路径（plain 单元恒 null） |
+| `units[].kind` | 单元角色 additive 标记；现只登记 `contract-spike`（契约冒烟 spike 单元，外部契约任务的 DAG 首个可执行节点）。声明其他值 = 上游契约含糊，报缺口不静默放过（映射表登记归 tech-design-v6，D0 只消费） |
 | `processReviews[]` | 过程审查声明 `[{unitId, script?, promptFile?, mechanism?}]`——review 节点唯一来源，无声明不生成 |
 | `commitTemplate` | 缺省 `<type>(<scope>): {unitId} — {summary}`（占位符 {unitId}/{summary} 必含） |
 | `formNotApplicable[]` | 反例场景不适用豁免登记 `[{adversarialFormId, rationale}]` 逐字转抄（理由须说明为什么构造不出，不是偷懒不建） |
@@ -81,7 +85,30 @@ node ~/.agents/skills/dev-flow-v6/scripts/compile-exec-plan.mjs --impl-plan <tec
 | `acceptancePlan[].runner` / `.scenario` | wrapper 调用契约 `{path, flags}` / `{path}`——flags 显式声明逐字为准（仅 `--repo/--artifacts-dir/--name/--run-id` 之内），未声明或超界即缺口不生成（禁止猜参数） |
 | `acceptancePlan[].artifactsDir` | 产物目录绝对路径；缺省推导 `<产物根>/<name>.artifacts/<行id>` |
 | `acceptancePlan[].unit` | verifyAsset="new" 行的实装单元 id（此时必填；status.json 该单元 done 判资产就绪） |
+| `acceptancePlan[].type` | 验收行 additive 类型标记；现只登记 `runtime-probe`（runtime 探针行：level 必须 L3，`command` / `artifact` / `capabilityIds` 必填，编译为 verify 节点且 script = probe wrapper）。无 type 字段的行按既有 level 规则编译（向后兼容） |
+| `acceptancePlan[].command` | type="runtime-probe" 行的 driver 启动命令 `{program, args}`（program 受测试命令白名单约束，禁恒绿形态；driver 文件须已在盘——占位引用拒收） |
+| `acceptancePlan[].artifact` | type="runtime-probe" 行的 probe artifact 落点（相对交付任务目录的 evidence 路径，禁绝对路径与 `..` 逃逸） |
+| `acceptancePlan[].capabilityIds` | type="runtime-probe" 行观察的契约能力 id（裸能力 id 或 `<contractId>:<capabilityId>`；必须存在于验收包 externalContracts 的 capabilities） |
 | `testPlan.incrementalCommands[]` | dev 节点 testCommand 唯一提取权威（`{incrementId, unitIds[], command}`）；`testPlan.incremental` 文字段是阅读视图不作提取源 |
+
+### 外部契约守门（D0；`--task-dir` 且验收包契约感知时）
+
+**契约感知判定**：验收包 acceptance.json 顶层有 `externalContracts` 或 `externalContractReview` = 契约感知任务（升级后新任务）；两者都缺 = 升级前旧任务——**整门跳过**（新规则只对新任务生效，历史任务不受影响，不要求补快照）。
+
+**拒绝条件（全部落在写盘前，与「契约前移 = 全体不生成」纪律一致——任一命中即语义缺口、不落盘任何产物）**：
+
+1. **缺权威快照**：`<taskDir>/environment-contracts.current.json` 指针或指向的 `environment-contracts/<sha>.json` 快照缺失 / 不可读 / 缺 `contracts` 数组（无外部候选的新任务也须有空快照 `contracts: []`，使 detectionSha256 与 authoritySnapshotSha256 有可绑定对象）；
+2. **essential 契约非 resolved**：声明 `essential=true` 的契约（含下方复扫强制升级的）在当前快照中无 `status="resolved"` 条目——权威工件不可解析时不得进入实现，不得伪造 resolved；
+3. **缺契约冒烟增量**：essential 契约存在而 `increments.json` 无 `kind="contract-smoke"` 增量；
+4. **DAG 未依赖 spike**：impl-plan 无 `kind="contract-spike"` 单元，或任一业务单元（dev 节点且非 spike）的 deps 传递闭包不可达 spike 单元——只看 increments 数组顺序不算满足，编译器按依赖边复算拓扑；
+5. **D0 复扫拒绝**：spawn 探测 CLI（`detect-external-contracts.mjs --project-root <项目根> --intent-file <taskDir>/intent.md`）对当前源码 + intent 重跑完整候选探测（判定单一实现 = `check-contract-rescan.mjs`，D3 候选完成门共用）：unresolved 外部访问（计算式成员访问 / 动态 import / eval 等）→ 停回；strong 候选未处置 / 按 not-external 处置 / 处置指向不存在的契约 → 拒绝；strong 候选的调用类信号（`call-class:X`）及其策略表蕴含观察类（register-command 蕴含 dispatch-command）未被该契约任何 capability 的 `detectionClasses` 覆盖 → 拒绝并回验收修订；
+6. **runtime-probe 行校验**（acceptance 模式）：行级形态（command / artifact / capabilityIds）+ 能力 id 必须存在于验收包 externalContracts（与写盘后校验器同源，compile-exec-plan 与 check-exec-plan 共用 `checkRuntimeProbeRows` / `checkRuntimeProbeNodes`）。
+
+**复扫强制升级**：strong 候选绑定到验收标 `essential=false` 的契约时，该契约按 essential 处理（契约冒烟增量、spike DAG 与 runtime 义务均按 essential 判定），编译摘要「外部契约披露」行明示——验收低报不由实现侧静默吸收。
+
+**probe wrapper 生成**（acceptance 模式）：runtime-probe 行编译为 verify 节点，script = `gen-runtime-probe-wrapper.mjs` 生成的 wrapper，落 `<taskDir>/evidence/runtime-probes/<nodeId>.mjs`（产物进 taskDir evidence）；wrapper 按行声明的 command spawn driver、把 driver stdout 的单一 JSON 落为 probe artifact（行 `artifact` 声明的任务目录相对路径）、向节点产物目录写 summary.jsonl 行；driver 本体由任务实现提供（单文件、无动态 import、driverHash 覆盖全文的契约归 driver 与 evaluate 侧重算，wrapper 不猜测）。防手改委托：`--check` 时编译器 spawn `gen-runtime-probe-wrapper --check` 核对。
+
+**deliveryProfile 登记**：`<taskDir>/task.json` 的 `deliveryProfile`（a/b/c，gate init / set-delivery-profile 写入）登记进 exec-plan 顶层——a 级 D2 一致性审查分区降档的消费输入（降档实现见 `flow/consistency-review.md` 与 W3 引擎）。读不到字段缺省 b；值非法 / task.json 损坏报缺口（静默缺省会改变 D2 审查深度）。变更后需重编译生效（已有执行进度时手修 exec-plan `deliveryProfile` + ledger 登记，同其它 exec-plan 字段纪律）。
 
 ### 过程审查（kind=review）三态与触发判据
 

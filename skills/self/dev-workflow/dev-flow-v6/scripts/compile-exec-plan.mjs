@@ -15,6 +15,19 @@
 //   - 主 agent 只处理编译器报告的语义缺口；处理后回 impl-plan / 设计包修改并重新生成，
 //     不手修生成物（生成文件头/字段带输入哈希与生成命令，--check 发现手改给出重新生成命令）。
 //
+// 外部契约守门（设计《V6 运行可用性与外部契约守门升级》§7.1 / §7.3 / §13；--task-dir 交付
+// 体系任务才适用，升级前旧任务——验收包无 externalContracts / externalContractReview——整门
+// 跳过，历史任务不受影响）：
+//   - D0 契约门（写盘前，与其余语义缺口同通道全体不生成）：缺权威环境快照 / 验收含
+//     essential 契约却缺 kind=contract-smoke 增量 / 业务单元 DAG 未依赖契约 spike 单元 /
+//     D0 复扫发现未登记 strong 信号或 unresolved 外部访问 → 拒绝编译并回验收修订；
+//   - D0 复扫：spawn 探测 CLI 对当前源码 + intent 重跑完整候选探测（判定单一实现 =
+//     check-contract-rescan.mjs 的 runContractRescan，D3 候选完成门与 evaluate 侧共用）；
+//   - runtime-probe 验收行（impl-plan acceptancePlan additive 行类型）编译为 verify 节点，
+//     script = gen-runtime-probe-wrapper.mjs 生成的 probe wrapper（产物进 taskDir evidence）；
+//   - deliveryProfile（task.json，a/b/c）登记进 exec-plan——a 级 D2 一致性审查分区降档的
+//     消费输入（降档实现见 W3 dev-consistency-loop-v6 与 flow/consistency-review.md）。
+//
 // 用法：
 //   node compile-exec-plan.mjs --impl-plan <path>.impl-plan.json [--mode dev|acceptance]
 //        [--task-dir <交付任务目录>] [--check] [--replay-compare <旧 exec-plan 路径>] [--reinit]
@@ -53,6 +66,10 @@
 //                              编译摘要按警告列出未登记单元，不拦）
 //   units[].cwd                string 可选——isolation=worktree 单元的 worktree 绝对路径
 //                              （必填缺口；plain 单元恒 null，不接受声明）
+//   units[].kind               string 可选——单元角色 additive 标记；现只登记
+//                              "contract-spike"（契约冒烟 spike 单元，外部契约任务的 DAG
+//                              首个可执行节点）。声明其他值 = 上游契约含糊，报缺口不静默
+//                              放过（映射表登记归 tech-design-v6；D0 只消费该标记）
 //   processReviews[]           array 可选——过程审查声明 [{unitId, script?, promptFile?,
 //                              mechanism?}]：有则生成 review 节点（script/promptFile 逐字转抄，
 //                              promptFile 缺省按任务书要素模板生成），无则不生成
@@ -67,6 +84,18 @@
 //                              <产物根>/<name>.artifacts/<行id>
 //   acceptancePlan[].unit      string 可选——verifyAsset="new" 行的实装单元 id（此时必填；
 //                              编译器以 status.json 该单元 done 判定资产就绪）
+//   acceptancePlan[].type      string 可选——验收行 additive 类型标记；现只登记
+//                              "runtime-probe"（runtime 探针行：level 必须 L3，command /
+//                              artifact / capabilityIds 必填，编译为 verify 节点且 script =
+//                              gen-runtime-probe-wrapper 生成的 probe wrapper）。无 type 字段
+//                              的行按既有 level 规则编译（向后兼容）
+//   acceptancePlan[].command   object 可选——type="runtime-probe" 行的 driver 启动命令
+//                              {program, args}（program 受测试命令白名单约束，禁恒绿形态）
+//   acceptancePlan[].artifact  string 可选——type="runtime-probe" 行的 probe artifact 落点
+//                              （相对交付任务目录的 evidence 路径，禁越出任务目录）
+//   acceptancePlan[].capabilityIds array 可选——type="runtime-probe" 行观察的契约能力 id
+//                              （裸能力 id 或 <contractId>:<capabilityId>；必须存在于验收包
+//                              externalContracts 的 capabilities）
 //   testPlan.incrementalCommands[]  既有字段——dev 节点 testCommand 的提取权威
 //                              （{incrementId, unitIds[], command}；单元无覆盖条目即缺口；
 //                              testPlan.incremental 文字段是阅读视图，不作提取源）
@@ -78,13 +107,15 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
-import { checkPlan, checkIncrementContract, checkAcceptanceBinding } from "./check-exec-plan.mjs";
+import { checkPlan, checkIncrementContract, checkAcceptanceBinding, checkRuntimeProbeRows, checkRuntimeProbeNodes } from "./check-exec-plan.mjs";
+import { runContractRescan } from "./check-contract-rescan.mjs";
 
 const GENERATOR_VERSION = 1;
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SCRIPT_DIR = dirname(SCRIPT_PATH);
 const CHECK_EXEC_PLAN = join(SCRIPT_DIR, "check-exec-plan.mjs");
 const GEN_WRAPPER = join(SCRIPT_DIR, "gen-acceptance-wrapper.mjs");
+const GEN_PROBE_WRAPPER = join(SCRIPT_DIR, "gen-runtime-probe-wrapper.mjs");
 const VERIFY_INDEX_SCRIPT = join(SCRIPT_DIR, "verification-index.mjs");
 // wrapper 可建模的 runner flags 四旗（compile.md 验收分组规则点名的旗组）——与
 // gen-acceptance-wrapper.mjs 的 KNOWN_FLAGS 同源；范围校验前移到编译器缺口收集阶段，
@@ -318,6 +349,21 @@ function buildDevNodes(ctx) {
     if (testCommand === null) continue;
     if (!isStr(unit.designRef)) noDesignRefUnits.push(unit.id);
 
+    // 单元角色 additive 标记（units[].kind）：现只登记 contract-spike（契约冒烟 spike 单元）。
+    // 声明其他值 = 上游契约含糊——报缺口不静默忽略（静默丢弃会让 DAG 契约门失去判据）
+    let unitKind = null;
+    if (unit.kind !== undefined && unit.kind !== null) {
+      if (unit.kind === "contract-spike") unitKind = "contract-spike";
+      else {
+        gap(
+          `单元 ${unit.id} 的 kind 值不在已登记枚举（实际：${showVal(unit.kind)}）`,
+          `units[].kind 权威 = ${planPath}（现只登记 "contract-spike"——契约冒烟 spike 单元；新增角色属 impl-plan 契约扩展，由 tech-design-v6 映射表登记后本编译器才消费）`,
+          `回 tech-design-v6 T3 把该单元 kind 改为 "contract-spike" 或删除该字段后重新编译`,
+        );
+        continue;
+      }
+    }
+
     // cwd 契约：plain（含缺省）= null；worktree = units[].cwd 显式声明（不猜 worktree 路径）
     let cwd = null;
     if (unit.isolation === "worktree") {
@@ -345,6 +391,7 @@ function buildDevNodes(ctx) {
       deps: isStrArr(unit.deps) ? [...unit.deps] : [],
       wave: waveOf.get(unit.id) ?? 1,
       ...(isStr(unit.incrementId) ? { incrementId: unit.incrementId } : {}),
+      ...(unitKind !== null ? { unitKind } : {}),
       cwd,
       designRef: isStr(unit.designRef) ? unit.designRef : "",
       territory: isStrArr(unit.territory) ? [...unit.territory] : [],
@@ -581,6 +628,7 @@ function buildAcceptanceNodes(ctx) {
   const nodes = [];
   const prompts = new Map();
   const wrapperAssets = []; // 走 gen-acceptance-wrapper 的清单条目
+  const probeAssets = []; // 走 gen-runtime-probe-wrapper 的 runtime-probe 清单条目
   const compiledIds = new Set();
   let skippedRows = 0; // L0/L1/L2 等不编译行计数（D1/D2 已覆盖，compile.md 验收分组规则）
 
@@ -592,6 +640,17 @@ function buildAcceptanceNodes(ctx) {
         `验收计划行权威 = ${planPath} acceptancePlan[]（渲染必填校验由 tech-design-v6 渲染器承担——先过渲染门）`,
         "回 tech-design-v6 T3 补齐行 id 后重新渲染、重新编译",
       );
+      continue;
+    }
+    // runtime-probe 行（设计 §7.3 D3 additive 行类型）：编译为 verify 节点，script = 生成的
+    // probe wrapper；行字段形态与能力 id 对账由 check-exec-plan 同源函数承担（与写盘后校验器
+    // 零漂移）。无 type 字段的行走下方既有 level 规则（向后兼容）
+    if (isStr(row.type) && row.type === "runtime-probe") {
+      compiledIds.add(row.id);
+      const probeNode = buildRuntimeProbeNode(row, ctx);
+      if (probeNode === null) continue; // 缺口已收集——该行不编译（编译整体中止）
+      probeAssets.push(probeNode.asset);
+      nodes.push(probeNode.node);
       continue;
     }
     const level = isStr(row.level) ? row.level.trim() : "";
@@ -736,7 +795,113 @@ function buildAcceptanceNodes(ctx) {
     }
   }
 
-  return { nodes, prompts, wrapperAssets, skippedRows };
+  return { nodes, prompts, wrapperAssets, probeAssets, skippedRows };
+}
+
+/** runtime-probe 行 → verify 节点 + probe wrapper 清单条目（设计 §7.3 D3）。缺口收集后
+ *  返回 null（该行不编译，编译整体中止）；wrapper 落点 = <taskDir>/evidence/runtime-probes/
+ *  <nodeId>.mjs（产物进 taskDir evidence——设计 §7.3 D0 末条）。 */
+function buildRuntimeProbeNode(row, ctx) {
+  const label = `runtime-probe 行 ${row.id}`;
+  // runtime-probe 只适用于交付体系任务（wrapper 与 artifact 落 taskDir evidence，能力 id
+  // 对账对象 = 验收包 externalContracts）——独立设计任务（无 --task-dir）声明该行即缺口
+  if (!isStr(ctx.taskDir)) {
+    gap(
+      `${label} 只适用于交付体系任务（未传 --task-dir）`,
+      `runtime-probe 行的 wrapper / artifact 落交付任务目录 evidence，能力 id 对账验收包 externalContracts（权威 = ${ctx.planPath} acceptancePlan[] + 交付任务目录）`,
+      "交付体系任务补 --task-dir 后重新编译；独立设计任务回 tech-design-v6 T3 删除该行",
+    );
+    return null;
+  }
+  const level = isStr(row.level) ? row.level.trim() : "";
+  if (!LEVEL_VERIFY(level)) {
+    gap(
+      `${label} 的 level 必须是 L3（脚本执行行；实际：${showVal(row.level)}）`,
+      `runtime-probe 行 level 权威 = ${ctx.planPath} acceptancePlan[]（runtime 探针是脚本执行行，按 L3 编译为 verify 节点）`,
+      `回 tech-design-v6 T3 把该行 level 改为 L3 后重新渲染、重新编译`,
+    );
+    return null;
+  }
+  // 能力 id 对账对象 = 验收包 externalContracts（缺声明即无对账权威——probe 只能观察已声明能力）
+  const contracts =
+    ctx.acceptance !== null && Array.isArray(ctx.acceptance.externalContracts) ? ctx.acceptance.externalContracts : null;
+  if (contracts === null) {
+    gap(
+      `${label} 存在但验收包未声明 externalContracts——probe 观察的契约能力无对账对象`,
+      "runtime-probe 行 capabilityIds 必须能回溯到验收包 externalContracts 的 capabilities（设计 §7.3 / §5.1 检查 6）",
+      "回 delivery-v6 在验收包声明 externalContracts（含该行观察的能力）后重新编译，或回 tech-design-v6 T3 删除该行",
+    );
+    return null;
+  }
+  for (const e of checkRuntimeProbeRows([row], contracts)) {
+    gap(
+      `${label}：${e.message}`,
+      `runtime-probe 行字段权威 = ${ctx.planPath} acceptancePlan[]（type="runtime-probe" + capabilityIds + command + artifact；能力 id 对账权威 = 验收包 externalContracts）`,
+      "回 tech-design-v6 T3 修正该行字段后重新渲染、重新编译；能力 id 不在验收包时回 delivery-v6 修订 externalContracts",
+    );
+  }
+  const command = normalizeCommand(row.command, TEST_WHITELIST);
+  if (command === null) {
+    gap(
+      `${label} 的 command 形态非法（实际：${showVal(row.command)}）`,
+      `runtime-probe 行 command 权威 = ${ctx.planPath} acceptancePlan[].command（{program, args}；program 受测试命令白名单 ${TEST_WHITELIST.join("/")} 约束）`,
+      "回 tech-design-v6 T3 修正该行 command 形态后重新渲染、重新编译",
+    );
+    return null;
+  }
+  // driver 存在性（剧本实装硬门槛同款纪律：不编译指向不存在文件的引用——占位引用会把
+  // D3 探针节点变成启动即炸的雷）。无可静态判定的 driver 文件（bash -c 封装等）不猜
+  const missingDriver = missingDriverPath(row.command, ctx.projectRoot);
+  if (missingDriver !== null) {
+    gap(
+      `${label} 的 driver 文件不存在：${missingDriver}——probe 资产未实装`,
+      "runtime-probe 的 driver 由任务实现提供（acceptance 编译前须已实装——与 verify 剧本同款硬门槛；driver 契约 = 单文件、无动态 import、stdout 单一 JSON）",
+      "等 driver 所在实装单元完成（status=done）后重跑 acceptance 编译；driver 归属单元有变则回 T3 修正该行 command",
+    );
+    return null;
+  }
+  const artifact = resolveProbeArtifact(row.artifact, ctx.taskDir);
+  if (artifact === null) {
+    gap(
+      `${label} 的 artifact 缺失或越出交付任务目录（实际：${showVal(row.artifact)}）`,
+      `runtime-probe 行 artifact 权威 = ${ctx.planPath} acceptancePlan[].artifact（相对交付任务目录的 evidence 路径，禁绝对路径与 .. 逃逸）`,
+      "回 tech-design-v6 T3 把 artifact 改为任务目录内的 evidence 相对路径后重新渲染、重新编译",
+    );
+    return null;
+  }
+  const artifactsDir = isStr(row.artifactsDir) ? abs(row.artifactsDir) : join(ctx.productRoot, `${ctx.name}.artifacts`, row.id);
+  const wrapperPath = join(ctx.taskDir, "evidence", "runtime-probes", `${row.id}.mjs`);
+  const capabilityIds = [...row.capabilityIds];
+  return {
+    node: {
+      id: row.id,
+      kind: "verify",
+      deps: isStrArr(row.deps) ? [...row.deps] : [],
+      script: wrapperPath, // gen-runtime-probe-wrapper 落点（先登记，spawn 后核存在）
+      artifactsDir,
+      runtimeProbe: { capabilityIds, command, artifact },
+    },
+    asset: { nodeId: row.id, capabilityIds, command, artifact, artifactsDir },
+  };
+}
+
+/** runtime-probe 行 command.args 中 node 系扩展名条目全部须在盘上（driver 与 import 前置
+ *  文件）；返回缺失路径串（多个以「、」连接），无缺失或无可静态判定条目时返回 null */
+function missingDriverPath(command, projectRoot) {
+  if (!isRec(command) || !isStrArr(command.args)) return null;
+  const nodeish = command.args.filter((a) => /\.(mjs|cjs|js)$/.test(a));
+  if (nodeish.length === 0) return null;
+  const resolved = nodeish.map((a) => (isAbsolute(expandHome(a)) ? abs(a) : resolve(projectRoot, a)));
+  const missing = resolved.filter((p) => !existsSync(p));
+  return missing.length > 0 ? missing.join("、") : null;
+}
+
+/** probe artifact 落点：任务目录相对声明 → 绝对路径；绝对路径与 .. 逃逸（越出任务目录）拒绝 */
+function resolveProbeArtifact(artifact, taskDir) {
+  if (!isStr(artifact) || !isStr(taskDir)) return null;
+  const p = resolve(taskDir, expandHome(artifact));
+  if (p !== taskDir && !p.startsWith(`${taskDir}/`)) return null;
+  return p;
 }
 
 /** 组装 gen-acceptance-wrapper 验收资产清单并 spawn 生成器（确定性委派——wrapper 模板与
@@ -772,6 +937,45 @@ function materializeWrappers(ctx, wrapperAssets, planPath) {
     const wrapperFile = join(outDir, `${a.nodeId}.mjs`);
     if (!existsSync(wrapperFile)) {
       gap(`wrapper 落点缺失：${wrapperFile}（生成器报告成功但文件不在盘上）`, `wrapper 落点 = <产物根>/<name>.verify/<nodeId>.mjs（gen-acceptance-wrapper 契约）`, `重新运行编译命令重试；仍失败按 gen-acceptance-wrapper --help 排障`);
+    }
+  }
+  return gaps.length === 0;
+}
+
+/** 组装 gen-runtime-probe-wrapper probe 资产清单并 spawn 生成器（确定性委派——wrapper 模板、
+ *  防手改与命令/落点校验由生成器承担；行字段形态与能力 id 对账已在 buildRuntimeProbeNode 的
+ *  缺口收集阶段完成，此处生成器校验作为第二道独立防线，报缺口即转发中止）。wrapper 落点 =
+ *  <taskDir>/evidence/runtime-probes/<nodeId>.mjs（产物进 taskDir evidence——设计 §7.3 D0 末条）。 */
+function materializeProbeWrappers(ctx, probeAssets, planPath) {
+  if (probeAssets.length === 0) return true;
+  const outDir = join(ctx.taskDir, "evidence", "runtime-probes");
+  const manifestPath = join(outDir, "probe-assets.json");
+  const manifest = { schemaVersion: 1, assets: probeAssets };
+  try {
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  } catch (e) {
+    gap(`probe 资产清单写盘失败：${manifestPath}（${e.message}）`, `清单落点 = 交付任务目录 evidence/runtime-probes/（${outDir}）`, "排除文件系统故障后重新运行编译命令");
+    return false;
+  }
+  const r = spawnSync(process.execPath, [GEN_PROBE_WRAPPER, "--assets", manifestPath, "--out", outDir], { encoding: "utf8" });
+  if (r.status !== 0) {
+    // 生成器自报语义缺口（driver 命令恒绿形态 / capabilityIds 缺失等）——转发其三段式输出
+    process.stderr.write(
+      [
+        "probe wrapper 生成器（gen-runtime-probe-wrapper.mjs）报告缺口，编译中止，exec-plan 已写盘但验收节点不可执行：",
+        "",
+        String(r.stderr || r.stdout || "").trim(),
+        "",
+        `恢复动作处理后重新运行：node ${SCRIPT_PATH} --impl-plan ${planPath} --mode acceptance${ctx.taskDir ? ` --task-dir ${ctx.taskDir}` : ""}`,
+      ].join("\n") + "\n",
+    );
+    process.exit(1);
+  }
+  for (const a of probeAssets) {
+    const wrapperFile = join(outDir, `${a.nodeId}.mjs`);
+    if (!existsSync(wrapperFile)) {
+      gap(`probe wrapper 落点缺失：${wrapperFile}（生成器报告成功但文件不在盘上）`, `wrapper 落点 = <taskDir>/evidence/runtime-probes/<nodeId>.mjs（gen-runtime-probe-wrapper 契约）`, `重新运行编译命令重试；仍失败按 gen-runtime-probe-wrapper --help 排障`);
     }
   }
   return gaps.length === 0;
@@ -845,6 +1049,18 @@ function runCheckMode(ctx, execPlan, prompts) {
       wrapperNote = "wrapper 防手改核对 PASS（gen-acceptance-wrapper --check）";
     }
   }
+  // probe wrapper：委托 gen-runtime-probe-wrapper --check（清单在场时——编译过 runtime-probe 行才有）
+  const probeWrapperDir = ctx.taskDir ? join(ctx.taskDir, "evidence", "runtime-probes") : null;
+  const probeManifestPath = probeWrapperDir ? join(probeWrapperDir, "probe-assets.json") : null;
+  let probeWrapperNote = null;
+  if (probeManifestPath !== null && existsSync(probeManifestPath)) {
+    const r = spawnSync(process.execPath, [GEN_PROBE_WRAPPER, "--assets", probeManifestPath, "--out", probeWrapperDir, "--check"], { encoding: "utf8" });
+    if (r.status !== 0) {
+      failures.push({ file: probeWrapperDir, reason: `runtime-probe wrapper 防手改核对未过（gen-runtime-probe-wrapper --check）`, detail: String(r.stderr || r.stdout || "").trim().split("\n") });
+    } else {
+      probeWrapperNote = "runtime-probe wrapper 防手改核对 PASS（gen-runtime-probe-wrapper --check）";
+    }
+  }
   if (failures.length > 0) {
     const regen = `node ${SCRIPT_PATH} --impl-plan ${ctx.planPath} --mode ${ctx.mode}${ctx.taskDir ? ` --task-dir ${ctx.taskDir}` : ""}`;
     const out = [`FAIL：${failures.length} 项与重新生成结果不一致——生成物禁手改，语义修订回 impl-plan / 设计包后重新生成`];
@@ -860,6 +1076,7 @@ function runCheckMode(ctx, execPlan, prompts) {
   const lines = [`CHECK PASS：exec-plan 与 ${prompts.size} 份任务书与重新生成结果一致（impl-plan ${ctx.planPath}）`];
   if (statusNote) lines.push(`说明：${statusNote}`);
   if (wrapperNote) lines.push(wrapperNote);
+  if (probeWrapperNote) lines.push(probeWrapperNote);
   process.stdout.write(lines.join("\n") + "\n");
   process.exit(0);
 }
@@ -909,7 +1126,7 @@ function realpathSafe(p) {
 }
 
 function checkTaskDirContract(execPlan, ctx) {
-  const { taskDir, increments, designDocPath } = ctx;
+  const { taskDir, increments, acceptance, designDocPath } = ctx;
   if (taskDir === null || increments === null) return;
   // ① 增量契约核对（check-exec-plan 同口径移植函数，直接吃内存对象）
   for (const e of checkIncrementContract(execPlan, increments)) {
@@ -919,40 +1136,206 @@ function checkTaskDirContract(execPlan, ctx) {
       "按缺口明细回上游修正后重新编译：归属/命令转抄问题回 tech-design-v6 T3「增量契约对齐」节；增量的增删改回 delivery-v6 递增验收版本重批",
     );
   }
-  // ② 验收绑定一致性核对：读设计包 meta.json 与交付任务目录 acceptance.json
-  const metaPath = join(designDocPath.endsWith(".rendered.md") ? join(dirname(designDocPath), basename(designDocPath, ".rendered.md")) : designDocPath, "meta.json");
-  let meta = null;
+  // ② 验收绑定一致性核对：读设计包 meta.json 与交付任务目录 acceptance.json（后者由 main
+  // 预先读入 ctx.acceptance——外部契约门与 runtime-probe 对账共用同一份；读失败已报缺口）
+  if (acceptance !== null) {
+    const metaPath = join(designDocPath.endsWith(".rendered.md") ? join(dirname(designDocPath), basename(designDocPath, ".rendered.md")) : designDocPath, "meta.json");
+    let meta = null;
+    try {
+      meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    } catch (e) {
+      gap(
+        `无法读取设计包 meta.json：${metaPath}（${e.message}）——验收绑定核对缺输入`,
+        "meta.json 的 acceptanceBinding 由 tech-design-v6 T1 入口门（flow/write.md Step 0）写入；exec-plan designDocPath 指向渲染视图，meta.json 在同级设计目录",
+        "确认设计包在 T1 入口门写入 acceptanceBinding（独立设计任务不传 --task-dir 即无此核对）后重新编译",
+      );
+      return;
+    }
+    const metaNorm =
+      isRec(meta) && isRec(meta.acceptanceBinding) && isStr(meta.acceptanceBinding.taskDir)
+        ? { ...meta, acceptanceBinding: { ...meta.acceptanceBinding, taskDir: realpathSafe(meta.acceptanceBinding.taskDir) } }
+        : meta;
+    for (const e of checkAcceptanceBinding(execPlan, metaNorm, acceptance, increments, realpathSafe(taskDir))) {
+      gap(
+        `验收绑定核对未过：${e.message}`,
+        "验收版本与验收包内容变化属技能①职权（delivery-v6 裁决域）；绑定更新权威 = tech-design-v6 T1 入口门（flow/write.md Step 0）",
+        "回 tech-design-v6 flow/write.md Step 0 重新影响审查并更新 meta.json acceptanceBinding 后重编译——不在 exec-plan 侧改",
+      );
+    }
+  }
+  // ③ 外部契约门（设计 §7.1 / §7.3 D0）：权威快照 / essential 契约的契约冒烟增量与 spike
+  //   DAG / D0 复扫。验收包无 externalContracts 与 externalContractReview = 升级前旧任务，
+  //   整门跳过（新规则只对新任务生效，历史任务不受影响）
+  checkExternalContractGate(execPlan, ctx);
+  // ④ runtime-probe 节点 vs 验收包能力对账（acceptance 模式编译产物；dev 模式无验收节点）
+  for (const e of checkRuntimeProbeNodes(execPlan, acceptance)) {
+    gap(
+      `runtime-probe 核对未过：${e.message}`,
+      "runtime-probe 节点的 capabilityIds 必须能回溯到验收包 externalContracts 的 capabilities（设计 §7.3 D3；exec-plan 节点由 impl-plan acceptancePlan 行编译，禁手改）",
+      "回 tech-design-v6 T3 修正 acceptancePlan 的 runtime-probe 行后重编译；能力 id 不在验收包时回 delivery-v6 修订 externalContracts",
+    );
+  }
+}
+
+/** 外部契约门（设计 §7.3 D0 三条拒绝条件 + §4.2 D0 复扫规则 + §4.3 权威快照）。
+ *  拒绝条件全部落在写盘前（与「契约前移 = 全体不生成」纪律一致——新门在写盘前）。 */
+function checkExternalContractGate(execPlan, ctx) {
+  const { taskDir, acceptance, increments, projectRoot } = ctx;
+  if (taskDir === null || acceptance === null) return;
+  const contracts = Array.isArray(acceptance.externalContracts) ? acceptance.externalContracts : null;
+  const review = isRec(acceptance.externalContractReview) ? acceptance.externalContractReview : null;
+  if (contracts === null && review === null) return; // 升级前旧任务——整门跳过
+
+  const AUTHORITY_PKG =
+    "外部契约声明与候选处置的权威 = 交付验收包 acceptance.json 顶层 externalContracts / externalContractReview（delivery-v6 验收设计产出；字段规则见设计 §4.1 / §4.2）";
+  // ① 声明层形态（结构性缺漏在此拦，语义充分性归验收审查）
+  if (contracts !== null) {
+    contracts.forEach((c, i) => {
+      if (!isRec(c) || !isStr(c.id)) {
+        gap(
+          `acceptance.externalContracts[${i}] 缺 id 或形态非法（实际：${showVal(c)}）`,
+          AUTHORITY_PKG,
+          "回 delivery-v6 修订验收包 externalContracts 后重新编译",
+        );
+      } else if (!Array.isArray(c.capabilities)) {
+        gap(
+          `外部契约 ${c.id} 缺 capabilities 数组`,
+          `${AUTHORITY_PKG}；capabilities 是机器可对账的最小能力清单（设计 §4.1）`,
+          "回 delivery-v6 补该契约 capabilities（含 detectionClasses / surfaceRefs / minEnvironment）后重新编译",
+        );
+      } else if (c.essential !== undefined && typeof c.essential !== "boolean") {
+        gap(
+          `外部契约 ${c.id} 的 essential 必须是布尔值（实际：${showVal(c.essential)}）`,
+          `${AUTHORITY_PKG}；essential 决定权威不可解析 / runtime 义务未满足时能否批准与 accepted（设计 §4.1）`,
+          "回 delivery-v6 修正该契约 essential 后重新编译",
+        );
+      }
+    });
+  }
+
+  // ② 权威环境契约快照（指针 + 按哈希分文件快照）：缺快照即缺权威工件，拒绝编译
+  const pointerPath = join(taskDir, "environment-contracts.current.json");
+  let pointer = null;
   try {
-    meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    pointer = JSON.parse(readFileSync(pointerPath, "utf8"));
   } catch (e) {
     gap(
-      `无法读取设计包 meta.json：${metaPath}（${e.message}）——验收绑定核对缺输入`,
-      "meta.json 的 acceptanceBinding 由 tech-design-v6 T1 入口门（flow/write.md Step 0）写入；exec-plan designDocPath 指向渲染视图，meta.json 在同级设计目录",
-      "确认设计包在 T1 入口门写入 acceptanceBinding（独立设计任务不传 --task-dir 即无此核对）后重新编译",
+      `缺权威环境契约快照指针：${pointerPath}（${e.message}）`,
+      "环境契约快照指针 = 交付任务目录 environment-contracts.current.json（resolve-external-contracts.mjs --write 产物，指向 environment-contracts/<snapshotSha256>.json；无外部候选时也须有空快照 contracts: []——设计 §4.3 / §4.5）",
+      `跑 node ~/.agents/skills/delivery-v6/scripts/resolve-external-contracts.mjs --task-dir ${taskDir} --project-root ${projectRoot} --write 重建后重新编译`,
     );
-    return;
   }
-  let acceptance = null;
-  try {
-    acceptance = JSON.parse(readFileSync(join(taskDir, "acceptance.json"), "utf8"));
-  } catch (e) {
-    gap(
-      `无法读取交付任务目录 acceptance.json：${join(taskDir, "acceptance.json")}（${e.message}）——验收绑定核对缺输入`,
-      "acceptance.json 由 delivery-v6 验收设计产出（已批准版本）",
-      "核对 --task-dir 指向 delivery-v6 产出的交付任务目录后重新编译",
-    );
-    return;
+  let snapshotContracts = null;
+  if (pointer !== null) {
+    const sha = ["snapshotSha256", "snapshot", "sha256", "path", "file"]
+      .map((k) => (isStr(pointer?.[k]) ? pointer[k] : null))
+      .find((v) => v !== null);
+    const shaNorm = sha !== undefined && sha.includes("/") ? basename(sha).replace(/\.json$/, "") : sha;
+    if (!isStr(shaNorm)) {
+      gap(
+        `环境契约快照指针形态非法：${pointerPath}（未找到 snapshotSha256 / snapshot / path 字段）`,
+        "指针形态权威 = resolve-external-contracts.mjs 产物（current 指针指向当前快照的派生指针，可重建）",
+        `重跑 node ~/.agents/skills/delivery-v6/scripts/resolve-external-contracts.mjs --task-dir ${taskDir} --project-root ${projectRoot} --write 重建指针；快照手改或损坏的恢复动作是重跑 resolve，不手工修复`,
+      );
+    } else {
+      const snapshotPath = join(taskDir, "environment-contracts", `${shaNorm}.json`);
+      let snapshot = null;
+      try {
+        snapshot = JSON.parse(readFileSync(snapshotPath, "utf8"));
+      } catch (e) {
+        gap(
+          `环境契约快照不可读：${snapshotPath}（${e.message}）`,
+          "快照落点 = <taskDir>/environment-contracts/<snapshotSha256>.json（按哈希分文件、不覆盖旧快照）",
+          `重跑 node ~/.agents/skills/delivery-v6/scripts/resolve-external-contracts.mjs --task-dir ${taskDir} --project-root ${projectRoot} --write 重建`,
+        );
+      }
+      if (snapshot !== null) {
+        if (!Array.isArray(snapshot.contracts)) {
+          gap(
+            `环境契约快照缺 contracts 数组：${snapshotPath}`,
+            "快照结构权威 = resolve-external-contracts.mjs 产物（contracts[{id, status, resolvedPath, surfaces, aggregateHash}]）",
+            `重跑 resolve --write 重建快照`,
+          );
+        } else {
+          snapshotContracts = snapshot.contracts;
+        }
+      }
+    }
   }
-  const metaNorm =
-    isRec(meta) && isRec(meta.acceptanceBinding) && isStr(meta.acceptanceBinding.taskDir)
-      ? { ...meta, acceptanceBinding: { ...meta.acceptanceBinding, taskDir: realpathSafe(meta.acceptanceBinding.taskDir) } }
-      : meta;
-  for (const e of checkAcceptanceBinding(execPlan, metaNorm, acceptance, increments, realpathSafe(taskDir))) {
+
+  // ③ D0 复扫（判定单一实现 = check-contract-rescan.mjs；D3 候选完成门与 evaluate 侧共用）：
+  //    重新运行完整候选探测（当前源码 + intent），不只看源码调用——unresolved 停回、strong
+  //    候选调用类（含蕴含观察类）必须映射到已声明 capability、实际使用的契约强制按 essential
+  const rescan = runContractRescan({ taskDir, projectRoot, acceptance, stage: "d0" });
+  for (const e of rescan.errors) {
     gap(
-      `验收绑定核对未过：${e.message}`,
-      "验收版本与验收包内容变化属技能①职权（delivery-v6 裁决域）；绑定更新权威 = tech-design-v6 T1 入口门（flow/write.md Step 0）",
-      "回 tech-design-v6 flow/write.md Step 0 重新影响审查并更新 meta.json acceptanceBinding 后重编译——不在 exec-plan 侧改",
+      `D0 外部契约复扫未过：${e.message}`,
+      "复扫判定权威 = detect-external-contracts.mjs 候选快照 × 验收包 externalContracts / externalContractReview（设计 §4.2 D0 复扫规则 / §7.3 D0）",
+      "按明细回 delivery-v6 修订验收包（递增验收版本重批）或修掉未登记外部调用 / unresolved 访问后重新编译——本地 re-export 穿透归因由探测线承担，本门只消费其输出",
     );
+  }
+  ctx.contractNotes = rescan.notes;
+
+  // ④ essential 契约（声明 essential + 复扫强制升级）→ 权威快照必须 resolved
+  const essentialIds = rescan.effectiveEssential;
+  if (snapshotContracts !== null) {
+    const resolvedIds = new Set(snapshotContracts.filter((c) => isRec(c) && isStr(c.id) && c.status === "resolved").map((c) => c.id));
+    for (const id of essentialIds) {
+      if (!resolvedIds.has(id)) {
+        const st = snapshotContracts.find((c) => isRec(c) && c.id === id);
+        gap(
+          `essential 外部契约 ${id} 在当前环境快照中非 resolved（status=${isRec(st) ? String(st.status) : "缺该契约条目"}）——权威工件不可解析时不得进入实现`,
+          "essential 契约必须有 resolved 权威快照（设计 §5.1 检查 3；解析规则与离线 fail-closed 见 §4.3）",
+          `跑 node ~/.agents/skills/delivery-v6/scripts/resolve-external-contracts.mjs --task-dir ${taskDir} --project-root ${projectRoot} --write 重建；权威确实不可得时任务停在批准前或走 open-revision，不得伪造 resolved`,
+        );
+      }
+    }
+  }
+
+  // ⑤⑥ essential 契约 → 契约冒烟增量在场 + 业务单元 DAG 传递闭包可达契约 spike 单元
+  if (essentialIds.length > 0) {
+    const smokeItems = (Array.isArray(increments?.items) ? increments.items : []).filter((it) => isRec(it) && it.kind === "contract-smoke");
+    if (smokeItems.length === 0) {
+      gap(
+        `验收含 essential 外部契约（${essentialIds.join("、")}）但 increments.json 无 kind=contract-smoke 增量`,
+        `契约冒烟增量的权威 = ${taskDir}/increments.json items[].kind="contract-smoke"（设计 §7.1：每个含 essential 契约的任务必须有一个契约冒烟增量）`,
+        "回 delivery-v6 递增验收版本补契约冒烟增量（含 spike / final 两阶段计划），再回 tech-design-v6 T3 拆 spike 单元后重新编译",
+      );
+    }
+    const spikeNodes = execPlan.nodes.filter((n) => n.kind === "dev" && n.unitKind === "contract-spike");
+    if (spikeNodes.length === 0) {
+      gap(
+        `验收含 essential 外部契约（${essentialIds.join("、")}）但 impl-plan 无 kind=contract-spike 单元`,
+        `契约 spike 单元的权威 = impl-plan units[].kind="contract-spike"（设计 §7.2 T3：契约 spike 必须是 DAG 首个可执行节点）`,
+        "回 tech-design-v6 T3 拆分契约 spike 单元（最小可装载实现先跑，确认 API 形态 / 字段名 / 调用签名 / 回执通道）后重新编译",
+      );
+    } else {
+      // DAG 拓扑复算：只看 increments 数组顺序不算满足——用依赖边复算「全部业务单元
+      // （dev 节点且非 spike）传递闭包可达 spike 单元」（review 节点不是业务单元，不参与）
+      const byId = new Map(execPlan.nodes.map((n) => [n.id, n]));
+      const isSpike = (n) => n.kind === "dev" && n.unitKind === "contract-spike";
+      const reachesSpike = (id, seen) => {
+        if (seen.has(id)) return false; // 环由校验器拦，这里只保证终止
+        seen.add(id);
+        const n = byId.get(id);
+        if (n === undefined) return false;
+        if (isSpike(n)) return true;
+        for (const d of isStrArr(n.deps) ? n.deps : []) {
+          if (reachesSpike(d, seen)) return true;
+        }
+        return false;
+      };
+      const unreached = execPlan.nodes
+        .filter((n) => n.kind === "dev" && !isSpike(n) && !reachesSpike(n.id, new Set()))
+        .map((n) => n.id);
+      if (unreached.length > 0) {
+        gap(
+          `业务单元 DAG 未依赖契约 spike 单元：${unreached.join("、")}——只看 increments 数组顺序不算满足（契约 spike 失败时业务实现不得先行展开）`,
+          `DAG 依赖权威 = impl-plan units[].deps（设计 §7.1：归属业务增量的全部单元必须显式依赖契约 spike 单元，D0 复算拓扑）`,
+          "回 tech-design-v6 T3 给这些单元补指向契约 spike 单元（直接或经中间单元传递）的 deps 后重新编译",
+        );
+      }
+    }
   }
 }
 
@@ -1035,15 +1418,51 @@ function main() {
   const designDoc = expandHome(isStr(plan.designDoc) ? plan.designDoc : "");
   const designDocPath = designDoc.endsWith(".rendered.md") ? designDoc : `${designDoc}.rendered.md`;
 
-  // 交付体系任务：读 increments.json（增量归属断言数据源）
+  // 交付体系任务：读 increments.json（增量归属断言数据源）与 acceptance.json（外部契约门 /
+  // runtime-probe 能力对账 / 验收绑定核对共用）；task.json 的 deliveryProfile（设计 §13）
   let increments = null;
+  let acceptance = null;
   let taskDirAbs = null;
+  let deliveryProfile = "b";
   if (opts.taskDir) {
     taskDirAbs = abs(opts.taskDir);
     try {
       increments = JSON.parse(readFileSync(join(taskDirAbs, "increments.json"), "utf8"));
     } catch (e) {
       gap(`交付任务目录 increments.json 不可读：${join(taskDirAbs, "increments.json")}（${e.message}）`, "increments.json 由 delivery-v6 验收设计产出、随验收包批准冻结（增量归属断言与 --task-dir 校验的数据源）", "核对 --task-dir 指向 delivery-v6 产出的交付任务目录后重跑；独立设计任务去掉 --task-dir");
+    }
+    try {
+      acceptance = JSON.parse(readFileSync(join(taskDirAbs, "acceptance.json"), "utf8"));
+    } catch (e) {
+      gap(
+        `无法读取交付任务目录 acceptance.json：${join(taskDirAbs, "acceptance.json")}（${e.message}）——验收绑定 / 外部契约门 / runtime-probe 对账均缺输入`,
+        "acceptance.json 由 delivery-v6 验收设计产出（已批准版本；顶层 externalContracts / externalContractReview 是外部契约守门的声明层）",
+        "核对 --task-dir 指向 delivery-v6 产出的交付任务目录后重新编译",
+      );
+    }
+    // deliveryProfile（设计 §13 任务分级）：task.json 由 gate init / set-delivery-profile user
+    // 命令写入；读不到字段缺省 b。值非法 / 文件损坏报缺口——静默缺省会改变 D2 审查深度
+    const taskMetaPath = join(taskDirAbs, "task.json");
+    if (existsSync(taskMetaPath)) {
+      try {
+        const taskMeta = JSON.parse(readFileSync(taskMetaPath, "utf8"));
+        const dp = isRec(taskMeta) ? taskMeta.deliveryProfile : undefined;
+        if (dp === undefined || dp === null) deliveryProfile = "b";
+        else if (dp === "a" || dp === "b" || dp === "c") deliveryProfile = dp;
+        else {
+          gap(
+            `task.json deliveryProfile 值非法（实际：${showVal(dp)}）`,
+            "deliveryProfile 权威枚举 = a|b|c（设计 §13；只能由 gate init 参数或 set-delivery-profile user 命令写入 task 元数据，禁直改 task.json）",
+            "跑 delivery-v6 set-delivery-profile 修正后重新编译",
+          );
+        }
+      } catch (e) {
+        gap(
+          `task.json 不可读或不是合法 JSON：${taskMetaPath}（${e.message}）`,
+          "deliveryProfile 的权威载体 = 交付任务目录 task.json（gate init / set-delivery-profile 写入）",
+          "修复 task.json（或重跑 set-delivery-profile）后重新编译",
+        );
+      }
     }
   }
 
@@ -1084,7 +1503,7 @@ function main() {
     }
   }
 
-  const ctx = { plan, planPath, projectRoot, productRoot, promptsDir, runlogDir, name, designDocPath, taskDir: taskDirAbs, increments, mode: opts.mode, skillVersion };
+  const ctx = { plan, planPath, projectRoot, productRoot, promptsDir, runlogDir, name, designDocPath, taskDir: taskDirAbs, increments, acceptance, deliveryProfile, mode: opts.mode, skillVersion };
 
   // dev 部分（两种模式共用——acceptance exec-plan 顶层保留 dev/review 节点与全部 dev 期字段）
   const dev = buildDevNodes(ctx);
@@ -1119,6 +1538,10 @@ function main() {
       ...(Array.isArray(plan.testPlan?.artifacts) ? { artifacts: plan.testPlan.artifacts.map((a) => ({ id: a?.id, command: normalizeCommand(a?.command, TEST_PLAN_WHITELIST) ?? a?.command })) } : {}),
     },
     commitTemplate: isStr(plan.commitTemplate) ? plan.commitTemplate : COMMIT_TEMPLATE_DEFAULT,
+    // deliveryProfile（设计 §13；交付体系任务才登记）：a 级 D2 一致性审查分区降档的消费
+    // 输入（W3 dev-consistency-loop-v6 按本字段 + units[].kind 过滤契约相关分区）。
+    // 变更后需重编译生效（已有执行进度时手修本字段 + ledger 登记，同其它 exec-plan 字段纪律）
+    ...(taskDirAbs ? { deliveryProfile } : {}),
     nodes: dev.nodes,
     ...(taskDirAbs ? { processReviewPath: join(taskDirAbs, "process-review.jsonl") } : {}),
     ...(Array.isArray(plan.associations) ? { associations: plan.associations } : {}),
@@ -1133,7 +1556,7 @@ function main() {
   };
 
   // acceptance 部分
-  let acc = { nodes: [], prompts: new Map(), wrapperAssets: [], skippedRows: 0 };
+  let acc = { nodes: [], prompts: new Map(), wrapperAssets: [], probeAssets: [], skippedRows: 0 };
   if (opts.mode === "acceptance") {
     // 前置读取按实际形态区分报缺（不存在 = 未跑 dev 编译；坏 JSON = 执行态载体损坏——
     // 两者恢复动作不同，合并成「不存在」会把损坏误报成缺前置）
@@ -1206,6 +1629,10 @@ function main() {
     for (const [p, text] of allPrompts) writeFileSync(p, text);
     if (opts.mode === "acceptance") {
       if (!materializeWrappers(ctx, acc.wrapperAssets, planPath)) {
+        printGaps();
+        process.exit(1);
+      }
+      if (!materializeProbeWrappers(ctx, acc.probeAssets, planPath)) {
         printGaps();
         process.exit(1);
       }
@@ -1287,13 +1714,18 @@ function main() {
     `  dev 单元 ${devCount} 个（wave ${waves.join("/") || "-"}）；过程审查节点 ${reviewCount} 个；校验器 PASS`,
   ];
   if (indexNote !== null) lines.push(`  ${indexNote}`);
+  if (Array.isArray(ctx.contractNotes) && ctx.contractNotes.length > 0) {
+    for (const note of ctx.contractNotes) lines.push(`  外部契约披露：${note}`);
+  }
   if (dev.noDesignRefUnits.length > 0) {
     lines.push(`  警告：${dev.noDesignRefUnits.length} 个单元未登记 units[].designRef（任务书缺设计章节锚）：${dev.noDesignRefUnits.join("、")}——建议回 impl-plan 补登记`);
   }
   if (opts.mode === "acceptance") {
     lines.push(`  验收节点：verify ${acc.nodes.filter((n) => n.kind === "verify").length} / inspect ${acc.nodes.filter((n) => n.kind === "inspect").length}；未编译行（L0/L1/L2，D1/D2 已覆盖）${acc.skippedRows} 行`);
     if (acc.wrapperAssets.length > 0) lines.push(`  wrapper ${acc.wrapperAssets.length} 个（gen-acceptance-wrapper 生成，落 ${join(productRoot, `${name}.verify`)}/）`);
+    if (acc.probeAssets.length > 0) lines.push(`  runtime-probe wrapper ${acc.probeAssets.length} 个（gen-runtime-probe-wrapper 生成，落 ${join(taskDirAbs, "evidence", "runtime-probes")}/）`);
     lines.push(`  D3 发起前跑校验门：node ${CHECK_EXEC_PLAN} ${join(productRoot, `${name}.exec-plan.json`)}`);
+    if (taskDirAbs) lines.push(`  D3 全绿后、D4 候选完成前跑外部契约复扫门：node ${join(SCRIPT_DIR, "check-contract-rescan.mjs")} --task-dir ${taskDirAbs} --project-root ${projectRoot} --exec-plan ${join(productRoot, `${name}.exec-plan.json`)} --stage d3`);
   } else {
     lines.push(`  初始 status.json / runlog / ledger 已初始化；防手改核对：node ${SCRIPT_PATH} --impl-plan ${planPath} --check${taskDirAbs ? ` --task-dir ${taskDirAbs}` : ""}`);
     lines.push(`  验收资产就绪后跑 acceptance 编译：node ${SCRIPT_PATH} --impl-plan ${planPath} --mode acceptance${taskDirAbs ? ` --task-dir ${taskDirAbs}` : ""}`);

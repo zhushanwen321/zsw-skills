@@ -1,12 +1,18 @@
 /* zcode-workflow
-description: delivery-v6 技能 DESIGN 段目标与验收设计循环：setup 先固定策略快照
-  （snapshot-policy）；designer 读取用户 objective、项目 AGENTS.md 与已有验收，产出
-  acceptance.json / solution.md / increments.json 草稿；acceptance-reviewer 独立复查
-  目标缩窄、判据可证伪性、证据类型、风险级别与增量划分并返回结构化问题清单；机器
-  校验（validate-acceptance）通过后以 assurance 凭据 record-review 登记
-  AcceptanceReviewed（CLI 自动绑验收包哈希、intent 哈希与策略快照哈希）并返回
-  acceptance-ready。AcceptanceApproved 由主会话在用户批准后追加（approve-acceptance）；
-  本 workflow 不写 verdict.json，不触碰产品代码，不执行 Git 写操作
+description: delivery-v6 技能 DESIGN 段目标与验收设计循环：setup 先跑外部契约候选探测
+  （detect-external-contracts，stdout 落盘按验收版本隔离的候选快照并计算
+  detectionSha256）、固定策略快照（snapshot-policy）；designer 读取用户 objective、
+  项目 AGENTS.md 与已有验收，按候选快照填写 externalContractReview 处置表并声明
+  externalContracts 与契约冒烟增量，产出 acceptance.json / solution.md /
+  increments.json 草稿；草稿过版本门后跑 authority resolve 落环境权威快照（essential
+  契约未 resolved 即停回）；acceptance-reviewer 独立复查目标缩窄、判据可证伪性、证据
+  类型、风险级别、增量划分与外部契约守门（候选低报/能力遗漏/mock-only/riskCoverage
+  十类/契约反例最低记录）并返回结构化问题清单；机器校验（validate-acceptance）通过后
+  以 assurance 凭据 record-review 登记 AcceptanceReviewed（CLI 自动绑验收包哈希、
+  intent 哈希、策略快照哈希与 authority-snapshot-sha256）并返回 acceptance-ready。
+  AcceptanceApproved 由主会话在用户批准后追加（approve-acceptance，须带
+  --authority-snapshot-sha256）；本 workflow 不写 verdict.json，不触碰产品代码，不执行
+  Git 写操作
   agent 调用结构校验与修正重问、CLI spawn 级失败重试（只读/幂等命令）、自修复
   记录（taskDir/self-repairs.jsonl）随终态 message 上报主 agent（DEV 韧性层）
 whenToUse: delivery-v6 技能验收设计段——任务目录已由 delivery-gate init（含

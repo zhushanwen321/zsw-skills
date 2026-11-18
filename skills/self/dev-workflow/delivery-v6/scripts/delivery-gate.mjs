@@ -46,6 +46,8 @@ import {
   LOOP_BUDGET_CAP_KEYS,
   deriveObligations,
   deriveRevisionProvenance,
+  deriveRuntimeObligations,
+  environmentKindSatisfies,
   findingRegrades,
   loopAttemptsBudget,
   openFindingsFromEvents,
@@ -162,6 +164,20 @@ const EVENT_SCHEMAS = {
     actors: ["user"],
     fields: ["target", "reason"],
   },
+  // 外部权威登记（V6 运行可用性升级 §4.4）：local-path / executable 权威必须由用户凭据
+  // 登记——designer 或 builder 填写的本地路径不生成 resolved。任务级事件（验收包就位前
+  // 亦可登记），字段 {contractId, resolverKind, locator, snapshotSha256, summary}
+  ExternalAuthorityDeclared: {
+    actors: ["user"],
+    fields: ["contractId", "resolverKind", "locator", "snapshotSha256"],
+  },
+  // 外部环境基线确认（V6 运行可用性升级 §10）：外部依赖升级/宿主版本变化后，用户确认新
+  // 环境基线并接上环境历史链——不直接把 runtime 义务置 satisfied，确认后仍必须在当前环境
+  // 重跑 probe。同一 acceptanceVersion 内最多一次（§4.3 预算规则，evaluate 判定）
+  EnvironmentBaselineConfirmed: {
+    actors: ["user"],
+    fields: ["newAuthoritySnapshotSha256", "contractIds"],
+  },
 };
 const EVENT_TYPES = Object.keys(EVENT_SCHEMAS);
 // TaskSuperseded 的 prepareEventId 只在 committed 段必填；shape 校验按 phase 条件放行
@@ -169,13 +185,24 @@ const CONDITIONAL_EVENT_FIELDS = {
   TaskSuperseded: { onlyPhase: "committed", fields: ["prepareEventId"] },
 };
 const OPTIONAL_EVENT_FIELDS = {
-  EvidenceRecorded: ["assertionIds", "adversarialFormIds"],
+  // 外部契约能力绑定与 runtime probe 标记（V6 运行可用性升级 §6.3）：additive 可选。
+  // contractCapabilityIds = 该证据覆盖的「契约id:能力id」清单；runtimeProbe=true 表示
+  // 该证据由真实 runner/宿主驱动产生，是 runtime 义务唯一可满足的证据形态
+  EvidenceRecorded: ["assertionIds", "adversarialFormIds", "contractCapabilityIds", "runtimeProbe"],
   // consequenceRefutationType = 行为后果否决论证的三类声明（合并稿 §9：不会发生 /
   // 用户不可观察 / 验收明确允许），正文存 consequenceRefutation，机器只认枚举。
   // emptyScopeRefutation = 空关联 boundary 的不影响任何需求论证（V5 完整性设计 §5.4：
   // requirementIds=[] 曾绕过定级护栏——GLM F-5 实证；空关联必须证明其不影响任何需求）
-  FindingRaised: ["consequenceRefutation", "consequenceRefutationType", "reopenOf", "origin", "firstDetectedStage", "expectedStage", "regressionTestRef", "emptyScopeRefutation"],
+  // authority 反驳组（V6 运行可用性升级 §9）：结构命中外部契约（contractCapabilityIds
+  // 非空，或 requirementIds 反查断言含 requiredEnvironment.capability）时 authorityBacked
+  // 必须为 true 且 authorityHash / authorityObservationRef 非空——堵住拿同一份文字文档
+  // 自我证明的弱关闭通道
+  FindingRaised: ["consequenceRefutation", "consequenceRefutationType", "reopenOf", "origin", "firstDetectedStage", "expectedStage", "regressionTestRef", "emptyScopeRefutation", "contractCapabilityIds", "authorityBacked", "authorityHash", "authorityObservationRef"],
   AssuranceCompleted: ["mode", "artifactSha256"],
+  // 审查/批准时刻的环境契约快照哈希（V6 运行可用性升级 §4.4）：审计事实，不进批准四元组
+  // 有效性判定；新任务即使无外部契约也绑定空快照哈希，历史事件与升级前任务允许缺省
+  AcceptanceReviewed: ["authoritySnapshotSha256"],
+  AcceptanceApproved: ["authoritySnapshotSha256"],
   // 哈希绑定扩展到全部携带 artifact 的证据/回执事件（合并稿 §10.3 证据不可覆盖）：
   // OPTIONAL 起步兼容旧事件流，workflow 侧新登记必填
   ImplementationRecorded: ["artifactSha256"],
@@ -209,21 +236,24 @@ const HELP = `delivery-gate（V6）：delivery-v6 的确定性交付裁决器（
   一致——builder 凭据签不出 actor=assurance 的事件，user 凭据只供主会话使用，绝不注入子 agent。
 
 用法：
-  delivery-gate init --project-root P --task-id T [--new-round] [--resume-existing] [--intent-file F]
+  delivery-gate init --project-root P --task-id T [--new-round] [--resume-existing] [--intent-file F] [--delivery-profile a|b|c]  # 缺省 b（§13 分级；降档只减审查席与分区，不减必做机器门）
   delivery-gate set-intent --task-dir D --file F
   delivery-gate validate-acceptance --task-dir D
   delivery-gate snapshot-policy --task-dir D
-  delivery-gate record-review --task-dir D --conclusion pass|reject --summary S --credential <assurance credentialId>
-  delivery-gate approve-acceptance --task-dir D --confirmation user-explicit|standing-authorization --summary S --credential <user credentialId> [--revision R]  # V6：批准即冻结（chmod 0444 + frozen/v<N>/ 快照）
+  delivery-gate record-review --task-dir D --conclusion pass|reject --summary S --credential <assurance credentialId> [--artifact A] [--authority-snapshot-sha256 H]  # 验收包声明外部契约时自动绑定当前环境契约快照哈希
+  delivery-gate approve-acceptance --task-dir D --confirmation user-explicit|standing-authorization --summary S --credential <user credentialId> [--revision R] [--authority-snapshot-sha256 H]  # V6：批准即冻结（chmod 0444 + frozen/v<N>/ 快照）；快照哈希 = 环境历史链起点
   delivery-gate open-revision --task-dir D --reason S --credential <user credentialId>  # V6：合法解冻唯一通道（RevisionOpened 留痕 + chmod 0644）
+  delivery-gate declare-external-authority --task-dir D --contract-id C --resolver-kind K --locator L --snapshot-sha256 H --summary S --credential <user credentialId>  # local-path/executable 权威必须由用户凭据登记；designer/builder 填写的本地路径不生成 resolved
+  delivery-gate confirm-environment-baseline --task-dir D --contract-ids '<JSON>' --new-authority-snapshot-sha256 H --credential <user credentialId>  # 用户确认新外部环境基线（只接环境历史链，不满足 runtime 义务；同一 acceptanceVersion 最多一次）
+  delivery-gate set-delivery-profile --task-dir D --profile a|b|c --credential <user credentialId>  # 任务分级唯一写通道（禁直改 task.json）
   delivery-gate record-design-approved --task-dir D --package-file F --decision-file F2 --summary S --credential <user credentialId>
   # 意图提交命令组（执行器事件唯一通道；信封由 gate 构造：actor/revision/acceptanceVersion/domain/artifactSha256 缺省内核计算）
   delivery-gate record-implementation --task-dir D --increment-id INC-1 --summary S --artifact A --merge-receipt '<JSON>' --credential <builder credentialId> [--revision R]
   delivery-gate record-repair-round --task-dir D --round N --summary S --trigger-finding-ids '<JSON>' --affected-assertion-ids '<JSON>' --artifact A --credential <builder credentialId> [--from-revision R --to-revision R2 --nature behavior|environment|evidence --increment-receipts '<JSON>']
-  delivery-gate record-finding --task-dir D --summary S --category defect|boundary --severity blocker|non-blocker --requirement-ids '<JSON>' --artifact A --credential <builder|assurance credentialId> [--finding-id F --origin O --consequence-refutation S --consequence-refutation-type T --reopen-of F0 --empty-scope-refutation S]  # schema 2 下 category=boundary 且 --requirement-ids '[]'（空关联）必须附 --empty-scope-refutation（不影响任何需求的论证）
+  delivery-gate record-finding --task-dir D --summary S --category defect|boundary --severity blocker|non-blocker --requirement-ids '<JSON>' --artifact A --credential <builder|assurance credentialId> [--finding-id F --origin O --consequence-refutation S --consequence-refutation-type T --reopen-of F0 --empty-scope-refutation S --contract-capability-ids '<JSON>' --authority-backed true --authority-hash H --authority-observation-ref R]  # schema 2 下 category=boundary 且 --requirement-ids '[]'（空关联）必须附 --empty-scope-refutation（不影响任何需求的论证）；结构命中外部契约时 authority 三段必填
   delivery-gate resolve-finding --task-dir D --finding-id F --summary S --artifact A --credential <assurance credentialId>
   delivery-gate reaffirm-resolution --task-dir D --finding-id F --original-resolution-event-id E --basis S --summary S --artifact A --credential <assurance credentialId>
-  delivery-gate record-evidence --task-dir D --requirement-id R --kind K --result S --summary S --artifact A --credential <assurance credentialId> [--assertion-ids '<JSON>' --adversarial-form-ids '<JSON>']
+  delivery-gate record-evidence --task-dir D --requirement-id R --kind K --result S --summary S --artifact A --credential <assurance credentialId> [--assertion-ids '<JSON>' --adversarial-form-ids '<JSON>' --contract-capability-ids '<JSON>' --runtime-probe]  # --runtime-probe = 真实 runner/宿主驱动产生的 runtime probe 证据（runtime 义务唯一可满足形态）
   delivery-gate record-exploration --task-dir D --summary S --dimensions '<JSON>' --coverage-manifest-sha256 H --artifact A --credential <assurance credentialId>
   delivery-gate complete-assurance --task-dir D --summary S --coverage-manifest-sha256 H --exploration-event-id E --increment-receipts '<JSON>' --artifact A --credential <assurance credentialId> [--mode full|recheck|explore-only --evidence-event-ids '<JSON>' --clean-build '<JSON>']
   delivery-gate record-assurance-drift --task-dir D --setup-revision R --finalize-revision R2 --drift-seq N --summary S --credential <assurance credentialId>
@@ -556,6 +586,9 @@ function publicJwkXFromPrivate(privateKeyObject) {
 // 只从技能安装目录与用户级目录加载；被验收的项目仓库不可覆盖（安全参数零信任）。
 // 快照：AcceptanceReviewed 之前由 snapshot-policy 固化为任务目录内文件，此后审查/批准/evaluate 全按快照执行。
 const POLICY_FILE_NAMES = ["roles.json", "evidence-kinds.json", "finding-categories.json", "verdict-rules.json", "revision.json"];
+// 外部契约调用类目录（V6 运行可用性升级）：文件由候选探测线创建，本 CLI 只读消费。
+// 声明提前到模块顶层——OPTIONAL_POLICY_FILE_NAMES 在模块初始化时就要引用它
+const EXTERNAL_CONTRACT_CLASSES_FILE = "external-contract-classes.json";
 
 function readPolicyJson(filePath, originLabel) {
   const parsed = readJson(filePath, `${originLabel} 策略文件`);
@@ -575,6 +608,14 @@ function loadPolicySources() {
       const override = join(POLICY_USER_DIR(), name);
       if (existsSync(override)) sources[name] = readPolicyJson(override, "用户级策略目录");
     }
+  }
+  // 可选策略文件：安装目录存在才加载；用户级覆盖同样可选
+  for (const name of [EXTERNAL_CONTRACT_CLASSES_FILE]) {
+    const installedFile = join(installed, name);
+    if (!existsSync(installedFile)) continue;
+    sources[name] = readPolicyJson(installedFile, "技能安装目录");
+    const override = existsSync(POLICY_USER_DIR()) ? join(POLICY_USER_DIR(), name) : null;
+    if (override !== null && existsSync(override)) sources[name] = readPolicyJson(override, "用户级策略目录");
   }
   return sources;
 }
@@ -644,13 +685,55 @@ function validatePolicySources(sources) {
   requireRecord(revision, "revision.json");
   requireEnum(revision.mode ?? "auto-git", ["auto-git", "content-manifest"], "revision.json mode");
   requireBoolean(revision.runsFromIgnoredArtifacts ?? false, "revision.json runsFromIgnoredArtifacts");
+  // 外部契约调用类目录（可选策略文件）：词表形态校验。文件缺失 = 未登记调用类，外部契约
+  // 的词表与环境底线校验整体关闭（消费方以 warnings 披露），此处不因缺失而失败
+  const classes = sources[EXTERNAL_CONTRACT_CLASSES_FILE];
+  if (classes !== undefined) {
+    requireRecord(classes, `${EXTERNAL_CONTRACT_CLASSES_FILE}`);
+    if (!Array.isArray(classes.classes) || classes.classes.length === 0) {
+      fail(`${EXTERNAL_CONTRACT_CLASSES_FILE} 的 classes 必须是非空数组。`, `修正 ${join(SKILL_ROOT, "policies", EXTERNAL_CONTRACT_CLASSES_FILE)} 或用户级覆盖后重试。`);
+    }
+    if (classes.resolverKinds !== undefined) {
+      requireStringArray(classes.resolverKinds, `${EXTERNAL_CONTRACT_CLASSES_FILE} resolverKinds`, { nonEmptyItems: true, unique: true });
+    }
+    const environmentVocabulary = sources["evidence-kinds.json"].environmentKinds ?? [];
+    const seenClassIds = new Set();
+    for (let index = 0; index < classes.classes.length; index += 1) {
+      const entry = classes.classes[index];
+      const label = `${EXTERNAL_CONTRACT_CLASSES_FILE} classes[${index}]`;
+      requireRecord(entry, label);
+      requireNonEmptyString(entry.id, `${label}.id`);
+      if (seenClassIds.has(entry.id)) fail(`${label}.id 重复：${entry.id}。`, "调用类 id 必须唯一，修正后重试。");
+      seenClassIds.add(entry.id);
+      // 环境底线不得是 fake-host（自写模拟宿主不是任何能力的底线档位）
+      requireEnum(entry.minEnvironment, environmentVocabulary.filter((kind) => kind !== "fake-host"), `${label}.minEnvironment`);
+      // 蕴含观察类字段名以策略文件为准（impliesObservationClasses）；缺省空数组 = 无蕴含
+      if (entry.impliesObservationClasses !== undefined) requireStringArray(entry.impliesObservationClasses, `${label}.impliesObservationClasses`, { unique: true });
+      // 静态信号清单由候选探测线消费（detect-external-contracts 的匹配源）；本 CLI 只校验
+      // 它是数组，不解释其内容（信号语义归探测线）
+      if (entry.staticSignals !== undefined && !Array.isArray(entry.staticSignals)) {
+        fail(`${label}.staticSignals 必须是数组。`, `把 ${label}.staticSignals 改为信号对象数组后重试。`);
+      }
+    }
+    // 蕴含关系必须指向已登记调用类（否则蕴含观察义务无法对账）
+    for (const entry of classes.classes) {
+      for (const implied of entry.impliesObservationClasses ?? []) {
+        if (!seenClassIds.has(implied)) {
+          fail(`${EXTERNAL_CONTRACT_CLASSES_FILE} 中 ${entry.id} 的 impliesObservationClasses 含未登记调用类 ${implied}。`, "把蕴含目标改为已登记的调用类 id，或先登记该调用类后重试。");
+        }
+      }
+    }
+  }
   return true;
 }
 
 function policySnapshotDocument(sources) {
-  // 快照 = 五个策略文件解析后的规范内容；快照哈希 = 该文档的 canonicalJson sha256
+  // 快照 = 五个策略文件解析后的规范内容；快照哈希 = 该文档的 canonicalJson sha256。
+  // 可选策略文件（外部契约调用类目录）落盘即进快照——与其余策略同受冻结保护
+  // （改词表 = 走策略升级通道，不得静默替换）
   const document = {};
   for (const name of POLICY_FILE_NAMES) document[name] = sources[name];
+  if (sources[EXTERNAL_CONTRACT_CLASSES_FILE] !== undefined) document[EXTERNAL_CONTRACT_CLASSES_FILE] = sources[EXTERNAL_CONTRACT_CLASSES_FILE];
   return document;
 }
 
@@ -720,6 +803,13 @@ function validateTaskRecord(task, taskDir) {
   }
   const requiredKeys = ["builderPublicKey", "assurancePublicKey", "userPublicKey"];
   const taskKeys = ["schemaVersion", "taskId", "projectRoot", "credentials", ...requiredKeys, "supersededBy", "supersedeCancelled"];
+  // 任务分级（设计 §13）：a/b/c additive 可选字段。init 在该升级后统一写入（缺省 b）；
+  // 字段缺失 = 升级前创建的任务，按 b 处理。该字段同时是「升级后新建任务」的判定锚——
+  // 外部契约相关的新静态检查只对带该字段的任务生效
+  if (Object.hasOwn(task, "deliveryProfile")) {
+    requireEnum(task.deliveryProfile, DELIVERY_PROFILES, "task.json.deliveryProfile");
+    taskKeys.push("deliveryProfile");
+  }
   // 只核验模式（纳管体系外已有实现）：豁免方案包与 DesignApproved，init 时显式声明
   if (Object.hasOwn(task, "verificationOnly")) {
     requireBoolean(task.verificationOnly, "task.json.verificationOnly");
@@ -763,14 +853,30 @@ function loadTaskCore(taskDirValue) {
 }
 
 // ── 验收文件与增量文件的 schema 校验（v2 命名：acceptanceVersion）──
-function validateAcceptance(acceptance, task) {
+// taskDir = 任务目录（外部契约检查读其中的候选快照与环境快照产物）；
+// sources = 已解析的策略包（调用方先加载再传入：外部契约检查要读调用类环境底线词表）
+function validateAcceptance(acceptance, task, taskDir, sources) {
   requireRecord(acceptance, "acceptance.json");
   const acceptanceFields = [
     "schemaVersion", "acceptanceVersion", "taskId", "projectRoot", "objective", "requirements",
     "nonGoals", "riskLevel", "exploratoryReview", "reviewDimensions",
   ];
   if (acceptance.schemaVersion === 2) acceptanceFields.push("adversarialForms");
-  requireExactKeys(acceptance, acceptanceFields, "acceptance.json");
+  // 外部契约登记与候选处置表（V6 运行可用性升级 §4.1/§4.2）：additive 可选顶层字段——
+  // 缺省不限制（未声明外部契约的验收包与升级前旧任务不受新检查约束）；声明非空
+  // externalContracts 时 externalContractReview 必填（候选处置随验收包冻结）
+  const optionalAcceptanceFields = ["externalContracts", "externalContractReview"];
+  const unknownAcceptanceFields = Object.keys(acceptance).filter((key) => !acceptanceFields.includes(key) && !optionalAcceptanceFields.includes(key));
+  const missingAcceptanceFields = acceptanceFields.filter((key) => !Object.hasOwn(acceptance, key));
+  if (missingAcceptanceFields.length > 0 || unknownAcceptanceFields.length > 0) {
+    const parts = [];
+    if (missingAcceptanceFields.length > 0) parts.push(`缺少字段 ${missingAcceptanceFields.join(", ")}`);
+    if (unknownAcceptanceFields.length > 0) parts.push(`含未知字段 ${unknownAcceptanceFields.join(", ")}`);
+    fail(
+      `acceptance.json 形态非法：${parts.join("；")}。`,
+      `按契约补齐必需字段并删除未知字段后重试；acceptance.json 可选字段为 ${optionalAcceptanceFields.join(", ")}。`,
+    );
+  }
   if (acceptance.schemaVersion !== 1 && acceptance.schemaVersion !== 2) {
     fail("acceptance.json 的 schemaVersion 必须为 1 或 2。", "旧任务保留 1；带断言与反例场景的验收包使用 2 后重试 validate-acceptance。");
   }
@@ -946,6 +1052,12 @@ function validateAcceptance(acceptance, task) {
   if (acceptance.exploratoryReview === "required" && acceptance.reviewDimensions.length === 0) {
     fail("探索性审查为 required 时 reviewDimensions 不能为空。", "为 acceptance.reviewDimensions 添加至少一个非空且去重的审查维度后重试。");
   }
+  // 外部契约结构层静态检查（设计 §5.1 检查 1/4/5/6/7/9）：纯计算，随每次加载执行。
+  // 声明层（候选处置表与 resolved 权威快照）只在 validate-acceptance 命令执行——
+  // 它要读候选快照并跑 resolver，属声明期门禁，不放进入口路径
+  if (Object.hasOwn(acceptance, "externalContracts")) {
+    validateExternalContractStructure(acceptance, sources);
+  }
 }
 
 function validateIncrements(increments, acceptance) {
@@ -967,8 +1079,24 @@ function validateIncrements(increments, acceptance) {
     const item = increments.items[index];
     const label = `increments.items[${index}]`;
     requireRecord(item, label);
-    // testCommand 必填（redesign 3.4/5.3：每个增量有自己的测试命令；裁决器要求回执覆盖全部增量）
-    requireExactKeys(item, ["id", "title", "requirementIds", "testCommand"], label);
+    // testCommand 必填（redesign 3.4/5.3：每个增量有自己的测试命令；裁决器要求回执覆盖全部增量）；
+    // kind 可选（V6 运行可用性升级 §7.1 契约冒烟类型）——能力绑定不写在增量里，唯一来源
+    // 仍是断言 requiredEnvironment.capability
+    const itemAllowed = ["id", "title", "requirementIds", "testCommand"];
+    const itemOptional = ["kind"];
+    const unknownItemFields = Object.keys(item).filter((key) => !itemAllowed.includes(key) && !itemOptional.includes(key));
+    const missingItemFields = itemAllowed.filter((key) => !Object.hasOwn(item, key));
+    if (unknownItemFields.length > 0 || missingItemFields.length > 0) {
+      const parts = [];
+      if (missingItemFields.length > 0) parts.push(`缺少字段 ${missingItemFields.join(", ")}`);
+      if (unknownItemFields.length > 0) parts.push(`含未知字段 ${unknownItemFields.join(", ")}`);
+      fail(`${label} 形态非法：${parts.join("；")}。`, `按契约补齐必需字段并删除未知字段后重试；increments.items 可选字段为 ${itemOptional.join(", ")}。`);
+    }
+    if (Object.hasOwn(item, "kind")) {
+      // 词表当前只登记 contract-smoke 一个值；新增增量类型是显式动作（改这里 + 同步消费方），
+      // 不接受任意字符串
+      requireEnum(item.kind, ["contract-smoke"], `${label}.kind`);
+    }
     requireNonEmptyString(item.id, `${label}.id`);
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(item.id)) {
       fail(`${label}.id 格式非法：${JSON.stringify(item.id)}。`, "把增量 id 改为字母或数字开头、仅含字母数字/下划线/连字符且长度不超过 64 的形式后重试。");
@@ -1013,6 +1141,10 @@ function validateIncrements(increments, acceptance) {
       }
     }
   }
+  // 契约冒烟增量检查（设计 §5.1 第 8 条）：验收含 essential 外部契约时必须存在
+  // kind=contract-smoke 增量——放在本函数是因为增量结构在此校验，与 validate-acceptance
+  // 是同一条命令的同一次执行
+  validateContractSmokeIncrement(increments, acceptance);
 }
 
 // ── 事件形态校验（16 类）──
@@ -1191,6 +1323,10 @@ function validateEventShape(event, { record = false } = {}) {
       requireSha256(event.artifactSha256, "event.artifactSha256");
       if (Object.hasOwn(event, "assertionIds")) requireStringArray(event.assertionIds, "event.assertionIds", { nonEmptyItems: true, unique: true });
       if (Object.hasOwn(event, "adversarialFormIds")) requireStringArray(event.adversarialFormIds, "event.adversarialFormIds", { nonEmptyItems: true, unique: true });
+      // 外部契约能力绑定（§6.3）：元素 = 「契约id:能力id」限定 id（单契约包允许裸能力 id，
+      // 语义层按验收包核对存在性）；runtimeProbe 标记该证据由真实 runner/宿主驱动产生
+      if (Object.hasOwn(event, "contractCapabilityIds")) requireStringArray(event.contractCapabilityIds, "event.contractCapabilityIds", { nonEmptyItems: true, unique: true });
+      if (Object.hasOwn(event, "runtimeProbe")) requireBoolean(event.runtimeProbe, "event.runtimeProbe");
       break;
     case "FindingRaised":
       requireFindingId(event.findingId, "event.findingId");
@@ -1211,6 +1347,13 @@ function validateEventShape(event, { record = false } = {}) {
       if (Object.hasOwn(event, "regressionTestRef")) requireNonEmptyString(event.regressionTestRef, "event.regressionTestRef");
       // 空关联 boundary 的不影响任何需求论证：非空字符串（存在性由 fold 层护栏裁决）
       if (Object.hasOwn(event, "emptyScopeRefutation")) requireNonEmptyString(event.emptyScopeRefutation, "event.emptyScopeRefutation");
+      // authority 反驳组（§9）：结构命中外部契约时 authorityBacked 必须为 true 且
+      // authorityHash / authorityObservationRef 非空（三段必填组的完整性在此保证；
+      // 「是否结构命中」的判定在 fold 层——需要验收包才能反查断言）
+      if (Object.hasOwn(event, "contractCapabilityIds")) requireStringArray(event.contractCapabilityIds, "event.contractCapabilityIds", { nonEmptyItems: true, unique: true });
+      if (Object.hasOwn(event, "authorityBacked")) requireBoolean(event.authorityBacked, "event.authorityBacked");
+      if (Object.hasOwn(event, "authorityHash")) requireSha256(event.authorityHash, "event.authorityHash");
+      if (Object.hasOwn(event, "authorityObservationRef")) requireNonEmptyString(event.authorityObservationRef, "event.authorityObservationRef");
       break;
     case "FindingResolved":
       requireFindingId(event.findingId, "event.findingId");
@@ -1311,6 +1454,16 @@ function validateEventShape(event, { record = false } = {}) {
     case "RevisionOpened":
       requireEnum(event.target, ["acceptance"], "event.target");
       requireNonEmptyString(event.reason, "event.reason");
+      break;
+    case "ExternalAuthorityDeclared":
+      requireNonEmptyString(event.contractId, "event.contractId");
+      requireNonEmptyString(event.resolverKind, "event.resolverKind");
+      requireNonEmptyString(event.locator, "event.locator");
+      requireSha256(event.snapshotSha256, "event.snapshotSha256");
+      break;
+    case "EnvironmentBaselineConfirmed":
+      requireSha256(event.newAuthoritySnapshotSha256, "event.newAuthoritySnapshotSha256");
+      requireStringArray(event.contractIds, "event.contractIds", { nonEmptyItems: true, unique: true });
       break;
     case "IndependentTaskDeclared":
       requireSha256(event.intentSha256, "event.intentSha256");
@@ -1535,6 +1688,11 @@ function loadWorld(taskDirValue, { withEvents = true, requirePackage = true, all
     world.policySnapshotSha256 = sha256Text(snapshotText);
   }
 
+  // 策略先于验收包解析：外部契约静态检查要读调用类环境底线词表（策略包第三层数据）
+  const sources = world.policySnapshot ?? loadPolicySources();
+  validatePolicySources(sources);
+  world.policy = sources;
+
   if (requirePackage) {
     const acceptancePath = join(taskDir, "acceptance.json");
     const acceptanceText = readText(
@@ -1548,18 +1706,13 @@ function loadWorld(taskDirValue, { withEvents = true, requirePackage = true, all
     } catch (error) {
       fail(`acceptance.json 不是合法 JSON：${error.message}。`, `修复 ${acceptancePath} 的 JSON 语法后重试当前命令。`);
     }
-    validateAcceptance(acceptance, task);
+    validateAcceptance(acceptance, task, taskDir, sources);
     const increments = readJson(join(taskDir, "increments.json"), "increments.json");
     validateIncrements(increments, acceptance);
     world.acceptance = acceptance;
     world.increments = increments;
     world.packageSha256 = acceptancePackageSha256(acceptance, increments);
   }
-
-  // 策略：有快照按快照执行（审查/批准/裁决全按快照）；无快照按安装目录+用户级当前值（快照前的阶段）
-  const sources = world.policySnapshot ?? loadPolicySources();
-  validatePolicySources(sources);
-  world.policy = sources;
 
   if (withEvents) {
     const parsed = parseEventRecords(taskDir, keys);
@@ -1656,6 +1809,9 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
     cancelRecords: [],
     revisionOpens: [],
     missingArtifacts: [],
+    // 外部权威登记与环境基线确认（V6 运行可用性升级）：持久事实，不按版本/revision 过滤
+    externalAuthorities: [],
+    environmentBaselines: [],
   };
   // 预授权名额用量（与 fold.preauthorizations 按 index 对齐；每验收版本独立配额）
   const preauthUsedCounts = [];
@@ -1752,6 +1908,19 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
               if (!event.assertionIds.includes(form.assertionId)) fail(`${lineLabel} 的反例场景 ${id} 与 assertionIds 不匹配。`, "同时列入该场景所属的断言 id 后重试。");
             }
           }
+          // 外部契约能力绑定存在性（§6.3）：contractCapabilityIds 的元素必须能在当前验收包
+          // 的 externalContracts 能力清单中找到——防自造能力名把 runtime 义务挂到不存在的
+          // 能力上。验收包未声明外部契约时该字段无意义，直接拒绝
+          if (Array.isArray(event.contractCapabilityIds) && event.contractCapabilityIds.length > 0) {
+            const known = knownContractCapabilityIds(world.acceptance);
+            const unknown = event.contractCapabilityIds.filter((id) => !known.has(id));
+            if (unknown.length > 0) {
+              fail(
+                `${lineLabel} 的 contractCapabilityIds 含当前验收包未声明的能力 ${unknown.join(", ")}。`,
+                "把能力 id 改为 acceptance.externalContracts[].capabilities[].id（或「契约id:能力id」限定形式）；验收包未声明 externalContracts 时删除该字段。",
+              );
+            }
+          }
           fold.evidence.push(event);
         }
         break;
@@ -1828,6 +1997,42 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
             const message = `${lineLabel} 的 category=boundary 且 requirementIds 为空（空关联）但未附 emptyScopeRefutation——空关联不得成为绕过定级护栏的通道，必须证明该发现不影响任何需求。`;
             if (guardrailStrict) {
               fail(message, `三选一：① 补充 --empty-scope-refutation "<该发现不影响任何需求的论证>" 后重登；② 该发现实际影响需求时，把对应需求 id 填入 --requirement-ids 重登（已断言覆盖的需求禁归 boundary，见护栏①）；③ 判据本身无法覆盖该行为时走 open-revision 修订验收（递增 acceptanceVersion 重审重批）。`);
+            }
+            fold.guardrailWarnings.push(`${message}（历史记录，写入时未拦）`);
+          }
+        }
+        // 护栏④（V6 运行可用性升级 §9）：外部契约 authority 反驳必填组——机器可判的结构命中
+        // 只有两种：contractCapabilityIds 非空，或 requirementIds 反查到的断言含
+        // requiredEnvironment.capability。命中时 authorityBacked 必须为 true 且 authorityHash
+        // 与 authorityObservationRef 非空；否则拒绝写入（拿平台文字文档 / 自写类型 / mock
+        // 行为自我证明的弱关闭通道由此封住）。只对新写入执行；历史记录在加载折算时降级为
+        // guardrailWarnings 留档（与护栏①②同模式）
+        if (current && Array.isArray(event.contractCapabilityIds) && event.contractCapabilityIds.length > 0) {
+          const known = knownContractCapabilityIds(world.acceptance);
+          const unknownIds = event.contractCapabilityIds.filter((id) => !known.has(id));
+          if (unknownIds.length > 0) {
+            fail(
+              `${lineLabel} 的 contractCapabilityIds 含当前验收包未声明的能力 ${unknownIds.join(", ")}。`,
+              "把能力 id 改为 acceptance.externalContracts[].capabilities[].id（或「契约id:能力id」限定形式）后重登。",
+            );
+          }
+        }
+        const structuralContractHit = current && (
+          (Array.isArray(event.contractCapabilityIds) && event.contractCapabilityIds.length > 0) ||
+          (world.acceptance.schemaVersion === 2 && event.requirementIds.some((requirementId) => {
+            const requirement = requirementById(world.acceptance, requirementId);
+            return requirement !== undefined && (requirement.assertions ?? []).some((assertion) =>
+              typeof assertion.requiredEnvironment?.capability === "string" && assertion.requiredEnvironment.capability !== "");
+          }))
+        );
+        if (structuralContractHit) {
+          const complete = event.authorityBacked === true &&
+            typeof event.authorityHash === "string" && event.authorityHash !== "" &&
+            typeof event.authorityObservationRef === "string" && event.authorityObservationRef.trim() !== "";
+          if (!complete) {
+            const message = `${lineLabel} 结构命中外部契约（contractCapabilityIds 非空，或关联需求断言带 requiredEnvironment.capability）但 authority 反驳组缺失或不完整——外部行为反驳必须引用权威工件。`;
+            if (guardrailStrict) {
+              fail(message, `三选一：① 补 --authority-backed --authority-hash <当前权威 aggregateHash> --authority-observation-ref <快照文件+符号/行 或真实 probe case id> 后重登；② 该发现与外部契约无关时删除 contractCapabilityIds 并确认关联需求断言不带 requiredEnvironment.capability；③ 判据本身缺外部契约依据时走 open-revision 修订验收。`);
             }
             fold.guardrailWarnings.push(`${message}（历史记录，写入时未拦）`);
           }
@@ -1923,6 +2128,13 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
         break;
       case "RevisionOpened":
         fold.revisionOpens.push(event);
+        break;
+      case "ExternalAuthorityDeclared":
+        // 用户登记的本地/可执行权威：持久事实（本地权威登记先于验收包存在）
+        fold.externalAuthorities.push(event);
+        break;
+      case "EnvironmentBaselineConfirmed":
+        fold.environmentBaselines.push(event);
         break;
       case "IndependentTaskDeclared":
         fold.declarations.push(event);
@@ -2196,6 +2408,876 @@ function assertionEnvironmentGap(world, assertion, evidenceEvent) {
   return verdictOf.ok ? null : { requirement: required.kind, reason: verdictOf.reason };
 }
 
+// ── 外部契约登记、权威解析与运行可用性（V6 运行可用性升级设计 §4/§5/§6/§8/§12）──
+// 验收包 additive 顶层字段 externalContracts / externalContractReview；调用类目录与环境底线
+// 落策略包 external-contract-classes.json（该文件由候选探测线创建，本 CLI 只读消费——文件
+// 缺失时词表与底线校验整体跳过并在 validate-acceptance 输出 warnings 披露，不静默当成通过）。
+//   resolve-external-contracts.mjs --task-dir D --project-root R [--acceptance-file F]
+//     → stdout JSON {contracts:[{id,status,authorityAggregateHash,identity,surfaces,snapshotSha256}],snapshotSha256}
+//   detect-external-contracts.mjs --project-root R --intent-file F
+//     → stdout JSON {candidates:[{id,strength,signals,...}],unresolved:[...]}
+// 两个脚本路径可用环境变量覆盖（测试与排障：DELIVERY_EXTERNAL_CONTRACT_RESOLVER /
+// DELIVERY_EXTERNAL_CONTRACT_DETECTOR），缺省取技能安装目录内的脚本。
+const ENVIRONMENT_CONTRACTS_DIRNAME = "environment-contracts";
+const ENVIRONMENT_CONTRACTS_POINTER = "environment-contracts.current.json";
+// 任务分级（设计 §13）：a=机制小改 / b=结构改（缺省）/ c=大版本。降档只减少审查席与分区，
+// 不减必做机器门；唯一写通道 = init 参数或 set-delivery-profile（禁直改 task.json）
+const DELIVERY_PROFILES = ["a", "b", "c"];
+
+function resolverScriptPath() {
+  const override = process.env.DELIVERY_EXTERNAL_CONTRACT_RESOLVER;
+  if (typeof override === "string" && override.trim() !== "") return override.trim();
+  return join(SKILL_ROOT, "scripts", "resolve-external-contracts.mjs");
+}
+
+function detectorScriptPath() {
+  const override = process.env.DELIVERY_EXTERNAL_CONTRACT_DETECTOR;
+  if (typeof override === "string" && override.trim() !== "") return override.trim();
+  return join(SKILL_ROOT, "scripts", "detect-external-contracts.mjs");
+}
+
+function externalContractsOf(acceptance) {
+  return Array.isArray(acceptance?.externalContracts) ? acceptance.externalContracts : [];
+}
+
+/** 调用类目录策略（含环境底线与蕴含观察类）。文件缺失 → null（词表校验整体跳过）。 */
+function externalContractClassesPolicy(world) {
+  const document = world?.policy?.[EXTERNAL_CONTRACT_CLASSES_FILE];
+  return document === null || document === undefined ? null : document;
+}
+
+/** classId → {minEnvironment, implies[]}；策略文件缺失或 classes 为空 → null。 */
+function classFloorTable(policyDocument) {
+  if (policyDocument === null || !Array.isArray(policyDocument.classes) || policyDocument.classes.length === 0) return null;
+  const table = new Map();
+  for (const entry of policyDocument.classes) {
+    if (entry === null || typeof entry !== "object" || typeof entry.id !== "string") continue;
+    table.set(entry.id, {
+      minEnvironment: typeof entry.minEnvironment === "string" ? entry.minEnvironment : null,
+      implies: Array.isArray(entry.impliesObservationClasses) ? entry.impliesObservationClasses.filter((item) => typeof item === "string") : [],
+    });
+  }
+  return table.size > 0 ? table : null;
+}
+
+/** 验收包全部「契约 × 能力」条目（sourceRef 指向 acceptance.externalContracts 的能力项）。 */
+function contractCapabilityEntries(acceptance) {
+  const entries = [];
+  externalContractsOf(acceptance).forEach((contract, contractIndex) => {
+    (Array.isArray(contract?.capabilities) ? contract.capabilities : []).forEach((capability, capabilityIndex) => {
+      entries.push({
+        contractId: contract.id,
+        contractIndex,
+        capabilityId: capability.id,
+        capability,
+        sourceRef: `acceptance.externalContracts[${contract.id}].capabilities[${capability.id}]`,
+      });
+    });
+  });
+  return entries;
+}
+
+/** 验收包已声明的能力 id 集合：限定形式「契约id:能力id」+ 契约内裸 id（单契约包）。 */
+function knownContractCapabilityIds(acceptance) {
+  const contracts = externalContractsOf(acceptance);
+  const known = new Set();
+  for (const entry of contractCapabilityEntries(acceptance)) {
+    known.add(`${entry.contractId}:${entry.capabilityId}`);
+  }
+  if (contracts.length === 1) {
+    for (const entry of contractCapabilityEntries(acceptance)) known.add(entry.capabilityId);
+  }
+  return known;
+}
+
+/** 候选快照路径（按验收版本隔离，设计 §4.2）。 */
+function candidateSnapshotPath(taskDir, acceptanceVersion) {
+  return join(taskDir, "evidence", `acceptance-v${acceptanceVersion}`, "external-contract-candidates.json");
+}
+
+function readCandidateSnapshot(taskDir, acceptanceVersion) {
+  const filePath = candidateSnapshotPath(taskDir, acceptanceVersion);
+  if (!existsSync(filePath)) return { available: false, path: filePath, document: null, sha256: null };
+  const text = readText(filePath, "外部契约候选快照", `重新运行 detect-external-contracts 生成 ${filePath} 后重试。`);
+  let document;
+  try {
+    document = JSON.parse(text);
+  } catch (error) {
+    fail(`外部契约候选快照不是合法 JSON：${error.message}。`, `修复 ${filePath} 的 JSON 语法后重试；不要手工改写探测产物。`);
+  }
+  return { available: true, path: filePath, document, sha256: sha256Text(text) };
+}
+
+/** strong 候选信号命中的调用类集合。词表缺失时退化为取信号末段（manifest:pi.extensions →
+ * pi.extensions；call-class:register-command → register-command）。 */
+function strongCandidateClasses(candidateSnapshot, floorTable) {
+  const classes = new Set();
+  if (candidateSnapshot?.available !== true) return classes;
+  const candidates = Array.isArray(candidateSnapshot.document?.candidates) ? candidateSnapshot.document.candidates : [];
+  const known = floorTable === null ? [] : [...floorTable.keys()];
+  for (const candidate of candidates) {
+    if (candidate?.strength !== "strong") continue;
+    const signals = Array.isArray(candidate.signals) ? candidate.signals.filter((item) => typeof item === "string") : [];
+    for (const signal of signals) {
+      for (const classId of known) {
+        if (signal.includes(classId)) classes.add(classId);
+      }
+      if (known.length === 0) {
+        const tail = signal.split(":").filter(Boolean).at(-1);
+        if (tail !== undefined) classes.add(tail);
+      }
+    }
+  }
+  return classes;
+}
+
+/** 机器强制按 essential 处理的能力（设计 §4.1 字段规则 + §7.3 D0）：源码/manifest strong
+ * 信号命中的能力，或已被断言 requiredEnvironment.capability 引用的能力——不看契约自报的
+ * essential，也不看需求自报的 required / riskAcceptable 标志。 */
+function forcedEssentialCapabilityIds(acceptance, strongClasses) {
+  const forced = new Set();
+  if (strongClasses.size === 0) return forced;
+  for (const entry of contractCapabilityEntries(acceptance)) {
+    const declared = Array.isArray(entry.capability.detectionClasses) ? entry.capability.detectionClasses : [];
+    if (declared.some((classId) => strongClasses.has(classId))) {
+      forced.add(`${entry.contractId}:${entry.capabilityId}`);
+    }
+  }
+  for (const requirement of acceptance.requirements ?? []) {
+    for (const assertion of requirement.assertions ?? []) {
+      const capability = assertion.requiredEnvironment?.capability;
+      if (typeof capability !== "string" || capability === "") continue;
+      for (const entry of contractCapabilityEntries(acceptance)) {
+        if (entry.capabilityId === capability || `${entry.contractId}:${entry.capabilityId}` === capability) {
+          forced.add(`${entry.contractId}:${entry.capabilityId}`);
+        }
+      }
+    }
+  }
+  return forced;
+}
+
+/** 契约是否 effectively essential（自报 essential 或被机器强制）。 */
+function effectivelyEssentialContracts(acceptance, forced) {
+  const essential = new Set();
+  for (const contract of externalContractsOf(acceptance)) {
+    if (contract.essential === true) {
+      essential.add(contract.id);
+      continue;
+    }
+    const forcedHit = (Array.isArray(contract.capabilities) ? contract.capabilities : [])
+      .some((capability) => forced.has(`${contract.id}:${capability.id}`));
+    if (forcedHit) essential.add(contract.id);
+  }
+  return essential;
+}
+
+/** 只读执行探测/解析脚本，返回 {ok, parsed, reason}（不写盘、无副作用）。 */
+function runExternalContractScript(scriptPath, args) {
+  if (!existsSync(scriptPath)) {
+    return { ok: false, parsed: null, reason: `脚本不存在：${scriptPath}` };
+  }
+  const result = spawnSync(process.execPath, [scriptPath, ...args], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, timeout: 120_000 });
+  if (result.error !== undefined && result.error !== null) {
+    return { ok: false, parsed: null, reason: `脚本执行失败：${result.error.message}` };
+  }
+  if (result.status !== 0) {
+    const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
+    return { ok: false, parsed: null, reason: `脚本退出码 ${result.status}${stderr === "" ? "" : `：${stderr.split("\n")[0]}`}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch (error) {
+    return { ok: false, parsed: null, reason: `脚本输出不是合法 JSON：${error.message}` };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, parsed: null, reason: "脚本输出不是 JSON 对象" };
+  }
+  return { ok: true, parsed, reason: null };
+}
+
+/** 每契约权威哈希取值：探测线输出 authorityAggregateHash；design §4.3 的 aggregateHash
+ * 形态一并接受（同一事实的两个命名，前者优先）。 */
+function contractAggregateHashOf(contract) {
+  if (typeof contract?.authorityAggregateHash === "string" && contract.authorityAggregateHash !== "") return contract.authorityAggregateHash;
+  if (typeof contract?.aggregateHash === "string" && contract.aggregateHash !== "") return contract.aggregateHash;
+  return null;
+}
+
+/** 环境契约快照文件（按哈希分文件、不覆盖）。 */
+function environmentSnapshotFilePath(taskDir, sha256) {
+  return join(taskDir, ENVIRONMENT_CONTRACTS_DIRNAME, `${sha256}.json`);
+}
+
+function readEnvironmentSnapshotFile(taskDir, sha256) {
+  const filePath = environmentSnapshotFilePath(taskDir, sha256);
+  if (!existsSync(filePath)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8"));
+    if (parsed === null || typeof parsed !== "object" || !Array.isArray(parsed.contracts)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** 解析当前外部契约权威。evaluate 侧必须走 resolver 现场重解析（不允许用 taskDir 内旧快照
+ * 结论蒙混——设计 §4.4 第 6/7 条）；validate-acceptance 是声明期检查，resolver 不可用时
+ * 允许回落到 current 指针（该指针由工作流在解析后刚写过）。 */
+function resolveEnvironmentContracts(taskDir, projectRoot, { allowPointerFallback = false } = {}) {
+  const outcome = runExternalContractScript(resolverScriptPath(), [
+    "--task-dir", taskDir,
+    "--project-root", projectRoot,
+  ]);
+  if (outcome.ok) {
+    const contracts = Array.isArray(outcome.parsed.contracts) ? outcome.parsed.contracts : [];
+    return {
+      available: true,
+      source: "resolver",
+      snapshotSha256: typeof outcome.parsed.snapshotSha256 === "string" ? outcome.parsed.snapshotSha256 : null,
+      contracts,
+      reason: null,
+    };
+  }
+  if (allowPointerFallback) {
+    const pointerPath = join(taskDir, ENVIRONMENT_CONTRACTS_POINTER);
+    if (existsSync(pointerPath)) {
+      try {
+        const pointer = JSON.parse(readFileSync(pointerPath, "utf8"));
+        const sha256 = typeof pointer?.snapshotSha256 === "string" ? pointer.snapshotSha256 : null;
+        const document = sha256 === null ? null : readEnvironmentSnapshotFile(taskDir, sha256);
+        if (document !== null) {
+          return {
+            available: true,
+            source: "pointer",
+            snapshotSha256: sha256,
+            contracts: document.contracts,
+            reason: `resolver 不可用（${outcome.reason}），已回落至 ${ENVIRONMENT_CONTRACTS_POINTER} 指向的快照`,
+          };
+        }
+      } catch {
+        // 指针损坏：与缺失同等处理，走下方不可用分支
+      }
+    }
+  }
+  return { available: false, source: "none", snapshotSha256: null, contracts: [], reason: outcome.reason };
+}
+
+/** 批准时的每契约权威哈希（环境历史链起点）。approve-acceptance 在验收包声明外部契约时
+ * 自动绑定当前快照哈希，因此正常情况下可取到；缺字段/缺快照文件 → null + 原因。 */
+function approvalBaselineHashes(world) {
+  const approvals = world.fold.approvals.filter((event) => event.acceptanceVersion === world.acceptance.acceptanceVersion);
+  const approval = approvals.length > 0 ? approvals[approvals.length - 1] : null;
+  if (approval === null) return { approval: null, hashes: null, reason: "任务尚无验收批准（无环境历史链起点）" };
+  const sha256 = typeof approval.authoritySnapshotSha256 === "string" ? approval.authoritySnapshotSha256 : null;
+  if (sha256 === null) {
+    return { approval, hashes: null, reason: `批准事件（seq ${approval.seq}）未绑定 authoritySnapshotSha256——升级前批准或未经自动绑定，无法确定批准时权威基线` };
+  }
+  const document = readEnvironmentSnapshotFile(world.taskDir, sha256);
+  if (document === null) {
+    return { approval, hashes: null, reason: `批准时快照文件缺失或损坏：${ENVIRONMENT_CONTRACTS_DIRNAME}/${sha256}.json` };
+  }
+  const hashes = new Map();
+  for (const contract of document.contracts) {
+    if (typeof contract?.id !== "string") continue;
+    hashes.set(contract.id, contractAggregateHashOf(contract));
+  }
+  return { approval, hashes, reason: null };
+}
+
+/** 环境历史链判定（设计 §4.3/§10）：契约当前 aggregateHash 等于批准时该契约哈希，或存在
+ * 覆盖该 contractId 的 EnvironmentBaselineConfirmed 接链（同验收版本、晚于批准）。 */
+function environmentChainOk(contractId, currentHash, baseline, world) {
+  if (baseline.hashes !== null && baseline.hashes.get(contractId) === currentHash) return true;
+  const approvalSeq = baseline.approval?.seq ?? 0;
+  return world.fold.environmentBaselines.some((event) =>
+    event.acceptanceVersion === world.acceptance.acceptanceVersion &&
+    event.seq > approvalSeq &&
+    Array.isArray(event.contractIds) &&
+    event.contractIds.includes(contractId));
+}
+
+/** 检查 5：每个（有效）essential capability 必须被断言 requiredEnvironment.capability 引用，
+ * 且该断言的 kind 满足能力环境底线。结构层（按验收包自报 essential）与声明层（叠加候选
+ * strong 信号强制判定的 essential）共用——强制 essential 只在能读到候选快照的层生效。 */
+function validateEssentialCapabilityBindings(acceptance, essentialContracts) {
+  const contracts = externalContractsOf(acceptance);
+  const assertions = (acceptance.requirements ?? []).flatMap((requirement) => requirement.assertions ?? []);
+  const assertionCapabilityKinds = new Map();
+  for (const assertion of assertions) {
+    const capability = assertion.requiredEnvironment?.capability;
+    if (typeof capability !== "string" || capability === "") continue;
+    const kinds = assertionCapabilityKinds.get(capability) ?? [];
+    kinds.push(assertion.requiredEnvironment.kind);
+    assertionCapabilityKinds.set(capability, kinds);
+  }
+  for (const contract of contracts) {
+    if (!essentialContracts.has(contract.id)) continue;
+    for (const capability of contract.capabilities) {
+      const kinds = assertionCapabilityKinds.get(capability.id) ?? assertionCapabilityKinds.get(`${contract.id}:${capability.id}`) ?? [];
+      if (kinds.length === 0) {
+        fail(
+          `essential 能力 ${contract.id}:${capability.id} 未被任何断言的 requiredEnvironment.capability 引用。`,
+          `在至少一条断言的 requiredEnvironment 增加 capability=${capability.id}（绑定唯一权威 = assertion.requiredEnvironment.capability，不另设 consumedBy 映射表）；确无对应行为断言时把该契约改为非 essential 并说明理由。`,
+        );
+      }
+      if (!kinds.some((kind) => environmentKindSatisfies(kind, capability.minEnvironment))) {
+        fail(
+          `essential 能力 ${contract.id}:${capability.id} 的底线 ${capability.minEnvironment} 无满足档位的断言引用（现有断言 kind：${kinds.join(" / ")}）。`,
+          `把绑定断言的 requiredEnvironment.kind 提升到不低于 ${capability.minEnvironment}（真实环境是官方运行器的超集，real-host 证据可满足 official-runner 要求）后重试。`,
+        );
+      }
+    }
+  }
+}
+
+// ── validate-acceptance 静态检查（设计 §5.1 九条）──
+// 分两层，触发条件相同：验收包出现 externalContracts 键即执行；未声明该键的验收包与升级前
+// 旧任务不受任何新检查约束（设计 §16 R1 验收项「无外部依赖的普通任务不受影响」；判定锚 =
+// task.json 的 deliveryProfile 元数据，init 在该升级后统一写入，旧任务目录无该字段）。
+//   ① 结构层（本函数，纯计算无 I/O）：检查 1/4/5/6/7/9 + 调用类底线与蕴含观察。
+//      随 loadWorld 每次执行——验收包结构损坏在任何命令入口都被拦下。
+//   ② 声明层（validateExternalContractDeclarations，读候选快照文件 + 跑 resolver）：
+//      检查 2/3。只在 validate-acceptance 命令执行——resolver 是外部进程调用，
+//      放进 loadWorld 会让 next / obligations / evaluate 之外的每个命令都依赖探测线脚本
+//      可用，读路径（「下一步是什么」）会被拖死，属于把声明期门禁放错了层。
+// 检查 8（contract-smoke 增量）在 validateIncrements——增量结构在那里校验，与
+// validate-acceptance 是同一条命令的同一次执行。
+function validateExternalContractStructure(acceptance, sources) {
+  const contracts = externalContractsOf(acceptance);
+  // 检查 1：externalContracts 若存在必须非空且结构合法
+  if (!Array.isArray(acceptance.externalContracts) || acceptance.externalContracts.length === 0) {
+    fail(
+      "acceptance.externalContracts 若存在必须是非空数组。",
+      "把 externalContracts 改为至少含一个契约的数组（id/essential/authorityRequest/capabilities），或删除该键表示本任务无外部契约依赖后重试。",
+    );
+  }
+  const policyDocument = sources?.[EXTERNAL_CONTRACT_CLASSES_FILE] ?? null;
+  const floorTable = classFloorTable(policyDocument);
+  const environmentKinds = (sources?.["evidence-kinds.json"]?.environmentKinds ?? []).filter((kind) => kind !== "fake-host");
+  // 结构层不读候选快照：strong 信号命中导致的「强制 essential」在声明层与 evaluate 复扫
+  // 两处生效（那里有候选快照/源码事实），结构层按验收包自报的 essential 判定
+  const forced = forcedEssentialCapabilityIds(acceptance, new Set());
+  const essentialContracts = effectivelyEssentialContracts(acceptance, forced);
+  const assertions = (acceptance.requirements ?? []).flatMap((requirement) => requirement.assertions ?? []);
+  // 断言能力引用 → 能力条目（裸 id 或限定 id）
+  const capabilityByReference = new Map();
+  for (const entry of contractCapabilityEntries(acceptance)) {
+    capabilityByReference.set(entry.capabilityId, entry);
+    capabilityByReference.set(`${entry.contractId}:${entry.capabilityId}`, entry);
+  }
+  const seenContractIds = new Set();
+  const seenCapabilityIds = new Set();
+  for (const contract of contracts) {
+    const contractLabel = `acceptance.externalContracts[${contract.id}]`;
+    // 检查 1：结构合法（非空数组、字段齐备、id 唯一）
+    requireRecord(contract, contractLabel);
+    requireExactKeys(contract, ["id", "essential", "authorityRequest", "capabilities"], contractLabel);
+    requireNonEmptyString(contract.id, `${contractLabel}.id`);
+    if (seenContractIds.has(contract.id)) {
+      fail(`${contractLabel}.id 重复：${contract.id}。`, "为每个外部契约分配唯一 id，并同步修正事件与证据中的引用后重试。");
+    }
+    seenContractIds.add(contract.id);
+    requireBoolean(contract.essential, `${contractLabel}.essential`);
+    const authorityRequest = contract.authorityRequest;
+    const authorityLabel = `${contractLabel}.authorityRequest`;
+    requireRecord(authorityRequest, authorityLabel);
+    requireExactKeys(authorityRequest, ["resolverKind", "locator"], authorityLabel);
+    requireNonEmptyString(authorityRequest.resolverKind, `${authorityLabel}.resolverKind`);
+    requireNonEmptyString(authorityRequest.locator, `${authorityLabel}.locator`);
+    if (policyDocument !== null && Array.isArray(policyDocument.resolverKinds) && policyDocument.resolverKinds.length > 0) {
+      requireEnum(authorityRequest.resolverKind, policyDocument.resolverKinds, `${authorityLabel}.resolverKind`);
+    }
+    if (!Array.isArray(contract.capabilities) || contract.capabilities.length === 0) {
+      fail(`${contractLabel}.capabilities 不能为空（能力清单是机器可对账的最小单元）。`, `至少登记一个 capability（id/minEnvironment/observable/surfaceRefs/detectionClasses）后重试。`);
+    }
+    const declaredClasses = new Set();
+    for (const capability of contract.capabilities) {
+      const capabilityLabel = `${contractLabel}.capabilities[${capability?.id ?? "?"}]`;
+      requireRecord(capability, capabilityLabel);
+      // 检查 4：capability 结构合法 + detectionClasses/surfaceRefs 非空
+      requireExactKeys(capability, ["id", "minEnvironment", "observable", "surfaceRefs", "detectionClasses"], capabilityLabel);
+      requireNonEmptyString(capability.id, `${capabilityLabel}.id`);
+      if (seenCapabilityIds.has(capability.id)) {
+        fail(`${capabilityLabel}.id 与已登记能力重复：${capability.id}。`, "能力 id 在全验收包内唯一（跨契约用「契约id:能力id」限定形式引用）后重试。");
+      }
+      seenCapabilityIds.add(capability.id);
+      requireNonEmptyString(capability.observable, `${capabilityLabel}.observable`);
+      requireStringArray(capability.surfaceRefs, `${capabilityLabel}.surfaceRefs`, { nonEmptyItems: true, unique: true });
+      requireStringArray(capability.detectionClasses, `${capabilityLabel}.detectionClasses`, { nonEmptyItems: true, unique: true });
+      if (capability.surfaceRefs.length === 0) {
+        fail(`${capabilityLabel}.surfaceRefs 不能为空。`, "每个 capability 必须带 surfaceRefs，指向权威快照中的文件或类型符号（probe 观察与审查抽查至少要能回溯到这些 surface）后重试。");
+      }
+      if (capability.detectionClasses.length === 0) {
+        fail(`${capabilityLabel}.detectionClasses 不能为空。`, "每个 capability 必须声明 detectionClasses（D0 探测到某个调用类时必须存在声明该类的 capability，否则拒绝编译并回验收修订）后重试。");
+      }
+      // 检查 9：minEnvironment 用策略环境词表（fake-host 不得作为档位——自写模拟宿主不是底线）
+      if (environmentKinds.length > 0) {
+        requireEnum(capability.minEnvironment, environmentKinds, `${capabilityLabel}.minEnvironment`);
+      } else {
+        requireEnum(capability.minEnvironment, ["official-runner", "real-host"], `${capabilityLabel}.minEnvironment`);
+      }
+      for (const classId of capability.detectionClasses) declaredClasses.add(classId);
+    }
+    // 检查 4 续：调用类环境底线——能力档位不得低于其声明调用类（及蕴含观察类）的底线
+    if (floorTable !== null) {
+      for (const capability of contract.capabilities) {
+        const floors = [];
+        for (const classId of capability.detectionClasses) {
+          const entry = floorTable.get(classId);
+          if (entry === undefined) {
+            fail(`${contractLabel}.capabilities[${capability.id}].detectionClasses 含未登记调用类 ${classId}。`, `只用策略包 ${EXTERNAL_CONTRACT_CLASSES_FILE} 已登记的调用类；新调用类走策略升级（upgrade-policy）后重试。`);
+          }
+          if (entry.minEnvironment !== null) floors.push({ classId, minEnvironment: entry.minEnvironment });
+          for (const implied of entry.implies) {
+            const impliedEntry = floorTable.get(implied);
+            if (impliedEntry !== undefined && impliedEntry.minEnvironment !== null) {
+              floors.push({ classId: implied, minEnvironment: impliedEntry.minEnvironment });
+            }
+          }
+        }
+        for (const floor of floors) {
+          if (!environmentKindSatisfies(capability.minEnvironment, floor.minEnvironment)) {
+            fail(
+              `${contractLabel}.capabilities[${capability.id}].minEnvironment=${capability.minEnvironment} 低于调用类 ${floor.classId} 的环境底线 ${floor.minEnvironment}。`,
+              `把 minEnvironment 提升到不低于 ${floor.minEnvironment}，或从 detectionClasses 移除该调用类（移除后源码复扫会按未登记 strong 信号拒绝）后重试。`,
+            );
+          }
+        }
+      }
+      // 蕴含观察义务：源码出现注册类时，能力清单必须同时覆盖注册与真实分发（§4.1 调用类目录规则）
+      for (const capability of contract.capabilities) {
+        for (const classId of capability.detectionClasses) {
+          for (const implied of floorTable.get(classId)?.implies ?? []) {
+            if (!declaredClasses.has(implied)) {
+              fail(
+                `${contractLabel} 声明调用类 ${classId}（蕴含 ${implied} 观察义务）但能力清单未覆盖 ${implied}。`,
+                `在 ${contractLabel}.capabilities 增加声明 detectionClasses 含 ${implied} 的能力（register-command 蕴含 dispatch-command：只登记注册不登记分发等于漏掉真实命令解析观察）后重试。`,
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+  validateEssentialCapabilityBindings(acceptance, essentialContracts);
+  // 检查 6：验收中出现的每个 requiredEnvironment.capability 必须可回溯到已声明能力
+  for (const assertion of assertions) {
+    const capability = assertion.requiredEnvironment?.capability;
+    if (typeof capability !== "string" || capability === "") continue;
+    if (!capabilityByReference.has(capability)) {
+      fail(
+        `断言 ${assertion.id} 的 requiredEnvironment.capability=${capability} 无法回溯到 acceptance.externalContracts 的能力清单。`,
+        "把该能力登记进对应契约的 capabilities（含 minEnvironment/detectionClasses/surfaceRefs），或改为不带 capability 的环境要求后重试。",
+      );
+    }
+  }
+  // 检查 7：capability 绑定断言的 given/when 把 mock/fake/自写 harness 作为唯一装载或
+  // 分发环境时拒绝（mock 可以是补充场景，不能是该 capability 的唯一声明来源）
+  for (const assertion of assertions) {
+    const capability = assertion.requiredEnvironment?.capability;
+    if (typeof capability !== "string" || capability === "" || !capabilityByReference.has(capability)) continue;
+    const text = `${assertion.given}\n${assertion.when}`.toLowerCase();
+    const mockHit = /(mock|fake|harness|stub|模拟|自写|假宿主)/.test(text);
+    const realHit = /(真实|real|official-runner|real-host|官方|生产环境|实际宿主)/.test(text);
+    if (mockHit && !realHit) {
+      fail(
+        `断言 ${assertion.id}（绑定能力 ${capability}）的 given/when 只把 mock/fake/自写 harness 作为装载或分发环境。`,
+        "mock 只能作补充场景：在 given/when 同时写明真实环境观察点（official-runner 或 real-host），或把该断言的能力绑定移除后重试。",
+      );
+    }
+  }
+}
+
+/** 声明层检查（设计 §5.1 第 2/3 条）：候选处置表与 resolved 权威快照。
+ * candidateSnapshot 由调用方读盘（taskDir/evidence/acceptance-v<N>/external-contract-candidates.json），
+ * 权威快照经 resolver 现场解析（validate-acceptance 是声明期检查，resolver 不可用时允许回落到
+ * current 指针——该指针由工作流在解析后刚写过）。 */
+function validateExternalContractDeclarations(acceptance, taskDir, sources, candidateSnapshot) {
+  const contracts = externalContractsOf(acceptance);
+  const policyDocument = sources?.[EXTERNAL_CONTRACT_CLASSES_FILE] ?? null;
+  const floorTable = classFloorTable(policyDocument);
+  const strongClasses = strongCandidateClasses(candidateSnapshot, floorTable);
+  const forced = forcedEssentialCapabilityIds(acceptance, strongClasses);
+  const essentialContracts = effectivelyEssentialContracts(acceptance, forced);
+  const seenContractIds = new Set(externalContractsOf(acceptance).map((contract) => contract.id));
+  // 检查 5（强制 essential 口径）：候选 strong 信号命中的能力被机器强制按 essential 处理
+  // （§4.1 字段规则）——结构层按自报 essential 已判过一次，这里用叠加后的集合再判
+  validateEssentialCapabilityBindings(acceptance, essentialContracts);
+  // 检查 2：候选处置表必填、detectionSha256 与候选快照一致、全部候选已处置、
+  // strong 候选只能 bound/unresolved、每个 externalContracts id 有 bound 或带 rationale 的
+  // manual 处置可回溯
+  const review = acceptance.externalContractReview;
+  requireRecord(review, "acceptance.externalContractReview");
+  requireExactKeys(review, ["detectionSha256", "dispositions"], "acceptance.externalContractReview");
+  requireSha256(review.detectionSha256, "acceptance.externalContractReview.detectionSha256");
+  if (candidateSnapshot?.available !== true) {
+    fail(
+      `externalContractReview.detectionSha256 无法对账：候选快照缺失（期望路径 taskDir/evidence/acceptance-v${acceptance.acceptanceVersion}/external-contract-candidates.json）。`,
+      `先运行 detect-external-contracts 生成该候选快照，再把其文件内容 sha256 填入 externalContractReview.detectionSha256 后重试；探测输入（intent/manifest/源码）变化后必须重新探测。`,
+    );
+  }
+  if (review.detectionSha256 !== candidateSnapshot.sha256) {
+    fail(
+      `externalContractReview.detectionSha256 与候选快照不一致（登记 ${review.detectionSha256.slice(0, 12)}…，快照 ${candidateSnapshot.sha256.slice(0, 12)}…）。`,
+      `探测输入变化后必须重新探测并重新冻结处置表：重跑 detect-external-contracts，用新快照内容 sha256 更新 externalContractReview.detectionSha256 后重试。`,
+    );
+  }
+  const candidates = Array.isArray(candidateSnapshot.document?.candidates) ? candidateSnapshot.document.candidates : [];
+  if (!Array.isArray(review.dispositions)) {
+    fail("acceptance.externalContractReview.dispositions 必须是数组（可为空）。", "把 dispositions 改为数组；每个候选一条处置记录后重试。");
+  }
+  const dispositionByCandidate = new Map();
+  for (let index = 0; index < review.dispositions.length; index += 1) {
+    const disposition = review.dispositions[index];
+    const label = `acceptance.externalContractReview.dispositions[${index}]`;
+    requireRecord(disposition, label);
+    const dispositionAllowed = ["candidateId", "disposition", "contractId", "rationale"];
+    const unknownDispositionFields = Object.keys(disposition).filter((key) => !dispositionAllowed.includes(key));
+    const missingDispositionFields = ["candidateId", "disposition"].filter((key) => !Object.hasOwn(disposition, key));
+    if (unknownDispositionFields.length > 0 || missingDispositionFields.length > 0) {
+      const parts = [];
+      if (missingDispositionFields.length > 0) parts.push(`缺少字段 ${missingDispositionFields.join(", ")}`);
+      if (unknownDispositionFields.length > 0) parts.push(`含未知字段 ${unknownDispositionFields.join(", ")}`);
+      fail(`${label} 形态非法：${parts.join("；")}。`, `按契约补齐必需字段并删除未知字段后重试；${label} 允许的字段为 ${dispositionAllowed.join(", ")}（contractId/rationale 按处置类型条件必填）。`);
+    }
+    requireNonEmptyString(disposition.candidateId, `${label}.candidateId`);
+    requireEnum(disposition.disposition, ["bound", "manual", "not-external", "unresolved"], `${label}.disposition`);
+    if (dispositionByCandidate.has(disposition.candidateId)) {
+      fail(`${label} 重复处置候选 ${disposition.candidateId}。`, "每个候选只登记一条处置；修正后重试。");
+    }
+    dispositionByCandidate.set(disposition.candidateId, disposition);
+    if (disposition.disposition === "bound") {
+      requireNonEmptyString(disposition.contractId, `${label}.contractId`);
+      if (!seenContractIds.has(disposition.contractId)) {
+        fail(`${label}.contractId=${disposition.contractId} 不是已声明的 externalContracts id。`, "把 contractId 改为 acceptance.externalContracts 中已登记的 id 后重试。");
+      }
+    } else if (disposition.disposition === "manual") {
+      requireNonEmptyString(disposition.contractId, `${label}.contractId`);
+      requireNonEmptyString(disposition.rationale, `${label}.rationale`);
+      if (!seenContractIds.has(disposition.contractId)) {
+        fail(`${label}.contractId=${disposition.contractId} 不是已声明的 externalContracts id。`, "把 contractId 改为 acceptance.externalContracts 中已登记的 id 后重试。");
+      }
+    } else if (disposition.disposition === "not-external") {
+      requireNonEmptyString(disposition.rationale, `${label}.rationale`);
+    }
+  }
+  for (const candidate of candidates) {
+    const candidateId = typeof candidate?.id === "string" ? candidate.id : null;
+    if (candidateId === null) continue;
+    const disposition = dispositionByCandidate.get(candidateId);
+    if (disposition === undefined) {
+      fail(
+        `候选 ${candidateId} 未处置（externalContractReview.dispositions 缺该候选）。`,
+        `为每个候选登记一条处置：bound（绑定契约）/ manual（reviewer 依 intent 补充，须给 rationale 与 contractId）/ not-external（仅 weak 候选可用，须给 rationale）/ unresolved（停回）。`,
+      );
+    }
+    if (candidate.strength === "strong" && disposition.disposition === "not-external") {
+      fail(
+        `strong 候选 ${candidateId} 被处置为 not-external——无效处置。`,
+        "strong 候选只能 bound（绑定契约）或 unresolved（停回用户裁决）；确不构成外部契约时由用户裁决并走 open-revision 修订验收，不接受一句自由文本放行。",
+      );
+    }
+  }
+  for (const contractId of seenContractIds) {
+    const bound = [...dispositionByCandidate.values()].some(
+      (disposition) => (disposition.disposition === "bound" || disposition.disposition === "manual") && disposition.contractId === contractId,
+    );
+    if (!bound) {
+      fail(
+        `externalContracts 契约 ${contractId} 没有可回溯的候选处置（缺 bound 或带 rationale 的 manual）。`,
+        `为 ${contractId} 补一条 bound/manual 处置；无对应候选时用 manual 并在 rationale 说明 intent 语义来源。`,
+      );
+    }
+  }
+  // 检查 3：essential 契约必须有 resolved 权威快照（含被机器强制判为 essential 的契约）
+  const environment = resolveEnvironmentContracts(taskDir, acceptance.projectRoot, { allowPointerFallback: true });
+  for (const contractId of essentialContracts) {
+    const snapshotEntry = environment.contracts.find((entry) => entry?.id === contractId);
+    if (!environment.available || snapshotEntry === undefined) {
+      fail(
+        `essential 外部契约 ${contractId} 无权威解析结果（当前解析：${environment.reason ?? "不可用"}）。`,
+        `先运行 resolve-external-contracts --write 生成权威快照；权威确实不可得时把该契约改为非 essential 并走普通风险接受，或停回用户裁决「目标环境不可满足」。`,
+      );
+    }
+    if (snapshotEntry.status !== "resolved" || contractAggregateHashOf(snapshotEntry) === null) {
+      fail(
+        `essential 外部契约 ${contractId} 的权威状态为 ${snapshotEntry.status ?? "未知"}（无 aggregateHash）。`,
+        "declared-unavailable 不能伪造 resolved：补齐权威工件（安装包/官方二进制/用户登记的本地路径）后重跑 resolve --write，或停回用户裁决。",
+      );
+    }
+  }
+}
+
+/** 检查 8：验收含（有效）essential 契约时，increments 必须存在 kind=contract-smoke 增量。 */
+function validateContractSmokeIncrement(increments, acceptance) {
+  const contracts = externalContractsOf(acceptance);
+  if (contracts.length === 0) return;
+  const forced = forcedEssentialCapabilityIds(acceptance, new Set());
+  const essentialContracts = effectivelyEssentialContracts(acceptance, forced);
+  if (essentialContracts.size === 0) return;
+  const hasSmoke = (increments.items ?? []).some((item) => item.kind === "contract-smoke");
+  if (hasSmoke) return;
+  fail(
+    `验收含 essential 外部契约（${[...essentialContracts].join(", ")}）但 increments 无 kind=contract-smoke 的契约冒烟增量。`,
+    "增加一个契约冒烟增量（kind=contract-smoke，testCommand 指向 runtime probe 入口），让 API 形态/签名/回执通道在业务实现前先被真实环境揭示。",
+  );
+}
+
+// ── runtime 义务与 readiness 组装（§6.1/§12.1）──
+// 磁盘读取（artifact 解析、driver 哈希、权威重解析）都在本段完成，判定本体交给
+// kernel-judgments.deriveRuntimeObligations（pure 单源）——gate evaluate 与
+// delivery-core obligations 共用同一段组装逻辑。
+
+/** 证据 artifact 全文（probe 判定输入）。不可读/非 JSON 对象 → null。 */
+function readEvidenceArtifactDocument(world, event) {
+  if (typeof event.artifact !== "string" || event.artifact === "") return null;
+  const filePath = isAbsolute(event.artifact) ? resolve(event.artifact) : resolve(world.taskDir, event.artifact);
+  if (!existsSync(filePath)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** driver 哈希核对（§6.3/§8.1）：driver 非空；声明 driverHash 时必须与驱动文件全文哈希
+ * 一致，文件不可解析同样按不一致处理（fail-closed——不可核验的驱动不证明任何能力）。 */
+function driverHashOkOf(world, environment) {
+  if (environment === null || environment === undefined) return false;
+  if (typeof environment.driver !== "string" || environment.driver.trim() === "") return false;
+  const candidates = [];
+  if (isAbsolute(environment.driver)) candidates.push(resolve(environment.driver));
+  else {
+    candidates.push(resolve(world.taskDir, environment.driver));
+    candidates.push(resolve(world.task.projectRoot, environment.driver));
+  }
+  const driverPath = candidates.find((candidate) => existsSync(candidate));
+  if (driverPath === undefined) return false;
+  if (typeof environment.driverHash !== "string" || environment.driverHash === "") return false;
+  return sha256File(driverPath, `environment.driver ${environment.driver}`) === environment.driverHash;
+}
+
+/** 参与 runtime 判定的证据记录（当前 revision、声明了契约能力或 runtimeProbe）。 */
+function runtimeEvidenceRecordsOf(world, revision) {
+  const records = [];
+  for (const event of world.fold.evidence) {
+    if (event.revision !== revision) continue;
+    const hasCapabilities = Array.isArray(event.contractCapabilityIds) && event.contractCapabilityIds.length > 0;
+    if (event.runtimeProbe !== true && !hasCapabilities) continue;
+    const document = readEvidenceArtifactDocument(world, event);
+    records.push({
+      eventId: event.eventId,
+      actor: event.actor,
+      revision: event.revision,
+      runtimeProbe: event.runtimeProbe === true,
+      contractCapabilityIds: hasCapabilities ? event.contractCapabilityIds : [],
+      artifactReadable: document !== null,
+      environment: document?.environment ?? null,
+      cases: Array.isArray(document?.cases) ? document.cases : [],
+      subject: document?.subject ?? null,
+      driverHashOk: driverHashOkOf(world, document?.environment ?? null),
+    });
+  }
+  return records;
+}
+
+/** 证据级权威核对（§8.1 第 4-6 条，与能力无关的维度）：sourceHash 与当前权威
+ * aggregateHash 一致、driver 与 driverHash 可核、probe subject.revision 与事件 revision 一致。
+ * 返回 null = 无缺口；非 null = 该证据最多 partial 的原因。 */
+function runtimeEvidenceAuthorityGap(world, record, snapshot) {
+  if (record.artifactReadable !== true) return "runtime probe artifact 不可读或不是 JSON 对象";
+  if (record.driverHashOk !== true) return "environment.driver 缺失、文件不可解析或 driverHash 与驱动文件内容不一致";
+  const environment = record.environment;
+  if (environment === null || environment === undefined) return "artifact 无 environment 元数据";
+  if (typeof environment.sourceHash !== "string" || environment.sourceHash === "") return "environment.sourceHash 缺失";
+  const contractIds = new Set(
+    record.contractCapabilityIds
+      .map((id) => (id.includes(":") ? id.slice(0, id.indexOf(":")) : (externalContractsOf(world.acceptance).length === 1 ? externalContractsOf(world.acceptance)[0].id : null)))
+      .filter((id) => typeof id === "string"),
+  );
+  for (const contractId of contractIds) {
+    const entry = snapshot.contracts.find((item) => item?.id === contractId);
+    const currentHash = entry === undefined ? null : contractAggregateHashOf(entry);
+    if (currentHash === null) {
+      return `契约 ${contractId} 当前权威不可解析（status=${entry?.status ?? "不在快照中"}）——无法核对证据 environment.sourceHash`;
+    }
+    if (environment.sourceHash !== currentHash) {
+      return `environment.sourceHash 与契约 ${contractId} 当前权威 aggregateHash 不一致（证据 ${environment.sourceHash.slice(0, 12)}…，权威 ${currentHash.slice(0, 12)}…）`;
+    }
+  }
+  const subjectRevision = typeof record.subject?.revision === "string" ? record.subject.revision : null;
+  if (subjectRevision === null || subjectRevision !== record.revision) {
+    return `probe subject.revision（${subjectRevision ?? "缺失"}）与证据事件 revision（${record.revision}）不一致——早期 spike 不能替代 final`;
+  }
+  return null;
+}
+
+/** runtime 义务 + readiness 组装（evaluate / obligations 共用）。 */
+function runtimeObligationsOf(world, revision) {
+  const acceptance = world.acceptance;
+  const contracts = externalContractsOf(acceptance);
+  if (contracts.length === 0) {
+    return { obligations: [], readiness: { overall: "not-applicable", contracts: [] }, snapshot: null, baseline: null, chainBroken: [], forced: new Set(), strongClasses: new Set(), rescanAvailable: true, rescanReason: null };
+  }
+  const floorTable = classFloorTable(externalContractClassesPolicy(world));
+  // evaluate 侧必须现场重解析权威（不允许读 taskDir 旧快照结论蒙混，设计 §4.4 第 6/7 条）
+  const snapshot = resolveEnvironmentContracts(world.taskDir, world.task.projectRoot, { allowPointerFallback: false });
+  const baseline = approvalBaselineHashes(world);
+  const rescan = rescanStrongClasses(world);
+  const strongClasses = rescan.classes;
+  const forced = forcedEssentialCapabilityIds(acceptance, strongClasses);
+  const essentialContracts = effectivelyEssentialContracts(acceptance, forced);
+  const chainBroken = [];
+  const chainOk = new Set();
+  for (const contract of contracts) {
+    const entry = snapshot.contracts.find((item) => item?.id === contract.id);
+    const currentHash = entry === undefined ? null : contractAggregateHashOf(entry);
+    if (currentHash !== null && environmentChainOk(contract.id, currentHash, baseline, world)) chainOk.add(contract.id);
+    else chainBroken.push(contract.id);
+  }
+  const obligations = deriveRuntimeObligations({
+    acceptance,
+    environmentSnapshot: snapshot,
+    evidence: runtimeEvidenceRecordsOf(world, revision),
+    currentRevision: revision,
+    forcedEssential: forced,
+    chainOkContracts: chainOk,
+  });
+  const readiness = buildRuntimeReadiness(acceptance, obligations, essentialContracts, snapshot, rescan);
+  return { obligations, readiness, snapshot, baseline, chainBroken, forced, strongClasses, rescanAvailable: rescan.available, rescanReason: rescan.reason };
+}
+
+/** readiness 汇总（§12.1）：overall 只看 effectively essential 契约；非增强契约的能力缺失
+ * 不进入 overall，逐条披露在 nonEssentialGaps。 */
+function buildRuntimeReadiness(acceptance, obligations, essentialContracts, snapshot, rescan = { available: true }) {
+  const contracts = externalContractsOf(acceptance).map((contract) => {
+    const entry = snapshot.contracts.find((item) => item?.id === contract.id);
+    return {
+      contractId: contract.id,
+      essential: essentialContracts.has(contract.id),
+      authorityHash: entry === undefined ? null : contractAggregateHashOf(entry),
+      authorityStatus: entry?.status ?? "absent",
+      capabilities: (Array.isArray(contract.capabilities) ? contract.capabilities : []).map((capability) => {
+        const obligation = obligations.find((item) => item.contractId === contract.id && item.capabilityId === capability.id);
+        return {
+          id: capability.id,
+          state: obligation?.readiness ?? "unknown",
+          reason: obligation?.reason ?? "无对应 runtime 义务记录",
+          evidenceEventId: obligation?.evidenceRefs?.[0] ?? null,
+        };
+      }),
+    };
+  });
+  const essential = contracts.filter((contract) => contract.essential);
+  const nonEssentialGaps = contracts
+    .filter((contract) => !contract.essential)
+    .flatMap((contract) => contract.capabilities.filter((capability) => capability.state !== "established").map((capability) => ({ contractId: contract.contractId, capabilityId: capability.id, state: capability.state, reason: capability.reason })));
+  let overall = "established";
+  if (essential.length === 0) {
+    overall = "established";
+  } else if (essential.some((contract) => contract.capabilities.some((capability) => capability.state === "unknown"))) {
+    overall = "unknown";
+  } else if (essential.some((contract) => contract.capabilities.some((capability) => capability.state !== "established"))) {
+    overall = "not-established";
+  }
+  return {
+    overall,
+    contracts,
+    ...(nonEssentialGaps.length > 0 ? { nonEssentialGaps } : {}),
+    authorityAvailable: snapshot.available === true,
+    ...(snapshot.reason !== null && snapshot.reason !== undefined ? { authorityReason: snapshot.reason } : {}),
+    // 候选复扫可用性：探测脚本缺失时复扫未执行——如实披露，不得当成「无未登记信号」
+    candidateRescanAvailable: rescan.available === true,
+    ...(rescan.available !== true ? { candidateRescanReason: rescan.reason ?? "未说明" } : {}),
+  };
+}
+
+/** 候选复扫（§8.1 第 1 条 / §7.3 D3）：对当前候选源码重跑完整候选探测，strong 信号与蕴含
+ * 观察类必须映射到已声明 capability，unresolved 外部访问必须清零。
+ * 返回 {available, classes}——探测脚本不可用时 available=false（调用方按 fail-closed 处理，
+ * 不把「没扫」当成「无信号」）。 */
+function rescanStrongClasses(world) {
+  const acceptance = world.acceptance;
+  if (externalContractsOf(acceptance).length === 0) return { available: true, classes: new Set(), reason: null };
+  const intentPath = join(world.taskDir, "intent.md");
+  const args = ["--project-root", world.task.projectRoot];
+  if (existsSync(intentPath)) args.push("--intent-file", intentPath);
+  const outcome = runExternalContractScript(detectorScriptPath(), args);
+  if (!outcome.ok) return { available: false, classes: new Set(), reason: outcome.reason };
+  const floorTable = classFloorTable(externalContractClassesPolicy(world));
+  return { available: true, classes: strongCandidateClasses({ available: true, document: outcome.parsed }, floorTable), reason: null };
+}
+
+/** evaluate 前置（§8.1）：候选复扫 + EnvironmentBaselineConfirmed 预算规则。复扫命中未登记
+ * strong 信号或未解外部访问 → 直接拒绝 evaluate（不是判个 candidate 了事）。 */
+function externalContractPreflight(world) {
+  const acceptance = world.acceptance;
+  if (externalContractsOf(acceptance).length === 0) return;
+  // 预算规则（§4.3/§10）：同一 acceptanceVersion 内最多一次 EnvironmentBaselineConfirmed，
+  // 再次环境漂移必须 open-revision 或停回——不允许用环境重试掩盖实现缺陷
+  const baselines = world.fold.environmentBaselines.filter((event) => event.acceptanceVersion === acceptance.acceptanceVersion);
+  if (baselines.length > 1) {
+    fail(
+      `同一验收版本（v${acceptance.acceptanceVersion}）内登记了 ${baselines.length} 次 EnvironmentBaselineConfirmed（上限 1 次）。`,
+      "外部环境再次漂移时停回用户裁决：① 走 open-revision 重新核对验收（递增 acceptanceVersion）；② 或由用户重新定义目标；不得继续用环境基线确认重试。",
+    );
+  }
+  const floorTable = classFloorTable(externalContractClassesPolicy(world));
+  const declaredClasses = new Set();
+  for (const entry of contractCapabilityEntries(acceptance)) {
+    for (const classId of Array.isArray(entry.capability.detectionClasses) ? entry.capability.detectionClasses : []) declaredClasses.add(classId);
+  }
+  const intentPath = join(world.taskDir, "intent.md");
+  const args = ["--project-root", world.task.projectRoot];
+  if (existsSync(intentPath)) args.push("--intent-file", intentPath);
+  const outcome = runExternalContractScript(detectorScriptPath(), args);
+  if (!outcome.ok) {
+    // 探测脚本不可用：不伪造「无信号」结论——复扫缺口进 verdict 披露并阻断 accepted
+    process.stderr.write(`delivery-gate: 外部契约候选复扫不可用（${outcome.reason}）：本次 evaluate 无法确认无未登记 strong 信号，accepted 判定按 fail-closed 处理。\n`);
+    return;
+  }
+  const candidates = Array.isArray(outcome.parsed.candidates) ? outcome.parsed.candidates : [];
+  const unresolved = Array.isArray(outcome.parsed.unresolved) ? outcome.parsed.unresolved : [];
+  const unmappedStrong = [];
+  for (const candidate of candidates) {
+    if (candidate?.strength !== "strong") continue;
+    const signals = Array.isArray(candidate.signals) ? candidate.signals.filter((item) => typeof item === "string") : [];
+    const known = floorTable === null ? [] : [...floorTable.keys()];
+    const hit = new Set();
+    for (const signal of signals) {
+      for (const classId of known) if (signal.includes(classId)) hit.add(classId);
+      if (known.length === 0) {
+        const tail = signal.split(":").filter(Boolean).at(-1);
+        if (tail !== undefined) hit.add(tail);
+      }
+    }
+    // 蕴含观察类：命中注册类时必须同时覆盖其蕴含的分发观察类
+    for (const classId of [...hit]) {
+      for (const implied of floorTable?.get(classId)?.implies ?? []) hit.add(implied);
+    }
+    const missing = [...hit].filter((classId) => !declaredClasses.has(classId));
+    if (hit.size === 0 || missing.length > 0) {
+      unmappedStrong.push({ candidateId: candidate.id ?? "未命名候选", signals, missing });
+    }
+  }
+  if (unresolved.length > 0) {
+    fail(
+      `外部契约候选复扫发现 ${unresolved.length} 项未解外部访问（${unresolved.map((item) => item?.signal ?? "未说明").join("；")}）。`,
+      "计算式外部成员访问、动态 import、eval/Function/vm 等运行时代码生成无法静态归类时停回人工裁决：要么改写为可静态归类的显式调用，要么由用户裁决该外部访问的契约归属后重试；不做字面白名单放行。",
+    );
+  }
+  if (unmappedStrong.length > 0) {
+    fail(
+      `外部契约候选复扫发现未登记 strong 信号：${unmappedStrong.map((item) => `${item.candidateId}（缺调用类 ${item.missing.join(", ") || "无匹配调用类"}）`).join("；")}。`,
+      "能力清单低报的主机器门：在 acceptance.externalContracts 补声明对应调用类的 capability（含 minEnvironment/detectionClasses/surfaceRefs），递增 acceptanceVersion 重新审查批准后重试；确不构成外部契约时由用户裁决并修订验收。",
+    );
+  }
+}
+
 // ── 交付判定（redesign 3.7 完整判定式 + 3.9 失效范围）──
 function buildVerdict(world, revision, revisionSource = "computed") {
   requireNonEmptyString(revision, "--revision");
@@ -2249,6 +3331,18 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     if (!currentRevision(event)) continue;
     latestEvidence.set(`${event.requirementId}\0${event.kind}`, event);
     for (const assertionId of event.assertionIds ?? []) latestAssertionEvidence.set(`${assertionId}\0${event.kind}`, event);
+  }
+
+  // 外部契约运行可用性（§6.1/§8.1/§12.1）：权威现场重解析 + runtime 义务派生 + readiness。
+  // 无外部契约时整体短路（零开销、零行为变化——普通任务不受影响）
+  const runtime = runtimeObligationsOf(world, revision);
+  const runtimeAuthorityGaps = new Map();
+  if (runtime.snapshot !== null) {
+    for (const record of runtimeEvidenceRecordsOf(world, revision)) {
+      if (!record.runtimeProbe) continue;
+      const gap = runtimeEvidenceAuthorityGap(world, record, runtime.snapshot);
+      if (gap !== null) runtimeAuthorityGaps.set(record.eventId, gap);
+    }
   }
 
   // 发现状态：defect 未决阻 accepted；boundary 未经确认阻 accepted。
@@ -2409,7 +3503,11 @@ function buildVerdict(world, revision, revisionSource = "computed") {
           // 必须携带满足要求的环境元数据；不满足降级 partial——真实环境不可用时只能
           // unknown/partial，不能 verified（模拟环境不能独立证明宿主类契约）
           const environmentGap = assertionEnvironmentGap(world, assertion, event);
-          const result = event === undefined || event === null ? "missing" : environmentGap !== null && event.result === "verified" ? "partial" : event.result;
+          // runtime probe 证据的权威核对（§8.1 第 4-6 条）：sourceHash/driver/driverHash/
+          // subject.revision 任一项不通过 → 该证据最多 partial（与 runtime 义务 open 同源）
+          const runtimeGap = event === undefined || event === null ? null : runtimeAuthorityGaps.get(event.eventId) ?? null;
+          const downgraded = (environmentGap !== null || runtimeGap !== null) && event !== undefined && event !== null && event.result === "verified";
+          const result = event === undefined || event === null ? "missing" : downgraded ? "partial" : event.result;
           const gapId = result === "verified" ? null : missingGapId(currentVersion, assertion.id, kind, revision);
           if (result !== "verified") missingAssertionIds.push({ assertionId: assertion.id, requirementId: requirement.id, kind, result, gapId });
           return {
@@ -2420,6 +3518,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
             gapId,
             riskAccepted: false,
             ...(environmentGap !== null ? { environmentGap } : {}),
+            ...(runtimeGap !== null ? { runtimeEvidenceGap: { reason: runtimeGap } } : {}),
           };
         });
         return { id: assertion.id, status: requirementEvidenceStatus(evidence), evidence };
@@ -2580,12 +3679,21 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     // design 阶段是否必需与状态路由同一判定源（requireDesignApproved 策略开关）——
     // 策略允许跳过 design 时不得把它判成 open 义务阻断 accepted（义务视图不覆盖策略裁决）
     designStageRequired: rules.requireDesignApproved !== false,
+    // 外部契约 runtime 义务（§6.1/§6.2）：不可豁免，无 explicitly-waived 态
+    runtimeObligations: runtime.obligations,
   });
   const openObligations = obligationJudgment.openRequired;
   // accepted 前置（机制三）：存在 open 必需义务不得 accepted；revision 来源不明的区间
   // 同样阻断（两个交付终态一并阻断——用户裁决豁免只适用于既有规则允许的事项，
   // 无法解释的代码变化不在可豁免范围内，出路是补登记 / 恢复基线 / 用户确认新基线）
   const obligationsBlock = openObligations.length > 0;
+  // accepted 前置（§6.2/§12.1）：全部 essential 外部契约的 runtime 能力 established
+  // （含证据环境满足 capability.minEnvironment 与 sourceHash 核对——两者已编码进 readiness），
+  // 且每个契约的环境历史链完好。unknown 不写成成功：不可判定时同样阻断
+  const runtimeReadinessBlock = runtime.readiness.overall !== "established" && runtime.readiness.overall !== "not-applicable";
+  const environmentChainBlock = runtime.chainBroken.length > 0;
+  // 候选复扫不可用（探测脚本缺失/执行失败）：不伪造「无未登记 strong 信号」结论——fail-closed
+  const candidateRescanBlock = runtime.rescanAvailable !== true;
 
   // accepted 要求全部必需证据 verified、无未决 defect（不是「全部缺口被接受」——被接受的缺口只通往 accepted_with_risk）
   const accepted =
@@ -2598,6 +3706,9 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     openDefects.length === 0 &&
     unconfirmedBoundaries.length === 0 &&
     !obligationsBlock &&
+    !runtimeReadinessBlock &&
+    !environmentChainBlock &&
+    !candidateRescanBlock &&
     !revisionUnknown;
 
   // accepted_with_risk：在 accepted 之外逐项豁免——每个缺口独立判定，两类证据缺口各自需有效接受
@@ -2612,6 +3723,9 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     (evidenceGaps.length > 0 || openDefects.length > 0) &&
     unconfirmedBoundaries.length === 0 &&
     !obligationsBlock &&
+    !runtimeReadinessBlock &&
+    !environmentChainBlock &&
+    !candidateRescanBlock &&
     !revisionUnknown;
 
   // ── 状态路由（redesign 3.7 优先级表，自上而下首条命中）──
@@ -2707,14 +3821,24 @@ function buildVerdict(world, revision, revisionSource = "computed") {
       id: obligation.id,
       kind: obligation.kind,
       sourceRef: obligation.sourceRef,
+      ...(obligation.kind === "runtime"
+        ? {
+            contractId: obligation.contractId,
+            capabilityId: obligation.capabilityId,
+            readiness: obligation.readiness,
+            ...(obligation.reason !== undefined && obligation.reason !== null ? { reason: obligation.reason } : {}),
+          }
+        : {}),
       recovery:
         obligation.kind === "assertion"
           ? "补齐证据至 verified（重新取证），或对允许风险的缺口执行 accept-risk（用户裁决）"
-          : obligation.kind === "pending"
-            ? "执行 delivery-core pending resolve 关闭该待办（或按其 note 完成事项后 resolve）"
-            : obligation.kind === "stage"
-              ? "按 verdict.missing 对应条目的恢复动作推进该阶段（阶段无独立豁免通道，走正常交付流程）"
-              : "核对修复轮登记完整性（受控修复轮须带 from/to revision 与全量回执）",
+          : obligation.kind === "runtime"
+            ? `外部契约能力 ${obligation.contractId}:${obligation.capabilityId} 未在当前 revision 由 official-runner/real-host 证据建立（${obligation.reason ?? "无 probe 观察通过记录"}）。恢复动作：① 由 assurance 以真实 runner/宿主重跑 runtime probe（driver 单文件、driverHash 覆盖全文）并 record-evidence --runtime-probe --contract-capability-ids '["${obligation.contractId}:${obligation.capabilityId}"]'；② 权威变化时先由用户 confirm-environment-baseline 接上环境历史链再重跑 probe；③ 环境确实不可得时停回用户裁决「目标环境不可满足」，不得写成 accepted / accepted_with_risk。runtime 义务没有豁免通道（accept-risk / preauthorize-risk 都不消化它）`
+            : obligation.kind === "pending"
+              ? "执行 delivery-core pending resolve 关闭该待办（或按其 note 完成事项后 resolve）"
+              : obligation.kind === "stage"
+                ? "按 verdict.missing 对应条目的恢复动作推进该阶段（阶段无独立豁免通道，走正常交付流程）"
+                : "核对修复轮登记完整性（受控修复轮须带 from/to revision 与全量回执）",
     })),
     assuranceFullFirst:
       recheckWithoutFull.length > 0
@@ -2723,6 +3847,17 @@ function buildVerdict(world, revision, revisionSource = "computed") {
             note: "当前 revision 存在基础校验通过的 recheck 保证，但其之前无登记时点完整的 full（同验收版本、receipts 覆盖全部增量、证据可解析、探索引用存在——任意 revision）——首次完整保证不可被定向复核替代。恢复动作：先运行 independent-assurance-v6（mode=full）完成首次完整取证，再以 recheck 做修复后定向复核",
           }
         : null,
+    // 外部环境历史链断裂（§4.3/§10）：契约当前权威哈希与批准时不一致，且事件链无覆盖该
+    // contractId 的 EnvironmentBaselineConfirmed 接链。恢复三选一：环境恢复到批准版本 /
+    // 用户确认新基线并重跑 probe / 走 open-revision 重新核对验收
+    environmentChain: runtime.chainBroken.length > 0
+      ? {
+          contractIds: runtime.chainBroken,
+          approvalSnapshotSha256: runtime.baseline.approval?.authoritySnapshotSha256 ?? null,
+          currentSnapshotSha256: runtime.snapshot?.snapshotSha256 ?? null,
+          recovery: `契约 ${runtime.chainBroken.join(", ")} 的当前权威哈希与批准时不一致且无 EnvironmentBaselineConfirmed 接链：① 把外部环境恢复到批准版本；② 或由用户执行 ${GATE_COMMAND} confirm-environment-baseline 确认新基线，然后在当前环境重跑 runtime probe；③ 契约语义确实变化时走 open-revision 重新核对验收。同一 acceptanceVersion 内最多确认一次基线。`,
+        }
+      : null,
   };
 
   const nextAction = buildNextAction({
@@ -2756,6 +3891,8 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     nonRequiredFailures,
     driftChain: drift,
     evidenceManifestSha256,
+    // 外部契约运行可用性（§12.1）：逐契约能力结论。unknown 不写成成功——报告首段据此披露
+    runtimeReadiness: runtime.readiness,
     quality: {
       uniqueMustFix: uniqueMustFix.size,
       repairRounds,
@@ -3214,6 +4351,8 @@ function isTaskLevelEventType(type) {
     "AssuranceRevisionDrift",
     // V6 代：授权声明先于验收包存在（托管开始前登记），任务级事件形态
     "RiskPreauthorized",
+    // V6 代：外部权威登记先于验收包存在（本地 SDK / 官方二进制的用户凭据登记）
+    "ExternalAuthorityDeclared",
   ].includes(type);
 }
 
@@ -3706,9 +4845,12 @@ function requireNoPackageLineageConflict(world) {
 function commandInit(args) {
   const options = parseOptions(args, {
     required: ["project-root", "task-id"],
-    optional: ["intent-file"],
+    optional: ["intent-file", "delivery-profile"],
     flags: ["new-round", "resume-existing", "verification-only"],
   });
+  // 任务分级（设计 §13）：缺省 b；只接受 a/b/c（降档只减审查席与分区，不减必做机器门）
+  const deliveryProfile = Object.hasOwn(options, "delivery-profile") ? options["delivery-profile"] : "b";
+  requireEnum(deliveryProfile, DELIVERY_PROFILES, "--delivery-profile");
   if (options["new-round"] && options["resume-existing"]) {
     fail("--new-round 与 --resume-existing 互斥：继续既有任务用 --resume-existing，开新一轮目录用 --new-round。", "按目标二选一后重试 init。");
   }
@@ -3757,6 +4899,7 @@ function commandInit(args) {
       reused: true,
       projectRoot,
       worktree,
+      deliveryProfile: existing.deliveryProfile ?? "b",
       ...identityNote,
       siblingTasks: listGroupTasks(groupDir).filter((task) => task.taskId !== options["task-id"]),
       credentials: existing.credentials,
@@ -3806,6 +4949,7 @@ function commandInit(args) {
       reused: true,
       projectRoot,
       worktree,
+      deliveryProfile: existing.deliveryProfile ?? "b",
       ...identityNote,
       siblingTasks: listGroupTasks(groupDir).filter((task) => task.taskId !== taskId),
       credentials: existing.credentials,
@@ -3835,6 +4979,7 @@ function commandInit(args) {
     userPublicKey: pairs.user.publicKey,
     supersededBy: null,
     supersedeCancelled: null,
+    deliveryProfile,
   };
   if (options["verification-only"]) taskRecord.verificationOnly = true;
   atomicWrite(taskPath, `${JSON.stringify(taskRecord, null, 2)}\n`);
@@ -3846,6 +4991,7 @@ function commandInit(args) {
     taskDir: realpathSync(taskDir),
     projectRoot,
     worktree,
+    deliveryProfile,
     ...identityNote,
     siblingTasks,
     ...(siblingTasks.length > 0
@@ -3893,6 +5039,24 @@ function commandValidateAcceptance(args) {
   const world = loadWorld(options["task-dir"], { withEvents: false });
   // 验收包首次成型时执行血统包对账（intent 对账已在 init 完成）
   requireNoPackageLineageConflict(world);
+  // 外部契约声明层静态检查（设计 §5.1 检查 2/3）：候选处置表 + resolved 权威快照。
+  // 放在结构层之后：结构先合法才有对账对象
+  if (Object.hasOwn(world.acceptance, "externalContracts")) {
+    validateExternalContractDeclarations(
+      world.acceptance,
+      world.taskDir,
+      world.policy,
+      readCandidateSnapshot(world.taskDir, world.acceptance.acceptanceVersion),
+    );
+  }
+  const warnings = detectionRoutingCriteriaWarnings(world.acceptance);
+  // 外部契约声明存在但调用类目录策略未落盘：词表与环境底线校验整体关闭——如实披露，
+  // 不把「没校验」显示成「已通过」
+  if (externalContractsOf(world.acceptance).length > 0 && externalContractClassesPolicy(world) === null) {
+    warnings.push(
+      `策略文件 ${EXTERNAL_CONTRACT_CLASSES_FILE} 缺失：外部契约调用类词表、resolverKind 词表与环境底线校验本次未执行。恢复动作：确认该策略文件已在技能 policies/ 目录落盘（由候选探测线创建）后重跑 snapshot-policy 与 validate-acceptance；确无调用类目录时，外部契约能力仍按结构规则校验，但调用类低报只由候选复扫兜底。`,
+    );
+  }
   printJson({
     valid: true,
     taskDir: world.taskDir,
@@ -3900,7 +5064,7 @@ function commandValidateAcceptance(args) {
     acceptancePackageSha256: world.packageSha256,
     intentSha256: world.intentSha256,
     // 检测/分流类判别力词面初筛 warning（不拒写入——词面有误伤率，硬判定留给 reviewer 语义审）
-    warnings: detectionRoutingCriteriaWarnings(world.acceptance),
+    warnings,
   });
 }
 
@@ -3967,7 +5131,7 @@ function commandSnapshotPolicy(args) {
 function commandRecordReview(args) {
   const options = parseOptions(args, {
     required: ["task-dir", "conclusion", "summary", "credential"],
-    optional: ["artifact"],
+    optional: ["artifact", "authority-snapshot-sha256"],
   });
   const world = loadWorld(options["task-dir"], { requirePackage: true });
   const privateKey = loadCredentialPrivateKey(world, options.credential, "assurance");
@@ -3987,6 +5151,9 @@ function commandRecordReview(args) {
     conclusion: options.conclusion,
     artifact,
   };
+  // 审查时刻的环境契约快照哈希（§4.4 审计事实）：验收包声明外部契约时自动绑定当前快照
+  const authoritySnapshotSha256 = resolveAuthoritySnapshotSha256(world, options);
+  if (authoritySnapshotSha256 !== null) event.authoritySnapshotSha256 = authoritySnapshotSha256;
   if (world.intentSha256 === null || world.policySnapshotSha256 === null) {
     fail("登记审查前必须先固定原始意图与策略快照。", "依次执行 set-intent 与 snapshot-policy，再 record-review（事件自动绑定两者哈希）。");
   }
@@ -3995,10 +5162,30 @@ function commandRecordReview(args) {
   });
 }
 
+/** 审查/批准时刻的环境契约快照哈希（§4.4）。验收包声明外部契约时必须绑定（自动解析当前
+ * 权威快照；显式 --authority-snapshot-sha256 优先）；未声明外部契约时不绑定——空快照的
+ * 显式绑定由工作流在物化空候选/空环境快照后完成，内核不把该字段塞进无契约任务的事件
+ * （保持无外部依赖任务的事件形态不变）。 */
+function resolveAuthoritySnapshotSha256(world, options) {
+  if (Object.hasOwn(options, "authority-snapshot-sha256")) {
+    requireSha256(options["authority-snapshot-sha256"], "--authority-snapshot-sha256");
+    return options["authority-snapshot-sha256"];
+  }
+  if (world.acceptance === null || externalContractsOf(world.acceptance).length === 0) return null;
+  const snapshot = resolveEnvironmentContracts(world.taskDir, world.task.projectRoot, { allowPointerFallback: true });
+  if (!snapshot.available || snapshot.snapshotSha256 === null) {
+    fail(
+      `验收包声明了外部契约但当前无法解析权威快照（${snapshot.reason ?? "未说明"}），审查/批准事件无快照哈希可绑。`,
+      `先运行 ${GATE_COMMAND.replace("delivery-gate.mjs", "resolve-external-contracts.mjs")} --task-dir <dir> --project-root <root> --write 生成环境契约快照后重试；或显式传 --authority-snapshot-sha256 绑定既有快照哈希。`,
+    );
+  }
+  return snapshot.snapshotSha256;
+}
+
 function commandApproveAcceptance(args) {
   const options = parseOptions(args, {
     required: ["task-dir", "confirmation", "summary", "credential"],
-    optional: ["revision"],
+    optional: ["revision", "authority-snapshot-sha256"],
   });
   withEventsLock(options["task-dir"], () => {
     const world = loadWorld(options["task-dir"]);
@@ -4032,6 +5219,9 @@ function commandApproveAcceptance(args) {
       reviewEventId: passReview ? passReview.eventId : "none",
       confirmation: options.confirmation,
     };
+    // 批准时刻的环境契约快照哈希（§4.4）：环境历史链起点。additive 可选、不进批准四元组
+    const authoritySnapshotSha256 = resolveAuthoritySnapshotSha256(world, options);
+    if (authoritySnapshotSha256 !== null) event.authoritySnapshotSha256 = authoritySnapshotSha256;
     const record = appendEvent(world, event, privateKey);
     // 写入防护（V6）：批准即冻结——验收包两文件 chmod 0444（写入当时拒非法改写）+
     // 只追加快照 frozen/v<N>/（事后对账与恢复的权威副本）。合法修订唯一通道 = open-revision
@@ -4166,8 +5356,8 @@ const INTENT_SPECS = {
     type: "FindingRaised",
     role: null, // actor 由凭据角色决定（builder 自报 / assurance 审查）
     required: ["task-dir", "summary", "category", "severity", "requirement-ids", "artifact", "credential"],
-    optional: ["finding-id", "origin", "consequence-refutation", "consequence-refutation-type", "reopen-of", "first-detected-stage", "expected-stage", "regression-test-ref", "empty-scope-refutation", "revision", "run-id"],
-    jsonFields: { "requirement-ids": "requirementIds" },
+    optional: ["finding-id", "origin", "consequence-refutation", "consequence-refutation-type", "reopen-of", "first-detected-stage", "expected-stage", "regression-test-ref", "empty-scope-refutation", "contract-capability-ids", "authority-backed", "authority-hash", "authority-observation-ref", "revision", "run-id"],
+    jsonFields: { "requirement-ids": "requirementIds", "contract-capability-ids": "contractCapabilityIds" },
     build: (world, options, parsed) => ({
       findingId: options["finding-id"] ?? nextFindingId(world),
       category: options.category,
@@ -4182,6 +5372,11 @@ const INTENT_SPECS = {
       ...(options["first-detected-stage"] !== undefined ? { firstDetectedStage: options["first-detected-stage"] } : {}),
       ...(options["expected-stage"] !== undefined ? { expectedStage: options["expected-stage"] } : {}),
       ...(options["regression-test-ref"] !== undefined ? { regressionTestRef: options["regression-test-ref"] } : {}),
+      // authority 反驳组（§9）：结构命中外部契约时三段必填（fold 层护栏④裁决完整性）
+      ...(parsed["contract-capability-ids"] !== undefined ? { contractCapabilityIds: parsed["contract-capability-ids"] } : {}),
+      ...(options["authority-backed"] !== undefined ? { authorityBacked: options["authority-backed"] === "true" } : {}),
+      ...(options["authority-hash"] !== undefined ? { authorityHash: options["authority-hash"] } : {}),
+      ...(options["authority-observation-ref"] !== undefined ? { authorityObservationRef: options["authority-observation-ref"] } : {}),
     }),
   },
   "resolve-finding": {
@@ -4207,8 +5402,9 @@ const INTENT_SPECS = {
     type: "EvidenceRecorded",
     role: "assurance",
     required: ["task-dir", "requirement-id", "kind", "result", "summary", "artifact", "credential"],
-    optional: ["assertion-ids", "adversarial-form-ids", "artifact-sha256", "revision", "run-id"],
-    jsonFields: { "assertion-ids": "assertionIds", "adversarial-form-ids": "adversarialFormIds" },
+    optional: ["assertion-ids", "adversarial-form-ids", "artifact-sha256", "contract-capability-ids", "revision", "run-id"],
+    flags: ["runtime-probe"],
+    jsonFields: { "assertion-ids": "assertionIds", "adversarial-form-ids": "adversarialFormIds", "contract-capability-ids": "contractCapabilityIds" },
     build: (world, options, parsed) => ({
       requirementId: options["requirement-id"],
       kind: options.kind,
@@ -4216,6 +5412,10 @@ const INTENT_SPECS = {
       artifact: options.artifact,
       ...(parsed["assertion-ids"] !== undefined ? { assertionIds: parsed["assertion-ids"] } : {}),
       ...(parsed["adversarial-form-ids"] !== undefined ? { adversarialFormIds: parsed["adversarial-form-ids"] } : {}),
+      // 外部契约能力绑定 + runtime probe 标记（§6.3）：runtime 义务只能由 assurance 签署、
+      // 带 runtimeProbe=true 且 capability id 匹配的证据满足
+      ...(parsed["contract-capability-ids"] !== undefined ? { contractCapabilityIds: parsed["contract-capability-ids"] } : {}),
+      ...(options["runtime-probe"] !== undefined ? { runtimeProbe: options["runtime-probe"] === true || options["runtime-probe"] === "true" } : {}),
     }),
   },
   "record-exploration": {
@@ -4262,7 +5462,7 @@ const INTENT_SPECS = {
 
 function commandIntent(commandName, args) {
   const spec = INTENT_SPECS[commandName];
-  const options = parseOptions(args, { required: spec.required, optional: spec.optional });
+  const options = parseOptions(args, { required: spec.required, optional: spec.optional, flags: spec.flags ?? [] });
   const parsed = {};
   for (const [optionKey] of Object.entries(spec.jsonFields ?? {})) {
     if (options[optionKey] !== undefined) parsed[optionKey] = parseJsonOption(options[optionKey], `--${optionKey}`, commandName);
@@ -4455,10 +5655,121 @@ function commandAcceptRisk(args) {
   });
 }
 
+// 外部权威登记（§4.4 第 3 条）：local-path 与 executable 权威必须由用户凭据登记——
+// designer 或 builder 填写的本地路径/可执行文件不生成 resolved。任务级事件，验收包就位前
+// 亦可登记（托管开始前的权威声明）
+function commandDeclareExternalAuthority(args) {
+  const options = parseOptions(args, {
+    required: ["task-dir", "contract-id", "resolver-kind", "locator", "snapshot-sha256", "summary", "credential"],
+    optional: [],
+  });
+  withEventsLock(options["task-dir"], () => {
+    // 验收包已起草时必须按包校验契约 id（防把权威挂到未声明的契约上）；包未就位时允许预登记
+    const packageReady = existsSync(join(loadTaskCore(options["task-dir"]).taskDir, "acceptance.json"));
+    const world = loadWorld(options["task-dir"], { requirePackage: packageReady });
+    const privateKey = loadCredentialPrivateKey(world, options.credential, "user");
+    requireNonEmptyString(options["resolver-kind"], "--resolver-kind");
+    requireNonEmptyString(options.locator, "--locator");
+    requireSha256(options["snapshot-sha256"], "--snapshot-sha256");
+    if (world.acceptance !== null) {
+      const declared = externalContractsOf(world.acceptance).some((contract) => contract.id === options["contract-id"]);
+      if (!declared) {
+        fail(
+          `--contract-id ${options["contract-id"]} 不是当前验收包已声明的 externalContracts id。`,
+          "把 contract-id 改为 acceptance.externalContracts 中已登记的 id；验收包尚未起草时该字段只做预登记，批准前必须与验收包一致。",
+        );
+      }
+    }
+    const event = {
+      type: "ExternalAuthorityDeclared",
+      actor: "user",
+      acceptanceVersion: world.acceptance !== null ? world.acceptance.acceptanceVersion : 0,
+      revision: computeRevision(world.task.projectRoot),
+      summary: options.summary,
+      contractId: options["contract-id"],
+      resolverKind: options["resolver-kind"],
+      locator: options.locator,
+      snapshotSha256: options["snapshot-sha256"],
+    };
+    printJson(appendEvent(world, event, privateKey));
+  });
+}
+
+// 外部环境基线确认（§10）：用户确认新的外部环境基线并接上环境历史链。只接链，不把 runtime
+// 义务置 satisfied——确认后仍必须在当前环境重跑 probe。同一 acceptanceVersion 内最多一次
+// （evaluate 判定该预算规则）
+function commandConfirmEnvironmentBaseline(args) {
+  const options = parseOptions(args, {
+    required: ["task-dir", "contract-ids", "new-authority-snapshot-sha256", "credential"],
+    optional: [],
+  });
+  const contractIds = parseJsonOption(options["contract-ids"], "--contract-ids", "confirm-environment-baseline");
+  requireStringArray(contractIds, "--contract-ids", { nonEmptyItems: true, unique: true });
+  withEventsLock(options["task-dir"], () => {
+    const world = loadWorld(options["task-dir"]);
+    const privateKey = loadCredentialPrivateKey(world, options.credential, "user");
+    requireSha256(options["new-authority-snapshot-sha256"], "--new-authority-snapshot-sha256");
+    const declared = new Set(externalContractsOf(world.acceptance).map((contract) => contract.id));
+    const unknown = contractIds.filter((contractId) => !declared.has(contractId));
+    if (unknown.length > 0) {
+      fail(
+        `--contract-ids 含未声明契约 ${unknown.join(", ")}。`,
+        "只允许确认 acceptance.externalContracts 中已登记的契约 id；新契约先修订验收再确认基线。",
+      );
+    }
+    const sameVersionBaselines = world.fold.environmentBaselines.filter(
+      (event) => event.acceptanceVersion === world.acceptance.acceptanceVersion,
+    );
+    if (sameVersionBaselines.length > 0) {
+      fail(
+        `同一验收版本（v${world.acceptance.acceptanceVersion}）已登记过 EnvironmentBaselineConfirmed（上限 1 次）。`,
+        "再次环境漂移时停回用户裁决：走 open-revision 重新核对验收，或由用户重新定义目标；不得继续用环境基线确认重试。",
+      );
+    }
+    const event = {
+      type: "EnvironmentBaselineConfirmed",
+      actor: "user",
+      acceptanceVersion: world.acceptance.acceptanceVersion,
+      revision: computeRevision(world.task.projectRoot),
+      summary: `确认外部环境基线 ${options["new-authority-snapshot-sha256"].slice(0, 12)}…（契约 ${contractIds.join(", ")}）`,
+      newAuthoritySnapshotSha256: options["new-authority-snapshot-sha256"],
+      contractIds,
+    };
+    printJson(appendEvent(world, event, privateKey));
+  });
+}
+
+// 任务分级唯一写通道之一（§13）：另一通道是 init 的 --delivery-profile。禁止直改 task.json
+function commandSetDeliveryProfile(args) {
+  const options = parseOptions(args, {
+    required: ["task-dir", "profile", "credential"],
+    optional: [],
+  });
+  requireEnum(options.profile, DELIVERY_PROFILES, "--profile");
+  withEventsLock(options["task-dir"], () => {
+    const world = loadWorld(options["task-dir"], { requirePackage: false });
+    loadCredentialPrivateKey(world, options.credential, "user");
+    const taskPath = join(world.taskDir, "task.json");
+    const current = readJson(taskPath, "task.json");
+    const currentProfile = typeof current.deliveryProfile === "string" ? current.deliveryProfile : "b";
+    if (currentProfile === options.profile) {
+      printJson({ taskDir: world.taskDir, deliveryProfile: options.profile, changed: false });
+      return;
+    }
+    current.deliveryProfile = options.profile;
+    validateTaskRecord(current, world.taskDir);
+    atomicWrite(taskPath, `${JSON.stringify(current, null, 2)}\n`);
+    printJson({ taskDir: world.taskDir, deliveryProfile: options.profile, changed: true, previous: currentProfile });
+  });
+}
+
 function commandEvaluate(args) {
   const options = parseOptions(args, { required: ["task-dir"], optional: ["revision"] });
   withEventsLock(options["task-dir"], () => {
     const world = loadWorld(options["task-dir"]);
+    // 外部契约前置（§8.1）：当前候选源码复扫（strong 信号/蕴含观察类映射 + unresolved 外部
+    // 访问）+ EnvironmentBaselineConfirmed 预算规则。未通过 → 直接拒绝 evaluate
+    externalContractPreflight(world);
     let revision;
     let revisionSource;
     if (Object.hasOwn(options, "revision")) {
@@ -4919,6 +6230,15 @@ function main() {
       case "open-revision":
         commandOpenRevision(commandArgs);
         break;
+      case "declare-external-authority":
+        commandDeclareExternalAuthority(commandArgs);
+        break;
+      case "confirm-environment-baseline":
+        commandConfirmEnvironmentBaseline(commandArgs);
+        break;
+      case "set-delivery-profile":
+        commandSetDeliveryProfile(commandArgs);
+        break;
       case "record-design-approved":
         commandRecordDesignApproved(commandArgs);
         break;
@@ -5003,15 +6323,23 @@ if (invokedPath !== null && invokedPath === realpathSync(fileURLToPath(import.me
 // 进程内调用垫片（测试提速）：走与 CLI 完全相同的 main 分发执行一段 argv，返回与
 // spawnSync 同口径的结构化结果 { status, stdout, stderr }。stdout/stderr 经临时替换
 // write 口径捕获（gate 全部输出都走这两处），status 取 process.exitCode 终值（未设即 0，
-// 与进程退出码一致）；home 参数与 spawn 时的 HOME env 等价（HOME 派生目录已惰性化）。
-// node --test 用例串行执行，临时替换全局口径安全；函数保证恢复现场，失败也不例外
-function runGateCommand(argv, home) {
+// 与进程退出码一致）；home 参数与 spawn 时的 HOME env 等价（HOME 派生目录已惰性化），
+// env 参数按键覆盖 process.env（外部契约探测/解析脚本路径的测试注入走此通道），
+// 返回前恢复现场。node --test 用例串行执行，临时替换全局口径安全；函数保证恢复现场，
+// 失败也不例外
+function runGateCommand(argv, home, env) {
   const previousArgv = process.argv;
   const previousHome = process.env.HOME;
   const previousExitCode = process.exitCode;
   const previousStdoutWrite = process.stdout.write;
   const previousStderrWrite = process.stderr.write;
   const chunks = { stdout: [], stderr: [] };
+  const previousEnv = {};
+  const overriddenKeys = env === undefined || env === null ? [] : Object.keys(env);
+  for (const key of overriddenKeys) {
+    previousEnv[key] = process.env[key];
+    process.env[key] = env[key];
+  }
   process.argv = [previousArgv[0], previousArgv[1], ...argv];
   if (home !== undefined) process.env.HOME = home;
   process.exitCode = 0;
@@ -5022,6 +6350,10 @@ function runGateCommand(argv, home) {
   } finally {
     process.argv = previousArgv;
     if (home !== undefined) process.env.HOME = previousHome;
+    for (const key of overriddenKeys) {
+      if (previousEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = previousEnv[key];
+    }
     process.stdout.write = previousStdoutWrite;
     process.stderr.write = previousStderrWrite;
   }
@@ -5030,4 +6362,4 @@ function runGateCommand(argv, home) {
   return result;
 }
 
-export { buildVerdict, computeRevision, loadTaskCore, loadWorld, runGateCommand };
+export { buildVerdict, computeRevision, loadTaskCore, loadWorld, runGateCommand, runtimeObligationsOf };

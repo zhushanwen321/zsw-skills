@@ -13,6 +13,19 @@
 // 独立保证的环境事实责任（设计 §6.3）：带 requiredEnvironment 的宿主类断言，其证据
 // artifact 须含 environment 元数据且 kind/capability 满足要求——缺失或 fake-host 时
 // 该断言结论如实降级（verified→partial），不阻塞其他断言（分级降级，不整体 fail）。
+// 外部契约的假设源独立（设计 §8.2/§8.3/§5.2/§5.3）：验收包带 externalContracts 且 mode
+// 非 explore-only 时，本 workflow 亲自运行 resolver（无 --write——只解析不落盘，不采信
+// builder 提供的路径字符串），并按 resolvedPath 核对权威 surface 存在性与哈希；essential
+// 契约权威不可得即登记 authority-missing must-fix（blocker 不降 info）。逐 essential
+// capability 的亲自观察、negative case 亲自执行与 fake-host parity 由 coverage-reviewer
+// 提示词承担执行义务，机器侧校验 probe artifact（§6.3 结构 + sourceHash 对账权威 +
+// subject.revision 对账当前 revision + driver 登记）与 parity 引用存在性，按能力汇总
+// iaExecuted / manualHandoff（real-host 无法安全自动化的能力走转人工通道，机器登记不
+// 静默跳过），并生成 能力×证据环境 来源矩阵——只有 fake-host 的能力在保证报告明示
+// runtime 义务 open。recheck 必须重跑 probe（subject.revision 时鲜对账）。证据事件按
+// §6.3 additive 字段带 --contract-capability-ids / --runtime-probe（仅 IA 亲自执行的
+// probe 证据才标 runtimeProbe）。deliveryProfile=a 时探索维度短路为契约与故障两类
+// （设计 §13，与验收线对 reviewDimensions 的写法是对账项）。
 // 保证开始时读取 revision-provenance（设计 §7.2，只读消费）：unknownCount>0 时在保证
 // 报告终态块如实披露未知 revision 变化，不阻塞、不改判定（判定归 gate）。
 // 循环尝试记录（设计 §8.1/§8.2「保证」循环接入）：进入保证活动登记 started，各终态
@@ -66,6 +79,10 @@ interface CoverageOutcome {
   /** 亲自核对后确认「仍未修复」的既有 open finding（V6 代：排除自动重认领——
    * 测试全绿不等于逐条修复有效，reviewer 的逐条否定结论优先于机器信号） */
   unresolvedFindingIds: string[];
+  /** 外部契约能力的 IA 亲自观察申报（设计 §8.2；任务无 externalContracts 时缺省） */
+  contractObservations?: ContractObservation[];
+  /** fake-host 用于契约专属语义时的 parity 记录（设计 §8.3） */
+  parityRecords?: ParityRecord[];
 }
 
 interface ExplorationOutcome {
@@ -73,6 +90,99 @@ interface ExplorationOutcome {
   /** 必须完整覆盖 contract.reviewDimensions */
   dimensions: string[];
   findings: FindingDraft[];
+}
+
+/** 外部契约能力（验收包 externalContracts[].capabilities[]，设计 §4.1） */
+interface ExternalContractCapability {
+  id: string;
+  minEnvironment?: string;
+  observable?: string;
+  surfaceRefs?: string[];
+  detectionClasses?: string[];
+}
+
+/** 外部契约（验收包顶层 externalContracts[]） */
+interface ExternalContractDoc {
+  id: string;
+  essential: boolean;
+  authorityRequest?: { resolverKind?: string; locator?: string };
+  capabilities: ExternalContractCapability[];
+}
+
+/** resolver stdout 摘要单契约条目（resolve-external-contracts.mjs，schemaVersion 1）：
+ * 契约级哈希键名为 authorityAggregateHash（gate 固定消费名）；stdout 不含 resolvedPath
+ * （只在 --write 落盘的快照文件 contracts[].resolver.resolvedPath 里） */
+interface ResolverContractEntry {
+  id: string;
+  status?: string;
+  authorityAggregateHash?: string;
+  identity?: { name?: string; version?: string } | null;
+  surfaces?: { surfaceRef?: string; sha256?: string }[];
+}
+
+/** resolver stdout 摘要（IA 无 --write 亲自运行的只读解析结果） */
+interface ResolverSnapshotDoc {
+  schemaVersion?: number;
+  contracts?: ResolverContractEntry[];
+  snapshotSha256?: string;
+  unresolvedContracts?: { contractId?: string; reason?: string }[];
+}
+
+/** runtime probe artifact（设计 §6.3）：由真实 runner/宿主驱动产生的能力观察记录 */
+interface ProbeCaseDoc {
+  capabilityId: string;
+  /** 样本/case 稳定 id（parity 的 realObserved.caseId 引用它；缺省回退 capabilityId） */
+  caseId?: string;
+  operation: string;
+  observed: Record<string, unknown>;
+  passed: boolean;
+}
+
+interface ProbeArtifactDoc {
+  environment: {
+    kind: string;
+    name?: string;
+    version?: string;
+    source?: string;
+    sourceHash?: string;
+    driver?: string;
+    driverHash?: string;
+    capabilities?: string[];
+  };
+  subject: { revision: string; entrypoint?: string };
+  cases: ProbeCaseDoc[];
+  summary: { passed: number; failed: number; skipped: number };
+}
+
+/** coverage reviewer 申报的逐能力亲自观察（设计 §8.2 第 2 条：非 builder 自报） */
+interface ContractObservation {
+  contractId: string;
+  capabilityId: string;
+  /** probe artifact 或观察记录 JSON（evidence/ 内） */
+  artifact: string;
+  /** assurance-agent = IA 侧亲自执行（自写最小 probe 或亲自执行独立执行器）；
+   * manual-handoff = real-host 类无法安全自动化，转人工执行后回传 artifact */
+  executedBy: "assurance-agent" | "manual-handoff";
+  /** 本次观察亲自执行了的 negative case 引用（§5.3 第 4 条） */
+  negativeCaseRefs?: string[];
+  /** manual-handoff 必填：为什么无法安全自动化 */
+  manualHandoffReason?: string;
+}
+
+/** fake-host parity 单样本（设计 §8.3） */
+interface ParitySample {
+  sampleId: string;
+  mockObserved: { artifact: string; caseId: string; value: string };
+  realObserved: { artifact: string; caseId: string; value: string };
+  same: boolean;
+}
+
+/** fake-host parity 记录（设计 §8.3）：mock 用于契约专属语义时的真实环境对照 */
+interface ParityRecord {
+  mockAssetId: string;
+  realProbeArtifact: string;
+  sampleIds: string[];
+  parity: ParitySample[];
 }
 
 interface CommandResult {
@@ -124,8 +234,59 @@ const NODE_CHECK_EXISTS =
 const NODE_CHECK_FILES =
   "const fs=require('fs');const bad=process.argv.slice(1).filter(p=>{try{return !fs.statSync(p).isFile()}catch(e){return true}});if(bad.length){process.stdout.write(bad.join(' | '));process.exit(1)}";
 const NODE_READ_FILE = "process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8'))";
+const NODE_FILE_SHA256 =
+  "const c=require('crypto'),f=process.argv[1];process.stdout.write(c.createHash('sha256').update(require('fs').readFileSync(f)).digest('hex'))";
 const NODE_WRITE_FILE =
   "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2],{flag:'wx'})";
+// 权威 surface 核对（设计 §8.2 第 1 条：IA 亲自核对 resolver 输出的权威工件，不采信
+// builder 路径字符串）：入参 = resolvedPath + JSON[{surfaceRef,sha256}]；surfaceRef 形如
+// 「文件路径#符号」，哈希口径 = 文件部分原始字节 sha256（与 resolver 快照登记值逐字节
+// 可比——若内核线采用非原始字节口径，此处会全量不符并响亮失败，属可见的对账失败而非
+// 静默跳过）。越界路径（解析出 resolvedPath 之外）拒读
+const NODE_VERIFY_SURFACES =
+  "const fs=require('fs'),pt=require('path'),cr=require('crypto');" +
+  "const base=process.argv[1];const items=JSON.parse(process.argv[2]);const out=[];" +
+  "for(const it of items){" +
+  "const ref=String((it&&it.surfaceRef)||'');const expected=String((it&&it.sha256)||'');" +
+  "const filePart=ref.split('#')[0];const entry={surfaceRef:ref,found:false,sha256Match:false};" +
+  "if(filePart!==''){" +
+  "const abs=pt.resolve(base,filePart);const rel=pt.relative(base,abs);" +
+  "if(!rel.startsWith('..')){" +
+  "try{const st=fs.lstatSync(abs);if(st.isFile()){entry.found=true;entry.sha256Match=cr.createHash('sha256').update(fs.readFileSync(abs)).digest('hex')===expected}}catch(e){}" +
+  "}" +
+  "}" +
+  "out.push(entry);" +
+  "}" +
+  "process.stdout.write(JSON.stringify({results:out}))";
+// 验收反例引用收集（设计 §5.3）：遍历 taskDir/evidence/acceptance-review 下的反例记录
+// artifact 并全轮并入，输出 {files,records,discrimination}——records 每条带 file 溯源。
+// 双形态兼容（验收线 artifact 命名演进，本 workflow 两种都消费）：
+//   ① r<round>-counter-implementations.json：顶层为 CounterImplementation 数组（旧形态）
+//   ② r<round>-contract-check.json：顶层为对象，counterImplementations 为其数组字段，
+//      另有 contractDiscrimination/contractDiscriminationRationale 申报（新形态，
+//      §5.3 第 5 条「完全无反例时 none-possible」的落点）
+// 目录不存在或文件损坏不致命（反例最低记录的完整性由验收线负责，IA 侧只消费能解析到的引用）
+const NODE_COLLECT_COUNTERS =
+  "const fs=require('fs'),pt=require('path');" +
+  "const root=process.argv[1];const base=pt.join(root,'evidence','acceptance-review');" +
+  "const files=[];" +
+  "const walk=(d)=>{let entries;try{entries=fs.readdirSync(d,{withFileTypes:true})}catch(e){return}" +
+  "for(const e of entries){const p=pt.join(d,e.name);if(e.isDirectory())walk(p);else if(e.isFile()&&/(-(counter-implementations|contract-check))\\.json$/.test(e.name))files.push(p)}};" +
+  "if(fs.existsSync(base))walk(base);" +
+  "files.sort();" +
+  "const records=[];const discrimination=[];" +
+  "const pushRecords=(f,list)=>{for(const r of list){if(r&&typeof r==='object'&&!Array.isArray(r))records.push(Object.assign({file:f},r))}};" +
+  "for(const f of files){" +
+  "let doc;try{doc=JSON.parse(fs.readFileSync(f,'utf8'))}catch(e){records.push({file:f,parseError:String((e&&e.message)||e)});continue}" +
+  "if(Array.isArray(doc)){pushRecords(f,doc)}" +
+  "else if(doc&&typeof doc==='object'){" +
+  "if(Array.isArray(doc.counterImplementations))pushRecords(f,doc.counterImplementations);" +
+  "else records.push({file:f,parseError:'对象形态缺 counterImplementations 数组'});" +
+  "if(typeof doc.contractDiscrimination==='string')discrimination.push({file:f,value:doc.contractDiscrimination,rationale:typeof doc.contractDiscriminationRationale==='string'?doc.contractDiscriminationRationale:''});" +
+  "}" +
+  "else records.push({file:f,parseError:'顶层不是数组或对象'});" +
+  "}" +
+  "process.stdout.write(JSON.stringify({files,records,discrimination}))";
 // 逐增量测试执行（cwd 可控——world.run 的 cwd 固定为 workspace，无法指定项目/干净目录）。
 // 超时入参（第 5 参）来自 increments 契约的 testCommand.timeoutMs（CLI validate-acceptance
 // 已校验 1000..3600000 整数）；非法或缺省回退 300000，与 CLI 缺省值一致。外层 world.run
@@ -355,6 +516,60 @@ const explorationRequired = acceptanceDoc?.exploratoryReview === "required";
 const reviewDimensions = Array.isArray(acceptanceDoc?.reviewDimensions)
   ? (acceptanceDoc.reviewDimensions as unknown[]).filter((x): x is string => typeof x === "string" && x !== "")
   : [];
+// 外部契约（设计 §4.1：验收包顶层 externalContracts[]）——IA 假设源独立的输入。
+// 形态非法项跳过（结构校验归验收线与 gate），此处只消费能解析的契约与能力
+function parseExternalContracts(value: unknown): ExternalContractDoc[] {
+  if (!Array.isArray(value)) return [];
+  const docs: ExternalContractDoc[] = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.id !== "string" || record.id === "") continue;
+    const capabilities: ExternalContractCapability[] = [];
+    if (Array.isArray(record.capabilities)) {
+      for (const cap of record.capabilities) {
+        if (cap === null || typeof cap !== "object" || Array.isArray(cap)) continue;
+        const capRecord = cap as Record<string, unknown>;
+        if (typeof capRecord.id !== "string" || capRecord.id === "") continue;
+        capabilities.push({
+          id: capRecord.id,
+          ...(typeof capRecord.minEnvironment === "string" ? { minEnvironment: capRecord.minEnvironment } : {}),
+          ...(typeof capRecord.observable === "string" ? { observable: capRecord.observable } : {}),
+          ...(Array.isArray(capRecord.surfaceRefs) ? { surfaceRefs: capRecord.surfaceRefs.filter((x): x is string => typeof x === "string") } : {}),
+          ...(Array.isArray(capRecord.detectionClasses) ? { detectionClasses: capRecord.detectionClasses.filter((x): x is string => typeof x === "string") } : {}),
+        });
+      }
+    }
+    const request = record.authorityRequest;
+    docs.push({
+      id: record.id,
+      essential: record.essential === true,
+      ...(request !== null && typeof request === "object" && !Array.isArray(request)
+        ? {
+            authorityRequest: {
+              ...(typeof (request as Record<string, unknown>).resolverKind === "string" ? { resolverKind: (request as Record<string, unknown>).resolverKind as string } : {}),
+              ...(typeof (request as Record<string, unknown>).locator === "string" ? { locator: (request as Record<string, unknown>).locator as string } : {}),
+            },
+          }
+        : {}),
+      capabilities,
+    });
+  }
+  return docs;
+}
+const externalContracts = parseExternalContracts(acceptanceDoc?.externalContracts);
+const hasExternalContracts = externalContracts.length > 0;
+// 任务级 deliveryProfile（设计 §13）：a/b/c 与 benchmark 级别同枚举，缺省 b；只读消费
+// （写入归 init 参数或 user 凭据命令 set-delivery-profile，IA 不直改 task.json）
+const deliveryProfile =
+  taskRecord !== null && typeof taskRecord.deliveryProfile === "string" && ["a", "b", "c"].includes(taskRecord.deliveryProfile)
+    ? taskRecord.deliveryProfile
+    : "b";
+// profile=a 的探索降档维度（设计 §13「探索维度取契约与故障两类」）：与验收线写
+// reviewDimensions 的写法是对账项——两侧不一致时 gate 的维度覆盖检查会响亮失败，
+// 本 workflow 只按 profile 短路并在保证报告披露实际生效维度
+const PROFILE_A_DIMENSIONS = ["外部契约", "故障形态"];
+// effectiveReviewDimensions 在 mode 定值后计算（mode 校验在本段之后），见下方
 // evaluate 只读：spawn 级失败可安全重试一次（下同——全部 evaluate 调用点）
 const initialEvaluation = await retryOnSpawnFailure(
   () => runGate(gatePath, ["evaluate", "--task-dir", taskDir]),
@@ -394,6 +609,14 @@ if (!["full", "recheck", "explore-only"].includes(mode)) {
   };
   return result;
 }
+// 探索维度生效值：profile=a 且任务带外部契约时短路为契约与故障两类（设计 §13 机器
+// 降档——减少审查分区不减必做机器门）；其余保持验收声明的 reviewDimensions。
+// explore-only 不降档：候选阶段 ExplorationCompleted 同样受 gate 维度覆盖检查
+// （coversDimensions 对全部 ExplorationCompleted 生效），降档只发生在背 runtime 义务的
+// full/recheck 保证轮。与验收线写 reviewDimensions 的写法是对账项——两侧不一致时 gate
+// 的维度覆盖检查会响亮失败，本 workflow 只按 profile 短路并在保证报告披露实际生效维度
+const explorationDimensionsNarrowed = deliveryProfile === "a" && hasExternalContracts && mode !== "explore-only";
+const effectiveReviewDimensions = explorationDimensionsNarrowed ? PROFILE_A_DIMENSIONS : reviewDimensions;
 if (initialVerdict.state === "draft" || initialVerdict.state === "acceptance-approved") {
   await obsCloseExecution("setup-failure");
   const result: AssuranceResult = {
@@ -663,6 +886,57 @@ function validateCoverage(value: CoverageOutcome): string {
     if (typeof id !== "string" || !openFindings.has(id)) return `unresolvedFindingIds 只能引用本轮开始前仍 open 的 finding：${String(id)}`;
     if (value.resolvedFindingIds.includes(id)) return `unresolvedFindingIds 与 resolvedFindingIds 不得同时含 ${String(id)}`;
   }
+  // 外部契约观察申报（设计 §8.2）：结构校验在此，probe/parity 深度校验（文件存在性、
+  // sourceHash 对账、case 引用存在性）在 execute 段——此处只保证形态可被深度校验消费
+  if (value.contractObservations !== undefined) {
+    if (!Array.isArray(value.contractObservations)) return "contractObservations 须为数组";
+    for (const observation of value.contractObservations) {
+      if (observation === null || typeof observation !== "object") return "contractObservations 条目须为对象";
+      const contract = externalContracts.find((c) => c.id === observation.contractId);
+      if (contract === undefined) return `contractObservations.contractId 不在验收 externalContracts：${String(observation.contractId)}`;
+      if (!contract.capabilities.some((cap) => cap.id === observation.capabilityId)) {
+        return `contractObservations.capabilityId 不属于契约 ${contract.id}：${String(observation.capabilityId)}`;
+      }
+      if (!isEvidenceArtifact(observation.artifact)) return `contractObservations.artifact 必须位于 ${evidenceRoot}`;
+      if (observation.executedBy !== "assurance-agent" && observation.executedBy !== "manual-handoff") {
+        return "contractObservations.executedBy 须为 assurance-agent 或 manual-handoff";
+      }
+      if (observation.executedBy === "manual-handoff" && (typeof observation.manualHandoffReason !== "string" || observation.manualHandoffReason.trim() === "")) {
+        return "manual-handoff 观察必须附 manualHandoffReason（为什么无法安全自动化）——转人工是登记不是静默跳过";
+      }
+      if (observation.negativeCaseRefs !== undefined && (!Array.isArray(observation.negativeCaseRefs) || observation.negativeCaseRefs.some((ref) => typeof ref !== "string" || ref === ""))) {
+        return "contractObservations.negativeCaseRefs 须为非空字符串数组";
+      }
+    }
+  }
+  if (value.parityRecords !== undefined) {
+    if (!Array.isArray(value.parityRecords)) return "parityRecords 须为数组";
+    for (const record of value.parityRecords) {
+      if (record === null || typeof record !== "object") return "parityRecords 条目须为对象";
+      if (typeof record.mockAssetId !== "string" || record.mockAssetId.trim() === "") return "parityRecords.mockAssetId 须为非空字符串";
+      if (!isEvidenceArtifact(record.realProbeArtifact)) return `parityRecords.realProbeArtifact 必须位于 ${evidenceRoot}`;
+      if (!Array.isArray(record.sampleIds) || record.sampleIds.length === 0 || record.sampleIds.some((id) => typeof id !== "string" || id === "")) {
+        return "parityRecords.sampleIds 须为非空字符串数组";
+      }
+      if (new Set(record.sampleIds).size !== record.sampleIds.length) return "parityRecords.sampleIds 须去重";
+      if (!Array.isArray(record.parity) || record.parity.length === 0) return "parityRecords.parity 须为非空数组";
+      const seenSamples = new Set<string>();
+      for (const sample of record.parity) {
+        if (sample === null || typeof sample !== "object") return "parity 条目须为对象";
+        if (typeof sample.sampleId !== "string" || !record.sampleIds.includes(sample.sampleId)) return `parity.sampleId 必须属于 sampleIds：${String(sample.sampleId)}`;
+        if (seenSamples.has(sample.sampleId)) return `parity 样本重复：${sample.sampleId}`;
+        seenSamples.add(sample.sampleId);
+        for (const side of [sample.mockObserved, sample.realObserved] as const) {
+          if (side === null || typeof side !== "object") return "parity 观察侧须为对象";
+          if (typeof side.artifact !== "string" || side.artifact === "") return "parity 观察侧缺 artifact";
+          if (typeof side.caseId !== "string" || side.caseId === "") return "parity 观察侧缺 caseId（必须是可定位的 case 引用，不能是自由文本）";
+          if (typeof side.value !== "string") return "parity 观察侧缺 value";
+        }
+        if (typeof sample.same !== "boolean") return "parity.same 须为布尔值";
+      }
+      if (seenSamples.size !== record.sampleIds.length) return "parity 必须覆盖 sampleIds 全部样本";
+    }
+  }
   return "";
 }
 
@@ -670,7 +944,7 @@ function validateExploration(value: ExplorationOutcome): string {
   if (typeof value.summary !== "string" || value.summary.trim() === "") return "exploration.summary 须为非空字符串";
   if (!Array.isArray(value.dimensions) || value.dimensions.some((d) => typeof d !== "string" || d.trim() === "")) return "dimensions 须为非空字符串数组";
   if (new Set(value.dimensions).size !== value.dimensions.length) return "dimensions 须去重";
-  for (const dimension of reviewDimensions) {
+  for (const dimension of effectiveReviewDimensions) {
     if (!value.dimensions.includes(dimension)) return `探索维度未覆盖：${dimension}`;
   }
   return validateFindings(value.findings);
@@ -705,6 +979,19 @@ function intentArgsFor(event: DeliveryEvent): string[] {
         "--summary", event.summary, "--artifact", String(event.artifact),
         ...(event.assertionIds !== undefined ? ["--assertion-ids", JSON.stringify(event.assertionIds)] : []),
         ...(event.adversarialFormIds !== undefined ? ["--adversarial-form-ids", JSON.stringify(event.adversarialFormIds)] : []),
+        // artifactSha256 显式透传（与 ExplorationCompleted/AssuranceCompleted 同形态）：
+        // gate 缺省自算口径是 sha256File(join(taskDir, artifact))，对绝对路径 artifact 会
+        // 拼出双段路径而 ENOENT——本 workflow 的 evidenceRoot 约定是绝对路径，缺省自算
+        // 必炸（曾致生产 IA 在 execute 段首条证据即失败）。IA 已按同一文件算过哈希
+        // （artifactSha256Of），显式传入让 gate 跳过自算，事件仍与磁盘同哈希绑定；
+        // 哈希不符由裁决器 fold 的 hash-mismatch 判证据失效（fail-closed 不靠写入端信任）
+        ...(event.artifactSha256 !== undefined ? ["--artifact-sha256", String(event.artifactSha256)] : []),
+        // runtime 绑定（设计 §6.3 additive 字段）：contractCapabilityIds = 该证据覆盖的
+        // 「契约id:能力id」清单；runtimeProbe = 真实 runner/宿主驱动的 IA 亲自执行证据。
+        // 仅 IA 侧执行（assurance-agent / manual-handoff）的 probe 证据才带——builder
+        // 自报回执不带，其能力证据因此不满足 runtime 义务
+        ...(event.contractCapabilityIds !== undefined ? ["--contract-capability-ids", JSON.stringify(event.contractCapabilityIds)] : []),
+        ...(event.runtimeProbe === true ? ["--runtime-probe"] : []),
         ...rev];
     case "ExplorationCompleted":
       return ["record-exploration", ...base,
@@ -749,8 +1036,7 @@ async function appendEvent(event: DeliveryEvent): Promise<string> {
 
 /** 证据文件内容哈希（evidence/ 内相对 artifact 的绝对路径） */
 async function artifactSha256Of(artifactPath: string): Promise<string> {
-  const script = "const c=require('crypto'),f=process.argv[1];process.stdout.write(c.createHash('sha256').update(require('fs').readFileSync(f)).digest('hex'))";
-  const res = await runNode([script, artifactPath]);
+  const res = await runNode([NODE_FILE_SHA256, artifactPath]);
   if (res.exitCode !== 0 || !/^[0-9a-f]{64}$/.test(res.stdout.trim())) {
     throw new Error(`证据文件哈希计算失败：${artifactPath}（${res.stderr.trim() || res.stdout.trim()}）`);
   }
@@ -786,6 +1072,100 @@ async function trackedTreeSha256(projectRootPath: string, revisionMode: string):
     );
   }
   return res.stdout.trim();
+}
+
+/** probe artifact 深度校验（设计 §6.3 + §8.1 + §8.2）：结构完整、sourceHash 对账权威
+ * aggregateHash、subject.revision 对账当前 revision（早期 spike 不能替代 final）、
+ * driver 登记、环境档位满足能力 minEnvironment、case 能力 id 属于契约声明的能力集。
+ * skipSourceHashMatch 供 parity 引用的 probe 复用（其 sourceHash 只要非空且命中任一
+ * 已解析契约即接受，具体归属由调用方披露） */
+async function checkProbeArtifact(
+  artifactPath: string,
+  expected: { revision: string; aggregateHash: string; minEnvironment: string; contractCapabilityIds: Set<string> },
+  options: { requireDriver: boolean; skipSourceHashMatch?: boolean },
+): Promise<{ ok: boolean; error: string; kind: string; sourceHash: string; capabilities: string[]; caseIds: string[]; passedByCapability: Map<string, boolean> }> {
+  const empty = { ok: false, error: "", kind: "", sourceHash: "", capabilities: [], caseIds: [], passedByCapability: new Map<string, boolean>() };
+  const res = await runNode([NODE_READ_FILE, artifactPath]);
+  if (res.exitCode !== 0) return { ...empty, error: `probe artifact 不可读：${artifactPath}（${res.stderr.trim()}）` };
+  let doc: unknown;
+  try {
+    doc = JSON.parse(res.stdout);
+  } catch {
+    return { ...empty, error: `probe artifact 不是合法 JSON：${artifactPath}` };
+  }
+  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) return { ...empty, error: `probe artifact 顶层必须是对象：${artifactPath}` };
+  const record = doc as Record<string, unknown>;
+  const environment = record.environment;
+  if (environment === null || typeof environment !== "object" || Array.isArray(environment)) {
+    return { ...empty, error: `probe artifact 缺 environment 对象（§6.3）：${artifactPath}` };
+  }
+  const env = environment as Record<string, unknown>;
+  const kind = typeof env.kind === "string" ? env.kind : "";
+  if (kind !== "official-runner" && kind !== "real-host") {
+    return { ...empty, error: `probe environment.kind 必须是 official-runner 或 real-host（收到 ${JSON.stringify(env.kind)}）——fake-host 不能作为 runtime 义务证据` };
+  }
+  if (expected.minEnvironment === "real-host" && kind !== "real-host") {
+    return { ...empty, error: `能力要求 real-host，probe 环境为 ${kind}（完整用户交互/进程行为不能由官方 runner 替代）` };
+  }
+  if (typeof env.sourceHash !== "string" || env.sourceHash === "") {
+    return { ...empty, error: `probe environment.sourceHash 缺失（§8.1：sourceHash 缺失不得 verified）` };
+  }
+  if (options.skipSourceHashMatch !== true && env.sourceHash !== expected.aggregateHash) {
+    return { ...empty, error: `probe environment.sourceHash 与契约 aggregateHash 不一致（证据环境真实性，§8.1）：probe=${env.sourceHash} 权威=${expected.aggregateHash}` };
+  }
+  if (options.requireDriver) {
+    if (typeof env.driver !== "string" || env.driver === "") return { ...empty, error: `probe environment.driver 缺失（§6.3：driver 是入口登记）` };
+    if (typeof env.driverHash !== "string" || env.driverHash === "") return { ...empty, error: `probe environment.driverHash 缺失（§6.3：driverHash 覆盖 driver 全文）` };
+  }
+  const capabilities = Array.isArray(env.capabilities)
+    ? (env.capabilities as unknown[]).filter((x): x is string => typeof x === "string")
+    : [];
+  if (capabilities.length === 0) return { ...empty, error: `probe environment.capabilities 必须为非空字符串数组（§6.3）` };
+  const subject = record.subject;
+  if (subject === null || typeof subject !== "object" || Array.isArray(subject)) {
+    return { ...empty, error: `probe artifact 缺 subject 对象（§6.3）：${artifactPath}` };
+  }
+  const subjectRecord = subject as Record<string, unknown>;
+  const subjectRevision = typeof subjectRecord.revision === "string" ? subjectRecord.revision : "";
+  if (subjectRevision === "") return { ...empty, error: `probe subject.revision 缺失（§6.3：必须由 probe 侧实际计算或核对，不能只自报）` };
+  if (subjectRevision !== expected.revision) {
+    return { ...empty, error: `probe subject.revision 与当前 revision 不一致（早期 spike 不能替代 final，§6.1 第 6 条）：probe=${subjectRevision} 当前=${expected.revision}` };
+  }
+  if (!Array.isArray(record.cases) || record.cases.length === 0) {
+    return { ...empty, error: `probe artifact cases 必须为非空数组（§6.3）：${artifactPath}` };
+  }
+  const caseIds: string[] = [];
+  const passedByCapability = new Map<string, boolean>();
+  let passedCount = 0;
+  for (const entry of record.cases) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return { ...empty, error: `probe cases 条目必须是对象：${artifactPath}` };
+    const c = entry as Record<string, unknown>;
+    if (typeof c.capabilityId !== "string" || c.capabilityId === "") return { ...empty, error: `probe case 缺 capabilityId：${artifactPath}` };
+    if (!expected.contractCapabilityIds.has(c.capabilityId)) {
+      return { ...empty, error: `probe case capabilityId 不属于契约声明的能力集：${c.capabilityId}` };
+    }
+    if (typeof c.operation !== "string" || c.operation === "") return { ...empty, error: `probe case（${c.capabilityId}）缺 operation` };
+    if (c.observed === null || typeof c.observed !== "object" || Array.isArray(c.observed)) {
+      return { ...empty, error: `probe case（${c.capabilityId}）缺 observed 键值（不得只有 passed 布尔，§6.3）` };
+    }
+    if (typeof c.passed !== "boolean") return { ...empty, error: `probe case（${c.capabilityId}）passed 须为布尔` };
+    if (c.passed) passedCount += 1;
+    caseIds.push(typeof c.caseId === "string" && c.caseId !== "" ? c.caseId : c.capabilityId);
+    const previous = passedByCapability.get(c.capabilityId);
+    passedByCapability.set(c.capabilityId, previous === undefined ? c.passed : previous && c.passed);
+  }
+  const summary = record.summary;
+  if (summary === null || typeof summary !== "object" || Array.isArray(summary)) {
+    return { ...empty, error: `probe artifact 缺 summary 对象（§6.3）：${artifactPath}` };
+  }
+  const s = summary as Record<string, unknown>;
+  if (s.passed !== passedCount || s.failed !== record.cases.length - passedCount || s.skipped !== 0) {
+    return {
+      ...empty,
+      error: `probe summary 计数与 cases 不一致（§6.3）：summary=${JSON.stringify(s)}，实算 passed=${passedCount}/failed=${record.cases.length - passedCount}；跳过必须落为失败 case 并在 observed 记理由`,
+    };
+  }
+  return { ok: true, error: "", kind, sourceHash: env.sourceHash, capabilities, caseIds, passedByCapability };
 }
 
 async function appendFinding(draft: FindingDraft, artifact: string): Promise<string> {
@@ -880,6 +1260,300 @@ await obsEnd("setup", null);
 await recordAssuranceAttempt("started");
 phase("独立覆盖核对与探索性审查");
 
+// ── 外部契约假设源独立（设计 §8.2）：IA 亲自运行 resolver，不采信 builder 路径字符串 ──
+// explore-only 是候选阶段反例审查：不登记 AssuranceCompleted、不背 runtime 义务，
+// 契约机器侧段整体跳过（full/recheck 才进入）
+const contractPhaseActive = hasExternalContracts && mode !== "explore-only";
+const resolverPath = `${homeDir}/.agents/skills/delivery-v6/scripts/resolve-external-contracts.mjs`;
+const resolverRecordPath = `${evidenceRoot}contract-resolver-${artifactTag}.json`;
+const contractRecordPath = `${evidenceRoot}contract-independence-${artifactTag}.json`;
+const parityRecordPath = `${evidenceRoot}fake-host-parity-${artifactTag}.json`;
+// 能力义务清单：逐 capability 的 essential 标记与断言绑定（绑定唯一权威 =
+// assertion.requiredEnvironment.capability，设计 §4.1）
+interface CapabilityObligation {
+  contractId: string;
+  capabilityId: string;
+  minEnvironment: string;
+  essential: boolean;
+  boundRequirementIds: string[];
+  boundAssertionIds: string[];
+}
+const capabilityObligations: CapabilityObligation[] = [];
+if (hasExternalContracts) {
+  for (const contract of externalContracts) {
+    for (const capability of contract.capabilities) {
+      const boundAssertions = requirements.flatMap((r) =>
+        (r.assertions ?? [])
+          .filter((assertion) => assertion.requiredEnvironment?.capability === capability.id)
+          .map((assertion) => ({ assertionId: assertion.id, requirementId: r.id })),
+      );
+      capabilityObligations.push({
+        contractId: contract.id,
+        capabilityId: capability.id,
+        minEnvironment: capability.minEnvironment ?? "",
+        essential: contract.essential,
+        boundRequirementIds: [...new Set(boundAssertions.map((b) => b.requirementId))],
+        boundAssertionIds: boundAssertions.map((b) => b.assertionId),
+      });
+    }
+  }
+}
+let resolverSnapshot: ResolverSnapshotDoc | null = null;
+let resolverError = "";
+// resolver 真实退出码（供机器记录对账；CLI 缺失记 127）
+let resolverExitCode: number | null = null;
+const authorityByContract = new Map<string, { status: "resolved" | "unresolved"; aggregateHash: string; resolvedPath: string; reason: string }>();
+const surfaceChecksByContract = new Map<string, { surfaceRef: string; found: boolean; sha256Match: boolean }[]>();
+// 反例引用（§5.3）：acceptance-review 下的反例记录 artifact 全轮并入（双形态兼容见
+// NODE_COLLECT_COUNTERS），negative case 亲自执行的输入
+const counterRecords: { file: string; obligationId: string; discriminatingScenarioRef: string; wouldPassCurrentCriteria: boolean; contractId: string }[] = [];
+// 验收线 contractDiscrimination 申报（§5.3 第 5 条：完全无反例时 none-possible + 理由）
+const counterDiscrimination: { file: string; value: string; rationale: string }[] = [];
+// 机器侧披露行（进保证报告与终态 message）：缺口可见，不静默
+const contractDisclosures: string[] = [];
+if (contractPhaseActive) {
+  await leaseHeartbeat();
+  // ① 亲自运行 resolver（无 --write：只解析不落盘）。CLI 缺失按 resolver 失败处理——
+  // essential 契约随后走 authority-missing must-fix（fail-closed：离线/缺工具不伪造
+  // resolved，设计 §4.3）。stdout 摘要契约（resolve-external-contracts.mjs，schemaVersion 1）：
+  // contracts[].{id,status,authorityAggregateHash,identity,surfaces} + snapshotSha256 +
+  // unresolvedContracts[{contractId,reason}]——stdout 不含 resolvedPath（只在 --write
+  // 落盘的快照文件里），surface 完整性核对改从 current 指针指向的快照文件取
+  const existsRes = await runNode([NODE_CHECK_EXISTS, resolverPath]);
+  const resolverRun = existsRes.exitCode === 0
+    ? await runGate(resolverPath, ["--task-dir", taskDir, "--project-root", projectRoot])
+    : { exitCode: 127, stdout: "", stderr: `resolver CLI 不存在：${resolverPath}（delivery-v6 scripts/resolve-external-contracts.mjs 未安装或版本过旧）。恢复动作：安装/升级 delivery-v6 技能后重新发起` };
+  resolverExitCode = resolverRun.exitCode;
+  if (resolverRun.exitCode !== 0) {
+    resolverError = `resolver 运行失败（exit ${resolverRun.exitCode}）：${(resolverRun.stderr || resolverRun.stdout).trim()}`;
+  } else {
+    const parsed = parseObject(resolverRun.stdout);
+    if (parsed === null) resolverError = "resolver 输出不是 JSON 对象（恢复动作：核对 resolve-external-contracts.mjs 的输出版本）";
+    else resolverSnapshot = parsed as unknown as ResolverSnapshotDoc;
+  }
+  // current 指针与快照文件（resolver --write 的产物，IA 只读消费）：快照条目带
+  // resolver.resolvedPath 与 aggregateHash——stdout 的 authorityAggregateHash 与快照的
+  // aggregateHash 是同一契约级哈希的两个键名（stdout 摘要键 / 快照文件键），逐契约对账。
+  // 指针路径双形态兼容：resolve-external-contracts.mjs 实装落在
+  // environment-contracts/ 目录内（CONTRACTS_DIRNAME/CURRENT_POINTER_FILENAME 拼接），
+  // 设计文档描述的 taskDir 直下形态作为回退——两种都找不到才判缺失
+  const snapshotPointerCandidates = [
+    `${taskDir}/environment-contracts/environment-contracts.current.json`,
+    `${taskDir}/environment-contracts.current.json`,
+  ];
+  let snapshotDoc: Record<string, unknown> | null = null;
+  let snapshotNote = "";
+  {
+    let pointerText = "";
+    let pointerPathUsed = "";
+    for (const candidate of snapshotPointerCandidates) {
+      const pointerRes = await runNode([NODE_READ_FILE, candidate]);
+      if (pointerRes.exitCode === 0) {
+        pointerText = pointerRes.stdout;
+        pointerPathUsed = candidate;
+        break;
+      }
+    }
+    if (pointerPathUsed === "") {
+      snapshotNote = `current 指针不存在（${snapshotPointerCandidates.join(" 或 ")}）：surface 完整性核对跳过——恢复动作：由 builder/gate 跑一次 resolve-external-contracts.mjs --write 生成环境契约快照后重新发起`;
+    } else {
+      const pointer = parseObject(pointerText);
+      const snapshotPath = pointer !== null && typeof pointer.snapshotPath === "string" ? pointer.snapshotPath : "";
+      if (snapshotPath === "") {
+        snapshotNote = `current 指针缺 snapshotPath（${pointerPathUsed}）：surface 完整性核对跳过——恢复动作：重跑 resolve --write 重建指针`;
+      } else {
+        // snapshotPath 相对 taskDir；越界（.. / 绝对路径）拒读
+        const snapshotAbs = snapshotPath.startsWith("/") ? snapshotPath : `${taskDir}/${snapshotPath}`;
+        const rel = snapshotAbs.startsWith(`${taskDir}/`) ? snapshotAbs.slice(taskDir.length + 1) : "";
+        const snapRes = rel !== "" && !rel.split("/").includes("..")
+          ? await runNode([NODE_READ_FILE, snapshotAbs])
+          : { exitCode: 1, stdout: "", stderr: "snapshotPath 越界" };
+        const parsed = snapRes.exitCode === 0 ? parseObject(snapRes.stdout) : null;
+        if (parsed === null) {
+          snapshotNote = `快照文件不可读或非法（${snapshotPath}）：surface 完整性核对跳过——恢复动作：重跑 resolve --write 重建快照`;
+        } else {
+          snapshotDoc = parsed;
+          const pointerSha = pointer?.snapshotSha256;
+          const snapshotSha = parsed.snapshotSha256;
+          if (typeof pointerSha === "string" && typeof snapshotSha === "string" && pointerSha !== snapshotSha) {
+            snapshotNote = `current 指针与快照文件身份不一致（pointer=${pointerSha.slice(0, 12)}… snapshot=${snapshotSha.slice(0, 12)}…）：按快照文件内容核对，恢复动作：重跑 resolve --write 重建`;
+          }
+        }
+      }
+    }
+  }
+  const unresolvedReasons = new Map<string, string>();
+  if (Array.isArray(resolverSnapshot?.unresolvedContracts)) {
+    for (const entry of resolverSnapshot.unresolvedContracts) {
+      if (entry !== null && typeof entry === "object" && !Array.isArray(entry)) {
+        const r = entry as Record<string, unknown>;
+        if (typeof r.contractId === "string" && typeof r.reason === "string") unresolvedReasons.set(r.contractId, r.reason);
+      }
+    }
+  }
+  const snapshotContractOf = (contractId: string): Record<string, unknown> | null => {
+    const contracts = snapshotDoc?.contracts;
+    if (!Array.isArray(contracts)) return null;
+    const found = contracts.find((c) => c !== null && typeof c === "object" && !Array.isArray(c) && (c as Record<string, unknown>).id === contractId);
+    return found === undefined ? null : found as Record<string, unknown>;
+  };
+  const resolverRecordDoc = {
+    revision,
+    acceptanceVersion,
+    mode,
+    resolverPath,
+    command: `node ${resolverPath} --task-dir ${taskDir} --project-root ${projectRoot}`,
+    exitCode: resolverRun.exitCode,
+    error: resolverError,
+    snapshotSha256: resolverSnapshot?.snapshotSha256 ?? null,
+    snapshotNote,
+    contracts: externalContracts.map((contract) => {
+      const entry = resolverSnapshot?.contracts?.find((c) => c.id === contract.id);
+      const authorityAggregateHash = entry !== undefined && typeof entry.authorityAggregateHash === "string" && entry.authorityAggregateHash !== "" ? entry.authorityAggregateHash : "";
+      const resolved = authorityAggregateHash !== "";
+      const snapshotEntry = snapshotContractOf(contract.id);
+      const snapshotAggregate = snapshotEntry !== null && typeof snapshotEntry.aggregateHash === "string" ? snapshotEntry.aggregateHash : "";
+      const resolverMeta = snapshotEntry?.resolver;
+      const resolvedPath = resolverMeta !== null && typeof resolverMeta === "object" && !Array.isArray(resolverMeta) && typeof (resolverMeta as Record<string, unknown>).resolvedPath === "string"
+        ? (resolverMeta as Record<string, unknown>).resolvedPath as string
+        : "";
+      return {
+        id: contract.id,
+        essential: contract.essential,
+        status: resolved ? "resolved" : "unresolved",
+        authorityAggregateHash: resolved ? authorityAggregateHash : null,
+        resolvedPath: resolvedPath === "" ? null : resolvedPath,
+        identity: entry?.identity ?? null,
+        // 快照与 stdout 的契约级哈希对账（两个键名同一值）：不符 = 环境自上次 --write
+        // 后发生变化，surface 核对结论以本轮 stdout 为准并在披露中说明
+        snapshotAggregateHashMatch: snapshotAggregate === "" ? null : snapshotAggregate === authorityAggregateHash,
+        reason: resolved
+          ? ""
+          : resolverError !== ""
+            ? resolverError
+            : unresolvedReasons.get(contract.id)
+              ?? (entry === undefined ? "resolver 摘要无该契约记录" : `status=${String(entry.status ?? "（缺省）")}`),
+      };
+    }),
+  };
+  const resolverWrite = await runNode([NODE_WRITE_FILE, resolverRecordPath, `${JSON.stringify(resolverRecordDoc, null, 2)}\n`]);
+  if (resolverWrite.exitCode !== 0) {
+    return failAssurance(`resolver 复核记录写入失败：${resolverWrite.stderr.trim()}（${resolverRecordPath}）`);
+  }
+  // ② 权威状态汇总 + essential 契约权威不可得 → authority-missing must-fix（§8.2 第 5 条：
+  // 不得降为 info）；非 essential 缺权威只披露（按普通风险通道，报告标 not-established）
+  for (const contract of externalContracts) {
+    const entry = resolverSnapshot?.contracts?.find((c) => c.id === contract.id);
+    const aggregateHash = entry !== undefined && typeof entry.authorityAggregateHash === "string" && entry.authorityAggregateHash !== "" ? entry.authorityAggregateHash : "";
+    const snapshotEntry = snapshotContractOf(contract.id);
+    const resolverMeta = snapshotEntry?.resolver;
+    const resolvedPath = resolverMeta !== null && typeof resolverMeta === "object" && !Array.isArray(resolverMeta) && typeof (resolverMeta as Record<string, unknown>).resolvedPath === "string"
+      ? (resolverMeta as Record<string, unknown>).resolvedPath as string
+      : "";
+    const reason = aggregateHash !== ""
+      ? ""
+      : resolverError !== ""
+        ? resolverError
+        : unresolvedReasons.get(contract.id)
+          ?? (entry === undefined ? "resolver 摘要无该契约记录" : `status=${String(entry?.status ?? "（缺省）")}`);
+    authorityByContract.set(contract.id, { status: aggregateHash !== "" ? "resolved" : "unresolved", aggregateHash, resolvedPath, reason });
+    // 快照与本轮 stdout 的契约级哈希对账：不符 = 外部环境自上次 --write 后发生变化
+    // （§8.1 环境漂移）——surface 核对以本轮 stdout 为准，漂移事实披露交裁决器终判
+    const snapshotAggregate = snapshotEntry !== null && typeof snapshotEntry.aggregateHash === "string" ? snapshotEntry.aggregateHash : "";
+    if (aggregateHash !== "" && snapshotAggregate !== "" && snapshotAggregate !== aggregateHash) {
+      contractDisclosures.push(
+        `契约 ${contract.id} 环境漂移：resolve --write 快照的 aggregateHash（${snapshotAggregate.slice(0, 12)}…）与本轮 stdout 解析结果（${aggregateHash.slice(0, 12)}…）不一致——外部环境自上次快照后变化，证据时鲜由裁决器按 §8.1 终判，恢复动作：重跑 resolve --write 重建快照或由用户确认环境基线`,
+      );
+    }
+    if (aggregateHash === "" && contract.essential) {
+      const bound = [...new Set(capabilityObligations.filter((o) => o.contractId === contract.id).flatMap((o) => o.boundRequirementIds))];
+      await appendFinding({
+        summary: `authority-missing：essential 外部契约 ${contract.id} 权威工件不可得（${reason}）——runtime 义务无法满足，按设计 §8.2 第 5 条登记 must-fix（不得降为 info）`,
+        requirementIds: bound,
+        tier: "must-fix",
+        origin: "environment",
+        firstDetectedStage: "assurance",
+        expectedStage: "acceptance",
+      }, resolverRecordPath);
+    }
+    if (aggregateHash === "" && !contract.essential) {
+      contractDisclosures.push(`非 essential 契约 ${contract.id} 权威不可得（${reason}）：报告须标 runtimeReadiness=not-established，缺权威按普通风险通道处理`);
+    }
+  }
+  if (snapshotNote !== "") contractDisclosures.push(snapshotNote);
+  // ③ 权威 surface 完整性核对（IA 亲自执行的机器观察）：resolvedPath 取快照文件
+  // （resolver --write 产物，非 builder 手写），surface 清单与登记哈希取本轮 stdout 摘要
+  // （IA 亲自运行的新鲜结果）——逐个文件重算 sha256 比对，缺失或不符即 must-fix。
+  // 无 resolvedPath（current 指针缺失）时只披露不核对：不猜路径、不静默跳过
+  for (const contract of externalContracts) {
+    const authority = authorityByContract.get(contract.id);
+    if (authority === undefined || authority.status !== "resolved" || authority.resolvedPath === "") continue;
+    const entry = resolverSnapshot?.contracts?.find((c) => c.id === contract.id);
+    const surfaces = (entry?.surfaces ?? []).filter(
+      (s): s is { surfaceRef: string; sha256: string } => s !== null && typeof s === "object" && typeof (s as Record<string, unknown>).surfaceRef === "string" && typeof (s as Record<string, unknown>).sha256 === "string",
+    );
+    if (surfaces.length === 0) continue;
+    const checkRes = await runNode([NODE_VERIFY_SURFACES, authority.resolvedPath, JSON.stringify(surfaces)]);
+    const parsed = parseObject(checkRes.stdout);
+    const results = Array.isArray(parsed?.results)
+      ? (parsed.results as unknown[]).flatMap((r) =>
+        r !== null && typeof r === "object" && !Array.isArray(r) && typeof (r as Record<string, unknown>).surfaceRef === "string"
+          ? [{ surfaceRef: (r as Record<string, unknown>).surfaceRef as string, found: (r as Record<string, unknown>).found === true, sha256Match: (r as Record<string, unknown>).sha256Match === true }]
+          : [],
+      )
+      : [];
+    surfaceChecksByContract.set(contract.id, results);
+    const mismatched = results.filter((r) => !r.found || !r.sha256Match);
+    if (checkRes.exitCode !== 0 || mismatched.length > 0) {
+      const detail = checkRes.exitCode !== 0
+        ? `surface 核对脚本失败（exit ${checkRes.exitCode}）：${checkRes.stderr.trim()}`
+        : mismatched.map((r) => `${r.surfaceRef}${r.found ? "哈希不符" : "文件缺失"}`).join("、");
+      await appendFinding({
+        summary: `权威工件完整性核对失败：契约 ${contract.id}（${detail}）——权威工件与 resolver 登记不一致，按设计 §4.3 恢复动作重跑 resolve --write 重建快照（不手工修文件）`,
+        requirementIds: [...new Set(capabilityObligations.filter((o) => o.contractId === contract.id).flatMap((o) => o.boundRequirementIds))],
+        tier: "must-fix",
+        origin: "environment",
+        firstDetectedStage: "assurance",
+        expectedStage: "acceptance",
+      }, resolverRecordPath);
+    }
+  }
+  // ④ 反例引用收集（negative case 亲自执行的输入，§5.3）。双形态兼容见
+  // NODE_COLLECT_COUNTERS 注释：旧 *-counter-implementations.json（顶层数组）与新
+  // *-contract-check.json（对象，counterImplementations 为字段）；另收
+  // contractDiscrimination 申报（§5.3 第 5 条 none-possible）供审计核对
+  const collectRes = await runNode([NODE_COLLECT_COUNTERS, taskDir]);
+  const collectParsed = parseObject(collectRes.stdout);
+  if (collectRes.exitCode === 0 && collectParsed !== null && Array.isArray(collectParsed.records)) {
+    for (const record of collectParsed.records) {
+      if (record === null || typeof record !== "object" || Array.isArray(record)) continue;
+      const r = record as Record<string, unknown>;
+      if (typeof r.discriminatingScenarioRef !== "string" || r.discriminatingScenarioRef === "") continue;
+      counterRecords.push({
+        file: typeof r.file === "string" ? r.file : "",
+        obligationId: typeof r.obligationId === "string" ? r.obligationId : "",
+        discriminatingScenarioRef: r.discriminatingScenarioRef,
+        wouldPassCurrentCriteria: r.wouldPassCurrentCriteria === true,
+        // 新形态条目可带 contractId（§5.3：反例指向具体契约）
+        contractId: typeof r.contractId === "string" ? r.contractId : "",
+      });
+    }
+    if (Array.isArray(collectParsed.discrimination)) {
+      for (const entry of collectParsed.discrimination) {
+        if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+        const d = entry as Record<string, unknown>;
+        counterDiscrimination.push({
+          file: typeof d.file === "string" ? d.file : "",
+          value: typeof d.value === "string" ? d.value : "",
+          rationale: typeof d.rationale === "string" ? d.rationale : "",
+        });
+      }
+    }
+  } else if (collectRes.exitCode !== 0) {
+    contractDisclosures.push(`反例引用收集失败（exit ${collectRes.exitCode}）：${collectRes.stderr.trim()}——negative case 亲自执行清单可能不完整`);
+  }
+}
+
 const explorationHistory = events
   .filter((event) => event.type === "ExplorationCompleted")
   .map((event) => ({ eventId: event.eventId, revision: event.revision, artifact: event.artifact }));
@@ -956,10 +1630,27 @@ const coverageGuard = await askGuarded<CoverageOutcome>(
       "写覆盖报告；新发现不分配 findingId。仅当亲自确认旧发现已修复时，把其 findingId 放入 resolvedFindingIds；亲自核对后确认仍未修复的旧发现放入 unresolvedFindingIds（两者不得重叠）。",
       "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据，不得只按字面合规降级。",
       "不得修改产品代码、验收、事件或 verdict；builder 的测试输出不能未经独立核对直接记为 verified。",
-      '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "assertionIds": string[], "adversarialFormIds": string[], "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }], "resolvedFindingIds": string[], "unresolvedFindingIds": string[] }——schema 2 须逐断言×kind 覆盖，artifact 为 evidence/ 内绝对路径。',
+      // 外部契约硬责任（设计 §8.2/§8.3/§5.3）：仅在任务带 externalContracts 时注入
+      ...(contractPhaseActive
+        ? [
+          `【外部契约·假设源独立】本 workflow 已亲自运行 resolver（无 --write，只解析不落盘）：复核记录 ${resolverRecordPath}。权威状态：${JSON.stringify(externalContracts.map((c) => ({ id: c.id, essential: c.essential, authority: authorityByContract.get(c.id) ?? null })))}。禁止采信 builder 提供的路径字符串，也禁止从平台文档重新推导契约——权威以 resolver 输出与权威 surface 文件为准。`,
+          `【外部契约·逐能力亲自观察】对下列每个 essential capability，你必须至少执行一条非 builder 自报的亲自观察：${JSON.stringify(capabilityObligations)}。执行形态：经 resolver 输出的 resolvedPath（权威绝对路径）调用外部系统做最小观察（official-runner probe；禁止用裸包名、项目内 alias 或 mock 模块替代）；probe artifact 按设计 §6.3 写入 evidence/：environment{kind=official-runner|real-host,name,version,source,sourceHash=该契约 aggregateHash,driver,driverHash,capabilities[]}、subject{revision="${revision}",entrypoint}、cases[{capabilityId,caseId,operation,observed{可定位契约形态的键值},passed}]、summary{passed,failed,skipped=0}；summary 计数必须与 cases 实算一致，跳过一律落为 failed case 并在 observed 记理由。real-host 类无法安全自动化的能力（如完整用户交互）转人工执行：由你承担人工执行义务并在 contractObservations 标记 executedBy=manual-handoff + manualHandoffReason + 回传 artifact，不得静默跳过。宿主类断言的覆盖结论应直接把 probe artifact 作为 artifact（机器侧据此登记 runtimeProbe 绑定）。`,
+          `【外部契约·negative case 亲自执行】验收反例引用（acceptance-review 下 *-counter-implementations.json / *-contract-check.json，机器已全轮收集）：${JSON.stringify(counterRecords)}${counterDiscrimination.length > 0 ? `；验收线另申报 contractDiscrimination：${JSON.stringify(counterDiscrimination)}` : ""}。其中指向外部契约能力的 negative case 必须由你亲自执行——自写最小 probe 或亲自执行独立执行器并观察真实环境拒绝，不能只运行 builder driver；执行结果以 contractObservations[].negativeCaseRefs 申报（引用必须存在于上方清单）。`,
+          mode === "recheck"
+            ? `【外部契约·recheck 重跑 probe】本轮是 recheck：必须重跑 runtime probe——全部 essential capability 的 probe artifact 必须为本 revision（${revision}）重新执行产生，不得引用早期 spike；只复跑项目测试不满足义务。`
+            : `【外部契约·probe 时鲜】全部 probe artifact 的 subject.revision 必须等于当前 revision ${revision}（早期 spike 不能替代 final）。`,
+          `【外部契约·fake-host parity】fake-host 资产被用于证明契约专属语义时，按设计 §8.3 生成 parity 记录：{mockAssetId,realProbeArtifact,sampleIds[],parity[{sampleId,mockObserved{artifact,caseId,value},realObserved{artifact,caseId,value},same}]}——realObserved.caseId 必须真实存在于所引 probe artifact 的 cases（caseId 缺省时回退 capabilityId），mockObserved.artifact 必须可定位；纯隔离故障注入（模拟磁盘损坏、时序异常等不断言外部契约语义的）不需要 parity。样本语义不同（same=false）不是立即失败：在报告中披露，处置 = 把该观察升级为真实环境断言或修 mock。`,
+          `【外部契约·申报结构】contractObservations[{contractId,capabilityId,artifact,executedBy:"assurance-agent"|"manual-handoff",negativeCaseRefs?:string[],manualHandoffReason?:string}]——executedBy=assurance-agent 表示该观察由你亲自执行（自写最小 probe 或亲自执行独立执行器）；parityRecords[{mockAssetId,realProbeArtifact,sampleIds,parity[...]}]。无外部契约观察义务时两者给空数组。`,
+        ]
+        : []),
+      '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "assertionIds": string[], "adversarialFormIds": string[], "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }], "resolvedFindingIds": string[], "unresolvedFindingIds": string[], "contractObservations": [{ "contractId": string, "capabilityId": string, "artifact": string, "executedBy": "assurance-agent"|"manual-handoff", "negativeCaseRefs": string[], "manualHandoffReason": string|null }], "parityRecords": [{ "mockAssetId": string, "realProbeArtifact": string, "sampleIds": string[], "parity": [{ "sampleId": string, "mockObserved": { "artifact": string, "caseId": string, "value": string }, "realObserved": { "artifact": string, "caseId": string, "value": string }, "same": boolean }] }] }——schema 2 须逐断言×kind 覆盖，artifact 为 evidence/ 内绝对路径；contractObservations/parityRecords 无义务时给空数组。',
       ...(corrective === null ? [] : [corrective]),
     ].join("\n"));
-    const requiredArtifacts = [coverageReportPath, ...outcome.evidence.map((e) => e.artifact)];
+    // 完成后验：覆盖结论、契约观察与 parity 记录引用的 artifact 必须全部落盘——
+    // probe artifact / mock 观察记录缺失同属完成判据（触发修正重问而非静默通过）
+    const contractArtifacts = (outcome.contractObservations ?? []).map((o) => o.artifact);
+    const parityArtifacts = (outcome.parityRecords ?? []).flatMap((r) => [r.realProbeArtifact, ...r.parity.flatMap((s) => [s.mockObserved.artifact, s.realObserved.artifact])]);
+    const requiredArtifacts = [coverageReportPath, ...outcome.evidence.map((e) => e.artifact), ...contractArtifacts, ...parityArtifacts];
     const artifactRes = await runNode([NODE_CHECK_FILES, ...requiredArtifacts]);
     if (artifactRes.exitCode !== 0) {
       throw new Error(`覆盖报告或原始证据文件缺失：${artifactRes.stdout.trim()}——证据文件与结构化返回同为完成判据`);
@@ -1045,6 +1736,318 @@ if (requiredEnvByAssertionId.size > 0) {
     }
   }
 }
+// ── 契约能力独立观察的深度校验与汇总（设计 §8.2/§5.3/§8.3/§5.2）──
+// 逐能力汇总 IA 亲自执行状态（iaExecuted / manualHandoff / failedObservation）、
+// negative case 执行对账、parity 引用存在性校验，产出证据来源矩阵与机器记录；
+// essential 能力缺 IA 亲自执行观察或观察未通过 → must-fix（builder 自报不能替代）
+interface CapabilityRollupEntry {
+  contractId: string;
+  capabilityId: string;
+  essential: boolean;
+  iaExecuted: boolean;
+  manualHandoff: boolean;
+  manualHandoffReason: string;
+  failedObservation: string;
+  negativeCaseRefs: string[];
+  /** 是否收到过观察申报（含不合法申报）——用于避免同一能力重复登记 must-fix */
+  observationDeclared: boolean;
+}
+const capabilityRollup = new Map<string, CapabilityRollupEntry>();
+// probe artifact → 其覆盖的能力 id 清单（供 EvidenceRecorded 的 runtime 绑定与矩阵消费）
+const probeCapabilityIdsByArtifact = new Map<string, string[]>();
+const parityProblems: string[] = [];
+const parityMismatches: { mockAssetId: string; sampleId: string; mockValue: string; realValue: string }[] = [];
+const validParityRecords: ParityRecord[] = [];
+const negativeCaseExecuted: { contractId: string; capabilityId: string; refs: string[] }[] = [];
+const allContractCapabilityIds = new Set(externalContracts.flatMap((c) => c.capabilities.map((cap) => cap.id)));
+const knownCounterRefs = new Set(counterRecords.map((r) => r.discriminatingScenarioRef));
+if (contractPhaseActive) {
+  // ① 逐条观察申报深度校验：结构（validateCoverage 已拦）+ probe artifact 对账权威
+  for (const observation of coverage.contractObservations ?? []) {
+    const contract = externalContracts.find((c) => c.id === observation.contractId);
+    const obligation = capabilityObligations.find((o) => o.contractId === observation.contractId && o.capabilityId === observation.capabilityId);
+    if (contract === undefined || obligation === undefined) continue;
+    const authority = authorityByContract.get(contract.id);
+    const entryKey = `${contract.id}\0${observation.capabilityId}`;
+    const entry: CapabilityRollupEntry = capabilityRollup.get(entryKey) ?? {
+      contractId: contract.id,
+      capabilityId: observation.capabilityId,
+      essential: obligation.essential,
+      iaExecuted: false,
+      manualHandoff: false,
+      manualHandoffReason: "",
+      failedObservation: "",
+      negativeCaseRefs: [],
+      observationDeclared: false,
+    };
+    entry.observationDeclared = true;
+    if (authority === undefined || authority.status !== "resolved") {
+      // 权威不可得时观察无法对账 sourceHash——义务保持 open（authority-missing 已另登记）
+      contractDisclosures.push(`能力 ${observation.capabilityId}（契约 ${contract.id}）的观察无法对账权威（权威不可得）：runtime 义务保持 open`);
+      capabilityRollup.set(entryKey, entry);
+      continue;
+    }
+    const check = await checkProbeArtifact(
+      observation.artifact,
+      { revision, aggregateHash: authority.aggregateHash, minEnvironment: obligation.minEnvironment, contractCapabilityIds: new Set(contract.capabilities.map((cap) => cap.id)) },
+      { requireDriver: observation.executedBy === "assurance-agent" },
+    );
+    if (!check.ok) {
+      if (obligation.essential) {
+        await appendFinding({
+          summary: `essential 能力 ${observation.capabilityId}（契约 ${contract.id}）的 IA 亲自观察不合法：${check.error}`,
+          requirementIds: obligation.boundRequirementIds,
+          tier: "must-fix",
+          origin: "evidence",
+          firstDetectedStage: "assurance",
+          expectedStage: "assurance",
+        }, coverageReportPath);
+      } else {
+        contractDisclosures.push(`非 essential 能力 ${observation.capabilityId} 的观察不合法：${check.error}`);
+      }
+      capabilityRollup.set(entryKey, entry);
+      continue;
+    }
+    const covers = check.capabilities.includes(observation.capabilityId) || check.passedByCapability.has(observation.capabilityId);
+    if (!covers) {
+      contractDisclosures.push(`能力 ${observation.capabilityId} 的观察 artifact 未覆盖该能力（environment.capabilities 与 cases 均无）：${observation.artifact}`);
+      capabilityRollup.set(entryKey, entry);
+      continue;
+    }
+    // probe artifact → 覆盖的能力 id（供 EvidenceRecorded 的 runtime 绑定与证据矩阵
+    // 消费）；assurance-agent 与 manual-handoff 两种 IA 侧执行都登记——builder 自报
+    // 不进本表，其证据因此不带 runtimeProbe 绑定、不满足 runtime 义务。id 用
+    // 「契约id:能力id」限定形式（gate knownContractCapabilityIds 的固定消费形态，
+    // 多契约任务下裸 id 会被拒）
+    const coveredIds = [...new Set([
+      ...check.capabilities.filter((id) => contract.capabilities.some((cap) => cap.id === id)).map((id) => `${contract.id}:${id}`),
+      ...[...check.passedByCapability.keys()].map((id) => `${contract.id}:${id}`),
+    ])];
+    probeCapabilityIdsByArtifact.set(observation.artifact, [...new Set([...(probeCapabilityIdsByArtifact.get(observation.artifact) ?? []), ...coveredIds])]);
+    const passed = check.passedByCapability.get(observation.capabilityId) === true;
+    if (!passed) {
+      entry.failedObservation = `真实环境观察未通过（${observation.artifact}，environment.kind=${check.kind}）`;
+    }
+    if (observation.executedBy === "assurance-agent") entry.iaExecuted = true;
+    if (observation.executedBy === "manual-handoff") {
+      entry.manualHandoff = true;
+      entry.manualHandoffReason = observation.manualHandoffReason ?? "";
+    }
+    for (const ref of observation.negativeCaseRefs ?? []) {
+      if (!knownCounterRefs.has(ref)) {
+        contractDisclosures.push(`观察申报的 negative case 引用不在验收反例记录清单内（不计入执行覆盖）：${ref}`);
+        continue;
+      }
+      if (!entry.negativeCaseRefs.includes(ref)) entry.negativeCaseRefs.push(ref);
+    }
+    capabilityRollup.set(entryKey, entry);
+  }
+  // ② 逐能力义务判定：essential 缺 IA 亲自执行观察（且无转人工登记）或观察未通过
+  // → must-fix；转人工是显式登记（obligation open + 披露），不是静默跳过。
+  // 已因「观察不合法」登记过 must-fix 的能力不重复登记（同根因一条修复项）
+  for (const obligation of capabilityObligations) {
+    const entry = capabilityRollup.get(`${obligation.contractId}\0${obligation.capabilityId}`);
+    if (!obligation.essential) continue;
+    if (entry === undefined || (!entry.iaExecuted && !entry.manualHandoff)) {
+      if (entry?.observationDeclared === true) continue;
+      await appendFinding({
+        summary: `essential 能力 ${obligation.capabilityId}（契约 ${obligation.contractId}）无 IA 亲自执行观察（设计 §8.2 第 2 条：每个 essential capability 至少一条非 builder 自报观察）——builder 测试回执不能替代`,
+        requirementIds: obligation.boundRequirementIds,
+        tier: "must-fix",
+        origin: "evidence",
+        firstDetectedStage: "assurance",
+        expectedStage: "assurance",
+      }, coverageReportPath);
+      continue;
+    }
+    if (entry.failedObservation !== "") {
+      await appendFinding({
+        summary: `essential 能力 ${obligation.capabilityId}（契约 ${obligation.contractId}）${entry.failedObservation}——契约能力在当前 revision 的真实环境观察中未通过`,
+        requirementIds: obligation.boundRequirementIds,
+        tier: "must-fix",
+        origin: "implementation",
+        firstDetectedStage: "assurance",
+        expectedStage: "implementation",
+      }, coverageReportPath);
+      continue;
+    }
+    if (!entry.iaExecuted && entry.manualHandoff) {
+      contractDisclosures.push(`essential 能力 ${obligation.capabilityId}（契约 ${obligation.contractId}）转人工执行（${entry.manualHandoffReason}）：runtime 义务保持 open，待人工观察 artifact 回传后重新保证`);
+    }
+  }
+  // ③ negative case 亲自执行对账（§5.3 第 4 条）：essential 契约存在反例引用而零执行
+  // → must-fix；引用本身的最低记录完整性归验收线，此处只对账「引用了就必须亲自执行」。
+  // 归属判定双通道：obligationId 命中契约绑定的需求/断言 id，或条目自带 contractId
+  // （验收线新形态可带）；contractDiscrimination=none-possible 的任务无引用可执行，
+  // 不进本判定（其不可构造性论证归验收线审查）
+  for (const contract of externalContracts) {
+    if (!contract.essential) continue;
+    const boundIds = new Set(capabilityObligations.filter((o) => o.contractId === contract.id).flatMap((o) => [...o.boundRequirementIds, ...o.boundAssertionIds]));
+    const contractRefs = counterRecords
+      .filter((r) => boundIds.has(r.obligationId) || r.contractId === contract.id)
+      .map((r) => r.discriminatingScenarioRef);
+    if (contractRefs.length === 0) continue;
+    const executedRefs = capabilityObligations
+      .filter((o) => o.contractId === contract.id)
+      .flatMap((o) => capabilityRollup.get(`${o.contractId}\0${o.capabilityId}`)?.negativeCaseRefs ?? []);
+    for (const obligation of capabilityObligations.filter((o) => o.contractId === contract.id)) {
+      const entry = capabilityRollup.get(`${obligation.contractId}\0${obligation.capabilityId}`);
+      if (entry !== undefined && entry.negativeCaseRefs.length > 0) {
+        negativeCaseExecuted.push({ contractId: contract.id, capabilityId: obligation.capabilityId, refs: entry.negativeCaseRefs });
+      }
+    }
+    if (executedRefs.length === 0) {
+      await appendFinding({
+        summary: `essential 契约 ${contract.id} 的 negative case 未经 IA 亲自执行（引用：${contractRefs.join("、")}）——设计 §5.3 第 4 条要求 final 阶段由 assurance 亲自执行并观察真实环境拒绝，只运行 builder driver 不满足`,
+        requirementIds: [...new Set(capabilityObligations.filter((o) => o.contractId === contract.id).flatMap((o) => o.boundRequirementIds))],
+        tier: "must-fix",
+        origin: "evidence",
+        firstDetectedStage: "assurance",
+        expectedStage: "assurance",
+      }, coverageReportPath);
+    }
+  }
+  // ④ fake-host parity 深度校验（§8.3）：realObserved.caseId 必须真实存在于所引 probe
+  // artifact 的 cases；mockObserved.artifact 必须可定位；same=false 只披露不失败
+  for (const record of coverage.parityRecords ?? []) {
+    const probeCheck = await checkProbeArtifact(
+      record.realProbeArtifact,
+      { revision, aggregateHash: "", minEnvironment: "", contractCapabilityIds: allContractCapabilityIds },
+      { requireDriver: false, skipSourceHashMatch: true },
+    );
+    const recordProblems: string[] = [];
+    if (!probeCheck.ok) {
+      recordProblems.push(`realProbeArtifact 不是合法的真实环境 probe：${probeCheck.error}`);
+    } else {
+      const authorityHashes = new Set([...authorityByContract.values()].filter((a) => a.status === "resolved").map((a) => a.aggregateHash));
+      if (!authorityHashes.has(probeCheck.sourceHash)) {
+        recordProblems.push(`realProbeArtifact 的 sourceHash 未命中任一已解析契约的 aggregateHash：${probeCheck.sourceHash || "（缺失）"}`);
+      }
+    }
+    for (const sample of record.parity) {
+      if (probeCheck.ok && !probeCheck.caseIds.includes(sample.realObserved.caseId)) {
+        recordProblems.push(`样本 ${sample.sampleId} 的 realObserved.caseId 在 probe artifact 中不存在（§8.3 必须引用真实 case id）：${sample.realObserved.caseId}`);
+      }
+      const mockRes = await runNode([NODE_CHECK_FILES, sample.mockObserved.artifact]);
+      if (mockRes.exitCode !== 0) {
+        recordProblems.push(`样本 ${sample.sampleId} 的 mockObserved.artifact 不可定位：${sample.mockObserved.artifact}`);
+      }
+      if (!sample.same) {
+        parityMismatches.push({ mockAssetId: record.mockAssetId, sampleId: sample.sampleId, mockValue: sample.mockObserved.value, realValue: sample.realObserved.value });
+      }
+    }
+    if (recordProblems.length > 0) {
+      parityProblems.push(`${record.mockAssetId}：${recordProblems.join("；")}`);
+    } else {
+      validParityRecords.push(record);
+    }
+  }
+  if (parityProblems.length > 0) {
+    await appendFinding({
+      summary: `fake-host parity 记录机器校验失败（${parityProblems.length} 条）：${parityProblems.join("；")}——§8.3 要求 realObserved 引用真实 probe case id 且 mock 观察可定位，无法核验的 parity 不能支撑契约专属语义`,
+      requirementIds: [...new Set(capabilityObligations.filter((o) => o.essential).flatMap((o) => o.boundRequirementIds))],
+      tier: "must-fix",
+      origin: "evidence",
+      firstDetectedStage: "assurance",
+      expectedStage: "assurance",
+    }, coverageReportPath);
+  }
+  for (const mismatch of parityMismatches) {
+    contractDisclosures.push(
+      `fake-host ${mismatch.mockAssetId} 样本 ${mismatch.sampleId} 语义与真实 probe 不同（mock=${mismatch.mockValue} / real=${mismatch.realValue}）：该 mock 不得继续作为该语义的证明，处置 = 升级为真实环境断言或修 mock（不是立即失败）`,
+    );
+  }
+  // ⑤ 证据来源矩阵（§5.2）：能力 × EvidenceRecorded artifact.environment 三态计数；
+  // 只有 fake-host（或无证据）的能力在报告明示 runtime 义务 open
+  const boundAssertionIdsByCapability = new Map<string, string[]>();
+  for (const obligation of capabilityObligations) {
+    boundAssertionIdsByCapability.set(obligation.capabilityId, [...(boundAssertionIdsByCapability.get(obligation.capabilityId) ?? []), ...obligation.boundAssertionIds]);
+  }
+  const evidenceMatrix: { contractId: string; capabilityId: string; essential: boolean; fakeHost: number; officialRunner: number; realHost: number; missingEnvironment: number }[] = [];
+  for (const obligation of capabilityObligations) {
+    const counts = { fakeHost: 0, officialRunner: 0, realHost: 0, missingEnvironment: 0 };
+    const boundAssertionIds = new Set(boundAssertionIdsByCapability.get(obligation.capabilityId) ?? []);
+    for (const conclusion of coverage.evidence) {
+      const bindsAssertion = (conclusion.assertionIds ?? []).some((id) => boundAssertionIds.has(id));
+      const artifactIsProbe = (probeCapabilityIdsByArtifact.get(conclusion.artifact) ?? []).includes(obligation.capabilityId);
+      if (!bindsAssertion && !artifactIsProbe) continue;
+      const meta = await environmentMetaOf(conclusion.artifact);
+      if (meta === null) counts.missingEnvironment += 1;
+      else if (meta.kind === "fake-host") counts.fakeHost += 1;
+      else if (meta.kind === "official-runner") counts.officialRunner += 1;
+      else if (meta.kind === "real-host") counts.realHost += 1;
+      else counts.missingEnvironment += 1;
+    }
+    evidenceMatrix.push({ contractId: obligation.contractId, capabilityId: obligation.capabilityId, essential: obligation.essential, ...counts });
+  }
+  for (const row of evidenceMatrix) {
+    if (row.officialRunner + row.realHost === 0) {
+      contractDisclosures.push(
+        `能力 ${row.capabilityId}（契约 ${row.contractId}）证据来源矩阵无 non-fake 证据（fake-host ${row.fakeHost} / official-runner ${row.officialRunner} / real-host ${row.realHost} / 缺环境元数据 ${row.missingEnvironment}）：runtime 义务 open`,
+      );
+    }
+  }
+  // ⑥ 机器记录落盘（evidence/ 内）：供 gate 线与主 agent 对账的单一事实源
+  const contractRecordDoc = {
+    revision,
+    acceptanceVersion,
+    mode,
+    deliveryProfile,
+    resolver: { path: resolverPath, exitCode: resolverExitCode, error: resolverError, snapshotSha256: resolverSnapshot?.snapshotSha256 ?? null },
+    contracts: externalContracts.map((contract) => ({
+      id: contract.id,
+      essential: contract.essential,
+      authority: authorityByContract.get(contract.id) ?? null,
+      surfaceChecks: surfaceChecksByContract.get(contract.id) ?? null,
+    })),
+    capabilities: capabilityObligations.map((obligation) => {
+      const entry = capabilityRollup.get(`${obligation.contractId}\0${obligation.capabilityId}`);
+      return {
+        contractId: obligation.contractId,
+        capabilityId: obligation.capabilityId,
+        minEnvironment: obligation.minEnvironment,
+        essential: obligation.essential,
+        // gate 线消费字段：iaExecuted = 存在 IA 亲自执行且通过的真实环境观察
+        iaExecuted: entry?.iaExecuted === true && entry.failedObservation === "",
+        manualHandoff: entry?.manualHandoff === true,
+        manualHandoffReason: entry?.manualHandoffReason ?? "",
+        failedObservation: entry?.failedObservation ?? "",
+        negativeCaseRefs: entry?.negativeCaseRefs ?? [],
+        obligationOpen: obligation.essential
+          ? !(entry?.iaExecuted === true && entry.failedObservation === "")
+          : (evidenceMatrix.find((row) => row.capabilityId === obligation.capabilityId)?.officialRunner ?? 0) + (evidenceMatrix.find((row) => row.capabilityId === obligation.capabilityId)?.realHost ?? 0) === 0,
+      };
+    }),
+    negativeCases: counterRecords.map((record) => ({
+      file: record.file,
+      obligationId: record.obligationId,
+      contractId: record.contractId,
+      discriminatingScenarioRef: record.discriminatingScenarioRef,
+      wouldPassCurrentCriteria: record.wouldPassCurrentCriteria,
+      executed: negativeCaseExecuted.some((executed) => executed.refs.includes(record.discriminatingScenarioRef)),
+    })),
+    // 验收线「完全无反例」申报（§5.3 第 5 条）：留档供审计核对 none-possible 与理由
+    contractDiscrimination: counterDiscrimination,
+    evidenceMatrix,
+    parity: { recordPath: parityRecordPath, validRecords: validParityRecords.length, mismatches: parityMismatches, problems: parityProblems },
+    runtimeBinding: {
+      note: "EvidenceRecorded additive 字段 contractCapabilityIds/runtimeProbe（设计 §6.3）——contractCapabilityIds 用「契约id:能力id」限定形式（gate knownContractCapabilityIds 固定消费形态）；runtimeProbe 仅对 IA 亲自执行且通过的 probe 证据登记",
+      probeArtifacts: [...probeCapabilityIdsByArtifact.entries()].map(([artifact, capabilityIds]) => ({ artifact, capabilityIds })),
+    },
+    disclosures: contractDisclosures,
+  };
+  const contractRecordWrite = await runNode([NODE_WRITE_FILE, contractRecordPath, `${JSON.stringify(contractRecordDoc, null, 2)}\n`]);
+  if (contractRecordWrite.exitCode !== 0) {
+    return failAssurance(`契约独立性记录写入失败：${contractRecordWrite.stderr.trim()}（${contractRecordPath}）`);
+  }
+  if (validParityRecords.length > 0 || parityMismatches.length > 0) {
+    const parityDoc = { revision, acceptanceVersion, mode, records: validParityRecords, mismatches: parityMismatches, problems: parityProblems };
+    const parityWrite = await runNode([NODE_WRITE_FILE, parityRecordPath, `${JSON.stringify(parityDoc, null, 2)}\n`]);
+    if (parityWrite.exitCode !== 0) {
+      return failAssurance(`fake-host parity 记录写入失败：${parityWrite.stderr.trim()}（${parityRecordPath}）`);
+    }
+  }
+}
 await obsEnd("review", 1);
 // 中间心跳点：coverage 与 explorer 两个顺序长调用只靠阶段边界心跳会超 LEASE_STALE_MS；
 // 残余窗口（单次调用超 120s）后果有界——接管后 append 被代次复核拒，响亮失败不双写
@@ -1053,23 +2056,68 @@ await leaseHeartbeat();
 await obsBegin("execute", 1);
 await leaseHeartbeat();
 const evidenceEventIds: string[] = [];
+// runtime 绑定未登记披露（§6.3 参数对账）：gate 拒收 additive 参数时证据事件仍登记
+// （核心取证不中断），但 runtimeProbe 绑定缺失 → gate 侧 runtime 义务保持 open，
+// 缺口在此披露，不静默
+const runtimeBindingMisses: string[] = [];
 try {
   for (const conclusion of coverage.evidence) {
     const artifactSha = await artifactSha256Of(conclusion.artifact);
-    const evidenceEventId = await appendEvent({
-      type: "EvidenceRecorded",
-      actor: "assurance",
-      acceptanceVersion,
-      revision,
-      summary: `${conclusion.requirementId}/${conclusion.kind} 独立核对结果：${conclusion.result}`,
-      ...(conclusion.assertionIds === undefined ? {} : { assertionIds: conclusion.assertionIds }),
-      ...(conclusion.adversarialFormIds === undefined ? {} : { adversarialFormIds: conclusion.adversarialFormIds }),
-      requirementId: conclusion.requirementId,
-      kind: conclusion.kind,
-      result: conclusion.result,
-      artifact: conclusion.artifact,
-      artifactSha256: artifactSha,
-    });
+    // probe 证据（IA 亲自执行的真实环境观察）才带 runtime 绑定；普通证据原样登记
+    const probeCapabilityIds = probeCapabilityIdsByArtifact.get(conclusion.artifact);
+    let evidenceEventId = "";
+    if (probeCapabilityIds !== undefined && probeCapabilityIds.length > 0) {
+      const runtimeCapabilityIds = probeCapabilityIds;
+      evidenceEventId = await appendEvent({
+        type: "EvidenceRecorded",
+        actor: "assurance",
+        acceptanceVersion,
+        revision,
+        summary: `${conclusion.requirementId}/${conclusion.kind} 独立核对结果：${conclusion.result}（runtime probe 证据，能力 ${runtimeCapabilityIds.join("、")}）`,
+        ...(conclusion.assertionIds === undefined ? {} : { assertionIds: conclusion.assertionIds }),
+        ...(conclusion.adversarialFormIds === undefined ? {} : { adversarialFormIds: conclusion.adversarialFormIds }),
+        requirementId: conclusion.requirementId,
+        kind: conclusion.kind,
+        result: conclusion.result,
+        artifact: conclusion.artifact,
+        artifactSha256: artifactSha,
+        contractCapabilityIds: runtimeCapabilityIds,
+        runtimeProbe: true,
+      }).catch((error: unknown) => {
+        // gate 尚未支持 additive 参数（内核线并行交付）时退化为无绑定登记并披露——
+        // runtime 义务因缺绑定保持 open，由 gate 终判，不伪造满足
+        runtimeBindingMisses.push(`${conclusion.artifact}：${errorText(error)}`);
+        return appendEvent({
+          type: "EvidenceRecorded",
+          actor: "assurance",
+          acceptanceVersion,
+          revision,
+          summary: `${conclusion.requirementId}/${conclusion.kind} 独立核对结果：${conclusion.result}`,
+          ...(conclusion.assertionIds === undefined ? {} : { assertionIds: conclusion.assertionIds }),
+          ...(conclusion.adversarialFormIds === undefined ? {} : { adversarialFormIds: conclusion.adversarialFormIds }),
+          requirementId: conclusion.requirementId,
+          kind: conclusion.kind,
+          result: conclusion.result,
+          artifact: conclusion.artifact,
+          artifactSha256: artifactSha,
+        });
+      });
+    } else {
+      evidenceEventId = await appendEvent({
+        type: "EvidenceRecorded",
+        actor: "assurance",
+        acceptanceVersion,
+        revision,
+        summary: `${conclusion.requirementId}/${conclusion.kind} 独立核对结果：${conclusion.result}`,
+        ...(conclusion.assertionIds === undefined ? {} : { assertionIds: conclusion.assertionIds }),
+        ...(conclusion.adversarialFormIds === undefined ? {} : { adversarialFormIds: conclusion.adversarialFormIds }),
+        requirementId: conclusion.requirementId,
+        kind: conclusion.kind,
+        result: conclusion.result,
+        artifact: conclusion.artifact,
+        artifactSha256: artifactSha,
+      });
+    }
     if (evidenceEventId !== "") evidenceEventIds.push(evidenceEventId);
   }
   for (const draft of coverage.findings) await appendFinding(draft, coverageReportPath);
@@ -1129,7 +2177,10 @@ if (explorationDue && mode === "full") {
         `本轮冻结覆盖清单（探索对照的覆盖集合，内容寻址 ${manifestSha.slice(0, 12)}…）：${manifestPath}`,
         `历史探索报告索引（已探索方向不得重复）：${JSON.stringify(explorationHistory)}`,
         `报告写入路径：${explorationReportPath}`,
-        `必须覆盖的探索维度：${JSON.stringify(reviewDimensions)}`,
+        `必须覆盖的探索维度：${JSON.stringify(effectiveReviewDimensions)}`,
+        ...(explorationDimensionsNarrowed
+          ? [`本轮按 deliveryProfile=a 机器降档（设计 §13）：探索维度只取契约与故障两类（${JSON.stringify(PROFILE_A_DIMENSIONS)}）；验收声明的 reviewDimensions 为 ${JSON.stringify(reviewDimensions)}——降档不减少必做机器门。`]
+          : []),
         "从原始意图、验收与真实实现主动寻找验收外反例；亲自运行探索命令并保存原始证据。",
         "写探索报告，申报实际覆盖维度与新发现；不分配 findingId，不修改产品代码、验收、事件或 verdict。",
         "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据，不得只按字面合规降级。重报此前已登记过的同类问题（修复回退/回归/同根因复发）时附 reopenOf=<旧 findingId>——同题判定责任在审查者，沿用旧 id 使计数不重复；不确定是否同题时不填。",
@@ -1183,14 +2234,26 @@ try {
     const processFailedAfterExploration = await stopIfProcessFailed();
     if (processFailedAfterExploration !== null) return processFailedAfterExploration;
   }
-  // 终态披露行（设计 §6.3/§7.2）：环境降级与未知 revision 变化如实进保证报告——缺口
-  // 可见，不静默；零降级零未知时不加行（正常路径不加噪音）
+  // 终态披露行（设计 §6.3/§7.2/§8.2/§8.3/§5.2）：环境降级、未知 revision 变化与外部
+  // 契约缺口如实进保证报告——缺口可见，不静默；零缺口时不加行（正常路径不加噪音）
   const disclosureLines = [
     ...(degradedEnvironmentEvidence.length > 0
       ? [`环境事实降级（verified→partial）：${degradedEnvironmentEvidence.length} 条证据未满足宿主类断言的环境要求——${degradedEnvironmentEvidence.join("；")}`]
       : []),
     ...(provenanceUnknownCount > 0
       ? [`存在 ${provenanceUnknownCount} 个来源不明的 revision 变化（revision-provenance unknownCount=${provenanceUnknownCount}）：交付判定由裁决器阻断，本保证结论不含对未知变化的背书`]
+      : []),
+    ...(contractPhaseActive
+      ? [
+        `外部契约假设源独立：IA 已亲自运行 resolver（无 --write）${resolverError === "" ? "成功" : `失败——${resolverError}`}；逐 essential capability 亲自观察、negative case 亲自执行与 fake-host parity 的机器侧记录见 ${contractRecordPath}`,
+        ...(explorationDimensionsNarrowed
+          ? [`探索维度按 deliveryProfile=a 降档为 ${JSON.stringify(PROFILE_A_DIMENSIONS)}（验收声明维度 ${JSON.stringify(reviewDimensions)}；设计 §13，降档不减必做机器门）`]
+          : []),
+        ...(runtimeBindingMisses.length > 0
+          ? [`runtime 绑定未登记 ${runtimeBindingMisses.length} 条（gate 拒收 record-evidence 的 --contract-capability-ids/--runtime-probe）：证据事件已登记但缺 runtime 绑定，gate 侧 runtime 义务保持 open——${runtimeBindingMisses.join("；")}`]
+          : []),
+        ...contractDisclosures,
+      ]
       : []),
   ];
   const summaryLines = [
@@ -1381,12 +2444,17 @@ const triageNote =
       : "三档停修判据满足：零未决发现，循环退出，按 verdict 进入裁决";
 // finished 先于 message 拼接登记：登记失败的 attemptNote 才能进本出口的终态披露
 await recordAssuranceAttempt("finished", "passed");
+// 外部契约缺口汇总（§8.2/§8.3/§5.2）：转人工、parity 差异与 runtime 绑定缺失进终态
+// message——主 agent 无需再翻文件即可看到义务未完成的能力
+const contractGapNote = contractPhaseActive
+  ? `；外部契约：resolver ${resolverError === "" ? "亲自运行成功" : `失败（${resolverError}）`}，逐能力亲自观察/negative case/parity 记录见 ${contractRecordPath}${explorationDimensionsNarrowed ? `；探索维度按 deliveryProfile=a 降档为 ${JSON.stringify(PROFILE_A_DIMENSIONS)}（设计 §13，降档不减必做机器门）` : ""}${contractDisclosures.length > 0 ? `，未完成义务 ${contractDisclosures.length} 项（${contractDisclosures.slice(0, 3).join("；")}${contractDisclosures.length > 3 ? " 等" : ""}）` : ""}${runtimeBindingMisses.length > 0 ? `，runtime 绑定未登记 ${runtimeBindingMisses.length} 条（义务保持 open）` : ""}`
+  : "";
 const result: AssuranceResult = {
   terminated: "assurance-completed",
   taskDir,
   revision,
   findingIds,
   verdict: finalVerdict,
-  message: `独立保证活动已完成，返回值携带 delivery-gate 生成的 verdict；workflow 本身不宣告 accepted；${triageNote}；本任务累计保证轮次 ${assuranceRoundsTotal}（重发前先核对累计成本再决定）${degradedEnvironmentEvidence.length > 0 ? `；环境事实降级 ${degradedEnvironmentEvidence.length} 条（verified→partial，明细见保证总结）` : ""}${provenanceUnknownCount > 0 ? `；来源不明的 revision 变化 ${provenanceUnknownCount} 个（本保证结论不含对未知变化的背书，明细见保证总结）` : ""}${attemptNote}${repairSummary()}${statsTailNote()}`,
+  message: `独立保证活动已完成，返回值携带 delivery-gate 生成的 verdict；workflow 本身不宣告 accepted；${triageNote}；本任务累计保证轮次 ${assuranceRoundsTotal}（重发前先核对累计成本再决定）${degradedEnvironmentEvidence.length > 0 ? `；环境事实降级 ${degradedEnvironmentEvidence.length} 条（verified→partial，明细见保证总结）` : ""}${provenanceUnknownCount > 0 ? `；来源不明的 revision 变化 ${provenanceUnknownCount} 个（本保证结论不含对未知变化的背书，明细见保证总结）` : ""}${contractGapNote}${attemptNote}${repairSummary()}${statsTailNote()}`,
 };
 return result;

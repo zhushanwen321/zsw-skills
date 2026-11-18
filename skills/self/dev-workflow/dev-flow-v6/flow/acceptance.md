@@ -18,6 +18,26 @@
 
 **手工路径**：场景按 DAG 派发——L3 脚本（预编译剧本：操作 + 断言 + 全页截图 + console 抓取，产物落 `<name>.acceptance/<场景id>/`；项目有 verification skill 时剧本 = 其场景库资产，跑其 wrapper（D0 生成，见 compile.md「wrapper 生成与 runner 契约」节）或 runner 直跑；剧本按 compile.md「每步汇总落盘」规范向 `<artifactsDir>/summary.jsonl` 追加逐步结果）并行跑；L4 判断型（任务书附确定性产物指针 + 逐节点 summary.jsonl 汇总路径——核对以汇总为准、仅异常步骤读全文日志）依赖其前驱；核心组先行（组内依赖拓扑 + 无共享状态并行 ≤5），核心全绿后非核心解锁；混合行已拆行（编译期）。
 
+**runtime-probe 行（外部契约任务 [MANDATORY]）**：impl-plan acceptancePlan 的 `type="runtime-probe"` 行由 D0 acceptance 编译为 verify 节点（script = `gen-runtime-probe-wrapper.mjs` 生成的 wrapper，落 `<taskDir>/evidence/runtime-probes/<nodeId>.mjs`）。执行语义：wrapper 按行声明的 `command` spawn driver（driver 由任务实现提供：单文件、无动态 import、stdout 输出单一 JSON、日志走 stderr），把 driver stdout 的 JSON 落为 probe artifact（行 `artifact` 声明的任务目录相对路径，如 `evidence/runtime-probe-<id>.json`），并向节点 `artifactsDir` 写 summary.jsonl 行（passed/failed/skipped 分开统计，缺 summary 如实记 unknown 不编 0）。driver 退出码非 0 或 stdout 非单一 JSON = 节点失败（进统一失败处理中心 / 手工路径归因重跑）。probe artifact 的 `environment` / `subject.revision` / `cases` / `summary` 内容是 runtime 义务判定输入（evaluate 与独立保证消费），driver 不实观测数据只写 passed 布尔 = 无效证据。
+
+## D3 候选完成门（外部契约任务 [MANDATORY]）
+
+**D3 全绿不等于可进入候选完成**：外部契约任务在 D3 验收全绿后、D4 候选完成前，主 agent 必须跑复扫门并清点 probe 证据——runtime 义务未满足（复扫有未登记 strong 信号 / probe 未跑）时状态不得进入候选完成。
+
+```bash
+node ~/.agents/skills/dev-flow-v6/scripts/check-contract-rescan.mjs \
+  --task-dir <交付任务目录> --project-root <项目根> \
+  --exec-plan <exec-plan 绝对路径> --stage d3
+```
+
+判定（与 D0 编译门同一实现 `check-contract-rescan.mjs`，绿地任务 D1 后引入的外部调用在此拦下）：
+
+1. **复扫无未登记强信号**：对当前候选源码 + intent 重跑完整候选探测——unresolved 外部访问 → 停回人工；strong 候选未处置 / not-external 处置 / 调用类（含蕴含观察类）未被已声明 capability 覆盖 → 拒绝；
+2. **probe 已跑**：essential 契约任务必须已编译 runtime-probe 验收节点（exec-plan acceptance.nodes 带 runtimeProbe），且每个节点的 probe artifact 落盘可解析——artifact 缺失 = probe 未跑或产物被清理，拒绝；
+3. 契约实际使用但验收标 optional 的（复扫强制按 essential）按 essential 判定，不因验收低报放行。
+
+**不通过的处置**：未登记调用类 / 候选未处置 → 回 delivery-v6 修订验收包（递增验收版本重批）后回 tech-design-v6 T3 补行 / 补能力再重编译；unresolved 外部访问 → 人工归类后登记 capability 或改写成可静态判定的调用形态；probe 未跑 → 重跑 D3 对应 verify 节点（或回 T3 补 runtime-probe 行后重编译）。**禁止带着未满足的 runtime 义务进入 D4**——D4 产出的是候选实现，runtime 义务未满足时交付结论不可能为 accepted，提前进入只会把缺口推给 evaluate 才炸。
+
 - **失败处置（依赖可达性判据，2026-09-26 裁决）**：任一场景 fail 先进 run 内自愈循环（归因 → spec-bug 修复重验 / product-bug 不修 / environment 重试一次）；自愈不收敛或 product-bug 时计算 fail 场景的 DAG 后继闭包——非空（卡住后续验收）→ 立即停止派发、熔断上报；为空（不卡）→ 记录跳过、其余场景全部跑完统一上报。通用原则：处理不了的问题，不影响后续执行就先记录并跳过（记录落 `<name>.ledger.md`——手工路径主 agent 落笔，workflow 路径引擎终态笔已含）；影响后续执行则停止。主 agent 零编码，只裁决与重发起；重发起按 status.json 断点续跑
 - **修复独立性三态前置跑**：核心组缺陷出现时逐场景标三态（无已知缺陷=默认 / 独立于缺陷 N=修复窗口期旧实例前置跑，产物按旧实例标记 / 依赖缺陷 N=阻塞）——仅在「已出现核心缺陷 + 修复窗口时长 > 前置场景预估耗时」时启用
 - fail → 先 read 项目排障文档（典型 docs/TROUBLESHOOTING.md，路径以 AGENTS.md 索引为准）匹配已知症状再进修复；blocked → 如实报告环境原因，禁 mock 冒充通过

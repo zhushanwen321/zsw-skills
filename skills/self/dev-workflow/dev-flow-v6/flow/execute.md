@@ -21,6 +21,14 @@ args: { execPlan: "~/.agents/skill-data/dev-flow/<project-slug>/<name>.exec-plan
 
 worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 worktree 内执行；集成性质下游单元在其合并节点完成后才就绪——合并由 D0 显式排布（合并节点/手工段，见 `flow/compile.md` worktree 合并排布节），引擎不做合并检测。
 
+## 契约 spike 顺序门（外部契约任务 [MANDATORY]）
+
+验收含 essential 外部契约时，impl-plan 的 DAG 已把契约 spike 单元（`kind="contract-spike"`）排在业务单元之前（D0 编译门复算拓扑：业务单元 deps 传递闭包必须可达 spike）。执行纪律：
+
+- **spike 失败时优先修契约层，不展开业务实现**：spike 的失败归因（API 形态 / 字段名 / 调用签名 / 回订通道与权威 surface 不符）修在契约层——改实现去贴合真实宿主契约，或归因确属验收声明有误时回 delivery-v6 修订验收包（递增验收版本）后重跑 D0 编译门；禁止在 spike 未过时先写业务代码「绕过」契约形态（那样只会把契约错误带进业务层，D3 复扫与 evaluate 仍会拦，但返工成本高一个量级）
+- **spike 通过后业务单元才解锁**：DAG 依赖边承载该顺序（spike 未 done 时业务单元不就绪），引擎调度天然保证；手工路径同步遵守——派发前核对 status.json，spike 非 done 不派业务单元
+- 绿地任务（D0 时源码为空）在 D1 才引入真实外部调用是合法演进，但 D3 候选完成前的复扫门会核对「引入的调用类是否已登记 capability」（见 `flow/acceptance.md` D3 候选完成门）——未登记即拒绝进入候选完成，回验收修订
+
 ## 手工降级路径（workflow 未就绪/失败时，语义等价）
 
 八步循环：

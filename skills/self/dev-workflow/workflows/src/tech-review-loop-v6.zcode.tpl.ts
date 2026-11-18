@@ -1,7 +1,10 @@
 /* zcode-workflow
-description: tech-design-v6 技能 W1 设计文档审查循环：四席并行审查（方向审席 +
+description: tech-design-v6 技能 W1 设计文档审查循环：缺省四席并行审查（方向审席 +
   主审/影响面审/简洁审，R1 全面审、R2+ 聚焦复审逐条对账——方向审 patch 档发现随当轮
-  问题清单进入聚合）→ 聚合裁决独立 phase（四席发现按同根因合并为去重权威清单
+  问题清单进入聚合）；task.json deliveryProfile=a 时固定两席（方向审 + 主审兼契约主审，
+  跳过影响面审/简洁审；读不到字段缺省 b 不降档）→ 外部契约任务的能力清单与权威快照
+  摘要进方向审与主审输入（核对自建接口 / vendored 类型 / mock 契约与 authority surface
+  的一致性）→ 聚合裁决独立 phase（各审查席发现按同根因合并为去重权威清单
   aggregated.md，refs 精确划分脚本 fail-closed 校验）→ 文档修复者单 agent 据聚合
   清单修复 + 处置表产出（dispositions.json/md）→ 循环至
   converged / escalated / stuck / max-rounds；

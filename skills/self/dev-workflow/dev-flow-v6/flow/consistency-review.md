@@ -6,6 +6,25 @@
 
 进入合法性由 delivery-core next 裁决（转移表唯一权威）。D1 各节点 deviations 中的测试缺口申报（testCommand 覆盖不了的改动行为）必须逐条落实去向，二选一：**更新设计包 s4-accept.json verificationBindings / impl-plan acceptancePlan 的测试绑定，或登记由 D3 独立验收节点承接（写明节点与场景 id）**——只申报缺口不落实去向 = 测试覆盖静默流失，D3 不会知道该验什么；未落实的条目回 D1 对应单元补齐。核对结果（逐条处置）append 到 `<name>.ledger.md`。
 
+## 外部契约对照（交付体系契约任务 [MANDATORY]）
+
+验收包含外部契约（acceptance.json 顶层 externalContracts / externalContractReview 在场）的任务，D2 审查输入增加契约对照维度：
+
+- **实现接口与设计契约快照漂移核对**：权威输入 = `<taskDir>/environment-contracts.current.json` 指针指向的环境契约快照（权威 surface 的内容哈希集合）。核对实现消费的外部接口（函数签名、字段名、返回形态、注册/分发入口）与快照 surface 是否一致——漂移（实现按错误契约形态编码）列 unreasonable 并给 file:line 证据
+- **手写外部 API 类型高重叠列为审查输入**：项目内自建 interface / vendored 类型与权威 surface 高重叠时，必须三选一且审查确认：import 权威包类型 / 由权威类型生成 stub / 登记 adapter boundary 并配真实 runner parity（设计 §7.2 T3 规则，D2 核对落实）
+- workflow 路径由引擎把契约快照指针注入分区 reviewer 的审查上下文（ctxBlock）；指针缺失时引擎显式 WARN 并在审查报告开头登记一行，终态由主 agent 呈报修复后重跑受影响审查——不静默降级
+- 手工路径：主 agent 派审时把快照指针与上述两条判据写进 reviewer 任务书
+
+## deliveryProfile=a 降档（D2 只做契约与改动对照）
+
+exec-plan 顶层 `deliveryProfile=a`（D0 从 task.json 登记）时，一致性审查分区降档：
+
+- **分区过滤**：W3 引擎把 diff 分区过滤到契约相关单元（`unitKind="contract-spike"` 及其传递依赖者）territory 覆盖的文件，其余文件不进审查范围（移出清单随终态 d2Downgrade 字段披露）；无 spike 单元时无降档依据，保持全部分区（fail-open）
+- **审查内容**：保留分区按上文「外部契约对照」执行（契约与改动对照），审出范围外问题登记 reasonable 并注明「降档范围外」，不回修复批次
+- **不减必做机器门**：Gate A 全量测试、绕过检测、修复组互斥校验照常；降档只减审查分区
+- 手工路径同规则：主 agent 只派契约相关单元范围的分区 reviewer，并在汇总中登记移出文件清单
+- b / c 级（缺省 b）不降档，分区规则与审查维度照现行
+
 ## 索引初始定位（辅助入口）
 
 R1 发起前可用逐断言引用索引（D0 生成 exec-plan 后重建于 `<exec-plan 同目录>/verification-index.json`，禁手改）拿初始候选上下文——按分区文件清单查询直接相关的设计条目、断言、单元与场景，附进对应 reviewer 任务书：

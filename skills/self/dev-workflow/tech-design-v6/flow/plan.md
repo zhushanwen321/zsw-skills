@@ -9,7 +9,7 @@
 1. **T2 证据**：`<name>/final.json` 存在且 terminated == "converged"——本 skill 产出的设计天然满足；**外部文档入口**（用户直接给一份未经本流程的设计文档）→ 先补 T2（按 `flow/review.md` 手工路径全量审查，方向审起），补审不通过停止；禁止拿未审查文档直接拆计划
 2. **结构完整性**：写 impl-plan 时逐项引用四类内容的实际节——背景/目标、终态/机制、验收场景表、下一层拆分。引用填不出 = 结构缺失，停下告知用户回 T1 补文档
 3. 章节映射落 impl-plan.json 的 `sectionMap` 字段（渲染视图「0 章节映射」节由渲染器生成）——后续所有 subagent/编译从这拿坐标，禁止自猜编号（两代结构并存：完整版 11 节 vs 五段制，一律按实质特征定位；节号坐标 = 渲染视图 `<name>.rendered.md` 的固定编号，渲染脚本保证节号稳定）
-4. **验收绑定现行性（交付体系任务 [MANDATORY]）**：设计包 meta.json `acceptanceBinding` 须仍与交付任务目录当前批准一致——跑 `node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs evaluate --task-dir <taskDir>`，把输出（verdict.json）的 `acceptanceVersion` 与 `acceptancePackageSha256` 和 meta.json acceptanceBinding 同名字段逐项比对，任一不一致 = 验收版本或验收包已变化（重批），旧设计包绑定失效 → 停止拆计划，回 `flow/write.md` Step 0 重新影响审查（对照新版本 acceptance.json 与 increments.json 逐条比对设计包覆盖，需改动回 T1 修订并按所处阶段重走 T2/T3），更新 binding 后重进本步；binding.taskDir 与 <taskDir> 不一致 = 拿错设计包，改用其绑定任务目录下的交付任务。独立设计任务（无交付任务目录）本条不适用。下游双保险：dev-flow-v6 D0 编译门（`check-exec-plan.mjs --task-dir`）对同一判据机器复算（验收包联合哈希 + 版本比对），本条在拆计划前提前拦
+4. **验收绑定现行性（交付体系任务 [MANDATORY]）**：设计包 meta.json `acceptanceBinding` 须仍与交付任务目录当前批准一致——跑 `node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs evaluate --task-dir <taskDir>`，把输出（verdict.json）的 `acceptanceVersion` 与 `acceptancePackageSha256` 和 meta.json acceptanceBinding 同名字段逐项比对，任一不一致 = 验收版本或验收包已变化（重批），旧设计包绑定失效 → 停止拆计划，回 `flow/write.md` Step 0 重新影响审查（对照新版本 acceptance.json 与 increments.json 逐条比对设计包覆盖，需改动回 T1 修订并按所处阶段重走 T2/T3），更新 binding 后重进本步；binding.taskDir 与 <taskDir> 不一致 = 拿错设计包，改用其绑定任务目录下的交付任务。独立设计任务（无交付任务目录）本条不适用。**环境快照现行性（外部契约任务 [MANDATORY]）**：meta.json `environmentBinding.snapshotSha256` 存在时，重读任务目录 `environment-contracts.current.json` 指向的快照——身份哈希不一致 = 环境已漂移，设计引用的契约事实可能失效 → 停止拆计划，回 `flow/write.md` Step 0 重新影响审查（对照新快照逐条核对 §2 契约事实与 upstreamDeps 契约能力行，需改动回 T1 修订并按所处阶段重走 T2/T3），更新 environmentBinding 后重进本步。下游双保险：dev-flow-v6 D0 编译门（`check-exec-plan.mjs --task-dir`）对同一判据机器复算（验收包联合哈希 + 版本比对），本条在拆计划前提前拦
 
 ## 增量契约对齐（交付体系任务 [MANDATORY]）
 
@@ -21,6 +21,15 @@
 4. **机器核对**：D0 编译门对交付体系任务必跑 `node ~/.agents/skills/dev-flow-v6/scripts/check-exec-plan.mjs <exec-plan> --task-dir <taskDir>`（增量归属全覆盖、incrementId 引用存在、测试命令逐字一致，任一不符 fail-fast 回 T3 本节——见 dev-flow-v6 `flow/compile.md` 步骤 3）
 
 交付体系外的独立设计任务（无交付任务目录）本节不适用，单元不带 incrementId。
+
+## 外部契约任务（T3 附加要求，交付体系任务且验收包含 externalContracts 时适用）
+
+验收声明外部契约时（acceptance.json 顶层 `externalContracts` 非空，任务目录有 `environment-contracts.current.json`），除上方通用纪律外加四条撰写要求：
+
+1. **契约 spike 单元前置 [MANDATORY]**：impl-plan 必须包含契约 spike 单元（spike = 用最小可装载实现揭示外部契约形态的前置探针单元——确认 API 形态、字段名、调用签名与回执通道，不追求产品功能），在 `units[]` 中以 additive 可选字段 `kind: "contract-spike"` 标记（additive 字段登记与渲染落点见 `references/impl-plan-mapping.md`；dev-flow-v6 D0 编译侧对该字段的拓扑复算归其 `flow/compile.md`，两侧以该字段为唯一依据）。契约 spike 单元是 **DAG 首个可执行节点**：它是唯一根（无 deps），归属业务增量的全部单元（含 u-foundation）经既有 `deps` 字段依赖它——依赖方向写「编译依赖 / 运行时读对方产物」之外的专门理由「契约形态未确认前不展开业务实现」；spike 的 `incrementId` = 验收包 increments 中 `kind=contract-smoke` 条目（每个含 essential 契约的任务必有该增量），其 `testCommand` 照「测试命令照抄不改编」纪律从该增量逐字转抄
+2. **mock-only 资产不得充当 runtime 证明 [MANDATORY]**：impl-plan 的验收条款与验收计划表（`acceptancePlan[]`）禁止把 mock-only 资产（fake-host、自写 harness、mock 测试回执）标记为契约能力的 runtime 证明——mock 只能作故障注入、边界组合与回归加速的补充场景；契约能力的真实运行证明归验收侧 runtime 义务与契约冒烟（官方 runner / 真实宿主观察），计划里出现「mock 通过即视为契约可用」形态 = 自检不过
+3. **手写外部 API interface 三选一 [MANDATORY]**：源码或测试需要手写外部 API interface（自建接口 / vendored 类型 / mock 契约）时，单元职责必须三选一且写明选哪条：① import 权威包类型（权威工件解析出的类型定义）；② 由权威类型生成 stub（生成命令与权威来源登记进单元）；③ 登记 adapter boundary 并配真实 runner parity（边界位置 + parity 观察点）。不声明 = 拆解未完成
+4. **TypeScript 项目必须包含可执行类型检查命令与依赖 [MANDATORY]**：项目含 tsconfig 且源码为 TypeScript（或外部契约 surface 以 TypeScript 类型提供、或设计声称 strict 类型层）时，`testPlan` 必须含可执行的类型检查命令（如 `tsc --noEmit`）与对应依赖（工具链在 devDependencies 且已安装）。类型检查命令缺失时二选一：把安装工具链与类型检查命令纳入首个增量（首个单元验收条款写明），或报用户显式裁决接受无类型检查并降低相关断言结论——不允许文档声称类型检查而命令不可执行（与验收侧 §11.2 类型层门同一判据，计划侧在此落位）
 
 ## 三类关联声明（渐进式 review）
 
@@ -56,7 +65,8 @@
 - **0 章节映射** ← `sectionMap`：四类内容 + 待验证检查点在设计包的实际位置（坐标唯一来源；扩展键承载「决策分级来源」「验收契约」等附加行）
 - **1 目标快照** ← `goalSnapshot`：摘录设计背景/目标 + Out-of-scope，逐字摘录禁止改写
 - **2 单元列表** ← `units[]`，八列 = id / responsibility / territory / deps（`depReasons` 括注理由）/ isolation(plain/worktree) / acceptance / decisionTier / incrementId
-  - u-foundation 固定为共享契约根节点，初始即就绪的 DAG 根
+  - u-foundation 固定为共享契约根节点，初始即就绪的 DAG 根；外部契约任务例外——契约 spike 单元（`kind=contract-spike`，见「外部契约任务」节）取代它成为唯一根，全部业务单元（含 u-foundation）经 deps 依赖 spike
+  - 契约 spike 单元的 Unit 单元格渲染为 `<id>（契约 spike）` 后缀标注（additive 渲染支持，`kind` 字段登记见 `references/impl-plan-mapping.md`）
   - 增量归属 = increments.items[].id（交付体系任务逐单元必填，见「增量契约对齐」节；独立设计任务省略该字段，渲染为「—（不归属增量）」）
   - 终态型设计：单元 = 迁移波次（来自设计文档差距-波次映射，见「终态型设计」节）
   - 决策分级 = 该单元实现的设计决策中的最高审核级别（A/B，来源 = meta.json reviewNav 人工审核导航，渲染视图呈现为导航表）；无决策覆盖的单元标 B
@@ -112,6 +122,7 @@
     { "id": "u-foundation", "responsibility": "…", "territory": ["…"],
       "deps": [], "isolation": "plain", "acceptance": ["条款…"], "decisionTier": "A",
       "incrementId": "<increments.items[].id——交付体系任务必填（D0 编译门核对归属与测试命令一致），独立设计任务省略>",
+      "kind": "contract-spike",                   // additive 可选：契约 spike 单元标记（唯一登记值 contract-spike；外部契约任务必有且为 DAG 唯一根——见「外部契约任务」节，渲染为 Unit 列后缀标注）
       "depReasons": { "<依赖单元id>": "<依赖理由>" } }   // additive 可选：依赖列括注理由
   ],
   "unitsNotes": [],                             // additive 可选：单元表后自检陈述（波次覆盖对账等）
@@ -196,6 +207,7 @@ node ~/.agents/skills/tech-design-v6/scripts/render-impl-plan.mjs ~/.agents/skil
 6. 决策分级列无遗漏：每单元已标注其实现决策的最高审核级别（来源 = meta.json reviewNav 人工审核导航），A 级决策至少被一个单元覆盖
 7. 终态型波次覆盖（终态型设计必查）：终态-现状差距表每条差距有归属波次单元；标注目标交付版本的波次版本齐全；波次间中间态边界（s3-solution.json migrationWaves 波次内容 scope 声明的进入/退出形态）在依赖列或单元职责中可见
 8. 三类关联声明无遗漏：跨文件契约 / 登记处 / 构建产物逐项登记 associations，co-change 项的 trigger 与 related 同单元覆盖（对照 D0 门判据）；exempt 项理由非空且兜底审查通道明确
+9. 外部契约任务四项（验收包含 externalContracts 时必查，见「外部契约任务」节）：契约 spike 单元存在（`kind=contract-spike`）、incrementId = contract-smoke 增量、testCommand 逐字转抄、为 DAG 唯一根且全部业务单元 deps 覆盖；验收条款与验收计划表无 mock-only 资产充当 runtime 证明；手写外部 API interface 的单元已三选一；TypeScript 项目的类型检查命令与依赖在位（缺失已纳入首个增量或用户显式裁决）
 
 仅当出现无法机械判定的歧义（范围声明必须重叠 / 设计自相矛盾）才停下问用户。
 
@@ -206,3 +218,5 @@ node ~/.agents/skills/tech-design-v6/scripts/render-impl-plan.mjs ~/.agents/skil
 ## 落盘与 T3 确认
 
 Write `.impl-plan.json` + 渲染命令跑通（`--check` 绿）= 落盘完成（不 commit）。呈现 DAG/单元表/验收计划表 + 自检与复审结论——**单元表按决策分级分组呈现（A 级单元在前列出，B 级紧随其后一行一条）**，默认等用户确认拆分与验收计划 → 授权后设计包交付；交付体系任务的后续阶段推进由 delivery-core next 裁决（转移表唯一权威），执行侧编译见 dev-flow-v6 `flow/compile.md`。
+
+**方案包哈希清单（交付体系任务）**：主会话登记 `record-design-approved` 前的 `--package-file` 清单逐文件列 name+sha256（组成见 SKILL.md「方案包确认与登记」节）；外部契约任务额外计入环境契约快照条目——name = `environment-contracts/<snapshotSha256>.json`、sha256 = meta.json `environmentBinding.snapshotSha256`（无外部契约的任务不产该条目）。快照漂移使该条目不再覆盖当前环境时，按入口自检第 4 条回 T1 重新影响审查。

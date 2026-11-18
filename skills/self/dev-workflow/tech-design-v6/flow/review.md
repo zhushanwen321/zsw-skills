@@ -1,6 +1,8 @@
 # T2 审查循环流程
 
-> 四席并行审查（方向审席 + 主审 / 影响面审 / 简洁审）+ 多轮修复循环（方向审 rewrite 档击穿时整循环终止回 T1）。执行体两形态：**zcode 环境优先发起 saved workflow `tech-review-loop-v6`**（契约见 SKILL.md）；workflow 未就绪/发起失败按本文件手工路径执行（语义等价）。审查标准见 `review/rubric-design-doc.md`，agent 定义见 `agents/`。
+> 四席并行审查（方向审席 + 主审 / 影响面审 / 简洁审）+ 多轮修复循环（方向审 rewrite 档击穿时整循环终止回 T1）。deliveryProfile=a 时降为方向审 + 主审两席（见「A 级降档」节）。执行体两形态：**zcode 环境优先发起 saved workflow `tech-review-loop-v6`**（契约见 SKILL.md）；workflow 未就绪/发起失败按本文件手工路径执行（语义等价）。审查标准见 `review/rubric-design-doc.md`，agent 定义见 `agents/`。
+
+> **外部契约审查输入（条件触发）**：交付体系任务且验收包含外部契约（acceptance.json 顶层 `externalContracts` 非空）时，方向审与主审的输入除设计文档外还包含契约能力清单与权威快照摘要（来源 = 验收包 externalContracts[].capabilities 与任务目录 `environment-contracts.current.json` 指向的快照）——两席据此核对自建接口 / vendored 类型 / mock 契约与 authority surface 的一致性，并把「以 SDK 为准」「联调时再核对」类未完成核对义务判 must-fix（判据写进两席 agent 模板与下方任务模板）。
 
 ## 产物路径约定 [MANDATORY]
 
@@ -13,6 +15,15 @@
 ## T2 进场门槛 [MANDATORY]
 
 进 T2 派审前，设计文档机器项必须全绿：`node <skill 安装位置>/scripts/check-design-doc.mjs <设计目录绝对路径>`（T1 `flow/write.md` Step 6 机器自检跑同一脚本）。脚本按十条规则判定：六文件完整与枚举合法 / id 全局唯一 / 导航对齐 / 跨章节引用与守护引用存在 / 分型一致 / 产物表触发完备 / 内容形态合法 / 穷举断言声明（warning 不阻塞）/ 渲染产物过期（warning 不阻塞）/ 守护单一登记——其中导航对齐 = reviewNav 与 decisions 的 decisionId 集合对账；跨章节引用与守护引用存在 = gapRefs / unitRefs / axiomRefs / goalRefs 指向的 id 必须在被引用数组中存在、{{Gx}} 守护引用指向的 guards id 必须在 decisions[].guards 登记中存在；内容形态合法 = 分型理由不重复前缀、文件条目括号配对；穷举断言声明 = 穷举断言行缺 searchCmd 登记时告警；守护单一登记 = guards 文本全局唯一，可执行内容跨字段逐字重复只告警不阻塞（提示收敛为 guards 登记 + 引用）。exit 非 0 = 未全绿——**不派审**，先回 T1 按 stdout 校验报告修对应章节 JSON、重跑脚本至 exit 0 再进 T2。输入是 md 单文件时脚本 exit 1 并输出指引（全文见 `references/design-doc-schema.md` §11），按指引处理后另行发起。骨架完整性、引用对账、导航对齐这类机器可查问题在 T1 拦截，T2 各 reviewer 不报它们。
+
+## A 级降档（deliveryProfile=a）
+
+交付体系任务的 task 元数据 `deliveryProfile`（task.json 字段，由 gate init 参数或 user 凭据命令 `set-delivery-profile` 写入，禁手改 task.json）为 `a` 时，T2 固定降为**方向审 + 主审（兼契约主审）两席**——跳过影响面审 / 简洁审（外部契约守门设计的 A 级成本控制：外部契约任务是「先小探针、后大流程」，降档只减审查席与分区，不减必做机器门；探索维度取契约与故障两类归独立保证线，本技能只降审查席）。
+
+- **读取方式**：设计目录 meta.json `acceptanceBinding.taskDir` → 任务目录 `task.json` 的 `deliveryProfile` 字段；合法取值 `a` / `b` / `c`（普通任务缺省 `b`）
+- **缺省不降档**：读不到字段（独立设计任务无任务目录 / task.json 缺失 / 字段缺失或值非法）一律按 `b` 处理，四席照常
+- **两席的输入不减**：契约能力清单与权威快照摘要（外部契约任务）仍进方向审与主审的输入——降档不是降契约核对强度
+- **双轨同判据**：workflow 路径（tech-review-loop-v6）由脚本侧读同一字段短路派审席（agent 名与产物名不变，只少派两席）；手工路径按本节派两席。轮次形态（R1 全面 / R2+ 聚焦复审）、聚合裁决、修复循环、终态判定不因降档改变
 
 ## W1 workflow 发起（zcode 环境默认动作）
 
@@ -56,6 +67,15 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
      结构化字段原文时读 <设计目录>/ 内章节 JSON，如 s2-status.json 的 artifactTables）
   3. 目标项目根：<绝对路径>——read 其 AGENTS.md（若存在）提取项目约定与架构
      事实；攻击「状态副本清单 / 上游依赖」以项目自己的架构事实为依据，不凭偏好
+  3.5 外部契约输入（交付体系任务且验收包含 externalContracts 时；无则跳过本条）：
+     主 agent 附契约能力清单（acceptance.json externalContracts[].capabilities：
+     id / minEnvironment / observable / surfaceRefs）与权威快照摘要（任务目录
+     environment-contracts.current.json 指向的快照：snapshotSha256、各契约
+     status / identity / aggregateHash 与 surfaces 的 surfaceRef+sha256；完整
+     内容可 read 该文件）。攻击「契约事实的来源不是权威快照」类前提（D2）：平台
+     文档与文字概述只能作背景，单独引用作契约事实 = must-fix；上游依赖清单的
+     契约能力行（capabilityRef / observation / risk）与能力清单对账（D4）——
+     capabilityRef 必须覆盖全部能力且一一对应
   4. 五大方向逐项攻击（判据 D1-D5，每项先找反例，找不到反例才判通过）：
      ① 分型：终态型有无触发依据（用户显式要求 / 修复史判定表「未修到」/
         架构级设计对象）；演进型的「为什么不需要终态视角」辩护是否被修复史
@@ -88,7 +108,7 @@ args: { designDoc: <设计目录绝对路径（或其渲染 md 路径——workf
 
 **全托管模式附加声明**：task 末尾追加「全托管模式：禁止 AskUserQuestion / ask-user / 任何等待用户输入的操作；遇到决策点自行裁决，决策清单写入报告 INFO 节。」
 
-三审（主审 / 影响面审 / 简洁审）与方向审席同一条消息并行派出（subagent 独立加载，task 内路径全部绝对路径；方向审 task 按 Step 2 模板）。**不要自己审——审查与写作分离，避免确认偏差，主 agent 不自审**。四席同轮并行、同一对账契约：方向审 patch 档发现与三审发现合并进当轮问题清单，由修复者一并处置（Step 4）；rewrite 档（问题定义/方案主干/分型被击穿）整循环终止按终态表 direction-rejected 处理。R2+ 四席均按聚焦复审（上轮处置对账 + 只审触及章节——方向审席另重跑穷举断言（exhaustive=true）searchCmd 登记的检索命令对账）。
+三审（主审 / 影响面审 / 简洁审）与方向审席同一条消息并行派出（subagent 独立加载，task 内路径全部绝对路径；方向审 task 按 Step 2 模板）。**不要自己审——审查与写作分离，避免确认偏差，主 agent 不自审**。四席同轮并行、同一对账契约：方向审 patch 档发现与三审发现合并进当轮问题清单，由修复者一并处置（Step 4）；rewrite 档（问题定义/方案主干/分型被击穿）整循环终止按终态表 direction-rejected 处理。R2+ 四席均按聚焦复审（上轮处置对账 + 只审触及章节——方向审席另重跑穷举断言（exhaustive=true）searchCmd 登记的检索命令对账）。**deliveryProfile=a 时只派主审（兼契约主审）——影响面审 / 简洁审跳过，判据见「A 级降档」节；主审的 task 模板不变（3.5 契约输入与加判项照常）。**
 
 ```text
 agent: tech-design-review-v6
@@ -103,6 +123,14 @@ task:
        assertionRedlights）
     3. 目标项目根：<绝对路径>——read 其 AGENTS.md / ARCHITECTURE.md（若存在）提取
        项目约定；read 源码核实声称时以此为锚
+    3.5 外部契约输入（交付体系任务且验收包含 externalContracts 时；无则跳过本条）：
+        主 agent 附契约能力清单与权威快照摘要（内容同方向审 3.5）。加判一项——
+        自建接口 / vendored 类型 / mock 契约与权威快照 surface 逐项对照（签名、
+        参数个数与形态、字段名、返回对象、命令分发规则——不一致 = must-fix，引用
+        能力 id 与 surfaceRef）；「以 SDK 为准」「联调时再核对」类未完成核对义务
+        = must-fix，修复方向只能是转为实施单元（s5-breakdown.json units 或 T3
+        impl-plan 契约 spike 单元，kind=contract-spike）或由修复者停回用户裁决
+        阻断设计确认，不得保留为待办文字
     4. <R1：逐项对抗式审查，找反例和攻击点，声称事实错误前必须 read 源码核实；
        只报影响决策的事实错误。
        R2+（聚焦复审）：只审三件事——上轮 must-fix 修复是否成立（fixed 须实证：读了

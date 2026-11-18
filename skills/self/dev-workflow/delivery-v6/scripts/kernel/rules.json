@@ -132,7 +132,9 @@
       "RevisionBaselineConfirmed",
       "IndependentTaskDeclared",
       "TaskSuperseded",
-      "TaskSupersedeCancelled"
+      "TaskSupersedeCancelled",
+      "ExternalAuthorityDeclared",
+      "EnvironmentBaselineConfirmed"
     ]
   },
   "writeMatrix": {

@@ -3,8 +3,10 @@
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
 // 改动任一侧循环骨架时评估另一侧是否需要同步）。语义权威源 = tech-design-v6
 // 设计文档 §5（轮次形态唯一定义 / 停机线 / 终态与停回通道）。与 rfl 的结构差异：
-//  - 维度固定四席（方向审席 + 三审同轮并行、同一对账契约——方向审 patch 档发现进
-//    当轮问题清单由文档修复者处置，审查-修改闭环收在 workflow 内），无 rfl 的批内
+//  - 维度缺省四席（方向审席 + 三审同轮并行、同一对账契约——方向审 patch 档发现进
+//    当轮问题清单由文档修复者处置，审查-修改循环收在 workflow 内）；A 级降档
+//    （deliveryProfile=a）固定两席 = 方向审 + 主审（兼契约主审），跳过影响面审 /
+//    简洁审（设计 §13 a 行——降档只减审查席，不减必做机器门）；无 rfl 的批内
 //    慢快池调度（四席恒定并行，无分批收益）
 //  - 聚合裁决是独立 phase（对齐 rfl 框架）：四席发现先经聚合裁决员合并为去重权威
 //    清单 aggregated.md（refs 对原始清单的精确划分由脚本 fail-closed 校验——漏报 /
@@ -389,7 +391,7 @@ function makeAggregationValidator(rawRefs: string[], prevImpactByRef: Map<string
         if (typeof r !== "string" || r.trim() === "") {
           errors.push(`items[${i}] refs 含空串`);
         } else if (!rawRefSet.has(r)) {
-          errors.push(`items[${i}] refs 含原始清单不存在的「${r}」（幻觉 ref——只能引用四席报告的既有锚点，即报告问题条目的编号 ref）`);
+          errors.push(`items[${i}] refs 含原始清单不存在的「${r}」（幻觉 ref——只能引用各审查席报告的既有锚点，即报告问题条目的编号 ref）`);
         } else if (seen.has(r)) {
           errors.push(`ref「${r}」同时出现在 items[${seen.get(r)}] 与 items[${i}]（每条原始 ref 恰好归属一条聚合项）`);
         } else {
@@ -436,6 +438,67 @@ function renderAggregatedMd(round: number, items: AggregatedItem[]): string {
       "",
     );
   });
+  return lines.join("\n");
+}
+
+/** 外部契约上下文探针输出 → prompt 注入文本（脚本确定性渲染，不让 LLM 自行摘要求——
+ *  能力清单与快照哈希是审查对账的比对基准，摘要有偏差即对账失准）。无外部契约 / 探针失败
+ *  返回空串（审查输入零变化）；快照缺失时返回带 WARN 披露行的文本（两席登记「权威
+ *  来源缺失」，不用平台文档替代） */
+function renderContractContext(raw: string, taskDir: string): string {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return "";
+  }
+  if (parsed?.status !== "ok") return "";
+  const contracts = Array.isArray(parsed.contracts) ? parsed.contracts : [];
+  if (contracts.length === 0) return "";
+  const lines: string[] = ["外部契约能力清单（验收包 externalContracts——机器可对账的最小能力清单；完整上下文可 read 验收包原文）："];
+  for (const c of contracts) {
+    if (c === null || typeof c !== "object") continue;
+    const contract = c as Record<string, unknown>;
+    const caps = Array.isArray(contract.capabilities) ? contract.capabilities : [];
+    lines.push(`- 契约 ${String(contract.id ?? "（缺 id）")}（essential=${String(contract.essential ?? "未声明")}），能力 ${caps.length} 项：`);
+    for (const cap of caps) {
+      if (cap === null || typeof cap !== "object") continue;
+      const p = cap as Record<string, unknown>;
+      const surfaces = Array.isArray(p.surfaceRefs) ? p.surfaceRefs.map((s) => String(s)).join("、") : "";
+      lines.push(
+        `  - 能力 ${String(p.id ?? "（缺 id）")}：最低环境 ${String(p.minEnvironment ?? "未声明")}；可观察行为 ${String(p.observable ?? "未声明")}；权威表面 ${surfaces === "" ? "（未登记）" : surfaces}`,
+      );
+    }
+  }
+  const snap = parsed.snapshot;
+  if (snap !== null && snap !== undefined && typeof snap === "object" && !Array.isArray(snap)) {
+    const s = snap as Record<string, unknown>;
+    const sha = String(s.snapshotSha256 ?? "");
+    lines.push(
+      `权威快照摘要（任务目录 ${taskDir}/environment-contracts.current.json 指向的快照${sha !== "" ? `：${taskDir}/environment-contracts/${sha}.json` : ""}——完整内容可 read）：snapshotSha256=${sha === "" ? "未登记" : sha}`,
+    );
+    const snapContracts = Array.isArray(s.contracts) ? s.contracts : [];
+    for (const sc of snapContracts) {
+      if (sc === null || typeof sc !== "object") continue;
+      const c = sc as Record<string, unknown>;
+      const identity = c.identity !== null && typeof c.identity === "object" ? (c.identity as Record<string, unknown>) : {};
+      const surfaces = Array.isArray(c.surfaces) ? c.surfaces : [];
+      const surfaceText = surfaces
+        .map((sf) => {
+          if (sf === null || typeof sf !== "object") return String(sf);
+          const f = sf as Record<string, unknown>;
+          return `${String(f.surfaceRef ?? "?")}（sha256 ${String(f.sha256 ?? "?").slice(0, 12)}）`;
+        })
+        .join("、");
+      lines.push(
+        `- 契约 ${String(c.id ?? "（缺 id）")} status=${String(c.status ?? "未登记")} 身份 ${String(identity.name ?? "?")}@${String(identity.version ?? "?")} aggregateHash=${String(c.aggregateHash ?? "未登记")}；surface ${surfaceText === "" ? "（无）" : surfaceText}`,
+      );
+    }
+  } else {
+    lines.push(
+      `WARN 权威快照不可读（${typeof parsed.snapNote === "string" && parsed.snapNote !== "" ? parsed.snapNote : "快照内容缺失"}）——契约事实无权威来源：在报告开头登记该事实，涉及契约判据的项标注「权威来源缺失」，不得用平台文档文字或 mock 行为替代`,
+    );
+  }
   return lines.join("\n");
 }
 
@@ -681,7 +744,7 @@ const renderedMd = `${designDoc}/${docBase}.rendered.md`;
 // V5 交付任务：设计目录 meta.acceptanceBinding.taskDir → 验收包路径。主审/方向审对照
 // requirements[].assertions、adversarialForms、criterionMechanisms 的判据锚点由它提供
 //（机制是否暗中改变判据自然语义——没有验收包输入则该审查无据可依）。独立设计任务
-// 无 binding = 不注入；binding 声明了但验收包不可读 = 显式披露给四席在报告中登记
+// 无 binding = 不注入；binding 声明了但验收包不可读 = 显式披露给各审查席在报告中登记
 const ACCEPTANCE_PROBE =
   "var fs=require('fs'),pt=require('path');" +
   "try{var meta=JSON.parse(fs.readFileSync(pt.join(process.argv[1],'meta.json'),'utf8'));" +
@@ -705,16 +768,78 @@ if (acceptanceBinding === null) {
   log(`WARN: 验收绑定探针输出不可解析（stdout=${acceptanceProbe.stdout.trim().slice(0, 120)}）——按独立设计任务处理，验收判据对照不可用`);
 }
 if (acceptanceBinding !== null && acceptanceBinding.status === "invalid") {
-  log(`WARN: 验收绑定异常——${acceptanceBinding.reason}；四席将在报告中登记「判据锚点缺失」`);
+  log(`WARN: 验收绑定异常——${acceptanceBinding.reason}；各审查席将在报告中登记「判据锚点缺失」`);
 }
 
-// 审查维度（固定四席并行 = 方向审席 + 三审；报告名确定性，落当轮轮次目录）
+// 交付任务目录（acceptanceBinding bound 时 = 验收包所在目录）——任务元数据读取与下方
+// 循环尝试登记共用同一派生（原先两处各算一遍，收敛至单一定义）
+const taskDir =
+  acceptanceBinding !== null && acceptanceBinding.status === "bound" && typeof acceptanceBinding.acceptancePath === "string"
+    ? acceptanceBinding.acceptancePath.split("/").slice(0, -1).join("/")
+    : "";
+
+// A 级降档输入（设计 §13）：task.json 的 deliveryProfile 字段（gate init 参数或 user
+// 凭据命令 set-delivery-profile 写入，禁手改 task.json）。a → T2 固定两席（方向审 +
+// 主审兼契约主审），跳过影响面审 / 简洁审；读不到字段（独立设计任务无任务目录 /
+// task.json 缺失 / 字段缺失或值非法）缺省 b 不降档——fail-open 取保守形态：派审席照常，
+// 不以缺字段为由减审（降档是显式声明，不是缺省推断）
+const TASK_PROFILE_PROBE =
+  "var fs=require('fs');" +
+  "try{var t=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));" +
+  "process.stdout.write(t&&typeof t.deliveryProfile==='string'?t.deliveryProfile:'')}" +
+  "catch(e){process.stdout.write('')}";
+let taskProfileRaw = "";
+if (taskDir !== "") {
+  const profileRes = await world.run("node", ["-e", TASK_PROFILE_PROBE, `${taskDir}/task.json`]);
+  if (profileRes.exitCode === 0) taskProfileRaw = profileRes.stdout.trim();
+}
+let deliveryProfile: "a" | "b" | "c" = "b";
+if (taskProfileRaw === "a" || taskProfileRaw === "b" || taskProfileRaw === "c") deliveryProfile = taskProfileRaw;
+
+// 外部契约上下文（T2 审查输入，设计 §7.2）：验收包 externalContracts 的能力清单 + 任务
+// 目录 environment-contracts.current.json 指向的权威快照摘要。方向审与主审（A 级降档下
+// 的契约主审）凭它核对自建接口 / vendored 类型 / mock 契约与 authority surface 的一致
+// 性。无外部契约的任务（绝大多数）探针输出 status=none → 注入块为空串，审查输入零变化。
+// 快照缺失 / 不可读时输出 snapNote，注入块披露该事实（essential 契约的权威工件必须已
+// 解析——缺失是验收侧问题，披露给两席登记，不静默跳过）
+const CONTRACT_CONTEXT_PROBE =
+  "var fs=require('fs'),pt=require('path');" +
+  "function rj(p){try{return JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){return null}}" +
+  "var taskDir=process.argv[1];" +
+  "var acc=rj(pt.join(taskDir,'acceptance.json'));" +
+  "var ecs=acc&&Array.isArray(acc.externalContracts)?acc.externalContracts:null;" +
+  "if(!ecs||ecs.length===0){process.stdout.write(JSON.stringify({status:'none'}));process.exit(0)}" +
+  "var cur=rj(pt.join(taskDir,'environment-contracts.current.json'));" +
+  "var snap=null;var snapNote='';" +
+  "if(!cur){snapNote='environment-contracts.current.json 缺失或不可读'}" +
+  "else if(typeof cur.snapshotSha256==='string'&&!Array.isArray(cur.contracts)){" +
+  "var s=rj(pt.join(taskDir,'environment-contracts',cur.snapshotSha256+'.json'));" +
+  "if(s){snap=s}else{snapNote='current 指针指向的快照文件不可读：environment-contracts/'+cur.snapshotSha256+'.json'}}" +
+  "else if(Array.isArray(cur.contracts)){snap=cur}" +
+  "process.stdout.write(JSON.stringify({status:'ok',snapshot:snap,snapNote:snapNote,contracts:ecs}))";
+let contractBlock = "";
+if (taskDir !== "") {
+  const contractRes = await world.run("node", ["-e", CONTRACT_CONTEXT_PROBE, taskDir]);
+  if (contractRes.exitCode !== 0) {
+    log(`WARN: 外部契约上下文探针失败（exit ${contractRes.exitCode}：${contractRes.stderr.trim().slice(0, 120)}）——契约审查输入缺失，两席按无契约上下文审查`);
+  } else {
+    contractBlock = renderContractContext(contractRes.stdout, taskDir);
+  }
+}
+
+// 审查维度（缺省四席 = 方向审席 + 三审；报告名确定性，落当轮轮次目录；实际派审席 = activeTrials）
 const TRIALS: { dim: "direction" | "main" | "impact" | "simplicity"; label: string; reportName: string }[] = [
   { dim: "direction", label: "方向审", reportName: "review-direction.md" },
   { dim: "main", label: "主审", reportName: "review-main.md" },
   { dim: "impact", label: "影响面审", reportName: "review-impact.md" },
   { dim: "simplicity", label: "简洁审", reportName: "review-simplicity.md" },
 ];
+
+// 派审席清单（A 级降档短路，设计 §13 a 行）：deliveryProfile=a 时固定两席 = 方向审 +
+// 主审（兼契约主审），跳过影响面审 / 简洁审——降档只减审查席与分区，不减必做机器门。
+// 方向审席恒在且恒为首席（activeTrials[0]=direction 是不变量：下方 verdicts[0] 的
+// rewrite 档 gate 与 oneliner 提取按索引 0 取方向审）。b/c 与读不到字段的缺省形态派审席照常
+const activeTrials = deliveryProfile === "a" ? TRIALS.filter((t) => t.dim === "direction" || t.dim === "main") : TRIALS;
 
 // 必读文件存在性探针：设计目录 + 四模板 + 校验/渲染 CLI（rubric 与 schema 是提示性路径，不挡启动）
 const requiredPaths = [designDoc, checkCliAbs, checkDesignCliAbs, renderCliAbs, ...TEMPLATE_BASENAMES.map((t) => templates.get(t.dim) ?? "")].filter((p) => p !== "");
@@ -784,25 +909,21 @@ if (designRender.exitCode !== 0) {
 if (designRender.stdout.trim() !== "") log(designRender.stdout.trim());
 
 // ── 循环尝试记录（设计 §8.1 T2 接入；终态收尾前定义，finish 内统一登记 finished）──
-// 绑定交付任务才登记（acceptanceBinding bound → 任务目录 = 验收包所在目录）；
-// 独立设计任务无任务目录不登记（已知缺口）。runId = 观测 executionId 优先，缺省合成
-// 时间戳（与 acceptance-design 同款退化链）；round 恒 1（run 粒度）。登记失败不阻断
-// 主流程，缺陷经 attemptNote 进 finish 的终态 message
-const loopAttemptTaskDir =
-  acceptanceBinding !== null && acceptanceBinding.status === "bound" && typeof acceptanceBinding.acceptancePath === "string"
-    ? acceptanceBinding.acceptancePath.split("/").slice(0, -1).join("/")
-    : "";
+// 绑定交付任务才登记（acceptanceBinding bound → 任务目录 = 验收包所在目录，取值 =
+// 上方 taskDir 同一派生）；独立设计任务无任务目录不登记（已知缺口）。runId = 观测
+// executionId 优先，缺省合成时间戳（与 acceptance-design 同款退化链）；round 恒 1
+// （run 粒度）。登记失败不阻断主流程，缺陷经 attemptNote 进 finish 的终态 message
 const loopAttemptRunId =
   typeof args.executionId === "string" && args.executionId.trim() !== ""
     ? args.executionId.trim()
     : `t2-${Date.now()}`;
 let attemptNote = "";
 async function recordLoopAttempt(event: "started" | "finished", outcome?: "passed" | "rejected" | "failed" | "interrupted"): Promise<void> {
-  if (loopAttemptTaskDir === "") return;
+  if (taskDir === "") return;
   const corePath = `${home}/.agents/skills/delivery-v6/scripts/delivery-core.mjs`;
   const res = await world.run("node", [
     corePath,
-    "loop-attempt", "--task-dir", loopAttemptTaskDir, "--loop", "tech-review", "--path", "workflow",
+    "loop-attempt", "--task-dir", taskDir, "--loop", "tech-review", "--path", "workflow",
     "--run-id", loopAttemptRunId, "--round", "1", "--event", event,
     ...(event === "finished" && outcome !== undefined ? ["--outcome", outcome] : []),
   ]);
@@ -960,7 +1081,7 @@ artifact.chart("trajectory", {
   y: { field: "mustFix", label: "must-fix 总和" },
 });
 
-// ── 方向审席（四席之一） ──
+// ── 方向审席（恒派，activeTrials 首席） ──
 // 方向审与三审同轮并行、同一对账契约：patch 档发现（前提层/产物表/措辞级——问题定义
 // 与方案主干不动）进当轮问题清单，由文档修复者随全部发现一并处置；rewrite 档（问题
 // 定义/方案主干/分型被击穿）整循环立即终止回 T1（gate 语义保留在真正需要外溢的形态）
@@ -969,7 +1090,7 @@ artifact.chart("trajectory", {
 // 递增发生时当场提示应固化原值，防操作方不知情
 const attemptAutoBumped = inputs.attempt === null && prevAttemptMax > 0;
 log(
-  `审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttemptMax > 0 ? `（检测到历史 attempt 后缀至 ${prevAttemptMax}，历史产物不覆盖）` : ""}${attemptAutoBumped ? `；注意：自动递增使轮次目录改名、AmendWorkflow 缓存会零命中从头重跑——修订续跑应在脚本内固化 attempt=${prevAttemptMax}` : ""}）；四席并行（方向审 + 三审）`,
+  `审查环境就绪：产物目录 ${runDir}（attempt=${attempt}${prevAttemptMax > 0 ? `（检测到历史 attempt 后缀至 ${prevAttemptMax}，历史产物不覆盖）` : ""}${attemptAutoBumped ? `；注意：自动递增使轮次目录改名、AmendWorkflow 缓存会零命中从头重跑——修订续跑应在脚本内固化 attempt=${prevAttemptMax}` : ""}）；派审席 ${activeTrials.map((t) => t.label).join("、")}（${activeTrials.length} 席${deliveryProfile === "a" ? "，A 级降档：task.json deliveryProfile=a，跳过影响面审/简洁审" : taskProfileRaw !== "" && taskProfileRaw !== deliveryProfile ? `，task.json deliveryProfile=${taskProfileRaw} 非法，按缺省 b 四席照常` : ""}）`,
 );
 
 // ── 审查-修复主循环 ──
@@ -980,7 +1101,7 @@ if (obsCtx !== null) await obsEnd("setup", null);
 // 任务目录时为空操作（独立设计任务，已知缺口）
 await recordLoopAttempt("started");
 const AGGREGATOR_PERSONA =
-  "你是审查聚合裁决员：把四席评审报告的发现合并为去重后的权威问题清单——同根因跨席位的发现合为一条（保留全部原始 ref，禁止静默丢弃任何一条），不同根因绝不合并；只读裁决，绝不修改设计文档与项目文件（验证样例可用管道或临时文件）；同根因判定依据是报告原文与设计文档原文，不是表面措辞相似；指令无法执行或有矛盾时如实说明，不伪造结论。" +
+  "你是审查聚合裁决员：把各审查席评审报告的发现合并为去重后的权威问题清单——同根因跨席位的发现合为一条（保留全部原始 ref，禁止静默丢弃任何一条），不同根因绝不合并；只读裁决，绝不修改设计文档与项目文件（验证样例可用管道或临时文件）；同根因判定依据是报告原文与设计文档原文，不是表面措辞相似；指令无法执行或有矛盾时如实说明，不伪造结论。" +
   NO_ASK_RULE;
 const DIRECTION_PERSONA =
   "你是方向审评审员：攻击设计的前提层与终态层——分型是否正确、前提清单能否被写者侧反例击穿、公理是真不变量还是实现细节、产物表是否完整且真实、问题定义是否忠于真问题；只读评审，绝不修改设计文档与项目文件（验证样例可用管道或临时文件）；每个判定都要有你亲自读到的文档原文或源码依据；指令无法执行或有矛盾时如实说明，不伪造结论。" +
@@ -989,7 +1110,7 @@ const REVIEWER_PERSONA =
   "你是资深设计文档评审员：只读评审，绝不修改设计文档与项目文件（验证样例可用管道或临时文件）；每个发现都要有你亲自读到的文档原文依据；报告与返回计数一致；指令无法执行或有矛盾时如实说明，不伪造结论。" +
   NO_ASK_RULE;
 const FIXER_PERSONA =
-  "你是设计文档修复者：直接编辑设计目录内的章节 JSON（六个 json 是权威源，渲染视图由脚本生成、不手改）；先核实再修改、反例重演验证修复、联动同步关联章节与跨章节引用字段、修改后重跑渲染脚本；指导给出的正则/守护/命令类内容，构造正例与反例实跑验证（正例命中、反例不命中）后才写入文档，实跑不过时自行修正后重验，并在处置表该条的 reenactment 字段登记对指导的偏离及理由（随实跑验证记录一并写入），不照抄未验证的指导；写入文档的每个断言必须标核实状态——能静态核实的（读源码/API 查询/文档核对）本会话核实后才写 ✅，不能核实的写 ⏳ 前提并指向实施期探针，禁止把推断、未尝试的查询、平台通用知识写成事实或 ✅；修复不得新增语义——新增验收场景、前提条目、决策条目仅当本会话亲自核实（读源码/实跑探针）其成立后才可写入，无法核实的行为断言一律写 ⏳ 前提并指向实施期探针、禁止以 ✅ 新增未核实条目，聚合清单未涉及的内容不主动扩写（历次实例：修复者凭推断新增场景前提，被四席后续轮各自独立击穿）；方案性意见修不动时如实置 status=\"blocked\" 并申报卡点，不硬改、不静默跳过。" +
+  "你是设计文档修复者：直接编辑设计目录内的章节 JSON（六个 json 是权威源，渲染视图由脚本生成、不手改）；先核实再修改、反例重演验证修复、联动同步关联章节与跨章节引用字段、修改后重跑渲染脚本；指导给出的正则/守护/命令类内容，构造正例与反例实跑验证（正例命中、反例不命中）后才写入文档，实跑不过时自行修正后重验，并在处置表该条的 reenactment 字段登记对指导的偏离及理由（随实跑验证记录一并写入），不照抄未验证的指导；写入文档的每个断言必须标核实状态——能静态核实的（读源码/API 查询/文档核对）本会话核实后才写 ✅，不能核实的写 ⏳ 前提并指向实施期探针，禁止把推断、未尝试的查询、平台通用知识写成事实或 ✅；修复不得新增语义——新增验收场景、前提条目、决策条目仅当本会话亲自核实（读源码/实跑探针）其成立后才可写入，无法核实的行为断言一律写 ⏳ 前提并指向实施期探针、禁止以 ✅ 新增未核实条目，聚合清单未涉及的内容不主动扩写（历次实例：修复者凭推断新增场景前提，被各审查席后续轮各自独立击穿）；方案性意见修不动时如实置 status=\"blocked\" 并申报卡点，不硬改、不静默跳过。" +
   NO_ASK_RULE;
 
 let prevDispositions: Disposition[] = [];
@@ -1008,7 +1129,7 @@ const AGGREGATE_REGRADE_HALT = 2; // 与 kernel/rules.json budgets.aggregateRegr
 const refImpactHistory = new Map<string, Array<{ round: number; impact: string }>>();
 
 for (let round = 1; round <= maxRounds; round++) {
-  phase("四席并行聚焦复审");
+  phase("并行审查聚焦复审");
   const roundAbs = `${runDir}/${roundDirName(round)}`;
   await obsBegin("review", round);
 
@@ -1040,11 +1161,12 @@ for (let round = 1; round <= maxRounds; round++) {
           "(d) 除对账外：只审上轮修复触及章节是否引入新问题；处置条目的攻击点建议（attackHints）是优先检查方向。",
         ].join("\n");
 
-  log(`第 ${round} 轮审查：四席并行（${TRIALS.map((t) => t.label).join("、")}），产物目录 ${roundAbs}`);
+  log(`第 ${round} 轮审查：${activeTrials.map((t) => t.label).join("、")}（${activeTrials.length} 席${deliveryProfile === "a" ? "，A 级降档：跳过影响面审/简洁审" : ""}），产物目录 ${roundAbs}`);
 
   // 三审拆显式调用点：agent 名字须以静态字面前缀开头（zcode GUI 泳道按编译期静态分析
   // 预建，`${t.label}-r${round}` 这类变量开头的名字整条泳道显示「未命名子代理」）；
-  // prompt 构造共享本函数保持单一来源，TRIALS[i] ↔ raw[i] 顺序对应由调用点顺序保证
+  // prompt 构造共享本函数保持单一来源，activeTrials[i] ↔ raw[i] 顺序对应由调用点顺序保证
+  // （activeTrials 恒以方向审居首 = TRIALS 过滤保序，raw 按 TRIALS 序过滤派发）
   const reviewerPrompt = (t: (typeof TRIALS)[number]): string =>
     [
       `第 ${round} 轮评审（维度：${t.label}；产物目录 ${roundAbs}）。`,
@@ -1061,12 +1183,24 @@ for (let round = 1; round <= maxRounds; round++) {
       ...(acceptanceBinding !== null && acceptanceBinding.status === "invalid"
         ? [`WARN 验收绑定异常（${acceptanceBinding.reason}）：设计目录声明了交付绑定但验收包不可读——在报告开头登记该事实；涉及验收判据的审查项标注「判据锚点缺失」，不得凭设计文档自述替代判据对照。`]
         : []),
+      // 外部契约审查输入（设计 §7.2 T2）：能力清单 + 权威快照摘要 + 两席的契约审查
+      // 义务进方向审与主审（A 级降档下主审兼契约主审）——义务文本随数据同注，自定义
+      // 模板（args.reviewers）缺契约判据时也不漏。无外部契约时 contractBlock 为空串，
+      // 注入零变化
+      ...(contractBlock !== "" && (t.dim === "direction" || t.dim === "main")
+        ? [
+            contractBlock,
+            t.dim === "main"
+              ? "契约审查义务（主审；A 级降档下兼契约主审，是主判之一）：自建接口 / vendored 类型 / mock 契约与权威快照 surface 逐项对照（签名、参数个数与形态、字段名、返回对象、命令分发规则——不一致 = must-fix，报告引用能力 id 与 surfaceRef）；文档引用的外部 API 事实只能来自权威快照 surface 内容（平台文档、实现方自写类型、mock 行为只能作背景，单独引用作契约事实 = must-fix）；「以 SDK 为准」「联调时再核对」类未完成核对义务 = must-fix——修复方向只能是转为实施单元（s5-breakdown.json units 或 T3 impl-plan 的契约 spike 单元，kind=contract-spike）或停回用户裁决阻断设计确认，不得保留为待办文字；上游依赖清单（s2-status.json artifactTables.upstreamDeps）的契约能力行（capabilityRef / observation / risk）与上方能力清单一一对账，缺行或对不上 = must-fix。"
+              : "契约审查义务（方向审）：按 D2 攻击「契约事实的来源不是权威快照」类前提——平台文档文字概述自我证明、mock 行为或实现方自写类型单独作契约事实 = must-fix；按 D4 对账上游依赖清单的契约能力行与上方能力清单（capabilityRef 覆盖全部能力、observation 与 risk 非空，漏一个能力 = 漏行）；权威快照不可读时在报告开头登记「权威来源缺失」，涉及契约判据的项据实标注，不得用平台文档文字替代。",
+          ]
+        : []),
       "只读评审：禁止修改设计文档与项目内任何文件。",
       round === 1 ? "本轮为首轮全面审：按模板 checklist 全项覆盖。" : "",
       focusBlock,
       t.dim === "direction"
         ? [
-            "你是方向审席（四席之一，与三审同轮并行）：判据 D1-D5（攻击方法与完整评审基准见模板）。R1 = 全面攻击（分型 / 前提可击穿 / 终态有效 / 产物表完整且真实 / 问题定义忠于真问题，含穷举断言检索命令对账）；R2+ 按上方聚焦范围复审——上轮处置表逐条对账 + 重跑穷举断言已登记的检索命令对账（清单外写者即反例）+ 只审修复触及章节是否引入前提层 / 终态层新问题。",
+            "你是方向审席（本轮审查席之一，与其他审查席同轮并行）：判据 D1-D5（攻击方法与完整评审基准见模板）。R1 = 全面攻击（分型 / 前提可击穿 / 终态有效 / 产物表完整且真实 / 问题定义忠于真问题，含穷举断言检索命令对账）；R2+ 按上方聚焦范围复审——上轮处置表逐条对账 + 重跑穷举断言已登记的检索命令对账（清单外写者即反例）+ 只审修复触及章节是否引入前提层 / 终态层新问题。",
             "返回 JSON 在三审字段（mustFix / problems / reconciliation）之外增加 fixScope（patch = 全部发现属前提层/产物表/措辞级、问题定义与方案主干不动；rewrite = 问题定义/方案主干/分型被击穿——任一 finding 击穿这三者即整份判 rewrite；mustFix=0 时填 patch）与 oneliner（一句话方向判定）。",
           ].join("\n")
         : "",
@@ -1086,40 +1220,58 @@ for (let round = 1; round <= maxRounds; round++) {
   let dirOneliner = "";
   // agent(名字) 全 run 只允许注册一次（引擎约束：具名 subagent 名字 run 内唯一）——
   // 先取引用，回喂重试经同一引用续聊（与下方修复者同款模式；闭包内重复 agent(同名)
-  // 在重试时二次注册同名被引擎拒绝，实测崩于 r2 聚合回喂）
-  const directionAgent = agent(`方向审-r${round}`, DIRECTION_PERSONA);
-  const mainAgent = agent(`主审-r${round}`, REVIEWER_PERSONA);
-  const impactAgent = agent(`影响面审-r${round}`, REVIEWER_PERSONA);
-  const simplicityAgent = agent(`简洁审-r${round}`, REVIEWER_PERSONA);
+  // 在重试时二次注册同名被引擎拒绝，实测崩于 r2 聚合回喂）。A 级降档（deliveryProfile=a）
+  // 时未派席的 agent 不注册——只注册 activeTrials 内的席，泳道不建空节点
+  const seatWanted = (dim: string): boolean => activeTrials.some((t) => t.dim === dim);
+  const directionAgent = seatWanted("direction") ? agent(`方向审-r${round}`, DIRECTION_PERSONA) : null;
+  const mainAgent = seatWanted("main") ? agent(`主审-r${round}`, REVIEWER_PERSONA) : null;
+  const impactAgent = seatWanted("impact") ? agent(`影响面审-r${round}`, REVIEWER_PERSONA) : null;
+  const simplicityAgent = seatWanted("simplicity") ? agent(`简洁审-r${round}`, REVIEWER_PERSONA) : null;
   try {
     const raw = await Promise.all([
-      askValidated(
-        validateDirectionVerdict,
-        (p) => directionAgent.ask<DirectionVerdict>(p),
-        reviewerPrompt(TRIALS[0]),
-      ),
-      askValidated(
-        validateReviewerVerdict,
-        (p) => mainAgent.ask<ReviewerVerdict>(p),
-        reviewerPrompt(TRIALS[1]),
-      ),
-      askValidated(
-        validateReviewerVerdict,
-        (p) => impactAgent.ask<ReviewerVerdict>(p),
-        reviewerPrompt(TRIALS[2]),
-      ),
-      askValidated(
-        validateReviewerVerdict,
-        (p) => simplicityAgent.ask<ReviewerVerdict>(p),
-        reviewerPrompt(TRIALS[3]),
-      ),
+      ...(directionAgent !== null
+        ? [
+            askValidated(
+              validateDirectionVerdict,
+              (p) => directionAgent.ask<DirectionVerdict>(p),
+              reviewerPrompt(TRIALS[0]),
+            ),
+          ]
+        : []),
+      ...(mainAgent !== null
+        ? [
+            askValidated(
+              validateReviewerVerdict,
+              (p) => mainAgent.ask<ReviewerVerdict>(p),
+              reviewerPrompt(TRIALS[1]),
+            ),
+          ]
+        : []),
+      ...(impactAgent !== null
+        ? [
+            askValidated(
+              validateReviewerVerdict,
+              (p) => impactAgent.ask<ReviewerVerdict>(p),
+              reviewerPrompt(TRIALS[2]),
+            ),
+          ]
+        : []),
+      ...(simplicityAgent !== null
+        ? [
+            askValidated(
+              validateReviewerVerdict,
+              (p) => simplicityAgent.ask<ReviewerVerdict>(p),
+              reviewerPrompt(TRIALS[3]),
+            ),
+          ]
+        : []),
     ]);
     const badNull = raw.findIndex((v) => v === null);
     if (badNull >= 0) {
       return await finish(
         "review-failure",
         round,
-        `维度 ${TRIALS[badNull].label} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规。恢复动作：报告已落盘可读 ${roundAbs} 人工核对；${HINT_REVIEW_BAD_COUNT}`,
+        `维度 ${activeTrials[badNull].label} 结构化返回 ${STRUCTURED_RETRY_MAX} 次回喂重试仍不合规。恢复动作：报告已落盘可读 ${roundAbs} 人工核对；${HINT_REVIEW_BAD_COUNT}`,
       );
     }
     verdicts = (raw as ReviewerVerdict[]).map((v, i) => {
@@ -1128,21 +1280,21 @@ for (let round = 1; round <= maxRounds; round++) {
       // 防线：自报计数非零但清单缺失/全畸形 → 派生计数归零会假 converged，fail-fast
       if (selfMf > 0 && problems.length === 0) {
         throw new Error(
-          `维度 ${TRIALS[i].label} 自报计数（must-fix ${selfMf}）非零但 problems 清单缺失或全畸形——覆盖校验无对账锚点，报告可读 ${roundAbs}/${TRIALS[i].reportName} 人工核对`,
+          `维度 ${activeTrials[i].label} 自报计数（must-fix ${selfMf}）非零但 problems 清单缺失或全畸形——覆盖校验无对账锚点，报告可读 ${roundAbs}/${activeTrials[i].reportName} 人工核对`,
         );
       }
       if (problems.length !== selfMf) {
-        log(`WARN: ${TRIALS[i].label} 自报计数（${selfMf}）与 problems 清单派生（${problems.length}）不一致，以清单为准`);
+        log(`WARN: ${activeTrials[i].label} 自报计数（${selfMf}）与 problems 清单派生（${problems.length}）不一致，以清单为准`);
       }
       if (i === 0) {
         const dv = v as DirectionVerdict;
         dirFixScope = dv.fixScope === "rewrite" ? "rewrite" : "patch";
         dirOneliner = typeof dv.oneliner === "string" ? dv.oneliner : "";
       }
-      return { mustFix: problems.length, problems, reconciliation: sanitizeReconciliation(v.reconciliation), dim: TRIALS[i].dim };
+      return { mustFix: problems.length, problems, reconciliation: sanitizeReconciliation(v.reconciliation), dim: activeTrials[i].dim };
     });
   } catch (e) {
-    return await finish("review-failure", round, `四席调用或归并失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——上下文超限则拆分投喂 / 结构化校验不过见当轮报告）；args.attempt 递增重新发起`);
+    return await finish("review-failure", round, `审查席调用或归并失败：${String(e)}。恢复动作：引擎层已含瞬态重试（走到这里多为逻辑失败——上下文超限则拆分投喂 / 结构化校验不过见当轮报告）；args.attempt 递增重新发起`);
   }
 
   // rewrite 档 gate：方向审席判问题定义/方案主干/分型被击穿 → 整循环立即终止回 T1
@@ -1162,13 +1314,13 @@ for (let round = 1; round <= maxRounds; round++) {
     return await finish(
       "direction-rejected",
       round,
-      `方向审席打回（rewrite 档，must-fix ${verdicts[0].problems.length} 条——问题定义/方案主干/分型被击穿；重写已用 ${rewritesUsed}/2 次）：${dirOneliner}。停回通道：回 T1 对话重写（含 Step D 诊断期重做），修完 attempt+1 重新发起（重过四席）；报告见 ${roundAbs}/review-direction.md`,
+        `方向审席打回（rewrite 档，must-fix ${verdicts[0].problems.length} 条——问题定义/方案主干/分型被击穿；重写已用 ${rewritesUsed}/2 次）：${dirOneliner}。停回通道：回 T1 对话重写（含 Step D 诊断期重做），修完 attempt+1 重新发起（重过全部审查席）；报告见 ${roundAbs}/review-direction.md`,
     );
   }
   directionOneliner = dirOneliner;
   directionReportFile = `${roundAbs}/review-direction.md`;
 
-  const rChk = await world.run("node", ["-e", NODE_CHECK_EXISTS, ...TRIALS.map((t) => `${roundAbs}/${t.reportName}`)]);
+  const rChk = await world.run("node", ["-e", NODE_CHECK_EXISTS, ...activeTrials.map((t) => `${roundAbs}/${t.reportName}`)]);
   if (rChk.exitCode !== 0) {
     return await finish("review-failure", round, `评审报告未落盘：${rChk.stdout.trim()}——报告是修复者的唯一输入，缺失即失败。恢复动作：args.attempt 递增重新发起`);
   }
@@ -1181,7 +1333,7 @@ for (let round = 1; round <= maxRounds; round++) {
   }
   await obsEnd("review", round);
 
-  // ── phase 2：聚合裁决（独立 phase——四席发现合并为去重权威清单；修复者据聚合清单处置） ──
+  // ── phase 2：聚合裁决（独立 phase——各审查席发现合并为去重权威清单；修复者据聚合清单处置） ──
   let aggregatedItems: AggregatedItem[] | null = null;
   if (roundProblems.length > 0) {
     phase("聚合裁决");
@@ -1194,17 +1346,17 @@ for (let round = 1; round <= maxRounds; round++) {
       if (last !== undefined) prevImpactByRef.set(ref, last.impact);
     }
     let aggregation: AggregationOutcome | null;
-    // 同四席：agent(名字) 先注册一次，回喂重试经同一引用续聊（闭包内重复 agent(同名) 会被引擎拒绝）
+    // 同审查席：agent(名字) 先注册一次，回喂重试经同一引用续聊（闭包内重复 agent(同名) 会被引擎拒绝）
     const aggregator = agent(`聚合裁决-r${round}`, AGGREGATOR_PERSONA);
     try {
       aggregation = await askValidated(
         makeAggregationValidator(rawRefs, prevImpactByRef),
         (p2) => aggregator.ask<AggregationOutcome>(p2),
         [
-          `聚合裁决（第 ${round} 轮，产物目录 ${roundAbs}）——四席评审已并行完成，把它们的发现合并为一份去重权威清单。`,
+          `聚合裁决（第 ${round} 轮，产物目录 ${roundAbs}）——${activeTrials.map((t) => t.label).join("、")}已并行完成，把它们的发现合并为一份去重权威清单。`,
           "",
-          "第一步：Read 四份评审报告（证据与完整上下文）：",
-          ...TRIALS.map((tt) => `- ${roundAbs}/${tt.reportName}`),
+          "第一步：Read 各审查席的评审报告（证据与完整上下文）：",
+          ...activeTrials.map((tt) => `- ${roundAbs}/${tt.reportName}`),
           `设计文档（判断同根因时的对照，渲染视图）：${renderedMd}`,
           "",
           "本轮原始问题清单（合并对象——聚合结果的 refs 全体必须与之精确划分相等）：",
@@ -1389,9 +1541,12 @@ for (let round = 1; round <= maxRounds; round++) {
   const baseFixInstructions = [
     `第 ${round} 轮设计文档修复（产物目录 ${roundAbs}）。`,
     "",
-    `第一步：Read 聚合清单 ${roundAbs}/aggregated.md（聚合裁决产物——四席发现按同根因合并的权威清单，每条 AG 项含全部原始 ref 与合并修复指导，是你的操作清单）；需要完整证据时按 ref 回读对应席位的报告：`,
-    ...TRIALS.map((t) => `- ${roundAbs}/${t.reportName}`),
+    `第一步：Read 聚合清单 ${roundAbs}/aggregated.md（聚合裁决产物——各审查席发现按同根因合并的权威清单，每条 AG 项含全部原始 ref 与合并修复指导，是你的操作清单）；需要完整证据时按 ref 回读对应席位的报告：`,
+    ...activeTrials.map((t) => `- ${roundAbs}/${t.reportName}`),
     `审查对象：设计目录 ${designDoc}——权威源是目录内六个章节 JSON（meta / s1-context / s2-status / s3-solution / s4-accept / s5-breakdown），${renderedMd} 是渲染出的阅读视图（非权威，禁止手改）。直接编辑章节 JSON 文件完成修复（你有文件工具，逐文件小步修改）；字段规格见 ${schemaPath}。`,
+    // 外部契约任务：修复契约类 must-fix 时对照权威快照——写入文档的契约事实（签名 /
+    // 字段 / 返回形态 / 分发规则）必须引自快照 surface 内容，本会话核实后才可标 ✅
+    ...(contractBlock !== "" ? [`外部契约权威快照（修复契约类问题时对照）：${taskDir}/environment-contracts.current.json（current 指针）及其指向的快照文件。`] : []),
     "",
     "任务：",
     "1. 按聚合清单逐条处置 critical 项（分级为 minor 的项由引擎另行收集，不要求你处置、不计入覆盖校验）：每条 critical AG 项至少对应一条处置，source 填该 AG 项覆盖的全部原始 ref（聚合裁决已去重——跨 AG 项不再二次合并；发现两条 AG 项实为同根因时在 revisionSummary 登记提示，不自行吞并）。",

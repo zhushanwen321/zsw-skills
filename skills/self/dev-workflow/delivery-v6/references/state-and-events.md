@@ -2,7 +2,7 @@
 
 `events.jsonl` 是事实事件唯一权威；`verdict.json` 是裁决器根据当前验收、当前 revision 与事件重新计算的派生结果，禁止手改。每条事件带 Ed25519 签名（凭据文件中的角色私钥签出，公钥在 task.json）；evaluate 逐条验签。
 
-## 事件词表（20 类）
+## 事件词表（22 类）
 
 | 事件 | 签署角色 | 含义与关键绑定 |
 |------|----------|----------------|
@@ -26,6 +26,8 @@
 | IndependentTaskDeclared | user | 独立任务声明；绑 intent 哈希与当时全部未替换任务清单 |
 | TaskSuperseded | user | 任务替换 prepare/committed 两段；predecessor 绑 task.json/verdict/openFindings 哈希与继承发现 |
 | TaskSupersedeCancelled | user | 恢复型取消；绑被取消 prepare 的事件 id 与被取消任务身份 |
+| ExternalAuthorityDeclared | user | 外部权威登记（local-path/executable 必须由用户凭据登记）；绑 contractId、resolverKind、locator 与快照哈希 |
+| EnvironmentBaselineConfirmed | user | 外部环境基线确认；绑新快照哈希与覆盖的契约 id 清单，只接环境历史链不满足 runtime 义务；同一 acceptanceVersion 最多一次 |
 
 相同事件重复追加幂等；角色权限由策略包 roles.json 约束（加载信任边界：技能安装目录 + 用户级，项目仓库不可覆盖）。
 
@@ -41,11 +43,11 @@
 | FindingResolved | 当前版本 + 当前 revision；新 revision 自动重开 |
 | AssuranceCompleted / ExplorationCompleted | full 必须绑定当前 revision 探索；recheck 可引用同验收版本历史探索，但必须有当前 revision 的定向覆盖报告与全量确定性测试回执 |
 | RiskAccepted | 当前版本 + 当前 revision 且 gapId 与当前缺口一致；缺口内容变化即失效 |
-| AssuranceRevisionDrift / RevisionBaselineConfirmed / IndependentTaskDeclared / TaskSuperseded / TaskSupersedeCancelled / PolicyUpgraded | 持久事实 |
+| AssuranceRevisionDrift / RevisionBaselineConfirmed / IndependentTaskDeclared / TaskSuperseded / TaskSupersedeCancelled / PolicyUpgraded / ExternalAuthorityDeclared / EnvironmentBaselineConfirmed | 持久事实 |
 
 ## 判定式（两个终态）
 
-- **accepted** = 批准有效（四元组一致 + 审查未被 reject 击穿）＋ 全部增量实现 ＋ 每条必需断言的**每类证据** verified（schema 1 仍为每条必需需求）＋ 当前指纹的保证完成（回执覆盖全部增量、退出码 0、绑定事件可追溯、按策略附干净构建）＋ 探索完成（如要求）＋ 无未决 defect ＋ 无未确认 boundary ＋ 候选形成后全部 revision 变化有合法来源（`revision-provenance` 无 unknown 代际）＋ 必需交付义务无 open（`obligations` 派生；`explicitly-waived` 须绑用户裁决）＋ 循环尝试未超预算（`loop-budget` 按 started 计数）＋ 未进入 process-failed。
+- **accepted** = 批准有效（四元组一致 + 审查未被 reject 击穿）＋ 全部增量实现 ＋ 每条必需断言的**每类证据** verified（schema 1 仍为每条必需需求）＋ 当前指纹的保证完成（回执覆盖全部增量、退出码 0、绑定事件可追溯、按策略附干净构建）＋ 探索完成（如要求）＋ 无未决 defect ＋ 无未确认 boundary ＋ 候选形成后全部 revision 变化有合法来源（`revision-provenance` 无 unknown 代际）＋ 必需交付义务无 open（`obligations` 派生；`explicitly-waived` 须绑用户裁决）＋ 循环尝试未超预算（`loop-budget` 按 started 计数）＋ runtime readiness 为 established / not-applicable 且每个外部契约的环境历史链完好（当前权威哈希等于批准时哈希，或有覆盖该契约的 `EnvironmentBaselineConfirmed` 接链）＋ 未进入 process-failed。
 - **accepted_with_risk** = 上述条件中，逐缺口豁免：每个未 verified 的「需求×证据类型」都有绑定该缺口 gapId 的有效接受（且需求 riskAcceptable=true），每个未决 defect 有有效接受；boundary 不可接受风险；至少存在一项具体接受。两类证据缺口各自需独立接受。来源不明的 revision 与无豁免通道的 open 义务不在可接受范围内——豁免只作用于现有规则允许接受风险的事项。
 
 缺口 gapId：完全缺失 = (acceptanceVersion, requirementId, evidenceKind, revision, "missing") 确定性派生；partial/failed = 对应证据事件 id；finding = findingId。

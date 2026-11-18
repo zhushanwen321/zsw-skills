@@ -1,9 +1,15 @@
 /* @pi-meta
 name: acceptance-design-v6
 description: >-
-  delivery-v6 技能 DESIGN 段产品契约设计循环：designer 产契约/解决方案/增量草稿，
-  contract reviewer 独立复查目标降级、可证伪性、证据类型、风险级别与增量划分，
-  脚本机器校验通过才 contract-ready；ContractApproved 留给主会话在用户批准后追加
+  delivery-v6 技能 DESIGN 段产品契约设计循环：setup 先跑外部契约候选探测
+  （detect-external-contracts，stdout 落盘按验收版本隔离的候选快照并计算
+  detectionSha256）与策略快照固定；designer 按候选快照填 externalContractReview
+  处置表并声明 externalContracts 与契约冒烟增量，产契约/解决方案/增量草稿；草稿过
+  版本门后跑 authority resolve 落环境权威快照（essential 契约未 resolved 即停回）；
+  contract reviewer 独立复查目标降级、可证伪性、证据类型、风险级别、增量划分与外部
+  契约守门（候选低报/能力遗漏/mock-only/riskCoverage 十类/契约反例最低记录）；机器
+  校验通过才 contract-ready；AcceptanceApproved 留给主会话在用户批准后追加
+  （approve-acceptance 带 --authority-snapshot-sha256）
   agent 调用结构校验与修正重问、CLI spawn 级失败重试（只读/幂等命令）、自修复
   记录（taskDir/self-repairs.jsonl）随终态 message 上报主 agent（DEV 韧性层）
 when: >-
@@ -104,21 +110,54 @@ const SCHEMA_ContractReviewOutcome = {
     // 反例实现检查记录（V5 完整性设计 §5.1 判别力检查；无强反例也须返回空数组）
     counterImplementations: {
       type: "array",
-      description: "每条核心目标的反例实现检查记录（wouldPassCurrentCriteria=true 是独立打回理由）",
+      description: "每条核心目标的反例实现检查记录（wouldPassCurrentCriteria=true 是独立打回理由；essential 契约的 mock 替代反例须带 contractId）",
       items: {
         type: "object",
         properties: {
           obligationId: { type: "string", description: "被检查的核心目标（需求/断言 id）" },
           counterImplementation: { type: "string", description: "反例实现：明显不符合用户目标却可能通过当前全部断言的实现形态" },
           violatesIntent: { type: "string", description: "为什么违反用户意图（对照 intent 原文）" },
-          discriminatingScenarioRef: { type: "string", description: "能区分正误实现的场景或测试资产引用" },
+          discriminatingScenarioRef: { type: "string", description: "能区分正误实现的场景或测试资产引用（契约反例须指向契约冒烟 negative case id）" },
           wouldPassCurrentCriteria: { type: "boolean", description: "true = 该反例能通过当前判据（判别力不足）" },
+          contractId: { type: "string", description: "该反例针对的外部契约 id（essential 契约的「mock 替代真实宿主」反例必填；非契约反例缺省）" },
         },
         required: ["obligationId", "counterImplementation", "violatesIntent", "discriminatingScenarioRef", "wouldPassCurrentCriteria"],
       },
     },
+    // 语义风险清单（V6 运行可用性设计 §5.4：十类逐类三值，不得静默略过未回答类别）
+    riskCoverage: {
+      type: "array",
+      description: "十类语义风险逐类处置（blocking/injection-cost/identity-alias/control-state/concurrent-rewrite/failure-modes/recovery/observability/input-validation/contract-single-source）",
+      items: {
+        type: "object",
+        properties: {
+          category: {
+            type: "string",
+            description: "风险类别 id（十类词表之一）",
+            enum: ["blocking", "injection-cost", "identity-alias", "control-state", "concurrent-rewrite", "failure-modes", "recovery", "observability", "input-validation", "contract-single-source"],
+          },
+          state: {
+            type: "string",
+            description: "covered = 指向断言/反例/测试资产；not-applicable = 给理由；needs-criteria = 缺判据打回",
+            enum: ["covered", "not-applicable", "needs-criteria"],
+          },
+          detail: { type: "string", description: "covered：指向的断言/反例/测试资产引用；not-applicable / needs-criteria：理由或缺失判据说明" },
+        },
+        required: ["category", "state", "detail"],
+      },
+    },
+    // 契约判别力显式申报（V6 运行可用性设计 §5.3：完全无反例时须为 none-possible 并给理由）
+    contractDiscrimination: {
+      type: "string",
+      description: "完全无反例时的显式申报（仅允许 none-possible；essential 契约无 mock 替代反例时必填）",
+      enum: ["none-possible"],
+    },
+    contractDiscriminationRationale: {
+      type: "string",
+      description: "contractDiscrimination=none-possible 的理由（为什么权威工件与能力观察让该反例不可构造）",
+    },
   },
-  required: ["summary", "problems", "counterImplementations"],
+  required: ["summary", "problems", "counterImplementations", "riskCoverage"],
 };
 
 // wfAgent：公共体的 agent(name, persona).ask<T>(prompt) 的 pi 等价。构建管线把公共体

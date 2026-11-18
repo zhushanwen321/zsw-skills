@@ -41,6 +41,7 @@
 | `goalSnapshot` | object `{problem, goals[], outOfScope}`（goals 逐字摘录自设计文档，禁止改写） | §1 目标快照三个小节 |
 | `unitsNotes[]` | string[] | §2 表后附注段（波次覆盖对账、决策覆盖对账等自检陈述） |
 | `units[].depReasons` | object（键 = 依赖单元 id，值 = 依赖理由） | §2「依赖」列括注：`<依赖id>（<理由>）`。盘上既有 impl-plan.json 数据先例，本次首次写入 flow/plan.md 模板与本表（此前只在个别盘上数据中出现、未入模板） |
+| `units[].kind` | string（唯一登记值 `contract-spike`） | §2 单元表「Unit」列后缀标注：`<id>（契约 spike）`；缺省无标注。契约 spike 单元 = 外部契约任务（验收含 externalContracts）必有、DAG 唯一根、全部业务单元经 deps 依赖它——撰写要求与 DAG 判据见 `flow/plan.md`「外部契约任务」节；D0 编译侧对该字段的拓扑复算归 dev-flow-v6 `flow/compile.md`（本表只登记 impl-plan 侧字段与渲染落点，不复列编译侧语义） |
 | `dagNote` | object `{nodeLabels{<unitId>:<label>}, criticalPath, parallelWindows[], edgeReasons[{edge, reason}]}` | §3：mermaid 本体从 `units`（节点）+ `deps`（边）确定性推导，`nodeLabels` 覆盖默认节点标注；`criticalPath` 渲染为一段；`parallelWindows` 渲染为列表；`edgeReasons` 渲染为边因表 |
 | `testPlan.incrementalCommands[]` | array（`{incrementId, unitIds[], command, timeoutMs?}`） | §4.1 增量测试命令表 |
 | `testPlan.fullSuiteChecks[]` | array（`{id, command, kind, note?}`，kind = 产物类\|验证类） | §4.2 逐条检查清单（渲染权威）：在场时该节按它逐条渲染（`- [<kind>] <id>：<command>（<note>）`），恢复 md 逐条标注产物类/验证类形态；与 `testPlan.artifacts[]` 的关系——artifacts 是 Gate A / exec-plan 消费的产物类子集（结构化承载，其消费方与消费内容不变），fullSuiteChecks 是 §4.2 视图权威；fullSuiteChecks 在场时 artifacts 不重复渲染，缺场时 artifacts 兜底渲染产物类条目 |
@@ -75,7 +76,7 @@
 
 ### 2 单元列表 → `units[]`
 
-八列固定：Unit / 职责 / 范围声明（精确文件路径）/ 依赖 / 隔离 / 验收条款 / 决策分级 / 增量归属。依赖列 = `deps` 逐个渲染，`depReasons` 有登记时括注理由；范围声明列 = `territory` 顿号连接；验收条款列 = `acceptance` 顿号连接。表后 `unitsNotes[]` 逐条一段。列语义判据（隔离形态、决策分级来源）见 `flow/plan.md`，渲染器不校验取值。
+八列固定：Unit / 职责 / 范围声明（精确文件路径）/ 依赖 / 隔离 / 验收条款 / 决策分级 / 增量归属。依赖列 = `deps` 逐个渲染，`depReasons` 有登记时括注理由；范围声明列 = `territory` 顿号连接；验收条款列 = `acceptance` 顿号连接。Unit 列 = `id`，`kind=contract-spike` 的单元渲染为 `<id>（契约 spike）` 后缀标注（契约 spike 单元的撰写要求与 DAG 判据见 `flow/plan.md`「外部契约任务」节）。表后 `unitsNotes[]` 逐条一段。列语义判据（隔离形态、决策分级来源）见 `flow/plan.md`，渲染器不校验取值。
 
 ### 3 DAG 图 → `units[]` 派生 + `dagNote`
 

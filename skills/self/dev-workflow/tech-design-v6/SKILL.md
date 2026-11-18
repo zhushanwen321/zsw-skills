@@ -3,7 +3,7 @@ name: tech-design-v6
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 6.2.0
+version: 6.3.0
 description: >-
   Use when 在已批准目标与验收（delivery-v6 产出）的约束下三阶段推敲方案并产出完整设计包：
   写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan.json 单源 + 渲染视图），用户确认后登记方案包
@@ -56,6 +56,7 @@ T3 实施计划（impl-plan.json 单源 + 渲染视图 + 三类关联声明 asso
 | 文件 | 产生者 | 机械可查判据 |
 |------|--------|-------------|
 | `meta.json` 内的 `acceptanceBinding`（acceptanceVersion + acceptancePackageSha256 + taskDir） | T1 入口门写入 | 与交付任务目录当前批准一致——T3 入口自检比对 `delivery-gate evaluate` 输出的 acceptanceVersion / acceptancePackageSha256（flow/plan.md 入口自检第 4 条），dev-flow-v6 D0 编译门 `check-exec-plan.mjs --task-dir` 复算验收包联合哈希机器核对（其 flow/compile.md 步骤 3）；验收版本变化后旧设计包不可直接进 T3/dev-flow-v6 入口（须重新影响审查） |
+| `meta.json` 内的 `environmentBinding`（snapshotSha256；外部契约任务，additive 可选） | T1 入口门写入 | 与任务目录 `environment-contracts.current.json` 指向的快照一致——T3 入口自检重读比对（flow/plan.md 入口自检第 4 条：环境漂移 → 回 T1 重新影响审查）；方案包哈希清单计入该哈希（SKILL.md「方案包确认与登记」节） |
 | `<name>/`（设计文档目录：六章节 JSON `meta.json` / `s1-context.json` / `s2-status.json` / `s3-solution.json` / `s4-accept.json` / `s5-breakdown.json`——权威源，字段规格见 `references/design-doc-schema.md`）+ `<name>.rendered.md`（渲染视图，`scripts/render-design-doc.mjs` 生成，非权威） | T1 | `scripts/check-design-doc.mjs` 对设计目录 exit 0 |
 | `<name>.impl-plan.json`（计划唯一权威）+ `<name>.impl-plan.md`（渲染视图，`scripts/render-impl-plan.mjs` 生成，禁手改） | T3 | 两文件存在且 `render-impl-plan.mjs --check` 绿（视图与 JSON 同源，单元 id 集一致性构造成立） |
 | `<name>.symbol-watchlist.json`（符号词表） | T3 | 文件存在且 sourceFingerprints 与源文档当前 sha256 一致（design-code-sync 发起时机器复验；词集漂移经 wordsDrift 软监测不拒启） |
@@ -84,7 +85,7 @@ T3 确认通过即形成**完整方案包** = 设计文档目录 + `<name>.impl-
 方案决策记录。用户确认（A 级逐条、B 级扫清单）后，主会话执行：
 
 ```bash
-# 方案包哈希清单：逐文件 name+sha256（solution 主文档取渲染视图、impl-plan json 与渲染视图、final.json、决策记录）
+# 方案包哈希清单：逐文件 name+sha256（solution 主文档取渲染视图、impl-plan json 与渲染视图、final.json、决策记录；外部契约任务另计环境契约快照——name=environment-contracts/<snapshotSha256>.json、sha256=meta.json environmentBinding.snapshotSha256，无外部契约时不产该条目）
 node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs record-design-approved   --task-dir <交付任务目录> --summary "方案包确认"   --package-file <方案包哈希清单 JSON> --credential <user credentialId>
 ```
 
@@ -97,6 +98,8 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs record-design-approv
 （从 `meta.json` reviewNav 导出：decisionId / level / title / anchor，各附一句结论与用户裁决结果），
 使裁决与复核可回溯（该文件同时计入方案包哈希清单）；决策记录放别处时显式传 `--decision-file <路径>`。
 
+**环境契约快照绑定（外部契约任务）**：验收包顶层 `externalContracts` 非空时，T1 入口门把任务目录 `environment-contracts.current.json` 指向的快照身份哈希写进 meta.json `environmentBinding.snapshotSha256`（additive 可选字段，规格见 `references/design-doc-schema.md` §3）；T3 入口自检比对现行性（flow/plan.md 入口自检第 4 条），方案包哈希清单计入该哈希——环境漂移使清单不再覆盖当前设计包时 DesignApproved 失效，回 T1 重新影响审查（对照新快照逐条核对设计引用的契约事实）。设计引用的外部契约事实只能来自该权威快照，平台事实文档只能作背景（T1 装载义务见 `flow/write.md` Step 0 与 Step 2）。
+
 ## W1 workflow 契约（执行体按宿主环境选择）
 
 T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 agent 调用层与文件头不同），按当前环境选择：
@@ -106,7 +109,7 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 | zcode | 会话可见 CreateWorkflow 工具 / saved workflows | saved workflow `tech-review-loop-v6`（`CreateWorkflow saved` 发起） |
 | pi（subagent-workflow extension） | 宿主为 pi coding agent、workflow 工具可用 | 本 skill 安装位置上级的 `../workflows/pi/tech-review-loop-v6.js`——复制或 symlink 到 `~/.pi/agent/workflows/`（或项目 `.pi/workflows/`）后 `workflow run tech-review-loop-v6 --args designDoc=<路径> projectRoot=<路径> maxRounds=<N>`（数组型参数 reviewers 不支持——--args 值全字符串，用缺省四件模板） |
 
-**两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers?, taskId?, executionId?, sampleType?, attempt? }`——designDoc = 设计目录绝对路径（或其渲染 md 路径，workflow 内部归一为设计目录；reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件 = 方向审 `tech-design-direction-review` + 三审 `tech-design-review-v6` / `tech-design-impact-review` / `tech-design-simplicity-review`；attempt = 重发起序号——环境失败族重发时递增，防轮次产物覆盖；缺省时自动检测已有产物并递增）；终态：converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 终态处置表）。
+**两版均未就绪或发起失败时走 `flow/review.md` 内置手工路径**（语义等价）。发起参数：`{ designDoc, projectRoot, maxRounds?, reviewers?, taskId?, executionId?, sampleType?, attempt? }`——designDoc = 设计目录绝对路径（或其渲染 md 路径，workflow 内部归一为设计目录；reviewers = 自定义 reviewer 模板绝对路径数组，缺省用本技能 agents/ 默认四件 = 方向审 `tech-design-direction-review` + 三审 `tech-design-review-v6` / `tech-design-impact-review` / `tech-design-simplicity-review`；deliveryProfile=a 时固定降为方向审 + 主审两席，见 SKILL.md「A 级降档」与 flow/review.md；attempt = 重发起序号——环境失败族重发时递增，防轮次产物覆盖；缺省时自动检测已有产物并递增）；终态：converged / direction-rejected / escalated / stuck / max-rounds + setup-failure / review-failure / aggregator-failure / fix-failure（环境失败族，处置 = 按 message 恢复动作重发，attempt 递增防产物覆盖）——除 converged 外全部停回主 agent 处理（见 review.md 终态处置表）。
 
 **关键决策分级收敛（V6 代，裁决规则 2026-11-15）**：聚合裁决对每条聚合项标注 impact 分级——critical（影响关键 ADR / 关键设计决策：分型、公理/不变量、问题定义、方案主干、关键决策的前提失实或矛盾、影响决策走向的事实错误）进修复循环参与收敛计数；minor（不影响关键决策：登记缺口、产物表完备性、非关键措辞、实施期探针补登记）不进循环，跨轮收集，converged 或触顶时统一落盘 `minor-findings.json`——主 agent 最后一波统一处理或登记放行。收敛判据只看 critical（两场实跑教训：patch 档前提层问题与关键决策问题等权计数时，T2 十轮触顶、约 4 亿 token 仍未收敛）。触顶/stuck 终态的 `remaining` 逐条带 `guidance`（最后一次聚合的可执行处方）与 `reportRefs`（报告锚点）——主 agent 按清单直接处置后登记 dispositions，不必再派复审 run；final.json 续跑前自动转存 `final.attempt-N.json`（防跨 run 轨迹覆盖）。
 
@@ -138,6 +141,8 @@ T2 审查循环的脚本化执行体有两版（业务逻辑逐行一致，仅 a
 ## 审查：四席并行（方向审席 + 三 reviewer）
 
 四席并行审查（T2）：`tech-design-direction-review` 方向审席与三 reviewer 同轮并行、同一对账契约，判据 D1-D5（D1 分型正确 / D2 前提可击穿：否定性断言找写者侧反例、穷举断言（exhaustive=true 声明行）按 searchCmd 登记的检索命令重跑对账、✅ 条目抽样复核实 / D3 终态有效：公理是真不变量、差距表无漏项、波次不制造新差距 / D4 产物表完整且真实：漏行与行级填表不实都算 / D5 问题定义忠于真问题）；发现分档：patch 档（前提层/产物表/措辞级——问题定义与方案主干不动）进当轮问题清单由文档修复者随三审发现一并处置，rewrite 档（问题定义/方案主干/分型被击穿）**整循环立即终止**回 T1 重做（含 Step D 诊断期重跑）。三 reviewer（`tech-design-review-v6` 主审：方案级判据 + 断言-红灯映射表核对 / `tech-design-impact-review` 影响面审：写入点穷举与代价量化 / `tech-design-simplicity-review` 简洁审：机制必要性与概念数净增；agent 定义在 `agents/`，分工判据在 `review/rubric-design-doc.md`）。审查与修复分离：agent 只报告不代改。**聚合裁决是独立 phase**：四席返回后先派聚合裁决员把发现按同根因合并为去重权威清单（`round-N/aggregated.md`；refs 对原始清单的精确划分由脚本 fail-closed 校验——漏报/重叠/幻觉 ref 均打回），修复者据聚合清单处置，语义去重不落在修复者身上。修复按 `flow/write.md` Step 8 循环协议。**轮次唯一形态：每轮 = 四席审 + 修复（R1 全面、R2+ 只审上轮处置表 + 攻击点——方向审席另重跑穷举断言 searchCmd 登记的检索命令对账），不存在全面审+聚焦审双重派发**。
+
+**A 级降档（deliveryProfile=a）**：交付体系任务的 task 元数据 `deliveryProfile`（task.json 字段，gate init / `set-delivery-profile` 写入，禁手改 task.json；读不到字段缺省 `b` 不降档）为 `a` 时，T2 固定降为**方向审 + 主审（兼契约主审）两席**——跳过影响面审 / 简洁审（外部契约守门设计的 A 级成本控制：降档只减审查席，不减必做机器门；契约能力清单与权威快照摘要仍进两席输入，派审短路与输入形态见 `flow/review.md`「A 级降档」节）。a 级任务的探索维度取契约与故障两类（归独立保证线，本技能只降审查席）。
 
 ## 标记说明
 
