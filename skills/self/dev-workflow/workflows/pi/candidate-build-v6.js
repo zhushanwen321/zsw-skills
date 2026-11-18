@@ -456,7 +456,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "7.5.1"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "7.5.2"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -966,7 +966,15 @@ async function appendFinding(draft, artifact) {
         severity: draft.severity,
         artifact,
     };
-    const error = await appendEvent(event);
+    let error = await appendEvent(event);
+    // boundary 护栏一次性降级重试：关联需求已有断言级判据明文覆盖时 gate 拒绝 boundary 申报，
+    // 按 gate 恢复指示（「改为 category=defect，按实际严重度定级」）改 defect 重登记一次——
+    // 类别可降、内容不变（实测 attempt-1：探索器 boundary 定级被拒即整发 build-failed）
+    if (error !== null && event.category === "boundary" && error.includes("不得申报为边界")) {
+        event.category = "defect";
+        event.summary = `${event.summary}（原申报 boundary：关联需求已有断言级判据明文覆盖，按 gate 恢复指示改 defect 登记，内容不变）`;
+        error = await appendEvent(event);
+    }
     if (error !== null)
         throw new Error(`FindingRaised 追加失败：${error}。恢复动作：修复 delivery-gate 报告的问题后重跑`);
     findingIds.push(findingId);
@@ -1032,6 +1040,10 @@ async function failBuild(message, artifact, drafts = []) {
 }
 await obsEnd("setup", null);
 phase("逐增量形成候选实现");
+// 运行次 token：同 revision 重发（attempt 重试）时避免证据文件名冲突——实现/探索报告由
+// agent 按 prompt 内给定路径写入、测试日志由引擎写，revision 未变时同名覆写会破坏已登记
+// 事件的内容哈希绑定（实测 attempt-3：探索报告被覆写致同路径新发现登记被 gate 拒）
+const runToken = `r${Date.now().toString(36)}`;
 // 回执链衔接：每增量 fromRevision = 上一已完成增量的 postRevision（初始为 setup 基线），
 // 多增量时逐条衔接而非全部挂 setup 基线
 let lastCompletedRevision = revision;
@@ -1058,7 +1070,7 @@ for (let index = 0; index < increments.length; index += 1) {
         log(`跳过增量 ${item.id}：当前 acceptanceVersion 已有实现记录且无修复信号（未决发现/失败证据），不因 revision 变化重做`);
         continue;
     }
-    const tag = `${index + 1}-${revisionHash(revision)}`;
+    const tag = `${index + 1}-${revisionHash(revision)}-${runToken}`;
     const reportPath = `${taskDir}/evidence/implementation-${tag}.md`;
     const testLogPath = `${taskDir}/evidence/test-${tag}.log`;
     const failurePath = `${taskDir}/evidence/build-failure-${tag}.md`;
@@ -1222,7 +1234,7 @@ for (let index = 0; index < increments.length; index += 1) {
     // 候选反例审查对全部 schema 2 任务执行（合并稿 §2.1/§5.3：D3 后 D4 前无风险门控；
     // 探索维度按验收包 reviewDimensions 派生，可为空数组）
     if (acceptanceDoc?.schemaVersion === 2) {
-        const explorationReportPath = `${taskDir}/evidence/candidate-exploration-${item.id}-${revisionHash(postRevision)}.md`;
+        const explorationReportPath = `${taskDir}/evidence/candidate-exploration-${item.id}-${revisionHash(postRevision)}-${runToken}.md`;
         const dimensions = Array.isArray(acceptanceDoc.reviewDimensions) ? acceptanceDoc.reviewDimensions : [];
         const explorer = wfAgent(`candidate-explorer-${item.id}`, explorerRoleRes.stdout);
         const history = events.filter((event) => event.type === "ExplorationCompleted").map((event) => ({ eventId: event.eventId, revision: event.revision, artifact: event.artifact }));
@@ -1272,18 +1284,26 @@ for (let index = 0; index < increments.length; index += 1) {
                 event.findingId = `F-X${findingSequence + 1}`;
             }
             findingSequence += 1;
-            const appended = await runGate(gatePath, [
+            const findingGateArgs = (ev) => [
                 "record-finding", "--task-dir", taskDir, "--channel", "workflow",
-                "--summary", event.summary, "--category", String(event.category), "--severity", String(event.severity),
-                "--requirement-ids", JSON.stringify(event.requirementIds), "--artifact", String(event.artifact),
-                "--finding-id", String(event.findingId), "--revision", postRevision,
-                ...(event.consequenceRefutation !== undefined ? ["--consequence-refutation", String(event.consequenceRefutation)] : []),
-                ...(event.consequenceRefutationType !== undefined ? ["--consequence-refutation-type", String(event.consequenceRefutationType)] : []),
-                ...(event.origin !== undefined ? ["--origin", String(event.origin)] : []),
-                ...(event.expectedStage !== undefined ? ["--expected-stage", String(event.expectedStage)] : []),
-                ...(event.regressionTestRef !== undefined ? ["--regression-test-ref", String(event.regressionTestRef)] : []),
+                "--summary", ev.summary, "--category", String(ev.category), "--severity", String(ev.severity),
+                "--requirement-ids", JSON.stringify(ev.requirementIds), "--artifact", String(ev.artifact),
+                "--finding-id", String(ev.findingId), "--revision", postRevision,
+                ...(ev.consequenceRefutation !== undefined ? ["--consequence-refutation", String(ev.consequenceRefutation)] : []),
+                ...(ev.consequenceRefutationType !== undefined ? ["--consequence-refutation-type", String(ev.consequenceRefutationType)] : []),
+                ...(ev.origin !== undefined ? ["--origin", String(ev.origin)] : []),
+                ...(ev.expectedStage !== undefined ? ["--expected-stage", String(ev.expectedStage)] : []),
+                ...(ev.regressionTestRef !== undefined ? ["--regression-test-ref", String(ev.regressionTestRef)] : []),
                 "--credential", assuranceCredentialId,
-            ]);
+            ];
+            let appended = await runGate(gatePath, findingGateArgs(event));
+            // boundary 护栏一次性降级重试（与 builder 侧 appendFinding 同款）：按 gate 恢复指示
+            // 改 defect 重登记一次，类别可降、内容不变
+            if (appended.exitCode !== 0 && event.category === "boundary" && `${appended.stderr.trim()}${appended.stdout.trim()}`.includes("不得申报为边界")) {
+                event.category = "defect";
+                event.summary = `${event.summary}（原申报 boundary：关联需求已有断言级判据明文覆盖，按 gate 恢复指示改 defect 登记，内容不变）`;
+                appended = await runGate(gatePath, findingGateArgs(event));
+            }
             if (appended.exitCode !== 0)
                 return failBuild(`候选探索发现登记失败：${appended.stderr.trim()}`, explorationReportPath);
             events.push(event);
