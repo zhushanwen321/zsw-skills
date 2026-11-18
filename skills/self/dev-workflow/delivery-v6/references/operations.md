@@ -21,7 +21,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs next --task-dir <tas
 | `node-project [--write]` | status.json 派生视图：从 status.events 按事件重新推算节点状态、比对在盘 nodes（绕过转移入口的改动被检出）；`--write` 以事件恢复 | 主 agent / 断点恢复 |
 | `loop-attempt` | 循环尝试登记：进入循环即追加 `started`，退出补 `finished --outcome passed\|rejected\|failed\|interrupted`（追加写任务目录 loop-attempts.jsonl；attemptKey = runId:round 幂等去重，崩溃重放不重复计数；打回、校验失败、中断全部计入） | workflow / 主 agent |
 | `loop-budget` | 循环尝试预算查询：按 `started` 计数（不读结果事件）对照各循环上限，输出用量与剩余；超限即停回判 process-failed | workflow / 主 agent |
-| `revision-provenance` | revision 来源对账（只读派生）：候选形成后每次 revision 变化的来源（cause + 事件引用 + actor）；无法推断来源的代际标 unknown | 主 agent / gate |
+| `revision-provenance` | revision 来源对账（只读派生）：候选形成后每次 revision 变化的来源（source + 事件引用 + actor）；无法推断来源的代际标 unknown | 主 agent / gate |
 | `obligations` | 交付义务清单派生（只读）：从验收断言 / 必需阶段 / 修复轮 / blocking 待办派生 `{id, kind: assertion\|stage\|repair\|pending\|asset, state: open\|satisfied\|explicitly-waived}`（asset 待实现——依赖用户资产声明通道）；不新增人工总表 | 主 agent / workflow |
 | `events [--domain D]` | 事件时间线读侧合流：交付事件（domain 章）+ 过程记录（process 域）统一输出 | 主 agent / 复盘 |
 | `replay` | 历史任务回放：真实事件序列对转移表的可表达性核验（不可表达即建模缺口或词表外操作） | 主 agent / 内核演进 |
@@ -52,7 +52,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs loop-budget \
 
 预算语义 = 按 `started` 计数（结果事件不作工作量依据）：进入循环即计数，打回、校验失败、designer 失败、整次重发与中断全部计入；跨 run、跨 workflow 与手工路径累计，重开 run 不重置。恢复时按 attemptKey + event 去重，同一尝试的完成事件不增加次数。已接入登记的循环：验收复审（`--loop acceptance-review`，唯一接入判定上限的循环——上限 `acceptanceReReviewRoundCap` = 6，超限判 process-failed）、T2 设计审查（`--loop tech-review`，设计目录绑定交付任务时由 workflow 自动登记）、D2 一致性审查（`--loop dev-consistency`，同前）、独立保证（`--loop assurance`，independent-assurance-v6 各终态出口登记）。后三类只登记不判定：机器上界判定需 gate 侧扩展循环词表（另行工作），属已知缺口，不宣称已有统一上界。手工复审同用 `loop-attempt --path manual` 登记（第 11 节手工通道执行复审时同样入账，保证终态报告的通道统计不缺手工路径）。
 
-**revision 来源对账**（候选形成后的每次 revision 变化必须有合法来源）：`revision-provenance` 从既有事件与合并回执只读派生逐代来源（cause ∈ implementation / candidate-repair / assurance-repair / environment / external-baseline，附 eventRef 与 actor）。存在 unknown（来源不明）代际时的恢复动作 = 补做合法修复登记（如 `record-repair-round`）或恢复已知基线；恢复不了且变化来自外部进程或用户操作时，由用户经 `confirm-baseline` 命令确认新的外部基线（登记 RevisionBaselineConfirmed 事件接链——未确认前 unknown 不得静默消除）。unknown 未消除不得 accepted；后续保证完成不把来源不明代际变成正常历史。
+**revision 来源对账**（候选形成后的每次 revision 变化必须有合法来源）：`revision-provenance` 从既有事件与合并回执只读派生逐代来源（source ∈ implementation / candidate-repair / assurance-repair / environment / external-baseline，附 eventRef 与 actor）。存在 unknown（来源不明）代际时的恢复动作 = 补做合法修复登记（如 `record-repair-round`）或恢复已知基线；恢复不了且变化来自外部进程或用户操作时，由用户经 `confirm-baseline` 命令确认新的外部基线（登记 RevisionBaselineConfirmed 事件接链——未确认前 unknown 不得静默消除）。unknown 未消除不得 accepted；后续保证完成不把来源不明代际变成正常历史。
 
 **交付义务派生**（accepted 前置的判定输入，从现有权威数据派生，不建人工总表）：
 
@@ -60,7 +60,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs loop-budget \
 node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs obligations --task-dir <taskDir>
 ```
 
-输出义务清单（kind：assertion 验收断言 / stage 必需阶段 / repair 受控修复 / pending blocking 待办 / asset 用户要求的交付资产（asset 待实现——依赖用户资产声明通道）；state：open / satisfied / explicitly-waived）。**accepted 前置 = 必需义务无 open**；`explicitly-waived` 必须绑定用户裁决。豁免通道按义务类型映射现状：assertion 类走 `accept-risk`（绑 gapId；boundary 与 riskAcceptable=false 不可豁免）；finding 类 non-blocker 走 `preauthorize-risk`（预授权范围内）；stage 与节点类走显式用户豁免（跳过须记录留痕；DAG 节点人工处置走 `node-transition --event manual-disposition --basis`）。无映射通道的义务类型不得豁免，只能完成或停回用户裁决。已知缺口：deferredLedger（dev-flow 侧未决清单）未接入义务派生。
+输出义务清单（kind：assertion 验收断言 / stage 必需阶段 / repair 受控修复 / pending blocking 待办 / asset 用户要求的交付资产（asset 待实现——依赖用户资产声明通道）；state：open / satisfied / explicitly-waived）。**accepted 前置 = 必需义务无 open**；`explicitly-waived` 必须绑定用户裁决。豁免通道按义务类型映射现状：assertion 类走 `accept-risk`（绑 gapId；boundary 与 riskAcceptable=false 不可豁免）；pending 类无豁免——按待办 note 完成事项后 `delivery-core pending resolve` 关闭；stage 与 repair 类无豁免通道（stage 类 gate 恢复动作明写「阶段无独立豁免通道，走正常交付流程」），只能推进完成或停回用户裁决。注意：人工处置（`node-transition --event manual-disposition --basis`）自动登记的待复盘待办属 pending 类，accept 前须先 resolve。finding 类残余风险不在义务清单内（义务 kind 词表无 finding），其接受走既有 finding 通道（`preauthorize-risk` 预授权范围内，或 `accept-risk --target-type finding` 绑 findingId）。交付义务派生不含 D5（其状态权威在 dev-flow 侧状态仓，机器前置待载体，见 dev-flow 文档）。已知缺口：deferredLedger（dev-flow 侧未决清单）未接入义务派生。
 
 ## 1. 初始化（init：意图 + 凭据 + 血统）
 
@@ -195,3 +195,5 @@ revision-unstable 排查完写入源后由用户确认新基线（漂移计数�
 1. 中断/善后/待登记事项在中断当下 `pending add` 落盘（kind 五类见第 0 节）；恢复后 `next` 优先回答待办。
 2. workflow 不可用时按 next 给出的合法转移 executor 手工执行同一角色职责，事件走意图命令组（builder/assurance 类，见第 0 节；user 类命令走第 2/3/6/8/9 节高层命令）。每次恢复先 `evaluate` 读 verdict 与 nextAction；跨会话凭据按 task.json 的 credentialId 定位（evaluate 不需要私钥）。手工复审同用 `loop-attempt --path manual` 登记（进入登记 started、离开登记 finished——手工路径与 workflow 同表计数，终态报告按通道分开统计）。
 3. DAG 节点的人工处置（blocked/failed/suspended → done）唯一合法通道 = `delivery-core node-transition --event manual-disposition --basis "<处置依据>"`——依据必填留痕；禁止直接编辑 status.json 或自造词表外事件。
+4. 手工复核独立性：高风险任务的关键手工复核（替代独立保证路径的人工环节，如验收复审、修复受影响复核）须由独立 assurance 子角色完成，主 agent 只做登记与呈报、不亲自复核；无法达到独立性时只能降低证据结论（如实降级为 partial/unknown 并披露）或停回用户，不得按完整独立保证表述。
+5. 场景库零产出治理：验证场景只保留实际拦截过问题或能证明区分度（能区分正误实现）的条目，连续零拦截且无区分度证明的场景删除；治理随实跑任务建设，不预设清单。

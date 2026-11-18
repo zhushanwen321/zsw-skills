@@ -449,6 +449,15 @@ test("eventDomains 对账：gate 全部事件类型都有目标域；意图命�
   const domainTypes = new Set(Object.values(RULES.eventDomains).flat());
   const uncovered = gateTypes.filter((t) => !domainTypes.has(t));
   assert.deepEqual(uncovered, [], "gate 每个事件类型必须登记在 eventDomains（未覆盖即写入矩阵盲区）");
+  // 事件词表文档对拍（设计 §3 事实事件唯一权威）：state-and-events.md 声明的计数与
+  // 表行必须与 gate EVENT_SCHEMAS 键集一致——文档漏登记新事件即在此红灯
+  const docText = readFileSync(join(V6, "references", "state-and-events.md"), "utf8");
+  const docCount = /## 事件词表（(\d+) 类）/.exec(docText);
+  assert.ok(docCount, "state-and-events.md 应有「事件词表（N 类）」标题");
+  assert.equal(Number(docCount[1]), gateTypes.length, `文档事件词表计数（${docCount[1]}）应与 gate EVENT_SCHEMAS 键数（${gateTypes.length}）一致`);
+  const vocabSection = docText.slice(docText.indexOf("## 事件词表"), docText.indexOf("## 失效范围"));
+  const docRows = [...vocabSection.matchAll(/^\| ([A-Za-z]+) \|/gm)].map((m) => m[1]);
+  assert.deepEqual([...docRows].sort(), [...gateTypes].sort(), "文档事件词表表行应与 EVENT_SCHEMAS 键集一一对应");
   // 意图命令组（执行器事件）与 workflow 迁移后零 append 残留
   const intentTypes = [...gateSrc.matchAll(/type: "([A-Za-z]+)",\n\s+role:/g)].map((m) => m[1]);
   const executorEventTypes = ["ImplementationRecorded", "RepairRoundRecorded", "FindingRaised", "FindingResolved", "ResolutionReaffirmed", "EvidenceRecorded", "ExplorationCompleted", "AssuranceCompleted", "AssuranceRevisionDrift"];
@@ -457,6 +466,17 @@ test("eventDomains 对账：gate 全部事件类型都有目标域；意图命�
     const workflowSrc = readFileSync(join(ROOT, "skills/self/dev-workflow/workflows/src", `${name}.shared.ts`), "utf8");
     assert.ok(!/\["append",/.test(workflowSrc), `${name} 不得残留手工 append 通道（意图提交唯一）`);
   }
+});
+
+// ── guardrails 键集对拍：gate 源码读取的护栏键必须在 rules.json 显式登记 ──
+
+test("guardrails 对拍：gate 源码读取的 guardrails 键在 rules.json 均已登记", () => {
+  const gateSrc = readFileSync(GATE, "utf8");
+  const readKeys = [...new Set([...gateSrc.matchAll(/KERNEL_RULES\.guardrails\.([A-Za-z]+)/g)].map((m) => m[1]))];
+  assert.ok(readKeys.length >= 3, `gate 源码应读取多个 guardrails 键（实际 ${readKeys.length}：${readKeys.join("、")}——提取失败须修测试正则）`);
+  const registered = new Set(Object.keys(RULES.guardrails).filter((key) => key !== "//"));
+  const missing = readKeys.filter((key) => !registered.has(key));
+  assert.deepEqual(missing, [], "gate 读取的 guardrails 键必须在 rules.json 显式登记——未登记的键靠「缺省启用」兜底，失去显式管理");
 });
 
 // ── 写入矩阵：角色 × 目标域拒绝清单（意图命令经 appendEvent 统一执行）──

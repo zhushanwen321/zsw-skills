@@ -22,10 +22,11 @@
     "aggregateRegradeHalt": 2
   },
   "guardrails": {
-    "//": "FindingRaised 登记护栏（delivery-gate 事件写入（appendEvent）当时执行）。",
+    "//": "FindingRaised 登记护栏（delivery-gate 事件写入（appendEvent）当时执行）。gate 源码读取的全部 guardrails 键必须在此显式登记（键集对拍见 delivery-core-v6.test.mjs）。注意：本节键是护栏登记不是运行时开关——V5 设计确立的护栏（如 consequenceRefutation 强制）语义上不可关闭，gate 端硬编码执行，登记只为数据权威完整；未来新增真正可配置的护栏时才允许 gate 按 false 跳过。",
     "boundaryBanOnAssertedRequirements": true,
     "consequenceRefutationRequired": true,
-    "regradeHaltEnabled": true
+    "regradeHaltEnabled": true,
+    "emptyScopeBoundaryRequiresRefutation": true
   },
   "predicates": {
     "//": "转移前置谓词词表。decider = 谁机器判定：gate = delivery-gate 命令、core = delivery-core 命令、workflow = 执行 workflow、user = 用户动作本身。",
@@ -408,7 +409,7 @@
           ],
           "executor": "delivery-gate evaluate",
           "actor": "engine",
-          "note": "含 perVersion>3 与 crossRun>6 两档预算耗尽，停回用户"
+          "note": "含 perVersion>3 / uniqueMustFix>10 / 跨 run 保证>6 / 验收复审 started>6 四档预算耗尽，停回用户（判定在 gate evaluate，谓词只是模型层表达）"
         },
         {
           "from": "*",

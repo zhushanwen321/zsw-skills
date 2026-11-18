@@ -2,12 +2,13 @@
 
 `events.jsonl` 是事实事件唯一权威；`verdict.json` 是裁决器根据当前验收、当前 revision 与事件重新计算的派生结果，禁止手改。每条事件带 Ed25519 签名（凭据文件中的角色私钥签出，公钥在 task.json）；evaluate 逐条验签。
 
-## 事件词表（19 类）
+## 事件词表（20 类）
 
 | 事件 | 签署角色 | 含义与关键绑定 |
 |------|----------|----------------|
 | AcceptanceReviewed | assurance | 验收独立审查完成；绑 acceptanceVersion + 验收包哈希 + intentSha256 + 策略快照哈希 + 结论（pass/reject） |
 | AcceptanceApproved | user | 某版验收被批准；四元组同上 + reviewEventId（指向通过的审查） |
+| RevisionOpened | user | 解封已冻结验收包进入修订起草的唯一合法通道（`open-revision` 留痕）；绑 target 与 reason，要求递增 acceptanceVersion 并重新审查批准 |
 | DesignApproved | user | 方案包确认；绑包文件哈希清单（packageFiles）与决策参照 |
 | ImplementationRecorded | builder | 增量在某指纹下实现完成；附合并回执（起始指纹、合并后指纹、补丁哈希） |
 | EvidenceRecorded | assurance | 某需求或断言某证据类型的结论；schema 2 附 assertionIds/adversarialFormIds；绑 artifact 内容哈希（禁止覆盖写）；宿主类证据的 JSON artifact 附 environment 元数据（kind/name/version/source/sourceHash/driver，见「宿主类断言与证据环境」节） |
@@ -96,6 +97,7 @@
 1. gate 对宿主类断言核对证据 artifact 的 environment 是否满足该断言的 requiredEnvironment——不满足时该证据最多判 partial/unknown，**不得 verified**。
 2. 模拟环境（fake-host）不能独立证明宿主契约：宿主专属语义（命令解析、注册、回执、事件语义）必须至少一条 official-runner 或 real-host 证据；真实环境不可用只能 unknown/partial，用户是否接受该风险走既有裁决通道。
 3. environment 的 `sourceHash` 用于核对证据来源身份；其与权威来源内容的一致性核对通道待建立——当前 gate 只读取与绑定元数据，不核 sourceHash 内容（如实声明，不虚报核对能力）。
+4. 已知缺口：分层证据规则第 4 条（模拟环境用于宿主语义证明前，须用相同样本与真实环境对照，证明未改写关键语义）未实施——当前拦截依赖 kind 词表 + 独立保证环境责任 + gate 降级三道防线；对照记录机制登记待实施。
 
 ## 循环尝试记录与预算
 

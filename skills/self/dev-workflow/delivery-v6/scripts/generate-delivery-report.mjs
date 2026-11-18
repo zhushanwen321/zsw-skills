@@ -10,7 +10,9 @@
 // 数据源 → 分节映射（全部为只读；判定/校验逻辑一律 import 单源库，不另立副本）：
 //   1 交付终态与判定时间   verdict.json 直读
 //   2 循环尝试账           loop-attempts.jsonl → kernel-judgments parseLoopAttemptsText
-//                          + loopAttemptsBudget（cap 键 LOOP_BUDGET_CAP_KEYS 单源）
+//                          + loopAttemptsBudget（cap 键 LOOP_BUDGET_CAP_KEYS 单源）；
+//                          修复进度（verdict.quality.repairRounds 直读 + 验收复审首次
+//                          通过轮次 = started 序列里首个 passed 的尝试序号）
 //   3 执行通道统计         loop-attempts.jsonl 的 path 字段（workflow/manual 分开）+
 //                          events.jsonl 的 AssuranceCompleted 计数 + workflow 观测记录
 //                          （~/.agents/skill-data/workflow-observability/<task-id>/，缺=unknown）
@@ -19,6 +21,13 @@
 //   6 revision 来源对账    kernel-judgments deriveRevisionProvenance（事件流经 gate
 //                          loadWorld 加载并验签；当前 revision 证据问题与历史登记痕迹分开）
 //   7 单元与节点数量       increments.json items 数 + status.json nodes 数（不数报告文字）
+//   8 宿主类断言证据覆盖   acceptance.json 的 requiredEnvironment 声明 × verdict 断言
+//                          证据状态（gate evaluate 已并入环境档位核对，覆盖 = 存在 verified）
+//   9 未决待办             pending-actions.json open 计数直读（损坏标 unknown，不冒充 0）
+//
+// 口径边界：产品运行成本由验收判据测量，不在本报告；跨任务度量（反例实现误判数、
+// 修复后同族缺陷复发数、终报与权威记录差异）不在单任务报告产出——终报由本脚本从
+// 权威记录机器生成，差异结构性为零（头部声明同文）。
 //
 // 事件级通道归属的诚实边界：events.jsonl 事件 schema（gate EVENT_SCHEMAS）不含 runId
 // 字段——gate 意图命令的 --run-id 只做写租约代次复核、不写入事件记录。因此「某条保证
@@ -161,6 +170,36 @@ if (loopAttemptsFile.status === "ok") {
     });
   }
 }
+
+// ── 修复进度（设计 §13.2「首次验收通过轮次与全部尝试轮次分别统计」）──
+// 修复轮数 = verdict.quality.repairRounds 直读；验收复审首次通过轮次 = acceptance-review
+// 循环 started 序列里首个 finished outcome=passed 的尝试序号（按 loop-attempts.jsonl 文件序，
+// attemptKey 首次 started 记序——去重口径与 loopAttemptsBudget 一致），无 passed 尝试标 unknown
+let firstPassedRound = null;
+if (loopAttemptsFile.status === "ok") {
+  const roundByAttempt = new Map();
+  for (const row of loopAttemptsFile.rows) {
+    if (row.loop !== "acceptance-review") continue;
+    if (typeof row.attemptKey !== "string" || typeof row.event !== "string") continue;
+    if (row.event === "started" && !roundByAttempt.has(row.attemptKey)) roundByAttempt.set(row.attemptKey, roundByAttempt.size + 1);
+    if (row.event === "finished" && row.outcome === "passed" && roundByAttempt.has(row.attemptKey)) {
+      firstPassedRound = roundByAttempt.get(row.attemptKey);
+      break;
+    }
+  }
+}
+const repairProgressSection = {
+  repairRounds:
+    verdictSection.status === "ok" && verdict !== null && typeof verdict.quality?.repairRounds === "number"
+      ? verdict.quality.repairRounds
+      : { status: "unknown", reason: "verdict.json 缺失或 quality.repairRounds 不可读" },
+  acceptanceReviewFirstPassedRound:
+    loopAttemptsFile.status !== "ok"
+      ? { status: "unknown", reason: loopAttemptsFile.reason ?? "loop-attempts.jsonl 不可读" }
+      : firstPassedRound === null
+        ? { status: "unknown", reason: "验收复审无 passed 尝试（尚未通过或未发起）" }
+        : { status: "ok", round: firstPassedRound },
+};
 
 // ── 分节 3：执行通道统计（workflow 与手工补登记分开）──
 // 判定依据：loop-attempts.jsonl 的 path 字段（workflow|manual，登记时由通道自报并经
@@ -351,19 +390,79 @@ const nodeCountSection =
     ? { status: "ok", dagNodeCount: nodeSection.nodeCount, source: nodeSection.file }
     : { status: "unknown", reason: nodeSection.reason };
 
+// ── 分节 8：宿主类断言证据覆盖（设计 §13.2「宿主类断言真实环境证据覆盖率」）──
+// 数据源：盘上 acceptance.json 的 requiredEnvironment 声明（宿主类断言清单）+ verdict 的
+// 断言证据状态（verdict.requirements[].assertions[].evidence[].result）。gate evaluate 已把
+// 环境档位核对并入 result（宿主类证据不满足 requiredEnvironment 时 verified 降级 partial），
+// 因此「覆盖」= 该断言存在 result=verified 的证据条目——本节做覆盖统计，不重复实现环境
+// 判定。schema 1 验收包无断言级声明，宿主类断言为 0（如实标注，不是缺数据）。
+const acceptanceFile = readJsonIfPresent(join(taskDir, "acceptance.json"), "acceptance.json");
+let hostCoverageSection = { status: "unknown", reason: null, total: null, covered: null, uncovered: [] };
+if (acceptanceFile.status !== "ok") {
+  hostCoverageSection.reason = acceptanceFile.reason;
+} else if (verdictSection.status !== "ok") {
+  hostCoverageSection.reason = "verdict.json 缺失——断言证据状态不可得（先运行 delivery-gate evaluate）";
+} else if (acceptanceFile.value?.schemaVersion !== 2) {
+  hostCoverageSection = { status: "ok", total: 0, covered: 0, uncovered: [], note: "验收包为 schema 1（需求级判定），无断言级宿主环境声明" };
+} else {
+  const assertionEvidenceById = new Map();
+  for (const requirement of verdict.requirements ?? []) {
+    for (const assertion of requirement.assertions ?? []) {
+      assertionEvidenceById.set(assertion.id, assertion.evidence ?? []);
+    }
+  }
+  const hostAssertions = [];
+  for (const requirement of acceptanceFile.value.requirements ?? []) {
+    for (const assertion of requirement.assertions ?? []) {
+      if (assertion !== null && typeof assertion === "object" && assertion.requiredEnvironment !== undefined && assertion.requiredEnvironment !== null) {
+        hostAssertions.push(assertion);
+      }
+    }
+  }
+  const isCovered = (assertion) => (assertionEvidenceById.get(assertion.id) ?? []).some((entry) => entry?.result === "verified");
+  hostCoverageSection = {
+    status: "ok",
+    total: hostAssertions.length,
+    covered: hostAssertions.filter(isCovered).length,
+    uncovered: hostAssertions.filter((assertion) => !isCovered(assertion)).map((assertion) => ({ id: assertion.id, requiredEnvironment: assertion.requiredEnvironment })),
+  };
+}
+
+// ── 分节 9：未决待办（pending-actions.json open 计数直读）──
+// 容忍形态与 delivery-core readPending 的查询路径一致：文件损坏标 unknown 并披露原因，
+// 不冒充 0——blocking 待办不得按不存在处理（交付义务 pending 类的 accepted 前置）
+const pendingSection = (() => {
+  const filePath = join(taskDir, "pending-actions.json");
+  if (!existsSync(filePath)) return { status: "unknown", reason: "pending-actions.json 缺失" };
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8"));
+    const items = Array.isArray(parsed?.items) ? parsed.items : [];
+    return {
+      status: "ok",
+      open: items.filter((item) => item !== null && typeof item === "object" && item.status === "open").length,
+      total: items.length,
+    };
+  } catch (error) {
+    return { status: "unknown", reason: `pending-actions.json 不是合法 JSON：${error.message}` };
+  }
+})();
+
 // ── 组装 JSON 对象与 markdown 渲染 ──
 const report = {
   taskDir,
   taskId: taskId !== "" ? taskId : null,
   generatedBy: SCRIPT_NAME,
   generatedAt: new Date().toISOString(),
-  disclaimer: "本报告由权威记录生成；叙事解释可由 agent 补充，数字与状态以本文件为准。缺少运行记录的项标 unknown，不按 0 或成功补齐。",
+  disclaimer: "本报告由权威记录生成；叙事解释可由 agent 补充，数字与状态以本文件为准。缺少运行记录的项标 unknown，不按 0 或成功补齐。产品运行成本由验收判据测量，不在本报告；跨任务度量（反例实现误判数、修复后同族缺陷复发数、终报与权威记录差异）不在单任务报告产出——终报由本脚本从权威记录机器生成，差异结构性为零。",
   verdict: verdictSection,
   loopAttempts: loopsSection,
+  repairProgress: repairProgressSection,
   channels: channelsSection,
   nodeEvents: nodeSection,
   selfRepairs: selfRepairsSection,
   revisionProvenance: provenanceSection,
+  hostEvidenceCoverage: hostCoverageSection,
+  pendingActions: pendingSection,
   counts: { increments: incrementsSection, dagNodes: nodeCountSection },
 };
 
@@ -375,6 +474,7 @@ const lines = [];
 lines.push(`# 交付终态报告（机器生成）：${taskId !== "" ? taskId : taskDir}`);
 lines.push("");
 lines.push("> 本报告由权威记录生成；叙事解释可由 agent 补充，数字与状态以本文件为准。缺少运行记录的项标 unknown，不按 0 或成功补齐。");
+lines.push("> 口径：产品运行成本由验收判据测量，不在本报告；跨任务度量（反例实现误判数、修复后同族缺陷复发数、终报与权威记录差异）不在单任务报告产出——终报由本脚本从权威记录机器生成，差异结构性为零。");
 lines.push(`> 生成时间：${report.generatedAt}；任务目录：${taskDir}`);
 lines.push("");
 
@@ -410,6 +510,12 @@ if (loopsSection.status === "ok") {
 } else {
   lines.push(`- ${fmtUnknown(loopsSection.reason)}`);
 }
+lines.push(
+  `- 修复轮数（verdict.quality.repairRounds 直读）：${typeof repairProgressSection.repairRounds === "number" ? repairProgressSection.repairRounds : fmtUnknown(repairProgressSection.repairRounds.reason)}`,
+);
+lines.push(
+  `- 验收复审首次通过轮次（started 序列里首个 passed 尝试的序号）：${repairProgressSection.acceptanceReviewFirstPassedRound.status === "ok" ? `第 ${repairProgressSection.acceptanceReviewFirstPassedRound.round} 次` : fmtUnknown(repairProgressSection.acceptanceReviewFirstPassedRound.reason)}`,
+);
 lines.push("");
 
 lines.push("## 3. 执行通道统计（workflow 与手工补登记分开）");
@@ -507,6 +613,31 @@ lines.push(
 lines.push(
   `- DAG 节点数（status.json nodes）：${nodeCountSection.status === "ok" ? nodeCountSection.dagNodeCount : fmtUnknown(nodeCountSection.reason)}`,
 );
+lines.push("");
+
+lines.push("## 8. 宿主类断言证据覆盖（requiredEnvironment 声明 × verdict 断言证据状态）");
+lines.push("");
+if (hostCoverageSection.status === "ok") {
+  if (hostCoverageSection.total === 0) {
+    lines.push(`- 宿主类断言（带 requiredEnvironment 声明）：0 条${hostCoverageSection.note !== undefined ? `——${hostCoverageSection.note}` : ""}`);
+  } else {
+    lines.push(`- 宿主类断言 ${hostCoverageSection.total} 条：覆盖 ${hostCoverageSection.covered}、未覆盖 ${hostCoverageSection.uncovered.length}——覆盖 = 存在 result=verified 的证据条目（gate evaluate 已并入环境档位核对：宿主类证据不满足 requiredEnvironment 时 verified 降级 partial）`);
+    for (const item of hostCoverageSection.uncovered) {
+      lines.push(`  - 未覆盖：${item.id}（requiredEnvironment：${JSON.stringify(item.requiredEnvironment)}）`);
+    }
+  }
+} else {
+  lines.push(`- ${fmtUnknown(hostCoverageSection.reason)}`);
+}
+lines.push("");
+
+lines.push("## 9. 未决待办（pending-actions.json 直读）");
+lines.push("");
+if (pendingSection.status === "ok") {
+  lines.push(`- open 待办 ${pendingSection.open} 条 / 总计 ${pendingSection.total} 条——open 待办即交付义务的 pending 类（accepted 前置），关闭走 delivery-core pending resolve`);
+} else {
+  lines.push(`- ${fmtUnknown(pendingSection.reason)}`);
+}
 lines.push("");
 
 lines.push("## 附：JSON 数据对象");

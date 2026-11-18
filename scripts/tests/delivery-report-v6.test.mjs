@@ -65,8 +65,9 @@ function makeFixture(t, { taskId = "report-v6" } = {}) {
   return { root, projectDir, home, taskDir: output.taskDir, creds: output.credentials };
 }
 
-/** 推进到设计批准（有 verdict.json 可读的实现前形态）——比 loop-attempts 测试少走实现段 */
-function driveToDesignApproved(t) {
+/** 推进到设计批准（有 verdict.json 可读的实现前形态）——比 loop-attempts 测试少走实现段。
+ * hostAssertion=true 时 A1 带宿主环境声明（报告宿主覆盖分节的断言数据源）。 */
+function driveToDesignApproved(t, { hostAssertion = false } = {}) {
   const fx = makeFixture(t);
   writeFileSync(join(fx.taskDir, "acceptance.json"), `${JSON.stringify({
     schemaVersion: 2,
@@ -79,7 +80,8 @@ function driveToDesignApproved(t) {
         id: "R1", kind: "invariant", statement: "关闭后任何路径零写入", required: true, riskAcceptable: false,
         evidenceKinds: ["command", "inspection"],
         assertions: [
-          { id: "A1", statement: "关闭后不写", qualifiers: ["关闭"], given: "关闭", when: "写入", then: "不写", adversarialFormRefs: ["AF1"], testAssetRefs: ["test-A1"] },
+          { id: "A1", statement: "关闭后不写", qualifiers: ["关闭"], given: "关闭", when: "写入", then: "不写", adversarialFormRefs: ["AF1"], testAssetRefs: ["test-A1"],
+            ...(hostAssertion ? { requiredEnvironment: { kind: "official-runner" } } : {}) },
         ],
       },
     ],
@@ -164,6 +166,16 @@ test("双通道统计分开 + 缺观测与缺 status.json 时 unknown 不冒充 
   );
   assert.equal(report.channels.assuranceEvents.total, 0, "保证事件数直读事件流（本任务无 AssuranceCompleted）");
 
+  // 修复进度：repairRounds 直读 verdict.quality；首次通过轮次 = 首个 passed 尝试序号
+  assert.equal(report.repairProgress.repairRounds, 0, "无修复轮 → quality.repairRounds=0 直读");
+  assert.deepEqual(report.repairProgress.acceptanceReviewFirstPassedRound, { status: "ok", round: 1 }, "run-a 第 1 轮 passed → 首次通过轮次 1");
+  // pending-actions.json 缺失 → unknown，不冒充 0
+  assert.equal(report.pendingActions.status, "unknown");
+  assert.match(report.pendingActions.reason, /pending-actions\.json 缺失/);
+  // 头部口径声明：产品运行成本与跨任务度量不在单任务报告
+  assert.match(markdown, /产品运行成本由验收判据测量，不在本报告/);
+  assert.match(markdown, /跨任务度量/);
+
   // unknown 纪律：观测目录不存在（HOME 指向空临时目录）→ unknown，不出现 0 次执行的假象
   assert.equal(report.channels.observability.status, "unknown");
   assert.match(report.channels.observability.reason, /观测目录不存在/);
@@ -198,6 +210,9 @@ test("超限循环如实呈现：7 次 started > cap 6 → exceeded + markdown �
   assert.equal(acceptanceLoop.started, 7);
   assert.equal(acceptanceLoop.exceeded, true, "7 > 6 超限");
   assert.match(markdown, /\*\*超限\*\*/, "markdown 应含超限标记");
+  // 首次通过轮次：全 rejected/failed，无 passed 尝试 → unknown（不冒充已通过）
+  assert.equal(report.repairProgress.acceptanceReviewFirstPassedRound.status, "unknown");
+  assert.match(report.repairProgress.acceptanceReviewFirstPassedRound.reason, /无 passed 尝试/);
 });
 
 test("revision 分节：尾部缺口披露 unknown；历史登记痕迹与当前问题分开", (t) => {
@@ -326,6 +341,70 @@ test("self-repairs.jsonl 存在时直读计数（byKind / byOutcome / byWorkflow
   assert.deepEqual(report.selfRepairs.byKind, { "agent-structure-retry": 1, "cli-retry": 1, "agent-error-retry": 1 });
   assert.deepEqual(report.selfRepairs.byOutcome, { recovered: 2, exhausted: 1 });
   assert.deepEqual(report.selfRepairs.byWorkflow, { "independent-assurance-v6": 2, "acceptance-design-v6": 1 });
+});
+
+test("宿主类断言证据覆盖分节：覆盖/未覆盖/零声明三形态如实呈现", (t) => {
+  // 未覆盖形态：A1 声明 requiredEnvironment 但无取证 → uncovered 含 A1
+  const fxNoEvidence = driveToDesignApproved(t, { hostAssertion: true });
+  ok(runGate(["evaluate", "--task-dir", fxNoEvidence.taskDir], fxNoEvidence.home));
+  const noEvidenceReport = reportJson(generate(fxNoEvidence));
+  assert.equal(noEvidenceReport.hostEvidenceCoverage.status, "ok");
+  assert.equal(noEvidenceReport.hostEvidenceCoverage.total, 1);
+  assert.equal(noEvidenceReport.hostEvidenceCoverage.covered, 0);
+  assert.deepEqual(noEvidenceReport.hostEvidenceCoverage.uncovered, [{ id: "A1", requiredEnvironment: { kind: "official-runner" } }]);
+  assert.match(generate(fxNoEvidence), /未覆盖：A1/, "markdown 应列出未覆盖断言");
+
+  // 覆盖形态：宿主类证据（JSON artifact 附满足要求的 environment 元数据）登记 verified
+  const fx = driveToDesignApproved(t, { hostAssertion: true });
+  const revisionResult = runGate(["revision", "--project-root", fx.projectDir], fx.home);
+  ok(revisionResult, "revision 查询应成功");
+  const revision0 = revisionResult.stdout.trim();
+  mkdirSync(join(fx.taskDir, "evidence"), { recursive: true });
+  writeFileSync(join(fx.taskDir, "evidence", "host-ev.json"), `${JSON.stringify({
+    summary: "官方运行器取证",
+    environment: { kind: "official-runner", name: "test-host", version: "1.0", source: "official-docs", driver: "cli" },
+  }, null, 2)}\n`);
+  ok(runGate(["record-evidence", "--task-dir", fx.taskDir, "--requirement-id", "R1", "--kind", "command", "--result", "verified",
+    "--summary", "宿主取证", "--artifact", "evidence/host-ev.json", "--revision", revision0,
+    "--assertion-ids", JSON.stringify(["A1"]), "--credential", fx.creds.assurance], fx.home), "宿主类证据登记应成功");
+  ok(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home));
+  const report = reportJson(generate(fx));
+  assert.deepEqual(
+    { status: report.hostEvidenceCoverage.status, total: report.hostEvidenceCoverage.total, covered: report.hostEvidenceCoverage.covered, uncovered: report.hostEvidenceCoverage.uncovered },
+    { status: "ok", total: 1, covered: 1, uncovered: [] },
+    "宿主类断言经官方运行器取证后覆盖",
+  );
+  assert.match(generate(fx), /宿主类断言 1 条：覆盖 1、未覆盖 0/);
+});
+
+test("pending 直读：open 计数与损坏 unknown；无宿主声明验收包覆盖为 0；verdict 缺失相关分节降级", (t) => {
+  const fx = driveToDesignApproved(t);
+  ok(runCore(["pending", "add", "--task-dir", fx.taskDir, "--kind", "awaiting-review", "--note", "人工处置复盘"], fx.home));
+  ok(runCore(["pending", "add", "--task-dir", fx.taskDir, "--kind", "cleanup", "--note", "善后清理"], fx.home));
+  ok(runCore(["pending", "resolve", "--task-dir", fx.taskDir, "--id", "pa-2", "--outcome", "已清理"], fx.home));
+  ok(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home));
+  const report = reportJson(generate(fx));
+  assert.deepEqual(report.pendingActions, { status: "ok", open: 1, total: 2 }, "open 计数只算 status=open（resolved 不计入）");
+  assert.deepEqual(
+    { status: report.hostEvidenceCoverage.status, total: report.hostEvidenceCoverage.total },
+    { status: "ok", total: 0 },
+    "无 requiredEnvironment 声明的验收包宿主类断言为 0（如实标注，不是缺数据）",
+  );
+
+  // 损坏形态：pending-actions.json 非法 JSON → unknown 不冒充 0（与 readPending 查询路径容忍一致）
+  const fxCorrupt = driveToDesignApproved(t);
+  ok(runGate(["evaluate", "--task-dir", fxCorrupt.taskDir], fxCorrupt.home));
+  writeFileSync(join(fxCorrupt.taskDir, "pending-actions.json"), "{broken json");
+  const corruptReport = reportJson(generate(fxCorrupt));
+  assert.equal(corruptReport.pendingActions.status, "unknown");
+  assert.match(corruptReport.pendingActions.reason, /不是合法 JSON/);
+
+  // verdict 缺失：repairRounds 与宿主覆盖都不可得 → unknown（不按 0 补齐）
+  const fxNoVerdict = driveToDesignApproved(t);
+  const noVerdictReport = reportJson(generate(fxNoVerdict));
+  assert.equal(noVerdictReport.repairProgress.repairRounds.status, "unknown");
+  assert.equal(noVerdictReport.hostEvidenceCoverage.status, "unknown");
+  assert.match(noVerdictReport.hostEvidenceCoverage.reason, /verdict\.json 缺失/);
 });
 
 test("参数校验：缺 --task-dir / 未知参数 / 目录不存在", () => {
