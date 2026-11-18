@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -74,19 +75,31 @@ function evidenceFile(taskDir, name, content) {
   return { artifact: `evidence/${name}`, artifactSha256: sha256File(filePath) };
 }
 
+// 模板仓：每测试进程只构建一次「初始提交仓」，fixture 经 cpSync 复制实例化——git 对象是
+// 内容寻址的只读数据，复制保真（实测复制仓 commit/rev-parse 与全新 init 仓行为一致），
+// 省掉每 fixture 的 init/add/commit 三连 spawn
+let repoTemplateDir = null;
+function materializeRepoTemplate() {
+  const dir = mkdtempSync(join(tmpdir(), "delivery-gate-v6-tpl-"));
+  mkdirSync(dir, { recursive: true });
+  // git 身份经 commit 的 -c 内联（省两次 spawn：模板是全部用例的公共前缀成本）
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  writeFileSync(join(dir, "a.txt"), "hello\n");
+  spawnSync("git", ["add", "."], { cwd: dir });
+  spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: dir });
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 /** v2 fixture：真实 git 项目 + 隔离 HOME + 已 init 的任务目录与三把凭据 id（intent 传 null 则不带意图） */
 function makeV2Fixture(t, { taskId = "task-a", intent = "原始需求：开关关闭后零写入\n" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "delivery-gate-v2-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const projectDir = join(root, "project");
   const home = join(root, "home");
-  mkdirSync(projectDir);
+  if (repoTemplateDir === null) repoTemplateDir = materializeRepoTemplate();
+  cpSync(repoTemplateDir, projectDir, { recursive: true });
   mkdirSync(home);
-  // git 身份经 commit 的 -c 内联（省两次 spawn：fixture 是全部用例的公共前缀成本）
-  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  writeFileSync(join(projectDir, "a.txt"), "hello\n");
-  spawnSync("git", ["add", "."], { cwd: projectDir });
-  spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: projectDir });
   const intentPath = join(root, "intent.md");
   if (intent !== null) writeFileSync(intentPath, intent);
 
@@ -1249,12 +1262,9 @@ test("垫片对拍：两份同构 fixture 各走一条通道，命令序列结�
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const projectDir = join(root, "project");
     const home = join(root, "home");
-    mkdirSync(projectDir);
+    if (repoTemplateDir === null) repoTemplateDir = materializeRepoTemplate();
+    cpSync(repoTemplateDir, projectDir, { recursive: true });
     mkdirSync(home);
-    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-    writeFileSync(join(projectDir, "a.txt"), "hello\n");
-    spawnSync("git", ["add", "."], { cwd: projectDir });
-    spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: projectDir });
     return { root, projectDir, home };
   };
   // stdout/stderr 含 fixture 绝对路径（tmp 根与 realpath 两形态）与每次运行天然不同的

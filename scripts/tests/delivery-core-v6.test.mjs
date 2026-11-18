@@ -20,7 +20,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -184,18 +184,30 @@ test("findingRegrades：同根多组定级超上限被熔断；同组 reopen 不
 
 // ── 真实任务夹具：next 样例 + CLI 判定 + pending 实体 ──
 
+// 模板仓：每测试进程只构建一次「初始提交仓」，fixture 经 cpSync 复制实例化——git 对象是
+// 内容寻址的只读数据，复制保真（实测复制仓 commit/rev-parse 与全新 init 仓行为一致），
+// 省掉每 fixture 的 init/add/commit 三连 spawn
+let repoTemplateDir = null;
+function materializeRepoTemplate() {
+  const dir = mkdtempSync(join(tmpdir(), "delivery-core-v6-tpl-"));
+  mkdirSync(dir, { recursive: true });
+  // git 身份经 commit 的 -c 内联（省两次 spawn：模板是全部用例的公共前缀成本）
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  writeFileSync(join(dir, "a.txt"), "one\n");
+  spawnSync("git", ["add", "."], { cwd: dir });
+  spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: dir });
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 function makeFixture(t, { taskId = "core-next" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "delivery-core-v6-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const projectDir = join(root, "project");
   const home = join(root, "home");
-  mkdirSync(projectDir);
+  if (repoTemplateDir === null) repoTemplateDir = materializeRepoTemplate();
+  cpSync(repoTemplateDir, projectDir, { recursive: true });
   mkdirSync(home);
-  // git 身份经 commit 的 -c 内联（省两次 spawn：fixture 是全部用例的公共前缀成本）
-  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  writeFileSync(join(projectDir, "a.txt"), "one\n");
-  spawnSync("git", ["add", "."], { cwd: projectDir });
-  spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: projectDir });
   const intentPath = join(root, "intent.md");
   writeFileSync(intentPath, "关闭后任何路径零写入；开启时行为正常\n");
   const init = runGate(["init", "--project-root", projectDir, "--task-id", taskId, "--intent-file", intentPath], home);

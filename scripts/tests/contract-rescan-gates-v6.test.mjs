@@ -4,7 +4,8 @@
 // §6.2 accepted 公式 / §4.3 预算规则 / §13 降档）：
 //   - compile-exec-plan.mjs：D0 外部契约门（快照指针 / essential resolved / 契约冒烟增量 /
 //     spike 单元存在性与 DAG / D0 复扫拒绝）——spawn 真实 CLI；
-//   - check-contract-rescan.mjs：D0/D3 复扫判定单一实现——D3 经 CLI 实跑；
+//   - check-contract-rescan.mjs：D0/D3 复扫判定单一实现——D3 经 CLI 实跑（进程内转译
+//     通道，CLI spawn 通道仅存于防漂移对拍锚）；
 //   - delivery-gate.mjs：evaluate 前置复扫、EnvironmentBaselineConfirmed 预算规则、
 //     accepted 公式 runtime 三区块、record-exploration 维度覆盖。
 //
@@ -31,14 +32,15 @@
 // 编译/复扫 fixture 形态照 compile-contract-gate-v6.test.mjs（该文件不动，此处为新文件
 // 独立复刻——测试文件之间不互相 import，避免测试进程互相装载）。
 //
-// 提速通道（进程内转译执行）：fixture 渲染器（RENDERER）与真实 resolver（--write 三用例）
-// 走 runMjsScript，语义一致性由防漂移对拍锚钉住（进程内 == CLI spawn 逐字节一致）。
-// 保留真实 spawn 的点及原因：COMPILER（f.run）与 RESCAN_CLI（D3 三用例）经 require(esm)
-// 加载复扫库（delivery-v6 scripts/lib/contract-rescan.mjs）——该库转译后落主测试进程，
-// 其内部 detector spawn 不透传 env，子进程会继承主进程 HOME（真实安装位）并丢失
-// RESCAN_FIXTURE 注入，复扫判定失真；gate 侧 stub resolver/detector（makeEvalFixture /
-// makeGateTaskFixture）由进程内 gate 模块自行 spawn，测试不可注入。git 系 spawnSync
-// 全部保持真实。
+// 提速通道（进程内转译执行）：fixture 渲染器（RENDERER）、真实 resolver（--write 三用例）、
+// COMPILER（f.run 全部用例）与 RESCAN_CLI（D3 三用例）走 runMjsScript，语义一致性由防漂移
+// 对拍锚钉住（进程内 == CLI spawn 逐字节一致）。复扫库经 require(esm) 落主测试进程后，其
+// DEFAULT_DETECTOR_PATH（顶层 homedir() 常量）随模块缓存只求值一次——预加载窗口把 HOME 指向
+// 会话级 detector 安装位根完成固化（见常量区）；每 fixture 的探测器/策略副本由 install* 双写
+// （home 安装位供 CLI spawn 形态、会话位供进程内形态），两形态同内容同 env——HOME 与
+// RESCAN_FIXTURE 注入经 runner 宿主临时应用进复扫库 detector 孙进程的继承链。保留真实 spawn
+// 的点：gate 侧 stub resolver/detector（makeEvalFixture / makeGateTaskFixture）由进程内 gate
+// 模块自行 spawn，测试不可注入；git 系 spawnSync 全部保持真实。
 //
 // 运行：node --test scripts/tests/contract-rescan-gates-v6.test.mjs
 
@@ -47,21 +49,48 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, createPrivateKey, sign } from "node:crypto";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { runMjsScript } from "./helpers/mjs-runner.mjs";
+import { makeMjsStubSpawn, runMjsScript } from "./helpers/mjs-runner.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V6 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6");
 const COMPILER = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v6", "scripts", "compile-exec-plan.mjs");
+const COMPILER_DIR_REAL = dirname(realpathSync(COMPILER));
 const RENDERER = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v6", "scripts", "render-impl-plan.mjs");
 const RESCAN_CLI = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v6", "scripts", "check-contract-rescan.mjs");
+const RESCAN_LIB = join(V6, "scripts", "lib", "contract-rescan.mjs");
 const GATE = join(V6, "scripts", "delivery-gate.mjs");
 const RESOLVER = join(V6, "scripts", "resolve-external-contracts.mjs");
 const DETECTOR = join(V6, "scripts", "detect-external-contracts.mjs");
 const POLICY_FILE = join(V6, "policies", "external-contract-classes.json");
+// COMPILER 进程内执行时沙箱内 spawn 的子脚本白名单（与 compile-exec-plan 内 spawn 参数逐字
+// 同构：四项无 .. 段，渲染器一项带 ".." 段——SCRIPT_DIR 在被测脚本内是 realpath 形态，
+// spawn 字符串原样透传，白名单按精确匹配，形态必须一致）
+const COMPILER_CHILD_SCRIPTS = [
+  join(COMPILER_DIR_REAL, "gen-acceptance-wrapper.mjs"),
+  join(COMPILER_DIR_REAL, "gen-runtime-probe-wrapper.mjs"),
+  join(COMPILER_DIR_REAL, "verification-index.mjs"),
+  join(COMPILER_DIR_REAL, "check-exec-plan.mjs"),
+  join(COMPILER_DIR_REAL, "..", "..", "tech-design-v6", "scripts", "render-impl-plan.mjs"),
+];
+// 复扫库 DEFAULT_DETECTOR_PATH = join(homedir(), ...) 顶层常量：库经 require(esm) 落主测试
+// 进程后随模块缓存只求值一次，进程内执行时无法按 fixture 注入重定向。预加载窗口把 HOME 指向
+// 会话级安装位根后加载 GATE（其 import 链含复扫库）与复扫库本身，固化路径即落到该根；窗口
+// 即恢复。detector/策略副本由 install* 双写（home 安装位供 CLI spawn 形态、会话位供进程内
+// 形态），两形态同内容同 env，判定输入一致
+const DETECTOR_HOME_ROOT = mkdtempSync(join(tmpdir(), "crg-detector-home-"));
+process.on("exit", () => rmSync(DETECTOR_HOME_ROOT, { recursive: true, force: true }));
+const RESCAN_INSTALL_SCRIPTS = join(DETECTOR_HOME_ROOT, ".agents", "skills", "delivery-v6", "scripts");
+const RESCAN_INSTALL_POLICIES = join(DETECTOR_HOME_ROOT, ".agents", "skills", "delivery-v6", "policies");
+const savedHome = process.env.HOME;
+process.env.HOME = DETECTOR_HOME_ROOT;
 const GATE_MODULE = await import(pathToFileURL(GATE).href);
+createRequire(import.meta.url)(RESCAN_LIB);
+if (savedHome === undefined) delete process.env.HOME;
+else process.env.HOME = savedHome;
 
 const sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex");
 const sha256Text = (t) => createHash("sha256").update(t, "utf8").digest("hex");
@@ -180,39 +209,49 @@ function ensureGitTemplate() {
   return gitTemplate;
 }
 
-/** 探测 CLI 替身：输出 RESCAN_FIXTURE 指向的 JSON（缺省 = 空候选快照） */
+/** 探测 CLI 替身：输出 RESCAN_FIXTURE 指向的 JSON（缺省 = 空候选快照）。
+ *  双写（fixture home 安装位 + 会话级安装位）：CLI spawn 形态经 HOME 注入命中前者，
+ *  进程内形态命中固化到会话位的 DEFAULT_DETECTOR_PATH——两形态拿同一份脚本内容 */
 function installFakeDetector(home) {
   const dir = join(home, ".agents", "skills", "delivery-v6", "scripts");
   mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, "detect-external-contracts.mjs"),
-    [
-      "import { readFileSync } from 'node:fs';",
-      "const out = { schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] };",
-      "const p = process.env.RESCAN_FIXTURE;",
-      "if (p) Object.assign(out, JSON.parse(readFileSync(p, 'utf8')));",
-      "process.stdout.write(JSON.stringify(out));",
-      "",
-    ].join("\n"),
-  );
+  mkdirSync(RESCAN_INSTALL_SCRIPTS, { recursive: true });
+  const body = [
+    "import { readFileSync } from 'node:fs';",
+    "const out = { schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] };",
+    "const p = process.env.RESCAN_FIXTURE;",
+    "if (p) Object.assign(out, JSON.parse(readFileSync(p, 'utf8')));",
+    "process.stdout.write(JSON.stringify(out));",
+    "",
+  ].join("\n");
+  writeFileSync(join(dir, "detect-external-contracts.mjs"), body);
+  writeFileSync(join(RESCAN_INSTALL_SCRIPTS, "detect-external-contracts.mjs"), body);
 }
 
 /** 把真实探测器与策略包复制进临时 HOME 安装位——复扫/对拍（对照验证（differential testing）：同一探测输出喂两侧判定）走真实探测输出
- * （探测器缺策略文件即 exit 3：调用类词表是探测的唯一权威来源，两者必须同装） */
+ （探测器缺策略文件即 exit 3：调用类词表是探测的唯一权威来源，两者必须同装）。
+ *  同 installFakeDetector 双写：home 安装位供 CLI spawn 形态、会话位供进程内形态 */
 function installRealDetector(home) {
   const scripts = join(home, ".agents", "skills", "delivery-v6", "scripts");
   const policies = join(home, ".agents", "skills", "delivery-v6", "policies");
   mkdirSync(scripts, { recursive: true });
   mkdirSync(policies, { recursive: true });
+  mkdirSync(RESCAN_INSTALL_SCRIPTS, { recursive: true });
+  mkdirSync(RESCAN_INSTALL_POLICIES, { recursive: true });
   cpSync(DETECTOR, join(scripts, "detect-external-contracts.mjs"));
+  cpSync(DETECTOR, join(RESCAN_INSTALL_SCRIPTS, "detect-external-contracts.mjs"));
   cpSync(POLICY_FILE, join(policies, "external-contract-classes.json"));
+  cpSync(POLICY_FILE, join(RESCAN_INSTALL_POLICIES, "external-contract-classes.json"));
 }
 
-/** 把真实策略包复制进临时 HOME 安装位（探测器仍可用替身控候选——策略判定走安装位真文件） */
+/** 把真实策略包复制进临时 HOME 安装位（探测器仍可用替身控候选——复扫判定的策略表走库
+ *  缺省路径即仓库真策略包，与本安装位无关）；双写同上，保持两形态安装位布局对称 */
 function installRealPolicy(home) {
   const policies = join(home, ".agents", "skills", "delivery-v6", "policies");
   mkdirSync(policies, { recursive: true });
+  mkdirSync(RESCAN_INSTALL_POLICIES, { recursive: true });
   cpSync(POLICY_FILE, join(policies, "external-contract-classes.json"));
+  cpSync(POLICY_FILE, join(RESCAN_INSTALL_POLICIES, "external-contract-classes.json"));
 }
 
 function makeContractFixture(t, opts = {}) {
@@ -306,9 +345,11 @@ function makeContractFixture(t, opts = {}) {
   const run = (args, extraEnv = {}) => {
     const env = { ...process.env, HOME: home, ...extraEnv };
     if (opts.detectorOutput !== undefined && opts.detectorOutput !== null) env.RESCAN_FIXTURE = join(taskDir, "detector-output.json");
-    // 保留真实 spawn（见文件头「提速通道」说明）：编译器加载的复扫库落主进程，
-    // 其 detector spawn 继承主进程 env 会让 RESCAN_FIXTURE 注入丢失、判定失真
-    return spawnSync(process.execPath, [COMPILER, ...args], { cwd: proj, env, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+    // 进程内转译执行：COMPILER 沙箱内 spawn 的子脚本走白名单桩（转译执行），git 系与白名单外
+    // 回退真实 spawnSync（cwd/env 由桩对齐 CLI 语义）；复扫库的 detector spawn 发生在真实
+    // 模块层（不经桩），HOME/RESCAN_FIXTURE 经 runner 宿主临时应用进其继承链（安装位双写
+    // 见 install*）；进程内捕获无缓冲上限，原为防大输出截断的 maxBuffer 放宽随 spawn 移除
+    return runMjsScript(COMPILER, args, { env, cwd: proj, spawn: makeMjsStubSpawn({ mjs: COMPILER_CHILD_SCRIPTS, env, cwd: proj }) });
   };
   t.after(() => {
     rmSync(home, { recursive: true, force: true });
@@ -329,6 +370,43 @@ test("防漂移锚：渲染器进程内执行 == CLI spawn（fixture 渲染双�
   assert.equal(inProc.status, cli.status);
   assert.equal(inProc.stdout, cli.stdout);
   assert.equal(inProc.stderr, cli.stderr);
+});
+
+test("防漂移锚：编译器与复扫 CLI 进程内执行 == CLI spawn（复扫链双跑逐字节对拍）", (t) => {
+  // COMPILER（f.run）与 RESCAN_CLI（D3）转换通道的语义一致性锚：拒绝路径只读不写盘，
+  // 同 fixture 双跑（进程内先、CLI spawn 后）输出须逐字节一致；复扫链含库内 detector
+  // spawn（安装位双写见文件头），两形态同内容同 env，判定输入一致
+  const f = makeContractFixture(t, {
+    acceptance: contractAcceptance({ capabilityClasses: ["register-tool"] }),
+    increments: contractIncrements(),
+    snapshot: true,
+    detectorOutput: {
+      candidates: [{ id: "candidate-cmd", strength: "strong", signals: ["source:src/app/main.ts:call-class:register-command"] }],
+      unresolved: [],
+    },
+  });
+  const acc = contractAcceptance({ capabilityClasses: ["register-tool"] });
+  acc.externalContractReview.dispositions = [{ candidateId: "candidate-cmd", disposition: "bound", contractId: "EC-demo-host" }];
+  f.rewriteAcceptance(acc);
+  const runEnv = { ...process.env, HOME: f.home, RESCAN_FIXTURE: join(f.taskDir, "detector-output.json") };
+  const inProc = f.run(["--impl-plan", f.planPath, "--task-dir", f.taskDir]);
+  const cli = spawnSync(process.execPath, [COMPILER, "--impl-plan", f.planPath, "--task-dir", f.taskDir], { cwd: f.proj, env: runEnv, encoding: "utf8" });
+  assert.equal(inProc.status, cli.status);
+  assert.equal(inProc.stdout, cli.stdout);
+  assert.equal(inProc.stderr, cli.stderr);
+  assert.equal(inProc.status, 1, "fixture 前提：调用类未覆盖形态复扫拒绝");
+  // D3 侧同口径（probe artifact 未落盘拒绝，只读判定；合法编译后 exec-plan 在场）
+  const g = makeContractFixture(t, { acceptance: contractAcceptance(), increments: contractIncrements(), snapshot: true });
+  assert.equal(g.run(["--impl-plan", g.planPath, "--task-dir", g.taskDir]).status, 0, "dev 编译前置");
+  assert.equal(g.run(["--impl-plan", g.planPath, "--mode", "acceptance", "--task-dir", g.taskDir]).status, 0, "acceptance 编译前置");
+  const d3Args = ["--task-dir", g.taskDir, "--project-root", g.proj, "--exec-plan", g.execPath, "--stage", "d3"];
+  const d3Env = { ...process.env, HOME: g.home };
+  const inProcD3 = runMjsScript(RESCAN_CLI, d3Args, { env: d3Env, cwd: g.proj });
+  const cliD3 = spawnSync(process.execPath, [RESCAN_CLI, ...d3Args], { cwd: g.proj, env: d3Env, encoding: "utf8" });
+  assert.equal(inProcD3.status, cliD3.status);
+  assert.equal(inProcD3.stdout, cliD3.stdout);
+  assert.equal(inProcD3.stderr, cliD3.stderr);
+  assert.equal(inProcD3.status, 1, "fixture 前提：probe 未落盘 D3 拒绝");
 });
 
 // ── A. D0/D3 复扫三条规则锚（审查发现 2）──
@@ -394,9 +472,9 @@ test("D3 复扫（CLI）：绿地后引入新调用类 → 候选完成前复扫
   mkdirSync(join(f.taskDir, "evidence"), { recursive: true });
   writeFileSync(join(f.taskDir, "evidence", "runtime-probe-A-probe-reg.json"), `${JSON.stringify({ environment: { kind: "real-host" }, cases: [], summary: { passed: 1, failed: 0, skipped: 0 } })}\n`);
   const runRescan = () =>
-    spawnSync(process.execPath, [RESCAN_CLI, "--task-dir", f.taskDir, "--project-root", f.proj, "--exec-plan", f.execPath, "--stage", "d3"], {
-      encoding: "utf8",
+    runMjsScript(RESCAN_CLI, ["--task-dir", f.taskDir, "--project-root", f.proj, "--exec-plan", f.execPath, "--stage", "d3"], {
       env: { ...process.env, HOME: f.home, RESCAN_FIXTURE: join(f.taskDir, "detector-output.json") },
+      cwd: f.proj,
     });
   // D1 引入新调用类 register-tool（验收 capability 未覆盖）→ D3 复扫拒绝
   writeFileSync(join(f.taskDir, "detector-output.json"), `${JSON.stringify({
@@ -424,9 +502,9 @@ test("D3 复扫（CLI）：unresolved 非空 → 候选完成前复扫拒绝（�
     candidates: [],
     unresolved: [{ signal: "运行时代码生成 eval(code)@src/gen.ts", reason: "动态生成调用无法静态归类" }],
   })}\n`);
-  const r = spawnSync(process.execPath, [RESCAN_CLI, "--task-dir", f.taskDir, "--project-root", f.proj, "--exec-plan", f.execPath, "--stage", "d3"], {
-    encoding: "utf8",
+  const r = runMjsScript(RESCAN_CLI, ["--task-dir", f.taskDir, "--project-root", f.proj, "--exec-plan", f.execPath, "--stage", "d3"], {
     env: { ...process.env, HOME: f.home, RESCAN_FIXTURE: join(f.taskDir, "detector-output.json") },
+    cwd: f.proj,
   });
   assert.equal(r.status, 1, `D3 应拒绝：${r.stdout}`);
   assert.ok(r.stdout.includes("未解析外部访问"), "D3 与 D0 同一判定：须点名未解析外部访问");
@@ -783,9 +861,9 @@ test("D3 复扫（CLI）：optional 契约被 strong 信号强制 essential 后�
   assert.ok(/按 essential 处理|强制按 essential/.test(d0.stdout), "D0 摘要须披露 optional 契约被强制按 essential 处理");
   assert.equal(f.run(["--impl-plan", f.planPath, "--mode", "acceptance", "--task-dir", f.taskDir]).status, 0, "acceptance 编译前置");
   // D3：essentialIds = 声明 essential ∪ 强制 essential —— 强制升级的契约同样受 probe 门约束
-  const r = spawnSync(process.execPath, [RESCAN_CLI, "--task-dir", f.taskDir, "--project-root", f.proj, "--exec-plan", f.execPath, "--stage", "d3"], {
-    encoding: "utf8",
+  const r = runMjsScript(RESCAN_CLI, ["--task-dir", f.taskDir, "--project-root", f.proj, "--exec-plan", f.execPath, "--stage", "d3"], {
     env: { ...process.env, HOME: f.home, RESCAN_FIXTURE: join(f.taskDir, "detector-output.json") },
+    cwd: f.proj,
   });
   assert.equal(r.status, 1, `D3 应拒绝：${r.stdout}`);
   assert.ok(r.stdout.includes("未编译任何 runtime-probe 验收节点"), "须点名 probe 节点缺失");

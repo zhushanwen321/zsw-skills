@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,22 +13,36 @@ const NODE_PREP = eval(
     .replace(/^const NODE_PREP = /, ""),
 );
 
+// 模板仓：每测试进程只构建一次「初始提交仓」，fixture 经 cpSync 复制实例化——git 对象是
+// 内容寻址的只读数据，复制保真，省掉每 fixture 的 init/config/add/commit spawn
+let gitTemplate = null;
+let gitTemplateHead = "";
+function ensureGitTemplate() {
+  if (gitTemplate === null) {
+    const tpl = mkdtempSync(join(tmpdir(), "v4-d2-contract-tpl-"));
+    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: tpl });
+    spawnSync("git", ["config", "user.email", "t@t"], { cwd: tpl });
+    spawnSync("git", ["config", "user.name", "t"], { cwd: tpl });
+    writeFileSync(join(tpl, "a.txt"), "one\n");
+    spawnSync("git", ["add", "."], { cwd: tpl });
+    spawnSync("git", ["commit", "-qm", "init"], { cwd: tpl });
+    gitTemplateHead = spawnSync("git", ["rev-parse", "HEAD"], { cwd: tpl, encoding: "utf8" }).stdout.trim();
+    process.on("exit", () => rmSync(tpl, { recursive: true, force: true }));
+    gitTemplate = tpl;
+  }
+  return gitTemplate;
+}
+
 function fixture(t, { withBinding }) {
   const root = mkdtempSync(join(tmpdir(), "v4-d2-contract-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const project = join(root, "project");
   const designDir = join(root, "design", "pkg");
   const taskDir = join(root, "task");
-  mkdirSync(project);
   mkdirSync(designDir, { recursive: true });
   mkdirSync(taskDir, { recursive: true });
-  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: project });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: project });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: project });
-  writeFileSync(join(project, "a.txt"), "one\n");
-  spawnSync("git", ["add", "."], { cwd: project });
-  spawnSync("git", ["commit", "-qm", "init"], { cwd: project });
-  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: project, encoding: "utf8" }).stdout.trim();
+  cpSync(ensureGitTemplate(), project, { recursive: true });
+  const head = gitTemplateHead;
   writeFileSync(join(designDir, "pkg.rendered.md"), "# design\n");
   writeFileSync(join(designDir, "meta.json"), JSON.stringify({
     acceptanceBinding: withBinding ? { taskDir, acceptanceVersion: 2 } : null,

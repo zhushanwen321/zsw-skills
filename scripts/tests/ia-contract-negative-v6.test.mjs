@@ -20,7 +20,10 @@
 // 本文件先跑再报（prompt 文案变化不影响结构校验断言）。
 //
 // fixture 纪律：mkdtempSync 临时目录、HOME 重定向（world.run 的 env 注入）、t.after 清理、
-// 无固定文件名；桩 gate/core/resolver/角色全部自撰，不依赖真实技能安装。
+// 无固定文件名；桩 gate/core/resolver/角色全部自撰，不依赖真实技能安装。world.run 走
+// 提速通道：自建桩（gate/core/resolver/detect）零改动转译进程内执行（runMjsScript）、
+// node -e 探针进程内求值（os.homedir() 按 $HOME 语义包装）、git/sh 回退真实 spawn；
+// 进程内与 CLI spawn 的语义一致性由防漂移对拍锚钉住。
 //
 // 运行：node --test scripts/tests/ia-contract-negative-v6.test.mjs
 
@@ -29,11 +32,12 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import vm from "node:vm";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { runMjsScript } from "./helpers/mjs-runner.mjs";
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -100,16 +104,26 @@ const ACCEPTANCE = (projectRoot) => ({
   }],
 });
 
+// 模板仓：每测试进程只构建一次「初始提交仓」，脚手架经 cpSync 复制实例化——git 对象是
+// 内容寻址的只读数据，复制保真，省掉每脚手架的 init/config/add/commit 五连 spawn
+let repoTemplateDir = null;
+function materializeRepoTemplate() {
+  const dir = mkdtempSync(join(tmpdir(), "ia-neg-v6-tpl-"));
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  spawnSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+  spawnSync("git", ["config", "user.name", "t"], { cwd: dir });
+  writeFileSync(join(dir, "a.txt"), "one\n");
+  spawnSync("git", ["add", "."], { cwd: dir });
+  spawnSync("git", ["commit", "-qm", "init"], { cwd: dir });
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 /** IA 任务脚手架：git 项目 + 任务目录 + 桩 gate/core/resolver（可选装）/角色 */
 function makeIaScaffold(home, { verdictQueue, installResolver = true, deliveryProfile = null } = {}) {
   const projectRoot = join(home, "proj");
-  mkdirSync(projectRoot, { recursive: true });
-  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectRoot });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectRoot });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectRoot });
-  writeFileSync(join(projectRoot, "a.txt"), "one\n");
-  spawnSync("git", ["add", "."], { cwd: projectRoot });
-  spawnSync("git", ["commit", "-qm", "init"], { cwd: projectRoot });
+  if (repoTemplateDir === null) repoTemplateDir = materializeRepoTemplate();
+  cpSync(repoTemplateDir, projectRoot, { recursive: true });
 
   const taskDir = join(home, "task");
   mkdirSync(join(taskDir, "evidence"), { recursive: true });
@@ -266,14 +280,93 @@ function agentStub(state, handlers, keyOf = (name) => name.replace(/-review$/, "
 /** acceptance-design 侧实例名 → handler 键（designer-r1 → designer；acceptance-reviewer-r1 → reviewer） */
 const adKeyOf = (name) => (name.includes("reviewer") ? "reviewer" : name.replace(/-r\d+$/, ""));
 
+// node -e 探针进程内执行：与 helpers/mjs-runner.mjs 的 runNodeProbe 同语义，另加
+// os.homedir() 读 $HOME 包装——PROV_PROBE 与 NODE_PROBE_HOME 探针（require('os').homedir()）
+// 经真实 spawn 时 homedir() 读注入 HOME，主进程直接求值会漏回用户真实 home
+class ProbeExitSignal {}
+const PROBE_EXIT = new ProbeExitSignal();
+const probeCache = new Map();
+function runProbe(script, restArgs, { env, cwd }) {
+  let stdout = "";
+  let stderr = "";
+  let status = 0;
+  const baseRequire = createRequire(pathToFileURL(join(cwd, "x")).href);
+  const osMod = baseRequire("os");
+  const osWrapped = Object.create(osMod);
+  osWrapped.homedir = () => env.HOME ?? osMod.homedir();
+  const ctxRequire = (id) => (id === "os" || id === "node:os" ? osWrapped : baseRequire(id));
+  const ctx = {
+    require: ctxRequire,
+    console: {
+      log: (...m) => { stdout += m.map(String).join(" ") + "\n"; },
+      error: (...m) => { stderr += m.map(String).join(" ") + "\n"; },
+    },
+    process: {
+      argv: [process.execPath, ...restArgs],
+      env,
+      platform: process.platform,
+      cwd: () => cwd,
+      stdout: { write: (s) => { stdout += String(s); return true; } },
+      stderr: { write: (s) => { stderr += String(s); return true; } },
+      exit: (c) => {
+        status = typeof c === "number" ? c : 0;
+        throw PROBE_EXIT;
+      },
+    },
+    Buffer,
+  };
+  ctx.globalThis = ctx;
+  let fn = probeCache.get(script);
+  if (fn === undefined) {
+    fn = new vm.Script(`(function(){\n${script}\n})`);
+    probeCache.set(script, fn);
+  }
+  try {
+    fn.runInNewContext(ctx)();
+  } catch (e) {
+    // exit 信号按类判定（对实例做 instanceof 会抛 TypeError——RHS 须为函数）；
+    // 探针运行时错误（如读不存在的草稿文件）按真实 spawn 语义落 status 1 + stderr 堆栈
+    if (!(e instanceof ProbeExitSignal)) {
+      stderr += String(e && e.stack ? e.stack : e) + "\n";
+      status = 1;
+    }
+  }
+  return { status, stdout, stderr, error: undefined };
+}
+
+// world.run 提速通道：自建桩脚本（gate/core/resolver/detect，HOME 安装位自建桩）零改动
+// 转译进沙箱执行（runMjsScript，env 注入含宿主临时应用），node -e 探针进程内求值
+// （os.homedir() 按 $HOME 语义包装），git/sh 等回退真实 spawn。
+// CLI spawn 通道仅存于防漂移对拍锚（进程内 == spawn 逐字节一致）
+function makeWorldSpawn({ home, env }) {
+  const scriptsDir = join(home, ".agents", "skills", "delivery-v6", "scripts");
+  const mjsSet = new Set([
+    join(scriptsDir, "delivery-gate.mjs"),
+    join(scriptsDir, "delivery-core.mjs"),
+    join(scriptsDir, "resolve-external-contracts.mjs"),
+    join(scriptsDir, "detect-external-contracts.mjs"),
+  ]);
+  return (cmd, args, opts = {}) => {
+    const a = args ?? [];
+    if (cmd === "node" || cmd === process.execPath) {
+      if (a[0] === "-e" && typeof a[1] === "string") return runProbe(a[1], a.slice(2), { env, cwd: home });
+      const target = a[0];
+      if (typeof target === "string" && target.endsWith(".mjs") && mjsSet.has(target)) {
+        return runMjsScript(target, a.slice(1), { env, cwd: home });
+      }
+    }
+    const r = spawnSync(cmd, a, { encoding: "utf8", cwd: home, ...opts, env: { ...env, ...(opts.env ?? {}) } });
+    return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", error: r.error };
+  };
+}
+
 async function runIaWorkflow(home, argsValue, agentImpl) {
   const js = transpile(readFileSync(IA_DWF, "utf8"));
+  const env = { ...process.env, HOME: home };
+  const spawn = makeWorldSpawn({ home, env });
   const world = {
     run: async (cmd, a, opts) => {
-      const r = spawnSync(cmd, a ?? [], {
-        encoding: "utf8", cwd: home, env: { ...process.env, HOME: home },
-        timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000,
-      });
+      const r = spawn(cmd, a ?? [], { timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000 });
       return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
     },
   };
@@ -448,9 +541,11 @@ function makeWritingDesigner(taskDir) {
 
 async function runAdWorkflow(home, argsValue, agentImpl) {
   const js = transpile(readFileSync(AD_DWF, "utf8"));
+  const env = { ...process.env, HOME: home };
+  const spawn = makeWorldSpawn({ home, env });
   const world = {
-    run: async (cmd, a) => {
-      const r = spawnSync(cmd, a ?? [], { encoding: "utf8", cwd: home, env: { ...process.env, HOME: home }, timeout: 30000 });
+    run: async (cmd, a, opts) => {
+      const r = spawn(cmd, a ?? [], { timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000 });
       return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
     },
   };
@@ -528,4 +623,39 @@ test("验收审查响应校验：riskCoverage 十类齐备且三值合法 → �
   assert.ok(files.length >= 1, "应落盘契约审查 artifact");
   const artifact = JSON.parse(readFileSync(join(artifactDir, ...String(files[0]).split("/")), "utf8"));
   assert.equal(artifact.riskCoverage.length, 10, "artifact 应登记十类 riskCoverage");
+});
+
+// ── 4. 防漂移锚：门桩/内核桩进程内执行 == CLI spawn（本文件唯一保留的桩 spawn 点）──
+
+test("防漂移锚：门桩/内核桩进程内执行 == CLI spawn（双跑逐字节对拍）", () => {
+  // world.run 提速通道的防漂移约束：自建桩零改动转译进沙箱执行，语义一致性由本锚钉住。
+  // IA 侧 verdictQueue 取单元素时 evaluate 取队首不 shift（桩语义）——进程内跑完后队列
+  // 未变，CLI 侧从同一起点出发；resolver 无 config 时 surfaces 为空、快照幂等重写；
+  // AD 侧 snapshot-policy / loop-budget 均为纯输出——双跑输出确定性成立
+  const home = tmpHome();
+  const adHome = tmpHome();
+  try {
+    const s = makeIaScaffold(home, { verdictQueue: [candidateVerdict] });
+    const ad = makeAdScaffold(adHome);
+    const scripts = join(home, ".agents", "skills", "delivery-v6", "scripts");
+    const adScripts = join(adHome, ".agents", "skills", "delivery-v6", "scripts");
+    const env = { ...process.env, HOME: home };
+    const adEnv = { ...process.env, HOME: adHome };
+    const pairs = [
+      [join(scripts, "delivery-gate.mjs"), ["evaluate", "--task-dir", s.taskDir], env, home],
+      [join(scripts, "resolve-external-contracts.mjs"), ["--task-dir", s.taskDir, "--project-root", s.projectRoot], env, home],
+      [join(adScripts, "delivery-gate.mjs"), ["snapshot-policy", "--task-dir", ad.taskDir], adEnv, adHome],
+      [join(adScripts, "delivery-core.mjs"), ["loop-budget", "--task-dir", ad.taskDir], adEnv, adHome],
+    ];
+    for (const [file, args, e, cwd] of pairs) {
+      const inProc = runMjsScript(file, args, { env: e, cwd });
+      const cli = spawnSync(process.execPath, [file, ...args], { encoding: "utf8", env: e, cwd });
+      assert.equal(inProc.status, cli.status, `exit code 漂移：${file}`);
+      assert.equal(inProc.stdout, cli.stdout, `stdout 漂移：${file}`);
+      assert.equal(inProc.stderr, cli.stderr, `stderr 漂移：${file}`);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(adHome, { recursive: true, force: true });
+  }
 });

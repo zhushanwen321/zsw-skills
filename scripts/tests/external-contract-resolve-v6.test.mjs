@@ -28,7 +28,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -106,6 +106,19 @@ const EXEC_CONTRACT = {
   capabilities: [],
 };
 
+// git 仓模板（同仓库拒绝用例的 worktree 身份覆盖 fixture）：每测试进程只构建一次，
+// fixture 经 cpSync 复制实例化，省掉每 fixture 的 git init spawn
+let repoTemplateDir = null;
+function materializeRepoTemplate() {
+  const dir = mkdtempSync(join(tmpdir(), "ec-resolve-tpl-"));
+  mkdirSync(join(dir, "sub-sdk"), { recursive: true });
+  write(join(dir, "sub-sdk", "package.json"), `${JSON.stringify({ name: "sub-sdk", version: "1.0.0" }, null, 2)}\n`);
+  const gitInit = spawnSync("git", ["init", "-q"], { cwd: dir, encoding: "utf8" });
+  assert.equal(gitInit.status, 0, "git init 失败");
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 function makeBase(t) {
   const base = mkdtempSync(join(tmpdir(), "ec-resolve-"));
   const home = join(base, "home");
@@ -122,10 +135,8 @@ function makeBase(t) {
   mkdirSync(taskDir, { recursive: true });
   // git 仓 fixture：同仓库拒绝用例（worktree 身份覆盖）
   const gitProj = join(base, "git-proj");
-  mkdirSync(join(gitProj, "sub-sdk"), { recursive: true });
-  write(join(gitProj, "sub-sdk", "package.json"), `${JSON.stringify({ name: "sub-sdk", version: "1.0.0" }, null, 2)}\n`);
-  const gitInit = spawnSync("git", ["init", "-q"], { cwd: gitProj, encoding: "utf8" });
-  assert.equal(gitInit.status, 0, "git init 失败");
+  if (repoTemplateDir === null) repoTemplateDir = materializeRepoTemplate();
+  cpSync(repoTemplateDir, gitProj, { recursive: true });
   t.after(() => rmSync(base, { recursive: true, force: true }));
   return { base, home, proj, localSdk, fakebin, taskDir, gitProj };
 }

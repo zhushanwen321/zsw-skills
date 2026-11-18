@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import vm from "node:vm";
@@ -34,17 +34,29 @@ const transpile = (code) =>
 
 const tmpHome = () => mkdtempSync(join(tmpdir(), "v4-ia-"));
 
+// 模板仓：每测试进程只构建一次「初始提交仓」，makeScaffold 经 cpSync 复制实例化——
+// git 对象是内容寻址的只读数据，复制保真，省掉每 scaffold 的 init/config/add/commit spawn
+let gitTemplate = null;
+function ensureGitTemplate() {
+  if (gitTemplate === null) {
+    const tpl = mkdtempSync(join(tmpdir(), "v4-ia-tpl-"));
+    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: tpl });
+    spawnSync("git", ["config", "user.email", "t@t"], { cwd: tpl });
+    spawnSync("git", ["config", "user.name", "t"], { cwd: tpl });
+    writeFileSync(join(tpl, "a.txt"), "one\n");
+    spawnSync("git", ["add", "."], { cwd: tpl });
+    spawnSync("git", ["commit", "-qm", "init"], { cwd: tpl });
+    process.on("exit", () => rmSync(tpl, { recursive: true, force: true }));
+    gitTemplate = tpl;
+  }
+  return gitTemplate;
+}
+
 /** 独立保证脚手架：真实 git 项目 + 任务目录 + 桩 delivery-gate（evaluate 按 verdicts
  *  队列出参；append 校验凭据后落盘返回递增 eventId）+ 技能角色文件 */
 function makeScaffold(home, { verdictQueue }) {
   const projectRoot = join(home, "proj");
-  mkdirSync(projectRoot, { recursive: true });
-  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectRoot });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectRoot });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectRoot });
-  writeFileSync(join(projectRoot, "a.txt"), "one\n");
-  spawnSync("git", ["add", "."], { cwd: projectRoot });
-  spawnSync("git", ["commit", "-qm", "init"], { cwd: projectRoot });
+  cpSync(ensureGitTemplate(), projectRoot, { recursive: true });
 
   const taskDir = join(home, "task");
   mkdirSync(join(taskDir, "evidence"), { recursive: true });

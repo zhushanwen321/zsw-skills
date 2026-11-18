@@ -18,7 +18,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,19 +34,29 @@ function ok(result, label = "命令应成功") {
   assert.equal(result.status, 0, `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
 }
 
+// 模板仓：每测试进程只构建一次「初始提交仓」，fixture 经 cpSync 复制实例化——git 对象是
+// 内容寻址的只读数据，复制保真，省掉每 fixture 的 init/config/add/commit 五连 spawn
+let repoTemplateDir = null;
+function materializeRepoTemplate() {
+  const dir = mkdtempSync(join(tmpdir(), "finding-scope-v6-tpl-"));
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  spawnSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+  spawnSync("git", ["config", "user.name", "t"], { cwd: dir });
+  writeFileSync(join(dir, "a.txt"), "one\n");
+  spawnSync("git", ["add", "."], { cwd: dir });
+  spawnSync("git", ["commit", "-qm", "init"], { cwd: dir });
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 function makeFixture(t, { taskId = "scope-guard" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "finding-scope-v6-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const projectDir = join(root, "project");
   const home = join(root, "home");
-  mkdirSync(projectDir);
   mkdirSync(home);
-  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectDir });
-  writeFileSync(join(projectDir, "a.txt"), "one\n");
-  spawnSync("git", ["add", "."], { cwd: projectDir });
-  spawnSync("git", ["commit", "-qm", "init"], { cwd: projectDir });
+  if (repoTemplateDir === null) repoTemplateDir = materializeRepoTemplate();
+  cpSync(repoTemplateDir, projectDir, { recursive: true });
   const intentPath = join(root, "intent.md");
   writeFileSync(intentPath, "记忆检索只注入与当前工作相关的条目\n");
   const init = runGate(["init", "--project-root", projectDir, "--task-id", taskId, "--intent-file", intentPath], home);

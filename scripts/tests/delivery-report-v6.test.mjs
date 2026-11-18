@@ -50,7 +50,7 @@ function ok(result, label = "命令应成功") {
 }
 
 /** git 模板仓（init + config + a.txt commit 只做一次）：每用例复制副本替代逐用例
- *  6 次 git spawn；模板落系统临时目录，进程退出后由 OS 清理 */
+ *  6 次 git spawn；模板落系统临时目录，进程退出时清理 */
 let gitTemplate = null;
 function ensureGitTemplate() {
   if (gitTemplate === null) {
@@ -61,6 +61,7 @@ function ensureGitTemplate() {
     writeFileSync(join(tpl, "a.txt"), "one\n");
     spawnSync("git", ["add", "."], { cwd: tpl });
     spawnSync("git", ["commit", "-qm", "init"], { cwd: tpl });
+    process.on("exit", () => rmSync(tpl, { recursive: true, force: true }));
     gitTemplate = tpl;
   }
   return gitTemplate;

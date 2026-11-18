@@ -94,6 +94,7 @@ function ensureGitTemplate() {
     writeFileSync(join(tpl, "a.txt"), "one\n");
     spawnSync("git", ["add", "."], { cwd: tpl });
     spawnSync("git", ["commit", "-qm", "init"], { cwd: tpl });
+    process.on("exit", () => rmSync(tpl, { recursive: true, force: true }));
     gitTemplate = tpl;
   }
   return gitTemplate;

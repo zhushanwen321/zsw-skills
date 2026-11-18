@@ -146,6 +146,28 @@ function buildExecutionContext(fileReal, args, { env = process.env, cwd = proces
 }
 
 /**
+ * 注入 env 的宿主临时应用：把调用方显式传入的 env 键值写到真实 process.env，返回恢复函数。
+ * 为什么需要：沙箱内脚本经 require(esm) 加载的本地依赖（如 v6 复扫库）运行在真实模块层，
+ * 其内部 spawnSync 启动的孙进程继承的是真实 process.env——沙箱 mergedEnv 的注入变量到不了
+ * 那里（contract-rescan detector 继承真实 HOME、丢失 fixture 注入的失真先例）。宿主临时应用
+ * 后孙进程继承链恢复真实 CLI 语义（CLI 流程里这些变量本来就在子进程 env 中）。
+ * node:test 同文件串行执行（默认并发关闭），窗口内无并发读取方；脚本全部同步 spawn，无跨恢复点泄漏。
+ */
+function applyEnvToHost(envOverrides) {
+  const saved = [];
+  for (const [k, v] of Object.entries(envOverrides)) {
+    saved.push([k, Object.hasOwn(process.env, k) ? process.env[k] : undefined]);
+    process.env[k] = v;
+  }
+  return () => {
+    for (const [k, old] of saved) {
+      if (old === undefined) delete process.env[k];
+      else process.env[k] = old;
+    }
+  };
+}
+
+/**
  * 进程内等价执行一个 ESM CLI 脚本（同步脚本；TLA 脚本用 runMjsScriptAsync）。
  * @param {string} file 脚本绝对路径
  * @param {string[]} args 命令行参数（不含 node 路径与脚本路径）
@@ -164,11 +186,14 @@ export function runMjsScript(file, args, opts = {}) {
     return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", error: r.error };
   }
   const ex = buildExecutionContext(fileReal, args, opts);
+  const restoreEnv = opts.env !== undefined ? applyEnvToHost(opts.env) : null;
   try {
     const fn = script.runInNewContext(ex.ctx);
     fn(ex.ctx.exports, ex.ctxRequire, ex.ctx.module, fileReal, ex.ctx.__dirname, ex.ctx.__stubImportMeta);
   } catch (e) {
     if (!(e instanceof RunnerExitSignal)) ex.reportError(e);
+  } finally {
+    restoreEnv?.();
   }
   return ex.finish();
 }
@@ -229,12 +254,15 @@ export async function runMjsScriptAsync(file, args, opts = {}) {
     return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", error: r.error };
   }
   const ex = buildExecutionContext(fileReal, args, opts);
+  const restoreEnv = opts.env !== undefined ? applyEnvToHost(opts.env) : null;
   try {
     const fn = script.runInNewContext(ex.ctx);
     const p = fn(ex.ctx.exports, ex.ctxRequire, ex.ctx.module, fileReal, ex.ctx.__dirname, ex.ctx.__stubImportMeta);
     if (p && typeof p.then === "function") await p;
   } catch (e) {
     if (!(e instanceof RunnerExitSignal)) ex.reportError(e);
+  } finally {
+    restoreEnv?.();
   }
   return ex.finish();
 }

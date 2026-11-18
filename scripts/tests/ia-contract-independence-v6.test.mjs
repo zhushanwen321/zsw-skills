@@ -29,7 +29,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import vm from "node:vm";
@@ -63,16 +63,26 @@ function makeAuthority(root) {
   return dir;
 }
 
+// 模板仓：每测试进程只构建一次「初始提交仓」，脚手架经 cpSync 复制实例化——git 对象是
+// 内容寻址的只读数据，复制保真，省掉每脚手架的 init/config/add/commit 五连 spawn
+let repoTemplateDir = null;
+function materializeRepoTemplate() {
+  const dir = mkdtempSync(join(tmpdir(), "ia-contract-v6-tpl-"));
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  spawnSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+  spawnSync("git", ["config", "user.name", "t"], { cwd: dir });
+  writeFileSync(join(dir, "a.txt"), "one\n");
+  spawnSync("git", ["add", "."], { cwd: dir });
+  spawnSync("git", ["commit", "-qm", "init"], { cwd: dir });
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 /** 任务脚手架：git 项目 + 任务目录 + 外部契约验收包 + 桩 gate/core/resolver/角色 */
 function makeScaffold(home, { verdictQueue, resolverMode = "resolved", deliveryProfile = null, reviewDimensions = ["外部契约", "故障形态", "状态机时序"], counterImplementations = null, counterArtifactForm = "contract-check" } = {}) {
   const projectRoot = join(home, "proj");
-  mkdirSync(projectRoot, { recursive: true });
-  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectRoot });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectRoot });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectRoot });
-  writeFileSync(join(projectRoot, "a.txt"), "one\n");
-  spawnSync("git", ["add", "."], { cwd: projectRoot });
-  spawnSync("git", ["commit", "-qm", "init"], { cwd: projectRoot });
+  if (repoTemplateDir === null) repoTemplateDir = materializeRepoTemplate();
+  cpSync(repoTemplateDir, projectRoot, { recursive: true });
 
   const taskDir = join(home, "task");
   mkdirSync(join(taskDir, "evidence"), { recursive: true });
@@ -350,7 +360,9 @@ function runProbe(script, restArgs, { env, cwd }) {
   try {
     fn.runInNewContext(ctx)();
   } catch (e) {
-    if (!(e instanceof PROBE_EXIT)) {
+    // 判定对象必须是类本身——对实例（PROBE_EXIT）做 instanceof 会因 RHS 不可调用直接抛
+    // TypeError，探针任何失败路径（含 process.exit）都会以异常逃出而非落 status 1
+    if (!(e instanceof ProbeExitSignal)) {
       stderr += String(e && e.stack ? e.stack : e) + "\n";
       status = 1;
     }

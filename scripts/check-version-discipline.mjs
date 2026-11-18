@@ -53,8 +53,8 @@ function parseArgs(argv) {
 
 const ROOT = parseArgs(process.argv.slice(2));
 
-function git(args) {
-  const r = spawnSync("git", ["-C", ROOT, ...args], { maxBuffer: 32 * 1024 * 1024 });
+function git(args, opts = {}) {
+  const r = spawnSync("git", ["-C", ROOT, ...args], { maxBuffer: 32 * 1024 * 1024, ...opts });
   if (r.error) failEnv(`git 无法执行（${r.error.message}）——确认 git 已安装后重试`);
   return r;
 }
@@ -67,15 +67,37 @@ function gitText(args) {
   return r.stdout.toString("utf8");
 }
 
-/** 读 git 对象（":path" = 索引内容，"HEAD:path" = 上次提交内容）；不存在返回 null */
-function gitBlob(spec) {
-  const r = git(["show", spec]);
-  return r.status === 0 ? r.stdout : null;
-}
-
-function blobsEqual(a, b) {
-  if (a === null || b === null) return a === b;
-  return Buffer.compare(a, b) === 0;
+/** 一次 git cat-file --batch 批量读全部 spec（":path" = 索引内容，"HEAD:path" = 上次提交
+ *  内容）；返回 Map<spec, Buffer|null>，缺失对象帧 = "<spec> missing" → null（与逐个
+ *  git show 失败等价）。帧格式（git 2.52 实测）：命中 = "<oid> <type> <size>\n" + 内容 +
+ *  "\n"，缺失 = "<spec> missing\n"，末帧命中同样以 "\n" 收尾 */
+function gitCatFileBatch(specs) {
+  const r = git(["cat-file", "--batch"], { input: specs.map((s) => `${s}\n`).join("") });
+  if (r.status !== 0) {
+    failEnv(`git cat-file --batch 失败（退出码 ${r.status}）：${r.stderr.toString("utf8").trim()}`);
+  }
+  const out = r.stdout;
+  const blobs = new Map();
+  let pos = 0;
+  for (const spec of specs) {
+    const lf = out.indexOf(10, pos);
+    if (lf === -1) failEnv(`git cat-file --batch 输出缺 ${spec} 的帧头——重跑本检查器；持续复现时确认 git 版本支持 --batch`);
+    const header = out.subarray(pos, lf).toString("utf8");
+    if (header === `${spec} missing`) {
+      blobs.set(spec, null);
+      pos = lf + 1;
+      continue;
+    }
+    const parsed = /^([0-9a-f]{40}) (?:blob|commit|tag|tree) (\d+)$/.exec(header);
+    const start = lf + 1;
+    const size = parsed === null ? NaN : Number(parsed[2]);
+    if (Number.isNaN(size) || start + size + 1 > out.length) {
+      failEnv(`git cat-file --batch 输出帧不可解析（${spec}）——重跑本检查器；持续复现时确认 git 版本支持 --batch`);
+    }
+    blobs.set(spec, out.subarray(start, start + size));
+    pos = start + size + 1;
+  }
+  return blobs;
 }
 
 const repoCheck = git(["rev-parse", "--is-inside-work-tree"]);
@@ -172,6 +194,24 @@ function listNullSeparated(args) {
 const stagedFiles = listNullSeparated(["diff", "--cached", "--name-only", "--diff-filter=ACMRD", "-z"]);
 const isProduct = (p) => p.startsWith(`${WORKFLOWS}/`) && !p.startsWith(SHARED_SRC_PREFIX);
 
+// ── blob 内容批量预取（单次 git spawn）──
+// 读取清单 = 9 个 SKILL.md × {:path, HEAD:path}（规则 1 版本号）+ 规则 3 全部产物的 :path，
+// 共 18 + 46 个 spec，一次 git cat-file --batch 读完；每次运行的 git spawn 由 66 次降到
+// 3 次（规则 2 触发时另加 2 次 ls 取 sha，共 5 次）。批量输出体积 = 全部产物 + SKILL.md
+// 内容之和，现仓实测约 7MB，32MB maxBuffer 上限沿用
+const BLOB_SPECS = [
+  ...SKILLS.flatMap((skill) => [`HEAD:${skill.dir}/SKILL.md`, `:${skill.dir}/SKILL.md`]),
+  ...Object.keys(PRODUCT_SKILL).map((rel) => `:${WORKFLOWS}/${rel}`),
+];
+const blobCache = gitCatFileBatch(BLOB_SPECS);
+
+/** 读预取缓存中的 git 对象（":path" = 索引内容，"HEAD:path" = 上次提交内容）；不存在返回 null */
+function gitBlob(spec) {
+  const blob = blobCache.get(spec);
+  if (blob === undefined) failEnv(`内部错误：blob spec 未在预取清单登记（${spec}）——补进 BLOB_SPECS 后重跑`);
+  return blob;
+}
+
 const versions = new Map();
 for (const skill of SKILLS) {
   const skillMd = `${skill.dir}/SKILL.md`;
@@ -214,7 +254,7 @@ for (const skill of SKILLS) {
   });
 }
 
-// ── 规则 2：共享源联动（产物逐字节 diff） ──
+// ── 规则 2：共享源联动（产物 blob SHA 对拍，SHA 相同 ⇔ 逐字节相同） ──
 // 共享层文件（skill-data/observability/provenance.shared.ts）拼入全部产物——变化要求全技能联动；
 // 单 workflow 独享源（<name>.shared.ts 及其模板）只影响本 workflow 产物——只要求产物所属技能 bump。
 const SHARED_LAYER_FILES = new Set([
@@ -227,29 +267,36 @@ const hasSharedLayerChange = sharedTouched.some((p) => SHARED_LAYER_FILES.has(p.
 let rule2State = "none"; // none = 无共享源变更；exempt = 有变更但产物零 diff；linked = 产物变且应联动技能已联动 bump
 if (sharedTouched.length > 0) {
   rule2State = "exempt";
-  const productSet = new Set(
-    [...listNullSeparated(["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", WORKFLOWS]),
-     ...listNullSeparated(["ls-files", "-z", "--", WORKFLOWS])].filter(isProduct),
-  );
+  // 产物相等性 = blob SHA 对拍（blob oid 是内容的确定性哈希，SHA 相同 ⇔ 内容逐字节相同），
+  // 索引/HEAD 两侧各一次 ls 取全量 sha，替代逐文件内容读取。stage 只取 0——unmerged 条目无
+  // stage 0，与逐文件 git show :path 失败同判为缺失
+  const headShas = new Map();
+  for (const entry of listNullSeparated(["ls-tree", "-r", "-z", "HEAD", "--", WORKFLOWS])) {
+    const tab = entry.indexOf("\t");
+    headShas.set(entry.slice(tab + 1), entry.slice(0, tab).split(" ")[2]);
+  }
+  const stagedShas = new Map();
+  for (const entry of listNullSeparated(["ls-files", "-s", "-z", "--", WORKFLOWS])) {
+    const tab = entry.indexOf("\t");
+    const meta = entry.slice(0, tab).split(" ");
+    if (meta[2] === "0") stagedShas.set(entry.slice(tab + 1), meta[1]);
+  }
+  const productSet = new Set([...headShas.keys(), ...stagedShas.keys()].filter(isProduct));
   const changedProducts = [];
+  const changedProductRels = [];
   for (const rel of [...productSet].sort()) {
-    const head = gitBlob(`HEAD:${rel}`);
-    const staged = gitBlob(`:${rel}`);
-    if (!blobsEqual(head, staged)) {
-      const kind = head === null ? "新增" : staged === null ? "删除" : "内容变化";
-      changedProducts.push(`${rel}（${kind}）`);
-    }
+    const headSha = headShas.get(rel) ?? null;
+    const stagedSha = stagedShas.get(rel) ?? null;
+    if (headSha === stagedSha) continue;
+    const kind = headSha === null ? "新增" : stagedSha === null ? "删除" : "内容变化";
+    changedProducts.push(`${rel}（${kind}）`);
+    changedProductRels.push(rel);
   }
   if (changedProducts.length === 0) {
     notes.push(`规则 2（共享源联动）：workflows/src/ 有 staged 改动（${sharedTouched.length} 个文件），产物与 HEAD 逐字节相同 → 豁免`);
   } else {
     rule2State = "linked";
     // 联动范围：共享层变化 → 全技能；仅独享源变化 → 变化产物所属技能（PRODUCT_SKILL 映射）
-    const changedProductRels = [...productSet].filter((rel) => {
-      const head = gitBlob(`HEAD:${rel}`);
-      const staged = gitBlob(`:${rel}`);
-      return !blobsEqual(head, staged);
-    });
     const affectedSkills = hasSharedLayerChange
       ? SKILLS.map((s) => s.name)
       : [...new Set(changedProductRels

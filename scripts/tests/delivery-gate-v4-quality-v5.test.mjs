@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,19 +34,31 @@ function evidenceFile(fx, name, content = `# ${name}\n`) {
   return { artifact: `evidence/${name}`, artifactSha256: sha256(readFileSync(path, "utf8")) };
 }
 
+// 模板仓：每测试进程只构建一次「初始提交仓」，fixture 经 cpSync 复制实例化——git 对象是
+// 内容寻址的只读数据，复制保真（实测复制仓 commit/rev-parse 与全新 init 仓行为一致），
+// 省掉每 fixture 的 init/add/commit 三连 spawn
+let repoTemplateDir = null;
+function materializeRepoTemplate() {
+  const dir = mkdtempSync(join(tmpdir(), "delivery-v5-quality-tpl-"));
+  mkdirSync(dir, { recursive: true });
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  // repo 级身份经追加 .git/config 写入（后续 commit 依赖 repo config）
+  appendFileSync(join(dir, ".git", "config"), "[user]\n\temail = t@t\n\tname = t\n");
+  writeFileSync(join(dir, "a.txt"), "one\n");
+  spawnSync("git", ["add", "."], { cwd: dir });
+  spawnSync("git", ["commit", "-qm", "init"], { cwd: dir });
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "delivery-v5-quality-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const projectDir = join(root, "project");
   const home = join(root, "home");
-  mkdirSync(projectDir);
+  if (repoTemplateDir === null) repoTemplateDir = materializeRepoTemplate();
+  cpSync(repoTemplateDir, projectDir, { recursive: true });
   mkdirSync(home);
-  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  // repo 级身份经追加 .git/config 写入（1 次文件写入替代 2 次 git spawn；后续 commit 依赖 repo config）
-  appendFileSync(join(projectDir, ".git", "config"), "[user]\n\temail = t@t\n\tname = t\n");
-  writeFileSync(join(projectDir, "a.txt"), "one\n");
-  spawnSync("git", ["add", "."], { cwd: projectDir });
-  spawnSync("git", ["commit", "-qm", "init"], { cwd: projectDir });
   const intentPath = join(root, "intent.md");
   writeFileSync(intentPath, "关闭后任何路径零写入；开启时行为正常\n");
   const init = runGate(["init", "--project-root", projectDir, "--task-id", "v4-quality", "--intent-file", intentPath], home);

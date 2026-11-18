@@ -317,6 +317,7 @@ function ensureGitTemplate() {
     writeFileSync(join(tpl, "README.md"), "fixture\n");
     assert.equal(git(["add", "."]).status, 0);
     assert.equal(git(["commit", "-q", "-m", "init"]).status, 0);
+    process.on("exit", () => rmSync(tpl, { recursive: true, force: true }));
     gitTemplate = tpl;
   }
   return gitTemplate;
