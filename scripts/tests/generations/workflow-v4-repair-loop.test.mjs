@@ -27,7 +27,7 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const WF = join(ROOT, "skills/self/dev-workflow/workflows");
 const ts = require("typescript");
 
@@ -52,7 +52,7 @@ const tmpHome = () => mkdtempSync(join(tmpdir(), "v4-repair-loop-"));
 // ── 提速通道：产物引擎的 node -e 探针与 node <桩CLI> 进程内等价执行（vm + mock process，
 // 与真实 spawn 子进程语义逐字段对齐，见 helper 头注）；sh -c 复合命令与 git 仍走真实
 // spawnSync（git 行为是被测语义的一部分）──
-import { runNodeScript } from "./helpers/node-stub.mjs";
+import { runNodeScript } from "../helpers/node-stub.mjs";
 
 const fastWorldRun = (home, cmd, a, opts) => {
   const args = a ?? [];

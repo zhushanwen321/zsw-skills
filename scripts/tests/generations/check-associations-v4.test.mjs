@@ -37,7 +37,7 @@ import { fileURLToPath } from "node:url";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
-  "..", "..",
+  "..", "..", "..",
   "skills", "self", "dev-workflow", "dev-flow-v4", "scripts", "check-associations.mjs",
 );
 

@@ -4,13 +4,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SAMPLES_PATH = join(
   ROOT,
   "skills",
   "self",
   "dev-workflow",
-  "delivery-v5",
+  "delivery-v4",
   "policies",
   "known-answer-samples.json",
 );

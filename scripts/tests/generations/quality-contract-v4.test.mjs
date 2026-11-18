@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const CHECKER = join(ROOT, "skills", "self", "dev-workflow", "delivery-v4", "scripts", "check-quality-contract.mjs");
 const writeJson = (path, value) => {
   mkdirSync(dirname(path), { recursive: true });

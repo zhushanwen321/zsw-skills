@@ -7,9 +7,9 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSyn
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMjsScript } from "./helpers/mjs-runner.mjs";
+import { runMjsScript } from "../helpers/mjs-runner.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const GATE = join(ROOT, "skills", "self", "dev-workflow", "delivery-v5", "scripts", "delivery-gate.mjs");
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));

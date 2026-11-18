@@ -13,9 +13,9 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
-import { validatePlanSchema } from "../../skills/self/dev-workflow/dev-flow-v4/scripts/check-exec-plan.mjs";
+import { validatePlanSchema } from "../../../skills/self/dev-workflow/dev-flow-v4/scripts/check-exec-plan.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const PI_ARTIFACT = join(ROOT, "skills", "self", "dev-workflow", "workflows", "pi", "wave-executor-v4.js");
 
 function loadReferenceValidatePlan() {

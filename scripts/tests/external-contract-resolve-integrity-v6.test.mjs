@@ -77,10 +77,12 @@ function makeNpmProject(base, { name = "fake-host-sdk", version = "1.0.0", conte
 }
 
 function runResolve(home, args) {
-  return spawnSync(process.execPath, [RESOLVER, ...args], {
-    encoding: "utf8",
-    env: { ...process.env, HOME: home },
-  });
+  // 夹具隔离：剥掉 npm 上下文（npm test / npm run）注入的 npm_* 环境变量——
+  // npm_config_cache 会把 resolver 内部 npm 子命令（config get cache）的缓存定位
+  // 从 fixture HOME 引到真实用户缓存，互核读到隔离外内容（曾让篡改用例被放行）
+  const env = { ...process.env, HOME: home };
+  for (const key of Object.keys(env)) if (key.startsWith("npm_")) delete env[key];
+  return spawnSync(process.execPath, [RESOLVER, ...args], { encoding: "utf8", env });
 }
 
 const NPM_CONTRACT = {

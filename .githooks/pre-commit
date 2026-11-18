@@ -80,4 +80,18 @@ if [ -n "$EXEC_STAGED" ]; then
   }
 fi
 
+# 段 5：V4/V5 代际测试层（按代际分层：改哪代测哪代）
+# 默认测试层（npm test）只含 V6 现行代 + 基建；V4/V5 冻结代已停开发，其测试移入
+# scripts/tests/generations/，仅当冻结代技能或其测试被改动时在提交前运行。CI 全量两层照跑。
+GEN_STAGED=$(git diff --cached --name-only --diff-filter=ACMRD -- 'skills/self/dev-workflow/delivery-v4/' 'skills/self/dev-workflow/dev-flow-v4/' 'skills/self/dev-workflow/tech-design-v4/' 'skills/self/dev-workflow/delivery-v5/' 'skills/self/dev-workflow/dev-flow-v5/' 'skills/self/dev-workflow/tech-design-v5/' 'scripts/tests/generations/')
+if [ -n "$GEN_STAGED" ]; then
+  echo "pre-commit[generation-tests]: staged 变更含 V4/V5 冻结代技能或其测试，跑代际测试层…"
+  node --test scripts/tests/generations/*.test.mjs || {
+    echo ""
+    echo "[generation-tests] V4/V5 代际测试层未过。"
+    echo "  恢复动作：修复对应冻结代脚本或测试后重新 git add 再提"
+    exit 1
+  }
+fi
+
 exit 0

@@ -24,9 +24,9 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSyn
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMjsScript, runMjsScriptAsync } from "./helpers/mjs-runner.mjs";
+import { runMjsScript, runMjsScriptAsync } from "../helpers/mjs-runner.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const V5 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v5");
 const CORE = join(V5, "scripts", "delivery-core.mjs");
 const GATE = join(V5, "scripts", "delivery-gate.mjs");

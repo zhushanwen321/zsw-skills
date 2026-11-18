@@ -27,5 +27,7 @@ jobs:
         run: node scripts/check-workflow-types.mjs
       - name: 版本纪律（SKILL.md 版本与产物一致）
         run: node scripts/check-version-discipline.mjs
-      - name: 全量测试
-        run: node --test scripts/tests/*.test.mjs
+      - name: 安装测试依赖（typescript——测试转译执行器 scripts/tests/helpers/mjs-runner.mjs 引用）
+        run: npm install --no-save
+      - name: 全量测试（默认层 V6+基建，代际层 V4/V5——冻结通道的环境漂移预警在此兜底）
+        run: node --test scripts/tests/*.test.mjs scripts/tests/generations/*.test.mjs

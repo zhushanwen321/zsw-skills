@@ -52,10 +52,10 @@ function plantNpmCache(home, content) {
 }
 
 function runResolve(home, args) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], {
-    encoding: "utf8",
-    env: { ...process.env, HOME: home },
-  });
+  // 夹具隔离：剥掉 npm 上下文注入的 npm_*（同 external-contract-resolve-integrity-v6 的坑）
+  const env = { ...process.env, HOME: home };
+  for (const key of Object.keys(env)) if (key.startsWith("npm_")) delete env[key];
+  return spawnSync(process.execPath, [SCRIPT, ...args], { encoding: "utf8", env });
 }
 
 function parseSummary(run) {

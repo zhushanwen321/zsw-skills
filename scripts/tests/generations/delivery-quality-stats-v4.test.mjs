@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const CLI = join(ROOT, "skills", "self", "dev-workflow", "delivery-v5", "scripts", "delivery-quality-stats.mjs");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const CLI = join(ROOT, "skills", "self", "dev-workflow", "delivery-v4", "scripts", "delivery-quality-stats.mjs");
 
 test("质量统计区分重开与不同问题，并按上限判过程失败", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "delivery-quality-stats-"));

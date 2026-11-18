@@ -19,7 +19,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const WF = join(ROOT, "skills/self/dev-workflow/workflows");
 const T2_AGENTS = join(ROOT, "skills/self/dev-workflow/tech-design-v4/agents");
 const D2_AGENTS = join(ROOT, "skills/self/dev-workflow/dev-flow-v4/agents");

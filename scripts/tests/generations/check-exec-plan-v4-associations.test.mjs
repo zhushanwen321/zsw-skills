@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { checkPlan } from "../../skills/self/dev-workflow/dev-flow-v4/scripts/check-exec-plan.mjs";
+import { checkPlan } from "../../../skills/self/dev-workflow/dev-flow-v4/scripts/check-exec-plan.mjs";
 
 const HASH = "abc1234def5678abc1234def5678abc1234abcd";
 

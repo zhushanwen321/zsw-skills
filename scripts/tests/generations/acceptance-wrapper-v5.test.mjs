@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const GENERATOR = join(REPO_ROOT, "skills", "self", "dev-workflow", "dev-flow-v5", "scripts", "gen-acceptance-wrapper.mjs");
 
 const NODE_ID = "verify-close-in-flight";

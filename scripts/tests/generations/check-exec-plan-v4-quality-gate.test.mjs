@@ -22,7 +22,7 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const CHECK_SCRIPT = join(ROOT, "skills/self/dev-workflow/dev-flow-v4/scripts/check-exec-plan.mjs");
 
 // 验收包联合哈希复刻（与 check-exec-plan.mjs / delivery-gate.mjs 同口径：解析内容规范

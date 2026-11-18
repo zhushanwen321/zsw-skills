@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SOURCE = join(ROOT, "skills", "self", "dev-workflow", "workflows", "src", "independent-assurance-v4.shared.ts");
 const CB_SOURCE = join(ROOT, "skills", "self", "dev-workflow", "workflows", "src", "candidate-build-v4.shared.ts");
 const source = readFileSync(SOURCE, "utf8");

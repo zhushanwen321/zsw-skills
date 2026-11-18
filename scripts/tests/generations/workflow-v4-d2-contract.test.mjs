@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SOURCE = readFileSync(join(ROOT, "skills/self/dev-workflow/workflows/src/dev-consistency-loop-v4.shared.ts"), "utf8");
 const NODE_PREP = eval(
   SOURCE.slice(SOURCE.indexOf("const NODE_PREP = ["), SOURCE.indexOf("].join(\"\\n\");", SOURCE.indexOf("const NODE_PREP = [")) + 1)

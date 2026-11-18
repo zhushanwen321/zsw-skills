@@ -23,7 +23,7 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const WF = join(ROOT, "skills/self/dev-workflow/workflows");
 const ts = require("typescript");
 
