@@ -28,6 +28,18 @@
 //   - deliveryProfile（task.json，a/b/c）登记进 exec-plan——a 级 D2 一致性审查分区降档的
 //     消费输入（降档实现见 W3 dev-consistency-loop-v6 与 flow/consistency-review.md）。
 //
+// 机制八 D0 门（设计《V6 运行可用性与外部契约守门升级》§11.2 / §11.3，验证资产与工具链
+// 真实性；写盘前与其余语义缺口同通道全体不生成）：消费项目能力快照（productRoot/
+// project-capabilities.json——detect-project-capabilities.mjs 缺省落点，W1 探测通道产物，
+// 本门只消费不代跑；快照不在盘按旧项目放行并登记披露，不虚构判定）：
+//   - 类型层门（§11.2）：项目 tsconfig 在场 / 快照 toolchain 登记 typescript / 外部契约
+//     surfaceRefs 含 .ts/.d.ts 任一触发，而 toolchain.typescript.status=missing → 拒绝编译
+//     （三选一处置；用户显式裁决走 --allow-missing-typescript 裁决旗）；
+//   - 测试命令有效性门（§11.3）：快照 testConfig 含 zeroTestPassThrough=true → 拒绝（移除
+//     或显式裁决走 --allow-zero-test-passthrough 裁决旗）；fullSuite 已绑定而快照判定无任何
+//     测试配置 → 拒绝；机器不可判定子条（机检脚本绑定增量 / D2 Gate A）以登记性披露落地，
+//     逐项核对归 D2 审查。裁决旗理由随 generatedBy.command 冻结进 exec-plan 溯源。
+//
 // 用法：
 //   node compile-exec-plan.mjs --impl-plan <path>.impl-plan.json [--mode dev|acceptance]
 //        [--task-dir <交付任务目录>] [--check] [--replay-compare <旧 exec-plan 路径>] [--reinit]
@@ -187,8 +199,8 @@ function printGaps() {
 }
 function failUsage(msg) {
   process.stderr.write(
-    `用法错误：${msg}\n用法：node compile-exec-plan.mjs --impl-plan <path>.impl-plan.json [--mode dev|acceptance] [--task-dir <交付任务目录>] [--check] [--replay-compare <旧 exec-plan 路径>] [--reinit]\n` +
-      "模式：dev 生成 exec-plan + 任务书 + 初始 status.json；acceptance 在其上填验收节点与 wrapper；--check 防手改比对；--replay-compare 历史只读重放；--reinit 显式确认重置已有执行进度。\n",
+    `用法错误：${msg}\n用法：node compile-exec-plan.mjs --impl-plan <path>.impl-plan.json [--mode dev|acceptance] [--task-dir <交付任务目录>] [--check] [--replay-compare <旧 exec-plan 路径>] [--reinit] [--allow-missing-typescript <裁决理由>] [--allow-zero-test-passthrough <裁决理由>]\n` +
+      "模式：dev 生成 exec-plan + 任务书 + 初始 status.json；acceptance 在其上填验收节点与 wrapper；--check 防手改比对；--replay-compare 历史只读重放；--reinit 显式确认重置已有执行进度；两个裁决旗 = 机制八门的用户显式裁决通道（理由必填、随 exec-plan 溯源）。\n",
   );
   process.exit(2);
 }
@@ -642,6 +654,19 @@ function buildAcceptanceNodes(ctx) {
       );
       continue;
     }
+    // adversarialFormRefs（JSON-only 字段，权威登记 = tech-design-v6/references/impl-plan-mapping.md）：
+    // 行声明的反例场景引用必须随行复制到该行产出的节点上——verification-index 的验收节点归属
+    // （acceptanceNodeIds）以节点上的该字段为唯一连接，节点不携带即索引恒空。存在但形态非法 =
+    // 上游契约含糊，报缺口不静默（静默丢引用会让 D3 节点失去场景归属且无从发现）
+    if (row.adversarialFormRefs !== undefined && !isStrArr(row.adversarialFormRefs)) {
+      gap(
+        `验收行 ${row.id} 的 adversarialFormRefs 存在但不是字符串数组（实际：${showVal(row.adversarialFormRefs)}）`,
+        `反例场景引用权威 = ${planPath} acceptancePlan[].adversarialFormRefs（string[]，元素为验收包 adversarialForms[].id）`,
+        `回 tech-design-v6 T3 把该行 adversarialFormRefs 修为字符串数组（或删除该字段）后重新渲染、重新编译`,
+      );
+      continue;
+    }
+    const rowFormRefs = isStrArr(row.adversarialFormRefs) ? [...row.adversarialFormRefs] : null;
     // runtime-probe 行（设计 §7.3 D3 additive 行类型）：编译为 verify 节点，script = 生成的
     // probe wrapper；行字段形态与能力 id 对账由 check-exec-plan 同源函数承担（与写盘后校验器
     // 零漂移）。无 type 字段的行走下方既有 level 规则（向后兼容）
@@ -674,7 +699,15 @@ function buildAcceptanceNodes(ctx) {
           );
           continue;
         }
-        nodes.push({ id: row.id, kind: "verify", deps: [...(isStrArr(row.deps) ? row.deps : [])], script: abs(row.script), artifactsDir });
+        nodes.push({
+          id: row.id,
+          kind: "verify",
+          deps: [...(isStrArr(row.deps) ? row.deps : [])],
+          script: abs(row.script),
+          artifactsDir,
+          // 行级反例场景引用随行携带（verification-index acceptanceNodeIds 的派生连接）
+          ...(rowFormRefs !== null ? { adversarialFormRefs: rowFormRefs } : {}),
+        });
       } else if (verifyAsset === "new" || verifyAsset.startsWith("reuse:")) {
         // wrapper 形态：runner 调用契约必须显式声明（禁止猜参数）；new 态还须实装单元已完成
         if (verifyAsset === "new") {
@@ -732,6 +765,8 @@ function buildAcceptanceNodes(ctx) {
           deps: [...(isStrArr(row.deps) ? row.deps : [])],
           script: join(ctx.productRoot, `${ctx.name}.verify`, `${row.id}.mjs`), // gen-acceptance-wrapper 落点（先登记，spawn 后核存在）
           artifactsDir,
+          // 行级反例场景引用随行携带（verification-index acceptanceNodeIds 的派生连接）
+          ...(rowFormRefs !== null ? { adversarialFormRefs: rowFormRefs } : {}),
         });
       } else {
         gap(
@@ -754,6 +789,8 @@ function buildAcceptanceNodes(ctx) {
         promptFile: promptRel,
         artifactsRefs: verifyDeps, // 引擎按 artifactsRefs 提示 verify 前驱产物目录
         artifactsDir: assetsDirFor(row.id), // verdict.json 判定书落点（引擎事实锚读取处）
+        // 行级反例场景引用随行携带（verification-index acceptanceNodeIds 的派生连接）
+        ...(rowFormRefs !== null ? { adversarialFormRefs: rowFormRefs } : {}),
       });
     }
   }
@@ -784,6 +821,9 @@ function buildAcceptanceNodes(ctx) {
     } else {
       const promptRel = join(ctx.promptsDir, `${summaryId}.md`);
       prompts.set(promptRel, summaryInspectTaskBook({ node: { id: summaryId }, verifyNodes, ctx }));
+      // 汇总节点无对应 impl-plan 行——反例场景引用 = 聚合全部 verify 节点携带的 refs 去重
+      //（汇总判定覆盖全部脚本前驱的场景集；前驱都无 refs 时不携带该字段，与行级纪律一致）
+      const summaryFormRefs = [...new Set(verifyNodes.flatMap((v) => (isStrArr(v.adversarialFormRefs) ? v.adversarialFormRefs : [])))];
       nodes.push({
         id: summaryId,
         kind: "inspect",
@@ -791,6 +831,7 @@ function buildAcceptanceNodes(ctx) {
         promptFile: promptRel,
         artifactsRefs: verifyNodes.map((v) => v.id),
         artifactsDir: join(ctx.productRoot, `${ctx.name}.artifacts`, summaryId),
+        ...(summaryFormRefs.length > 0 ? { adversarialFormRefs: summaryFormRefs } : {}),
       });
     }
   }
@@ -880,6 +921,9 @@ function buildRuntimeProbeNode(row, ctx) {
       script: wrapperPath, // gen-runtime-probe-wrapper 落点（先登记，spawn 后核存在）
       artifactsDir,
       runtimeProbe: { capabilityIds, command, artifact },
+      // 行级反例场景引用随行携带（acceptanceNodeIds 派生连接，与 verify/inspect 节点同纪律；
+      // 行字段形态已在 buildAcceptanceNodes 行首统一核对）
+      ...(isStrArr(row.adversarialFormRefs) ? { adversarialFormRefs: [...row.adversarialFormRefs] } : {}),
     },
     asset: { nodeId: row.id, capabilityIds, command, artifact, artifactsDir },
   };
@@ -928,7 +972,7 @@ function materializeWrappers(ctx, wrapperAssets, planPath) {
         "",
         String(r.stderr || r.stdout || "").trim(),
         "",
-        `恢复动作处理后重新运行：node ${SCRIPT_PATH} --impl-plan ${planPath} --mode acceptance${ctx.taskDir ? ` --task-dir ${ctx.taskDir}` : ""}`,
+        `恢复动作处理后重新运行：node ${SCRIPT_PATH} --impl-plan ${planPath} --mode acceptance${ctx.taskDir ? ` --task-dir ${ctx.taskDir}` : ""}${ctx.rulingArgs.length > 0 ? ` ${ctx.rulingArgs.join(" ")}` : ""}`,
       ].join("\n") + "\n",
     );
     process.exit(1);
@@ -967,7 +1011,7 @@ function materializeProbeWrappers(ctx, probeAssets, planPath) {
         "",
         String(r.stderr || r.stdout || "").trim(),
         "",
-        `恢复动作处理后重新运行：node ${SCRIPT_PATH} --impl-plan ${planPath} --mode acceptance${ctx.taskDir ? ` --task-dir ${ctx.taskDir}` : ""}`,
+        `恢复动作处理后重新运行：node ${SCRIPT_PATH} --impl-plan ${planPath} --mode acceptance${ctx.taskDir ? ` --task-dir ${ctx.taskDir}` : ""}${ctx.rulingArgs.length > 0 ? ` ${ctx.rulingArgs.join(" ")}` : ""}`,
       ].join("\n") + "\n",
     );
     process.exit(1);
@@ -1062,7 +1106,7 @@ function runCheckMode(ctx, execPlan, prompts) {
     }
   }
   if (failures.length > 0) {
-    const regen = `node ${SCRIPT_PATH} --impl-plan ${ctx.planPath} --mode ${ctx.mode}${ctx.taskDir ? ` --task-dir ${ctx.taskDir}` : ""}`;
+    const regen = `node ${SCRIPT_PATH} --impl-plan ${ctx.planPath} --mode ${ctx.mode}${ctx.taskDir ? ` --task-dir ${ctx.taskDir}` : ""}${ctx.rulingArgs.length > 0 ? ` ${ctx.rulingArgs.join(" ")}` : ""}`;
     const out = [`FAIL：${failures.length} 项与重新生成结果不一致——生成物禁手改，语义修订回 impl-plan / 设计包后重新生成`];
     failures.forEach((f, i) => {
       out.push("", `[${i + 1}] ${f.file}`, `  不一致原因：${f.reason}`);
@@ -1340,10 +1384,108 @@ function checkExternalContractGate(execPlan, ctx) {
   }
 }
 
+// ── 机制八 D0 门（设计《V6 运行可用性与外部契约守门升级》§11.2 类型层门 / §11.3 测试命令有效性）──
+// 判定输入 = 项目能力快照（productRoot/project-capabilities.json——detect-project-capabilities.mjs
+// 的缺省落点即本产物根，属 W1 探测通道产物，本门只消费不代跑）+ 项目文件系统事实（tsconfig 在场）
+// + 验收包外部契约 surfaceRefs。快照缺省 = 旧项目 / 未跑探测，机器判定不了的事实降级为登记性
+// 披露（不虚构判定）；快照在场但损坏 = 缺口（禁手改产物损坏照实报）。用户显式裁决通道 = 两个
+// 裁决旗（理由必填，随 generatedBy.command 冻结进 exec-plan 溯源）——机器无法核验「裁决已发生」，
+// 旗是唯一显式载体（与 --reinit 同款确认旗纪律），不带旗的复现缺口按未处置拒绝。
+function checkVerificationAssetGates(execPlan, ctx, opts) {
+  const { projectRoot, productRoot, acceptance } = ctx;
+  const snapshotPath = join(productRoot, "project-capabilities.json");
+  let snapshot = null;
+  if (existsSync(snapshotPath)) {
+    try {
+      snapshot = JSON.parse(readFileSync(snapshotPath, "utf8"));
+    } catch (e) {
+      gap(
+        `项目能力快照不可读（存在但不是合法 JSON）：${snapshotPath}（${e.message}）`,
+        "快照由 detect-project-capabilities.mjs 生成（禁手改；toolchain / testConfig 事实的唯一登记处）",
+        `重跑 node ~/.agents/skills/delivery-v6/scripts/detect-project-capabilities.mjs --project-root ${projectRoot} --out ${snapshotPath} 重建后重新编译`,
+      );
+      return;
+    }
+  }
+  // 升级前旧快照可能缺 toolchain / testConfig 字段（§11.1 additive 扩展）——缺字段 = 无事实，不虚构
+  const toolchain = snapshot !== null && Array.isArray(snapshot.toolchain) ? snapshot.toolchain.filter(isRec) : [];
+  const testConfig = snapshot !== null && Array.isArray(snapshot.testConfig) ? snapshot.testConfig.filter(isRec) : [];
+  const tsEntry = toolchain.find((entry) => entry.id === "typescript") ?? null;
+
+  // §11.2 类型层门：触发条件（任一）= 项目 tsconfig 在场 / 快照 toolchain 登记 typescript /
+  // 外部契约 surfaceRefs 含 .ts/.d.ts 类型 surface（surfaceRefs 形态 = 文件路径或 路径#符号，
+  // 按去 # 后的文件部分判定后缀）
+  const surfaceRefsTs = (Array.isArray(acceptance?.externalContracts) ? acceptance.externalContracts : []).some((contract) =>
+    isRec(contract) &&
+    Array.isArray(contract.capabilities) &&
+    contract.capabilities.some((capability) =>
+      isRec(capability) &&
+      Array.isArray(capability.surfaceRefs) &&
+      capability.surfaceRefs.some((ref) => typeof ref === "string" && ref.split("#")[0].endsWith(".ts")),
+    ),
+  );
+  const typeBasis = [
+    ...(existsSync(join(projectRoot, "tsconfig.json")) ? ["项目 tsconfig.json 在场"] : []),
+    ...(tsEntry !== null ? ["能力快照 toolchain 登记 typescript"] : []),
+    ...(surfaceRefsTs ? ["验收包外部契约 surfaceRefs 含 .ts/.d.ts 类型 surface"] : []),
+  ];
+  if (typeBasis.length > 0) {
+    if (tsEntry !== null && tsEntry.status === "missing") {
+      if (isStr(opts.allowMissingTypescript)) {
+        ctx.assetGateNotes.push(`类型层门：toolchain.typescript.status=missing，按用户显式裁决放行（裁决理由：${opts.allowMissingTypescript}）——相关类型层断言结论须降级并在 D2 审查披露（设计 §11.2 处置②）`);
+      } else {
+        gap(
+          `类型层门未过：任务触发类型检查义务（触发依据：${typeBasis.join("；")}），但能力快照 toolchain.typescript.status=missing（devDependencies 声明了 typescript 而安装目录缺失）——类型检查命令不可执行`,
+          `触发与快照事实的权威 = 设计 §11.2 + ${snapshotPath}（toolchain 段由 detect-project-capabilities.mjs 探测登记，禁手改）`,
+          `处置三选一：① 把工具链安装与类型检查命令纳入首个增量（回 tech-design-v6 T3 修 impl-plan 后重新编译）；② 用户显式裁决接受无类型检查并降低相关断言结论——裁决经 --allow-missing-typescript "<裁决理由>" 传入重新编译（理由随 exec-plan 溯源冻结）；③ 修订设计/验收表述，不再声称类型层断言（回 tech-design-v6 / delivery-v6 修订）`,
+        );
+      }
+    } else {
+      // 放行 + 登记注释（设计 §11.2：available / 快照不在盘均放行——快照生成属 W1 探测通道）
+      const observed = tsEntry === null
+        ? "快照 toolchain 无 typescript 条目（未在 devDependencies 声明——项目事实，命令可执行性归执行层验证）"
+        : `toolchain.typescript.status=${tsEntry.status}（类型检查命令声明：${typeof tsEntry.command === "string" ? tsEntry.command : "未登记"}）`;
+      ctx.assetGateNotes.push(
+        snapshot === null
+          ? `类型层门已触发（${typeBasis.join("；")}）但能力快照不在盘（${snapshotPath}）——类型检查可执行性未核验，按旧项目放行；运行 detect-project-capabilities.mjs 生成快照后重编译可补核验（快照生成属 W1 探测通道，本门不代跑）`
+          : `类型层门已触发（${typeBasis.join("；")}）并放行：${observed}`,
+      );
+    }
+  }
+
+  // §11.3 测试命令有效性
+  // ① 空跑放行配置（快照事实字段 zeroTestPassThrough=true）在已有测试任务中必须移除或显式登记理由
+  const passthrough = testConfig.filter((entry) => entry.zeroTestPassThrough === true);
+  if (passthrough.length > 0) {
+    const runners = passthrough.map((entry) => (isStr(entry.runner) ? entry.runner : "（runner 未登记）")).join("、");
+    if (isStr(opts.allowZeroTestPassthrough)) {
+      ctx.assetGateNotes.push(`测试命令有效性门：快照 testConfig 含 zeroTestPassThrough=true（runner：${runners}），按用户显式裁决放行（裁决理由：${opts.allowZeroTestPassthrough}）——相关测试结论按可能空跑降级并在 D2/D3 审查披露（设计 §11.3）`);
+    } else {
+      gap(
+        `测试命令有效性门未过：能力快照 testConfig 登记 zeroTestPassThrough=true（runner：${runners}）——空跑放行配置会让「无测试也全绿」，测试结论不可信`,
+        `空跑配置事实权威 = ${snapshotPath} testConfig 段（detect-project-capabilities.mjs 按测试配置文件与 package.json 文本探测登记，禁手改）`,
+        `处置二选一：① 移除 passWithNoTests（或等价）配置后重跑 node ~/.agents/skills/delivery-v6/scripts/detect-project-capabilities.mjs --project-root ${projectRoot} --out ${snapshotPath} 重建快照再重新编译；② 确需保留（存量测试补齐过渡期等）→ 用户显式裁决接受，经 --allow-zero-test-passthrough "<裁决理由>" 传入重新编译（理由随 exec-plan 溯源冻结，相关测试结论降级披露）`,
+      );
+    }
+  }
+  // ② 全量测试命令绑定但快照判定探测不到任何测试配置 → 全量命令在无测试时可空跑成功
+  //（快照缺省 = 探测事实不在盘，不虚构判定，不在此拦）
+  if (snapshot !== null && testConfig.length === 0 && isRec(execPlan.testPlan?.fullSuite)) {
+    gap(
+      "测试命令有效性门未过：全量测试命令（testPlan.fullSuite）已绑定但能力快照 testConfig 为空（项目内未探测到任何测试配置文件）——测试命令不可空跑成功",
+      `测试配置探测事实权威 = ${snapshotPath} testConfig 段（detect-project-capabilities.mjs 探测登记；配置为快照后新增时重跑探测即消解）`,
+      `确认测试基建（vitest/jest/playwright 等配置文件）在场后重跑 node ~/.agents/skills/delivery-v6/scripts/detect-project-capabilities.mjs --project-root ${projectRoot} --out ${snapshotPath} 再重新编译；该任务确无测试基建则回 tech-design-v6 修订测试策略并停回用户裁决（全量命令的断言结论降级）`,
+    );
+  }
+  // ③ 机器不可判定子条（设计 §11.3 第 3 句）以登记性注释落地：绑定充分性是设计语义判断，
+  //    编译器只登记义务不虚构判定逻辑，逐项核对归 D2 审查
+  ctx.assetGateNotes.push("机制八 §11.3 登记义务（机器不可判定，D2 审查核对）：声明的架构机检 / lint / 格式检查脚本必须绑定到某增量命令或 D2 Gate A；只存在脚本文件但无执行入口的，按 verification asset obligation open 处置（未绑定项停回披露，不得当作已覆盖）");
+}
+
 // ── 主流程 ──
 
 function parseArgs(argv) {
-  const opts = { implPlan: null, mode: "dev", taskDir: null, check: false, replay: null, reinit: false };
+  const opts = { implPlan: null, mode: "dev", taskDir: null, check: false, replay: null, reinit: false, allowMissingTypescript: null, allowZeroTestPassthrough: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--impl-plan") opts.implPlan = argv[++i];
@@ -1353,6 +1495,12 @@ function parseArgs(argv) {
     } else if (a === "--task-dir") {
       opts.taskDir = argv[++i];
       if (!opts.taskDir || opts.taskDir.startsWith("--")) failUsage("--task-dir 须带交付任务目录参数");
+    } else if (a === "--allow-missing-typescript") {
+      opts.allowMissingTypescript = argv[++i];
+      if (!opts.allowMissingTypescript || opts.allowMissingTypescript.startsWith("--")) failUsage("--allow-missing-typescript 须带非空裁决理由（机制八 §11.2 类型层门处置②：用户显式裁决接受无类型检查并降断言结论）");
+    } else if (a === "--allow-zero-test-passthrough") {
+      opts.allowZeroTestPassthrough = argv[++i];
+      if (!opts.allowZeroTestPassthrough || opts.allowZeroTestPassthrough.startsWith("--")) failUsage("--allow-zero-test-passthrough 须带非空裁决理由（机制八 §11.3：用户显式裁决接受空跑放行配置保留）");
     } else if (a === "--check") opts.check = true;
     else if (a === "--replay-compare") {
       opts.replay = argv[++i];
@@ -1361,13 +1509,15 @@ function parseArgs(argv) {
     else if (a === "--help" || a === "-h") {
       process.stdout.write(
         [
-          "用法：node compile-exec-plan.mjs --impl-plan <path>.impl-plan.json [--mode dev|acceptance] [--task-dir <交付任务目录>] [--check] [--replay-compare <旧 exec-plan 路径>] [--reinit]",
+          "用法：node compile-exec-plan.mjs --impl-plan <path>.impl-plan.json [--mode dev|acceptance] [--task-dir <交付任务目录>] [--check] [--replay-compare <旧 exec-plan 路径>] [--reinit] [--allow-missing-typescript <裁决理由>] [--allow-zero-test-passthrough <裁决理由>]",
           "  --impl-plan       impl-plan.json 路径（唯一计划权威；渲染字段权威 = tech-design-v6/references/impl-plan-mapping.md）",
           "  --mode            dev（缺省：exec-plan + 任务书 + 初始 status.json）| acceptance（在其上填验收节点与 wrapper；前置 dev 编译已完成）",
           "  --task-dir        交付体系任务的交付任务目录（读 increments.json 做增量归属断言；增量契约与验收绑定核对在写盘前执行）",
           "  --check           防手改比对（exec-plan 深比较 + promptFile 逐字节；status.json 跳过；wrapper 委托 gen-acceptance-wrapper --check）",
           "  --replay-compare  历史只读重放：按旧 exec-plan 的 mode 重新生成（不写盘）并逐字段比对报告",
           "  --reinit          dev 重编译时显式确认重置已有执行进度（status.json 含非 pending 节点时缺省拒绝）",
+          "  --allow-missing-typescript <理由>     机制八 §11.2 类型层门裁决旗：toolchain.typescript=missing 时用户显式接受无类型检查（理由必填、随 exec-plan 溯源）",
+          "  --allow-zero-test-passthrough <理由>  机制八 §11.3 测试命令有效性门裁决旗：快照 zeroTestPassThrough=true 时用户显式接受保留（理由必填、随 exec-plan 溯源）",
           "",
           "退出码：0 成功 / PASS / 重放完成；1 语义缺口或校验 FAIL（全体不生成）；2 用法错误。",
         ].join("\n") + "\n",
@@ -1504,7 +1654,13 @@ function main() {
     }
   }
 
-  const ctx = { plan, planPath, projectRoot, productRoot, promptsDir, runlogDir, name, designDocPath, taskDir: taskDirAbs, increments, acceptance, deliveryProfile, mode: opts.mode, skillVersion };
+  // 裁决旗后缀：生成的 exec-plan 溯源命令（generatedBy.command）与全部「重新运行」恢复文案
+  // 都必须携带——漏带会让照抄恢复命令的重跑重新触发同一裁决门（裁决是编译输入的一部分）
+  const rulingArgs = [
+    ...(isStr(opts.allowMissingTypescript) ? [`--allow-missing-typescript ${opts.allowMissingTypescript}`] : []),
+    ...(isStr(opts.allowZeroTestPassthrough) ? [`--allow-zero-test-passthrough ${opts.allowZeroTestPassthrough}`] : []),
+  ];
+  const ctx = { plan, planPath, projectRoot, productRoot, promptsDir, runlogDir, name, designDocPath, taskDir: taskDirAbs, increments, acceptance, deliveryProfile, mode: opts.mode, skillVersion, assetGateNotes: [], rulingArgs };
 
   // dev 部分（两种模式共用——acceptance exec-plan 顶层保留 dev/review 节点与全部 dev 期字段）
   const dev = buildDevNodes(ctx);
@@ -1552,7 +1708,7 @@ function main() {
       generator: "compile-exec-plan.mjs",
       generatorVersion: GENERATOR_VERSION,
       inputSha256: sha256Text(loaded.rawText),
-      command: `node ${SCRIPT_PATH} --impl-plan ${planPath} --mode ${opts.mode}${taskDirAbs ? ` --task-dir ${taskDirAbs}` : ""}`,
+      command: `node ${SCRIPT_PATH} --impl-plan ${planPath} --mode ${opts.mode}${taskDirAbs ? ` --task-dir ${taskDirAbs}` : ""}${ctx.rulingArgs.length > 0 ? ` ${ctx.rulingArgs.join(" ")}` : ""}`,
     },
   };
 
@@ -1587,6 +1743,10 @@ function main() {
   // --task-dir 增量契约与验收绑定核对前移（写盘前）：归属不全 / 绑定陈旧在此拦下，
   // 与其余语义缺口同通道输出，全体不生成（quality 段仍由写盘后真校验器承担）
   checkTaskDirContract(execPlan, ctx);
+
+  // 机制八 D0 门（§11.2 类型层门 / §11.3 测试命令有效性）：与其余语义缺口同通道全体不生成；
+  // 放行事实以登记性披露进编译摘要（快照缺省 / 显式裁决两类放行必须留痕）
+  checkVerificationAssetGates(execPlan, ctx, opts);
 
   // 写盘前统一出口：语义缺口全量报告，全体不生成
   if (gaps.length > 0) {
@@ -1718,6 +1878,10 @@ function main() {
   if (Array.isArray(ctx.contractNotes) && ctx.contractNotes.length > 0) {
     for (const note of ctx.contractNotes) lines.push(`  外部契约披露：${note}`);
   }
+  // 机制八 D0 门放行事实的登记性披露（快照缺省放行 / 显式裁决放行 / 机器不可判定义务登记）
+  if (Array.isArray(ctx.assetGateNotes) && ctx.assetGateNotes.length > 0) {
+    for (const note of ctx.assetGateNotes) lines.push(`  验证资产门披露：${note}`);
+  }
   if (dev.noDesignRefUnits.length > 0) {
     lines.push(`  警告：${dev.noDesignRefUnits.length} 个单元未登记 units[].designRef（任务书缺设计章节锚）：${dev.noDesignRefUnits.join("、")}——建议回 impl-plan 补登记`);
   }
@@ -1728,8 +1892,9 @@ function main() {
     lines.push(`  D3 发起前跑校验门：node ${CHECK_EXEC_PLAN} ${join(productRoot, `${name}.exec-plan.json`)}`);
     if (taskDirAbs) lines.push(`  D3 全绿后、D4 候选完成前跑外部契约复扫门：node ${join(SCRIPT_DIR, "check-contract-rescan.mjs")} --task-dir ${taskDirAbs} --project-root ${projectRoot} --exec-plan ${join(productRoot, `${name}.exec-plan.json`)} --stage d3`);
   } else {
-    lines.push(`  初始 status.json / runlog / ledger 已初始化；防手改核对：node ${SCRIPT_PATH} --impl-plan ${planPath} --check${taskDirAbs ? ` --task-dir ${taskDirAbs}` : ""}`);
-    lines.push(`  验收资产就绪后跑 acceptance 编译：node ${SCRIPT_PATH} --impl-plan ${planPath} --mode acceptance${taskDirAbs ? ` --task-dir ${taskDirAbs}` : ""}`);
+    const rulingSuffix = ctx.rulingArgs.length > 0 ? ` ${ctx.rulingArgs.join(" ")}` : "";
+    lines.push(`  初始 status.json / runlog / ledger 已初始化；防手改核对：node ${SCRIPT_PATH} --impl-plan ${planPath} --check${taskDirAbs ? ` --task-dir ${taskDirAbs}` : ""}${rulingSuffix}`);
+    lines.push(`  验收资产就绪后跑 acceptance 编译：node ${SCRIPT_PATH} --impl-plan ${planPath} --mode acceptance${taskDirAbs ? ` --task-dir ${taskDirAbs}` : ""}${rulingSuffix}`);
   }
   process.stdout.write(lines.join("\n") + "\n");
   process.exit(0);

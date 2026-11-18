@@ -639,3 +639,185 @@ test("防漂移锚：进程内转译执行 == CLI spawn（同 fixture dev 编译
   assert.equal(normalize(inProc.stdout, fIn.home, fIn.proj), normalize(cli.stdout, homeCli, projCli), "stdout 不一致（路径归一后应逐字段相同）");
   assert.equal(normalize(inProc.stderr, fIn.home, fIn.proj), normalize(cli.stderr, homeCli, projCli), "stderr 不一致（路径归一后应逐字段相同）");
 });
+
+// ── acceptancePlan[].adversarialFormRefs 随行携带（接缝回归：verification-index 的
+// acceptanceNodeIds 以节点上的该字段为唯一连接，编译器不携带即索引恒空）──
+
+/** 改写 fixture 的 impl-plan 后重渲染（编译前置门需要渲染视图与 JSON 同源） */
+function rewritePlan(f, mutate) {
+  mutate(f.plan);
+  writeFileSync(f.planPath, `${JSON.stringify(f.plan, null, 2)}\n`);
+  assert.equal(runRenderer(f.planPath).status, 0, "fixture 重渲染失败");
+}
+
+test("acceptance 编译：acceptancePlan 行 adversarialFormRefs 随行携带到节点，汇总节点聚合去重", (t) => {
+  const f = makeFixture(t);
+  rewritePlan(f, (plan) => {
+    plan.acceptancePlan[0].adversarialFormRefs = ["AF-1", "AF-2"];
+    plan.acceptancePlan[1].adversarialFormRefs = ["AF-2", "AF-1"];
+  });
+  assert.equal(f.run(["--impl-plan", f.planPath]).status, 0, "dev 编译前置失败");
+  const r = f.run(["--impl-plan", f.planPath, "--mode", "acceptance"]);
+  assert.equal(r.status, 0, `acceptance 编译失败：${r.stderr}`);
+  const plan = JSON.parse(readFileSync(join(f.productRoot, "demo-compile.exec-plan.json"), "utf8"));
+  // 行级引用逐字复制：script verify 与 inspect 节点随行携带
+  assert.deepEqual(plan.acceptance.nodes.find((n) => n.id === "A1").adversarialFormRefs, ["AF-1", "AF-2"]);
+  assert.deepEqual(plan.acceptance.nodes.find((n) => n.id === "A2").adversarialFormRefs, ["AF-2", "AF-1"]);
+  // 汇总 inspect 节点 = 聚合其 verify 前驱（仅 A1）的 refs 去重；inspect 行不进聚合域
+  assert.deepEqual(plan.acceptance.nodes.find((n) => n.id === "summarize").adversarialFormRefs, ["AF-1", "AF-2"]);
+});
+
+test("acceptance 编译：adversarialFormRefs 形态破损报三段式缺口不静默", (t) => {
+  const f = makeFixture(t);
+  rewritePlan(f, (plan) => {
+    plan.acceptancePlan[0].adversarialFormRefs = "AF-1"; // 字符串非数组——上游契约含糊
+  });
+  assert.equal(f.run(["--impl-plan", f.planPath]).status, 0, "dev 编译不受验收行字段影响");
+  const r = f.run(["--impl-plan", f.planPath, "--mode", "acceptance"]);
+  assert.equal(r.status, 1, `形态破损应拒绝：${r.stderr}`);
+  assert.ok(r.stderr.includes("adversarialFormRefs 存在但不是字符串数组"), `须点名字段形态缺口：${r.stderr}`);
+  assert.ok(r.stderr.includes("不合法输入") && r.stderr.includes("权威源") && r.stderr.includes("恢复动作"), "三段式齐全");
+  // acceptance 缺口不得覆盖 dev 期 exec-plan（保持 dev 形态，同 runner-flags 用例纪律）
+  assert.equal(JSON.parse(readFileSync(join(f.productRoot, "demo-compile.exec-plan.json"), "utf8")).mode, "dev", "exec-plan 须保持 dev 形态未被改写");
+});
+
+test("check-exec-plan schema 同步：节点 adversarialFormRefs 可选、在场须为字符串数组", async () => {
+  // 单元级断言（import checkPlan；CLI 全量校验由编译器生成即校验门与其他用例覆盖）
+  const { checkPlan } = await import(CHECKER);
+  const base = () => ({
+    version: 1,
+    mode: "acceptance",
+    projectRoot: "/p",
+    statusPath: "/p/s.json",
+    planPath: "/p/impl-plan.json",
+    designDocPath: "/p/design.rendered.md",
+    baseline: "abcdef1234567890",
+    testPlan: { fullSuite: { program: "node", args: ["--test", "all"] } },
+    acceptance: {
+      nodes: [{ id: "A1", kind: "verify", deps: [], script: "/p/s.mjs", artifactsDir: "/p/a" }],
+      groups: { core: [], nonCore: [] },
+    },
+  });
+  // 字段缺省 = 合法（行未声明引用的节点形态）
+  assert.equal(checkPlan(base()).ok, true, "无 adversarialFormRefs 的节点应放行");
+  // 字符串数组 = 合法
+  const arr = base();
+  arr.acceptance.nodes[0].adversarialFormRefs = ["AF-1"];
+  assert.equal(checkPlan(arr).ok, true, "字符串数组形态应放行");
+  // 在场但非数组 = field 缺口
+  const bad = base();
+  bad.acceptance.nodes[0].adversarialFormRefs = "AF-1";
+  const result = checkPlan(bad);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.category === "field" && e.message.includes("adversarialFormRefs")), "非数组形态须报 field 缺口");
+});
+
+// ── 机制八 D0 门（设计 §11.2 类型层门 / §11.3 测试命令有效性）：红绿用例 ──
+
+/** 手写项目能力快照（真实快照由 detect-project-capabilities.mjs 生成，此处只造门判定输入）。
+ *  testConfig 缺省 = 中性非空条目（zeroTestPassThrough=false）：11.2 用例不触发 11.3 的
+ *  「testConfig 为空 + fullSuite 绑定」拒绝，两门判定互不串扰 */
+function capabilitiesSnapshot(toolchain = [], testConfig = [{ runner: "vitest", zeroTestPassThrough: false, source: "vitest.config.ts" }]) {
+  return {
+    schemaVersion: 1,
+    generator: { name: "detect-project-capabilities", version: 1 },
+    projectRoot: "/p",
+    observedAt: "2026-11-18T00:00:00.000Z",
+    inputHashes: {},
+    commands: [],
+    verificationAssets: [],
+    toolchain,
+    testConfig,
+    unknowns: [],
+  };
+}
+
+function writeSnapshot(f, snapshot) {
+  mkdirSync(f.productRoot, { recursive: true });
+  writeFileSync(join(f.productRoot, "project-capabilities.json"), `${JSON.stringify(snapshot, null, 2)}\n`);
+}
+
+const TS_MISSING = [{ id: "typescript", status: "missing", command: "tsc --noEmit", source: "devDependencies + node_modules/.bin" }];
+const TS_AVAILABLE = [{ id: "typescript", status: "available", command: "tsc --noEmit", source: "devDependencies + node_modules/.bin" }];
+
+test("机制八 11.2 类型层门：tsconfig 在场 + typescript=missing → 拒绝编译，三选一处置齐全", (t) => {
+  const f = makeFixture(t);
+  writeFileSync(join(f.proj, "tsconfig.json"), "{}\n"); // 触发依据：项目 tsconfig 在场
+  writeSnapshot(f, capabilitiesSnapshot(TS_MISSING));
+  const r = f.run(["--impl-plan", f.planPath]);
+  assert.equal(r.status, 1, `类型工具链 missing 应拒绝：${r.stderr}`);
+  assert.ok(r.stderr.includes("类型层门未过"), `须走类型层门缺口通道：${r.stderr}`);
+  assert.ok(r.stderr.includes("tsconfig.json 在场"), "须点名触发依据");
+  assert.ok(r.stderr.includes("status=missing"), "须点名快照事实");
+  for (const option of ["纳入首个增量", "显式裁决", "不再声称类型层断言"]) {
+    assert.ok(r.stderr.includes(option), `设计 §11.2 三选一处置须含「${option}」`);
+  }
+  assert.ok(r.stderr.includes("--allow-missing-typescript"), "恢复动作须给出裁决旗");
+  assert.ok(!existsSync(join(f.productRoot, "demo-compile.exec-plan.json")), "拒绝时不得生成 exec-plan");
+});
+
+test("机制八 11.2 放行三态：available / 快照不在盘 / 显式裁决旗，全部放行并登记披露", (t) => {
+  // ① status=available → 放行 + 披露快照事实
+  const f1 = makeFixture(t);
+  writeFileSync(join(f1.proj, "tsconfig.json"), "{}\n");
+  writeSnapshot(f1, capabilitiesSnapshot(TS_AVAILABLE));
+  const r1 = f1.run(["--impl-plan", f1.planPath]);
+  assert.equal(r1.status, 0, `available 应放行：${r1.stderr}`);
+  assert.ok(r1.stdout.includes("验证资产门披露") && r1.stdout.includes("类型层门") && r1.stdout.includes("status=available"), "放行须披露快照事实");
+  // ② 快照不在盘（旧项目）→ 放行 + 披露未核验与补核验通道
+  const f2 = makeFixture(t);
+  writeFileSync(join(f2.proj, "tsconfig.json"), "{}\n");
+  const r2 = f2.run(["--impl-plan", f2.planPath]);
+  assert.equal(r2.status, 0, `快照不在盘应放行：${r2.stderr}`);
+  assert.ok(r2.stdout.includes("快照不在盘") && r2.stdout.includes("detect-project-capabilities.mjs"), "放行披露须点名快照缺省与探测通道");
+  // ③ 显式裁决旗 → 放行 + 披露裁决理由；裁决旗冻结进 exec-plan 溯源
+  const f3 = makeFixture(t);
+  writeFileSync(join(f3.proj, "tsconfig.json"), "{}\n");
+  writeSnapshot(f3, capabilitiesSnapshot(TS_MISSING));
+  const r3 = f3.run(["--impl-plan", f3.planPath, "--allow-missing-typescript", "用户裁决：接受无类型检查"]);
+  assert.equal(r3.status, 0, `裁决旗应放行：${r3.stderr}`);
+  assert.ok(r3.stdout.includes("按用户显式裁决放行") && r3.stdout.includes("用户裁决：接受无类型检查"), "放行披露须点名裁决");
+  const plan = JSON.parse(readFileSync(join(f3.productRoot, "demo-compile.exec-plan.json"), "utf8"));
+  assert.ok(plan.generatedBy.command.includes("--allow-missing-typescript"), "裁决旗须随 generatedBy.command 冻结");
+});
+
+test("机制八 11.3 测试命令有效性门：zeroTestPassThrough 拒绝（裁决旗放行）／testConfig 空 + fullSuite 绑定拒绝／快照损坏拒绝", (t) => {
+  // ① 空跑放行配置事实 → 拒绝（fixture 无 tsconfig、快照 toolchain 空——确认拒绝只来自 11.3）
+  const f1 = makeFixture(t);
+  writeSnapshot(f1, capabilitiesSnapshot([], [{ runner: "vitest", zeroTestPassThrough: true, source: "vitest.config.ts" }]));
+  const r1 = f1.run(["--impl-plan", f1.planPath]);
+  assert.equal(r1.status, 1, `空跑放行配置应拒绝：${r1.stderr}`);
+  assert.ok(r1.stderr.includes("测试命令有效性门未过"), `须走测试命令有效性门通道：${r1.stderr}`);
+  assert.ok(r1.stderr.includes("zeroTestPassThrough=true") && r1.stderr.includes("vitest"), "须点名快照事实与 runner");
+  assert.ok(r1.stderr.includes("移除 passWithNoTests") && r1.stderr.includes("--allow-zero-test-passthrough"), "两条处置须齐全");
+  assert.ok(!r1.stderr.includes("类型层门未过"), "类型层门未触发不得误报");
+  // ② 显式裁决旗 → 放行 + 披露
+  const f2 = makeFixture(t);
+  writeSnapshot(f2, capabilitiesSnapshot([], [{ runner: "vitest", zeroTestPassThrough: true, source: "vitest.config.ts" }]));
+  const r2 = f2.run(["--impl-plan", f2.planPath, "--allow-zero-test-passthrough", "过渡期保留"]);
+  assert.equal(r2.status, 0, `裁决旗应放行：${r2.stderr}`);
+  assert.ok(r2.stdout.includes("按用户显式裁决放行") && r2.stdout.includes("过渡期保留"), "放行披露须点名裁决");
+  // ③ testConfig 为空（探测不到任何测试配置）+ fullSuite 绑定 → 全量命令空跑拒绝
+  const f3 = makeFixture(t);
+  writeSnapshot(f3, capabilitiesSnapshot([], []));
+  const r3 = f3.run(["--impl-plan", f3.planPath]);
+  assert.equal(r3.status, 1, `无测试配置应拒绝：${r3.stderr}`);
+  assert.ok(r3.stderr.includes("测试命令不可空跑成功"), "须点名空跑风险");
+  assert.ok(r3.stderr.includes("detect-project-capabilities.mjs"), "恢复动作须指向重跑探测");
+  // ④ 快照在场但损坏 → 照实报缺口（禁手改产物损坏不静默当缺省）
+  const f4 = makeFixture(t);
+  mkdirSync(f4.productRoot, { recursive: true });
+  writeFileSync(join(f4.productRoot, "project-capabilities.json"), "{broken");
+  const r4 = f4.run(["--impl-plan", f4.planPath]);
+  assert.equal(r4.status, 1, `损坏快照应拒绝：${r4.stderr}`);
+  assert.ok(r4.stderr.includes("项目能力快照不可读"), "须点名快照损坏");
+  assert.ok(r4.stderr.includes("detect-project-capabilities.mjs"), "恢复动作须指向重建快照");
+});
+
+test("机制八 §11.3 登记义务：编译摘要披露机检脚本绑定义务（机器不可判定子条的登记性注释）", (t) => {
+  const f = makeFixture(t);
+  const r = f.run(["--impl-plan", f.planPath]);
+  assert.equal(r.status, 0, `编译应成功：${r.stderr}`);
+  assert.ok(r.stdout.includes("验证资产门披露") && r.stdout.includes("登记义务"), "摘要须登记 §11.3 机器不可判定义务");
+  assert.ok(r.stdout.includes("D2 Gate A") && r.stdout.includes("verification asset obligation open"), "义务登记须点名绑定去向与 open 处置");
+});

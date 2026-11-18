@@ -142,8 +142,9 @@ function contractIncrements() {
   };
 }
 
-/** 契约任务 impl-plan：spike 单元 + 两个业务单元（businessDepsOnSpike=false 时业务单元不依赖 spike） */
-function contractPlan(proj, { withSpike = true, businessDepsOnSpike = true, withProbeRow = true } = {}) {
+/** 契约任务 impl-plan：spike 单元 + 两个业务单元（businessDepsOnSpike=false 时业务单元不依赖 spike）；
+ *  probeFormRefs 非空时给 runtime-probe 行加 adversarialFormRefs（JSON-only 字段——D3 节点场景归属连接） */
+function contractPlan(proj, { withSpike = true, businessDepsOnSpike = true, withProbeRow = true, probeFormRefs = null } = {}) {
   const units = [];
   if (withSpike) {
     units.push({
@@ -184,6 +185,7 @@ function contractPlan(proj, { withSpike = true, businessDepsOnSpike = true, with
       id: "A-probe-reg", item: "runtime 探针：命令注册与分发", level: "L3", group: "core", deps: [], optimization: "可脚本化",
       type: "runtime-probe", capabilityIds: ["EC-demo-host:register-command"], command: { program: "node", args: ["scripts/probe.mjs"] },
       artifact: "evidence/runtime-probe-A-probe-reg.json",
+      ...(probeFormRefs !== null ? { adversarialFormRefs: probeFormRefs } : {}),
     });
     plan.acceptancePlan[1].deps = ["A-probe-reg"];
   }
@@ -1230,4 +1232,66 @@ test("evaluate 侧基线预算可达性：手改两条 EnvironmentBaselineConfir
   assert.notEqual(deniedResult.status, 0, `第二条基线确认应被 evaluate 拒绝：${deniedResult.stderr}`);
   assert.match(deniedResult.stderr, /同一验收版本（v1）内登记了 2 次 EnvironmentBaselineConfirmed/, "须点名预算规则（同版本上限 1 次）");
   assert.match(deniedResult.stderr, /恢复动作：/, "拒绝须带恢复动作");
+});
+
+// ── I. D3 probe artifact cases 结论核对（§7.3「D3 全绿但 runtime 义务未满足时不能进候选完成」）──
+// artifact 落盘可解析只证 JSON 在场；runtime 义务判定输入是 cases（设计 §6.3）——在场 case
+// 结论全绿（全部 passed 且无 skipped）才构成 D3 侧放行。cases 与 capability 的覆盖对账归
+// gate 义务派生单源，空 cases 数组在此按「无可判 case」放行（compile-contract-gate 用例钉住该边界）。
+
+test("D3 复扫（CLI）：probe cases 有未通过/跳过 case → 拒绝并点名 case id；全绿对照放行", (t) => {
+  const f = makeContractFixture(t, {
+    acceptance: contractAcceptance(),
+    increments: contractIncrements(),
+    snapshot: true,
+    planOverrides: { probeFormRefs: ["AF-PROBE-1"] }, // 探针行声明反例场景引用（D3 节点须随行携带）
+  });
+  // 探针行引用的场景必须在验收包登记 + 配 verificationBindings 测试绑定
+  //（check-quality-contract 引用存在性门：acceptancePlan 引用未知场景即拒）
+  writeFileSync(
+    join(f.proj, "design", "s4-accept.json"),
+    `${JSON.stringify({
+      criterionMechanisms: [],
+      verificationBindings: [{ adversarialFormId: "AF-PROBE-1", testRef: "probe-asset", preconditions: ["真实宿主已装载"], actions: ["按五参签名调用"], assertions: ["注册表含命令"] }],
+    }, null, 2)}\n`,
+  );
+  const acc = contractAcceptance();
+  acc.adversarialForms = [{ id: "AF-PROBE-1", assertionId: "A1", qualifier: "真实宿主", entryPoint: "host", initialState: "已装载", operation: "按五参签名调用", timing: "命令期", expected: "注册失败被观察", testAssetRefs: ["probe-asset"], rationale: "签名差异" }];
+  f.rewriteAcceptance(acc);
+  const d0 = f.run(["--impl-plan", f.planPath, "--task-dir", f.taskDir]);
+  assert.equal(d0.status, 0, `D0 编译前置失败：${d0.stderr}`);
+  const accepted = f.run(["--impl-plan", f.planPath, "--mode", "acceptance", "--task-dir", f.taskDir]);
+  assert.equal(accepted.status, 0, `acceptance 编译前置失败：${accepted.stderr}`);
+  // 接缝回归（任务一并断言）：runtime-probe 行的 adversarialFormRefs 须随行复制到 exec-plan 节点
+  const accPlan = JSON.parse(readFileSync(f.execPath, "utf8"));
+  assert.deepEqual(accPlan.acceptance.nodes.find((n) => n.runtimeProbe).adversarialFormRefs, ["AF-PROBE-1"], "probe 节点须携带行级反例场景引用");
+  mkdirSync(join(f.taskDir, "evidence"), { recursive: true });
+  const artifactPath = join(f.taskDir, "evidence", "runtime-probe-A-probe-reg.json");
+  const writeArtifact = (document) => writeFileSync(artifactPath, `${JSON.stringify(document)}\n`);
+  const runRescan = () =>
+    runMjsScript(RESCAN_CLI, ["--task-dir", f.taskDir, "--project-root", f.proj, "--exec-plan", f.execPath, "--stage", "d3"], {
+      env: { ...process.env, HOME: f.home },
+      cwd: f.proj,
+    });
+  // 红 1：passed=false → 拒绝并点名失败 case id（capabilityId）
+  writeArtifact({ environment: { kind: "real-host" }, cases: [{ capabilityId: "register-command", operation: "注册命令", observed: { called: false }, passed: false }], summary: { passed: 0, failed: 1, skipped: 0 } });
+  const failed = runRescan();
+  assert.equal(failed.status, 1, `失败 case 应拒绝：${failed.stdout}`);
+  assert.ok(failed.stdout.includes("probe case 未通过") && failed.stdout.includes("register-command"), `须点名失败 case id：${failed.stdout}`);
+  assert.ok(failed.stdout.includes("恢复动作"), "拒绝须带恢复动作");
+  // 红 2：skipped=true → 拒绝并点名 case id 与理由
+  writeArtifact({ environment: { kind: "real-host" }, cases: [{ capabilityId: "register-command", skipped: true, skipReason: "真实宿主不可得" }], summary: { passed: 0, failed: 0, skipped: 1 } });
+  const skipped = runRescan();
+  assert.equal(skipped.status, 1, `跳过 case 应拒绝：${skipped.stdout}`);
+  assert.ok(skipped.stdout.includes("probe case 被 skipped") && skipped.stdout.includes("真实宿主不可得"), `须点名跳过 case 与理由：${skipped.stdout}`);
+  // 红 3：cases 非数组 → 义务判定输入缺失拒绝
+  writeArtifact({ environment: { kind: "real-host" }, cases: "all-passed", summary: {} });
+  const invalid = runRescan();
+  assert.equal(invalid.status, 1, `cases 形态非法应拒绝：${invalid.stdout}`);
+  assert.ok(invalid.stdout.includes("cases 缺失或形态非法"), `须点名 cases 形态缺口：${invalid.stdout}`);
+  // 绿：cases 全部 passed（唯一变量 = artifact 内容——其余复扫段全绿，对照证明门是活的）
+  writeArtifact({ environment: { kind: "real-host" }, cases: [{ capabilityId: "register-command", operation: "注册命令", observed: { called: true }, passed: true }], summary: { passed: 1, failed: 0, skipped: 0 } });
+  const green = runRescan();
+  assert.equal(green.status, 0, `cases 全绿应放行：${green.stdout}${green.stderr}`);
+  assert.ok(green.stdout.includes("PASS"), "放行须输出 PASS");
 });

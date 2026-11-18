@@ -488,6 +488,16 @@ function contractExtras(raw, rawNodes) {
     if (isRec(rn.runtimeProbe)) {
       for (const e of probeSpecErrors(rn.runtimeProbe, `runtime-probe 节点 ${rn.id}`, null)) errors.push(e);
     }
+    // adversarialFormRefs（D3 节点场景归属的连接字段，verification-index acceptanceNodeIds
+    // 的派生输入）：可选——节点未携带 = 行未声明引用（合法）；在场即须为字符串数组
+    //（impl-plan acceptancePlan[].adversarialFormRefs 逐字转抄，权威登记 =
+    // tech-design-v6/references/impl-plan-mapping.md），形态破损说明被手改或转抄走样
+    if (rn.adversarialFormRefs !== undefined && !isStrArr(rn.adversarialFormRefs)) {
+      errors.push({
+        category: "field",
+        message: `节点 ${rn.id} 的 adversarialFormRefs 必须是字符串数组（反例场景引用，impl-plan acceptancePlan[].adversarialFormRefs 的逐字转抄；恢复：回 tech-design-v6 T3 修 acceptancePlan 后重新编译，不手修 exec-plan）`,
+      });
+    }
     if (isStr(rn.cwd) && !rn.cwd.startsWith("/")) {
       errors.push({
         category: "cwd",

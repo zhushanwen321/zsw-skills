@@ -36,7 +36,8 @@
 //   4. strong 候选绑定到验收标 optional 的契约 → 强制按 essential 处理（回灌编译门的
 //      契约冒烟增量与 DAG 检查，并披露给 evaluate 侧义务派生）；
 //   5. stage=d3 追加：essential 契约任务必须已编译 runtime-probe 验收节点且 probe artifact
-//      落盘可解析——probe 未跑不得进入候选完成。
+//      落盘可解析、在场 case 结论全绿（全部 passed 且无 skipped，设计 §6.3）——probe 未跑或
+//      有失败/跳过 case 不得进入候选完成。
 // 调用类提取的三条路径与「无调用类不拒绝」：manifest / 纯 import 型强候选提不到调用类时
 // 不因此拒绝（它们由候选处置表兜底——处置对账在声明层与复扫层都在），只有「提得到类但
 // 未被覆盖」才拒绝（能力清单低报的主机器门）。
@@ -450,10 +451,45 @@ export function runContractRescan(opts) {
         errors.push({ category: "probe", code: "probe-artifact-missing", nodeId: node.id, artifact, message: null });
         continue;
       }
+      let artifactDocument = null;
       try {
-        JSON.parse(readFileSync(artifact, "utf8"));
+        artifactDocument = JSON.parse(readFileSync(artifact, "utf8"));
       } catch (error) {
         errors.push({ category: "probe", code: "probe-artifact-invalid-json", nodeId: node.id, artifact, message: error.message });
+        continue;
+      }
+      // §7.3 机制四「D3 全绿但 runtime 义务未满足时不能进候选完成」：artifact 可解析只证 JSON
+      // 在场，runtime 义务的判定输入是 cases（设计 §6.3——probe artifact 骨架的 cases/summary 段）。
+      // 在场 case 结论全绿（全部 passed 且无 skipped）才构成 D3 侧的 runtime 满足信号；失败 case
+      // 是正常发现入口，不得因 artifact 落盘就当 probe 全绿。边界：cases 与 capability 的覆盖对账
+      // （哪个能力缺观察 case）归 gate evaluate 侧 runtime 义务派生单源（kernel-judgments
+      // runtimeEvidenceFailure），本门不做第二份 capability 匹配——空 cases 数组在此按「无可判
+      // case」放行，由义务派生报「无该能力的观察 case」，两层各守一条边界不重复实现
+      if (!Array.isArray(artifactDocument?.cases)) {
+        errors.push({ category: "probe", code: "probe-cases-invalid", nodeId: node.id, artifact, message: null });
+        continue;
+      }
+      for (const item of artifactDocument.cases) {
+        if (!isRec(item)) {
+          errors.push({ category: "probe", code: "probe-cases-invalid", nodeId: node.id, artifact, message: null });
+          continue;
+        }
+        const capabilityId = isStr(item.capabilityId) ? item.capabilityId : "（case 无 capabilityId）";
+        if (item.skipped === true) {
+          errors.push({
+            category: "probe",
+            code: "probe-case-skipped",
+            nodeId: node.id,
+            artifact,
+            capabilityId,
+            skipReason: isStr(item.skipReason) ? item.skipReason : null,
+            message: null,
+          });
+          continue;
+        }
+        if (item.passed !== true) {
+          errors.push({ category: "probe", code: "probe-case-failed", nodeId: node.id, artifact, capabilityId, message: null });
+        }
       }
     }
     const essentialIds = new Set([...declaredEssential, ...forcedEssential]);
@@ -526,6 +562,12 @@ export function renderRescanErrorDevFlow(error) {
       return `runtime probe artifact 未落盘：${error.artifact}（节点 ${error.nodeId}）——probe 未跑或产物被清理，runtime 义务不得进入候选完成（恢复：重跑 D3 该 verify 节点；节点未编译则回 T3 补 runtime-probe 行）`;
     case "probe-artifact-invalid-json":
       return `runtime probe artifact 不是合法 JSON：${error.artifact}（${error.message}）——probe 结果不可机器判定（恢复：重跑该 probe 节点；driver 必须向 stdout 输出单一 JSON（日志走 stderr））`;
+    case "probe-cases-invalid":
+      return `runtime probe artifact 的 cases 缺失或形态非法：${error.artifact}（节点 ${error.nodeId}）——cases 是 runtime 义务的判定输入（设计 §6.3），不可机器判定不得进入候选完成（恢复：修 driver 使其输出含 cases 数组的单一 JSON 后重跑该 probe 节点）`;
+    case "probe-case-skipped":
+      return `runtime probe case 被 skipped：${error.capabilityId}（节点 ${error.nodeId}${error.skipReason ? `；理由：${error.skipReason}` : "；未给理由"}）——skipped 的能力观察未建立，runtime 义务不得进入候选完成（恢复：修 driver 或环境后重跑该 probe 节点；环境确不可得时按设计 §6.3 转 open 义务停回用户裁决，不在 D3 掩盖）`;
+    case "probe-case-failed":
+      return `runtime probe case 未通过：${error.capabilityId}（节点 ${error.nodeId}）——失败 case 是正常发现入口不得隐藏，cases 全部 passed 才构成候选完成前提（恢复：按 artifact 中该 case 的 observed 归因——实现缺陷回 D1 修复，driver 缺陷修 driver 后重跑该 probe 节点）`;
     case "probe-nodes-missing":
       return `essential 契约任务未编译任何 runtime-probe 验收节点（essential 契约：${error.essentialIds.join("、")}）——probe 未跑不得进入候选完成（恢复：回 tech-design-v6 T3 在 acceptancePlan 补 runtime-probe 行（type=runtime-probe + capabilityIds + command + artifact）后重跑 acceptance 编译与 D3）`;
     default:

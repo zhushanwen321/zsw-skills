@@ -2,13 +2,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runMjsScript, makeMjsStubSpawn } from "./helpers/mjs-runner.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TOOL = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v6", "scripts", "verification-index.mjs");
+// 端到端用例（真实编译产物驱动）的编译器与前置渲染器（进程内转译执行，提速通道与
+// compile-exec-plan-v6.test.mjs 同款）
+const COMPILER = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v6", "scripts", "compile-exec-plan.mjs");
+const RENDERER = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v6", "scripts", "render-impl-plan.mjs");
 
 function writeJson(path, value) {
   mkdirSync(dirname(path), { recursive: true });
@@ -119,7 +124,7 @@ test("build：rows 逐字段来自既有引用派生，acceptance 未生成时 a
   assert.deepEqual(ax2.acceptanceNodeIds, []);
 });
 
-test("build：能力快照存在时纳入 inputHashes；acceptance exec-plan 生成后重建填充 acceptanceNodeIds", (t) => {
+test("build：能力快照存在时纳入 inputHashes；acceptance exec-plan 生成后重建（节点未携带引用时 acceptanceNodeIds 如实为空）", (t) => {
   const fx = fixture(t);
   writeJson(join(fx.root, "project-capabilities.json"), {
     schemaVersion: 1,
@@ -134,7 +139,9 @@ test("build：能力快照存在时纳入 inputHashes；acceptance exec-plan 生
   assert.equal(result.status, 0, result.stderr);
   let index = JSON.parse(readFileSync(fx.indexPath, "utf8"));
   assert.match(index.inputHashes.projectCapabilities, /^[0-9a-f]{64}$/);
-  // acceptance 模式 exec-plan（D3 编译产物）：verify 节点携带 adversarialFormRefs → 重建后归属 AX1
+  // acceptance 模式 exec-plan：验收节点未携带 adversarialFormRefs（行未声明引用的真实产物形态）
+  // → acceptanceNodeIds 如实为空（空集合是查询事实，不算失败）；归属非空的填充路径由下方
+  // 「真实编译产物驱动」端到端用例覆盖（手写节点伪造 adversarialFormRefs 曾掩盖编译器接缝断链）
   const accExecPlan = join(fx.root, "exec-plan-acceptance.json");
   writeJson(accExecPlan, {
     version: 1,
@@ -146,7 +153,7 @@ test("build：能力快照存在时纳入 inputHashes；acceptance exec-plan 生
     statusPath: join(fx.root, "status.json"),
     acceptance: {
       nodes: [
-        { id: "verify-af1", kind: "verify", deps: [], script: "s.sh", artifactsDir: "a", adversarialFormRefs: ["AF1"] },
+        { id: "verify-af1", kind: "verify", deps: [], script: "s.sh", artifactsDir: "a" },
         { id: "inspect-af1", kind: "inspect", deps: ["verify-af1"], promptFile: "p.md", artifactsRefs: ["verify-af1"] },
       ],
       groups: { core: [], nonCore: [] },
@@ -156,8 +163,8 @@ test("build：能力快照存在时纳入 inputHashes；acceptance exec-plan 生
   assert.equal(result.status, 0, result.stderr);
   index = JSON.parse(readFileSync(fx.indexPath, "utf8"));
   const ax1 = index.rows.find((row) => row.assertionId === "AX1");
-  assert.deepEqual(ax1.acceptanceNodeIds, ["verify-af1"]);
-  // inspect 节点无 adversarialFormRefs，不归属任何断言；acceptance 模式重建后 devUnits 空（无 dev 节点可映射）
+  assert.deepEqual(ax1.acceptanceNodeIds, []);
+  // acceptance 模式重建后 devUnits 空（无 dev 节点可映射）
   assert.deepEqual(index.devUnits, []);
 });
 
@@ -417,4 +424,107 @@ test("旧错误布局（章节 JSON 放渲染视图同目录而非 <name>/ 子�
   assert.match(result.stderr, /设计目录缺 s3-solution\.json 或 s4-accept\.json/);
   assert.match(result.stderr, /design\/legacy/);
   assert.match(result.stderr, /权威源/);
+});
+
+// ── 端到端：真实编译产物驱动（compile-exec-plan → verification-index）──
+// 回归背景：verification-index 的 acceptanceNodeIds 读验收节点的 adversarialFormRefs，而
+// 编译器曾不在任何验收节点上携带该字段——真实管线恒空，手写 fixture 伪造字段曾掩盖断链。
+// 本用例走真实编译器（最小 impl-plan → dev 编译 → acceptance 编译 → 编译器自动重建索引），
+// 断言索引 acceptanceNodeIds 非空且逐节点归属正确；手写节点形态（空归属）由上方用例覆盖。
+
+test("端到端：真实编译产物驱动索引重建——acceptanceNodeIds 非空且归属正确", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "vi-e2e-root-"));
+  const home = mkdtempSync(join(tmpdir(), "vi-e2e-home-"));
+  const proj = mkdtempSync(join(tmpdir(), "vi-e2e-proj-"));
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+    rmSync(proj, { recursive: true, force: true });
+  });
+  // git 项目（编译器 projectRoot / baseline 输入；章节 JSON 按真实布局放 design/ 子目录）
+  const git = (args) => spawnSync("git", ["-c", "user.email=f@x", "-c", "user.name=f", ...args], { cwd: proj, encoding: "utf8" });
+  assert.equal(git(["init", "-q"]).status, 0);
+  mkdirSync(join(proj, "scripts"), { recursive: true });
+  mkdirSync(join(proj, "design"), { recursive: true });
+  writeFileSync(join(proj, "scripts", "verify-a1.mjs"), "process.exit(0);\n");
+  writeFileSync(join(proj, "design", "s3-solution.json"), "{}\n");
+  writeFileSync(
+    join(proj, "design", "s4-accept.json"),
+    `${JSON.stringify({
+      criterionMechanisms: [{ assertionId: "AX1", decisionIds: [], mechanismRefs: [], consistency: "pass", counterexample: "c", resolution: "" }],
+      verificationBindings: [],
+    })}\n`,
+  );
+  writeFileSync(join(proj, "README.md"), "fixture\n");
+  assert.equal(git(["add", "."]).status, 0);
+  assert.equal(git(["commit", "-q", "-m", "init"]).status, 0);
+
+  // 验收包（断言 AX1 ↔ 场景 AF1）+ increments + 设计目录 binding（索引 build 的输入；
+  // 编译不传 --task-dir——acceptance 编译不需要验收包在场，索引按 binding 自行读取）
+  const taskDir = join(root, "task");
+  mkdirSync(taskDir, { recursive: true });
+  writeJson(join(taskDir, "acceptance.json"), {
+    schemaVersion: 2,
+    requirements: [{ id: "R1", assertions: [{ id: "AX1", adversarialFormRefs: ["AF1"], testAssetRefs: [] }] }],
+    adversarialForms: [{ id: "AF1", assertionId: "AX1", qualifier: "q", entryPoint: "e", initialState: "i", operation: "o", timing: "t", expected: "x", testAssetRefs: [], rationale: "r" }],
+  });
+  writeJson(join(taskDir, "increments.json"), { schemaVersion: 1, acceptanceVersion: 1, items: [{ id: "inc-1", title: "增量一" }] });
+  writeJson(join(proj, "design", "meta.json"), { acceptanceBinding: { acceptanceVersion: 1, acceptancePackageSha256: "x", taskDir } });
+
+  // 最小 impl-plan：acceptancePlan 行声明反例场景引用（JSON-only 字段，权威 = impl-plan-mapping.md）
+  const planPath = join(proj, "demo.impl-plan.json");
+  writeJson(planPath, {
+    name: "demo",
+    designDoc: join(proj, "design"),
+    baseline: "abcdef1234567890",
+    skillVersion: "1.0.0",
+    sectionMap: { goal: "§1", mechanism: "§2", acceptance: "§3", breakdown: "§4" },
+    units: [{ id: "u-main", responsibility: "r", territory: ["src/"], deps: [], isolation: "plain", acceptance: ["条款"], decisionTier: "B", incrementId: "inc-1" }],
+    testPlan: {
+      incrementalCommands: [{ incrementId: "inc-1", unitIds: ["u-main"], command: "node --test tests/" }],
+      fullSuite: { program: "node", args: ["--test", "tests/all"] },
+    },
+    acceptancePlan: [
+      { id: "A1", item: "脚本验收", level: "L3", group: "core", deps: [], optimization: "可脚本化", verifyAsset: "-", adversarialFormRefs: ["AF1"], script: join(proj, "scripts", "verify-a1.mjs") },
+      { id: "A2", item: "人工审查", level: "L4", group: "non-core", deps: ["A1"], optimization: "判断行", adversarialFormRefs: ["AF1"] },
+    ],
+  });
+  const rendered = runMjsScript(RENDERER, [planPath]);
+  assert.equal(rendered.status, 0, `fixture 渲染失败：${rendered.stderr}`);
+  const stubSpawn = makeMjsStubSpawn({
+    mjs: [
+      join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v6", "scripts", "check-exec-plan.mjs"),
+      join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v6", "scripts", "gen-acceptance-wrapper.mjs"),
+      TOOL,
+      RENDERER,
+    ],
+    cwd: proj,
+  });
+  const run = (args) => runMjsScript(COMPILER, args, { cwd: proj, env: { ...process.env, HOME: home }, spawn: stubSpawn });
+  assert.equal(run(["--impl-plan", planPath]).status, 0, "dev 编译前置失败");
+  const accepted = run(["--impl-plan", planPath, "--mode", "acceptance"]);
+  assert.equal(accepted.status, 0, `acceptance 编译失败：${accepted.stderr}`);
+
+  const projReal = realpathSync(proj);
+  const slug = `${basename(projReal)}-${createHash("sha256").update(projReal).digest("hex").slice(0, 8)}`;
+  const productRoot = join(home, ".agents", "skill-data", "dev-flow", slug);
+  // 编译器每次 exec-plan 生成后自动重建索引（真实管线时点）——直接读其产物，不再手动 build
+  const index = JSON.parse(readFileSync(join(productRoot, "verification-index.json"), "utf8"));
+  assert.equal(index.inputHashes.execPlan, createHash("sha256").update((() => {
+    const canonical = (v) => {
+      if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+      if (v !== null && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(",")}}`;
+      return JSON.stringify(v);
+    };
+    return canonical(JSON.parse(readFileSync(join(productRoot, "demo.exec-plan.json"), "utf8")));
+  })()).digest("hex"), "索引须随 acceptance 编译重建（哈希对齐最新 exec-plan）");
+  const ax1 = index.rows.find((row) => row.assertionId === "AX1");
+  assert.deepEqual(ax1.adversarialFormIds, ["AF1"], "场景引用经验收包派生（与编译无关的既有链路）");
+  // 接缝回归核心断言：verify A1 / inspect A2 随行携带行级引用，汇总节点聚合去重——三者全部归属 AX1
+  assert.deepEqual(ax1.acceptanceNodeIds, ["A1", "A2", "summarize"]);
+  // exec-plan 节点上的字段形态（引用来源的直接证据）
+  const accPlan = JSON.parse(readFileSync(join(productRoot, "demo.exec-plan.json"), "utf8"));
+  assert.deepEqual(accPlan.acceptance.nodes.find((n) => n.id === "A1").adversarialFormRefs, ["AF1"]);
+  assert.deepEqual(accPlan.acceptance.nodes.find((n) => n.id === "A2").adversarialFormRefs, ["AF1"]);
+  assert.deepEqual(accPlan.acceptance.nodes.find((n) => n.id === "summarize").adversarialFormRefs, ["AF1"]);
 });
