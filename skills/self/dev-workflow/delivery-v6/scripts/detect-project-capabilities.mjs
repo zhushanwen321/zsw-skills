@@ -28,6 +28,12 @@
 //   3. 项目 AGENTS.md 的 verification skill 声明 → 场景清单定位（声明制：AGENTS.md 只用于定位权威来源，
 //      手写命令不当作已执行事实；定位不到记 unknowns，不猜路径）。
 //
+// V6 运行可用性扩展（设计《V6 运行可用性与外部契约守门升级》§11.1）：派生事实新增
+// toolchain[]（devDependencies 声明的工具链安装事实：status available|missing + command + source）
+// 与 testConfig[]（runner 形态 + zeroTestPassThrough 空跑配置事实 + source 配置文件）。
+// 只登记事实，不缓存执行结果。外部契约候选不写入本快照——唯一来源是
+// detect-external-contracts.mjs 的候选快照（§11.1：避免同一事实双写）。
+//
 // 纠错口径（design §8 第二步）：快照有问题 → 修项目来源或本探测适配层后重跑，禁止手改快照。
 
 import { createHash } from "node:crypto";
@@ -154,17 +160,86 @@ const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 function probeTestConfigCommands(projectRoot, inputHashes) {
   const commands = [];
+  const matchedByRunner = new Map();
   for (const candidate of TEST_CONFIG_CANDIDATES) {
     const matched = candidate.files.map((file) => join(projectRoot, file)).find((path) => existsSync(path) && statSync(path).isFile());
     if (!matched) continue;
     inputHashes.set(inputHashKey(projectRoot, matched), fileSha256(matched));
+    matchedByRunner.set(candidate, matched);
     commands.push({
       id: `test.${candidate.runner}`,
       command: { program: "npx", args: [...candidate.args] },
       source: { kind: "test-config", ref: inputHashKey(projectRoot, matched) },
     });
   }
-  return commands;
+  return { commands, matchedByRunner };
+}
+
+// ---------------------------------------------------------------------------
+// V6 §11.1 扩展事实 1：toolchain[]（devDependencies 声明的工具链安装事实）
+// 只登记「声明了 + 装没装」的事实：available = node_modules/.bin/<bin> 或包目录存在，
+// missing = 声明在 devDependencies 但安装目录不在。不执行命令（不缓存执行结果）。
+// 未声明的工具链不登记——「没声明」不是缺口，是项目事实。
+// ---------------------------------------------------------------------------
+
+const TOOLCHAIN_CANDIDATES = [
+  { id: "typescript", devDependency: "typescript", bin: "tsc", command: "tsc --noEmit" },
+  { id: "eslint", devDependency: "eslint", bin: "eslint", command: "eslint ." },
+];
+
+function probeToolchainFacts(projectRoot) {
+  const manifestPath = join(projectRoot, "package.json");
+  if (!existsSync(manifestPath) || !statSync(manifestPath).isFile()) return [];
+  let devDependencies;
+  try {
+    devDependencies = JSON.parse(readFileSync(manifestPath, "utf8")).devDependencies;
+  } catch {
+    return []; // package.json 不可解析时 probePackageCommands 已记 unknown，这里不重复发声
+  }
+  if (!devDependencies || typeof devDependencies !== "object") return [];
+  const facts = [];
+  for (const candidate of TOOLCHAIN_CANDIDATES) {
+    if (!Object.hasOwn(devDependencies, candidate.devDependency)) continue;
+    const binPath = join(projectRoot, "node_modules", ".bin", candidate.bin);
+    const pkgPath = join(projectRoot, "node_modules", candidate.devDependency, "package.json");
+    const installed = (existsSync(binPath) && statSync(binPath).isFile()) || (existsSync(pkgPath) && statSync(pkgPath).isFile());
+    facts.push({
+      id: candidate.id,
+      status: installed ? "available" : "missing",
+      command: candidate.command,
+      source: "devDependencies + node_modules/.bin",
+    });
+  }
+  return facts.sort((a, b) => byCodeUnit(a.id, b.id));
+}
+
+// ---------------------------------------------------------------------------
+// V6 §11.1 扩展事实 2：testConfig[]（runner 形态 + zeroTestPassThrough 空跑配置事实）
+// zeroTestPassThrough 探测口径：vitest / jest 的配置文件与 package.json 文本中
+// passWithNoTests 置真即 true；其余 runner 的配置体系无该等价项，记 false
+//（语义 = 未探测到空跑配置，不是「已验证无空跑」——语义解析仍归执行层）。
+// ---------------------------------------------------------------------------
+
+const ZERO_TEST_PASSTHROUGH_RE = /passWithNoTests\s*[:=]\s*true/;
+const ZERO_TEST_PASSTHROUGH_RUNNERS = new Set(["vitest", "jest"]);
+
+function probeTestConfigFacts(projectRoot, matchedByRunner) {
+  const manifestPath = join(projectRoot, "package.json");
+  const manifestText = existsSync(manifestPath) && statSync(manifestPath).isFile() ? readFileSync(manifestPath, "utf8") : "";
+  const facts = [];
+  for (const [candidate, matched] of [...matchedByRunner.entries()].sort(([a], [b]) => byCodeUnit(a.runner, b.runner))) {
+    let zeroTestPassThrough = false;
+    if (ZERO_TEST_PASSTHROUGH_RUNNERS.has(candidate.runner)) {
+      const configText = readFileSync(matched, "utf8");
+      zeroTestPassThrough = ZERO_TEST_PASSTHROUGH_RE.test(configText) || ZERO_TEST_PASSTHROUGH_RE.test(manifestText);
+    }
+    facts.push({
+      runner: candidate.runner,
+      zeroTestPassThrough,
+      source: inputHashKey(projectRoot, matched),
+    });
+  }
+  return facts;
 }
 
 // ---------------------------------------------------------------------------
@@ -343,8 +418,11 @@ function buildSnapshot(projectRoot, skillsRoot) {
   const inputHashes = new Map();
   const unknowns = [];
   const packageProbe = probePackageCommands(projectRoot, inputHashes);
-  const commands = [...packageProbe.commands, ...probeTestConfigCommands(projectRoot, inputHashes)];
+  const testConfigProbe = probeTestConfigCommands(projectRoot, inputHashes);
+  const commands = [...packageProbe.commands, ...testConfigProbe.commands];
   const verificationAssets = probeVerificationAssets(projectRoot, skillsRoot, inputHashes, unknowns);
+  const toolchain = probeToolchainFacts(projectRoot);
+  const testConfig = probeTestConfigFacts(projectRoot, testConfigProbe.matchedByRunner);
   if (packageProbe.unknown) unknowns.push(packageProbe.unknown);
   const sortedHashes = Object.fromEntries([...inputHashes.entries()].sort(([a], [b]) => byCodeUnit(a, b)));
   return {
@@ -355,6 +433,8 @@ function buildSnapshot(projectRoot, skillsRoot) {
     inputHashes: sortedHashes,
     commands: commands.sort((a, b) => byCodeUnit(a.id, b.id)),
     verificationAssets: verificationAssets.sort((a, b) => byCodeUnit(a.id, b.id)),
+    toolchain,
+    testConfig,
     unknowns: unknowns.sort(byCodeUnit),
   };
 }
@@ -366,12 +446,17 @@ function buildSnapshot(projectRoot, skillsRoot) {
 // 执行语义键绕过——白名单不存在绕过面）
 // ---------------------------------------------------------------------------
 
-const SNAPSHOT_KEYS = new Set(["schemaVersion", "generator", "projectRoot", "observedAt", "inputHashes", "commands", "verificationAssets", "unknowns"]);
+const SNAPSHOT_KEYS = new Set(["schemaVersion", "generator", "projectRoot", "observedAt", "inputHashes", "commands", "verificationAssets", "toolchain", "testConfig", "unknowns"]);
 const GENERATOR_KEYS = new Set(["name", "version"]);
 const COMMAND_KEYS = new Set(["id", "command", "source"]);
 const COMMAND_INNER_KEYS = new Set(["program", "args"]);
 const SOURCE_KEYS = new Set(["kind", "ref"]);
 const ASSET_KEYS = new Set(["id", "kind", "path", "sha256", "source"]);
+// V6 §11.1 扩展字段白名单（additive：升级前快照缺这两个字段时校验放行——
+// 结构是封闭集合，出现即校验形态；缺省不报错，保旧快照与旧 fixture 兼容）
+const TOOLCHAIN_ENTRY_KEYS = new Set(["id", "status", "command", "source"]);
+const TEST_CONFIG_ENTRY_KEYS = new Set(["runner", "zeroTestPassThrough", "source"]);
+const TOOLCHAIN_STATUSES = new Set(["available", "missing"]);
 const COMMAND_SOURCE_KINDS = new Set(["package-script", "test-config"]);
 const ASSET_KINDS = new Set(["scenario", "scenario-manifest"]);
 const ASSET_SOURCE_KINDS = new Set(["scenario-manifest", "verification-skill-declaration"]);
@@ -462,6 +547,37 @@ function validateSnapshot(snapshot) {
       if (ids.has(item)) errors.push(`「${item}」同时出现在 unknowns 与可用命令/资产清单——unknown 不得被当可用；恢复动作：核对探测结果后重跑探测命令`);
     }
   }
+
+  // V6 §11.1 扩展字段校验（additive optional：缺省放行，保升级前快照兼容）
+  if (snapshot.toolchain !== undefined) {
+    const toolchain = Array.isArray(snapshot.toolchain) ? snapshot.toolchain : null;
+    if (!toolchain) errors.push("toolchain 缺失或不是数组；恢复动作：重跑探测命令重建快照");
+    else {
+      for (const entry of toolchain) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) { errors.push("toolchain 存在非对象条目；恢复动作：重跑探测命令重建快照"); continue; }
+        rejectUnknownKeys(entry, TOOLCHAIN_ENTRY_KEYS, "toolchain 条目");
+        if (typeof entry.id !== "string" || entry.id.trim() === "") errors.push("toolchain 存在缺 id 的条目；恢复动作：重跑探测命令重建快照");
+        else if (ids.has(`toolchain.${entry.id}`)) errors.push(`toolchain id 重复：${entry.id}；恢复动作：重跑探测命令重建快照`);
+        else ids.add(`toolchain.${entry.id}`);
+        if (!TOOLCHAIN_STATUSES.has(entry.status)) errors.push(`toolchain ${entry.id ?? "?"} 的 status 非法（${JSON.stringify(entry.status ?? null)}，词表：available / missing）——安装事实只有两态；恢复动作：重跑探测命令重建快照`);
+        if (typeof entry.command !== "string" || entry.command.trim() === "") errors.push(`toolchain ${entry.id ?? "?"} 缺 command（声明的检查命令）；恢复动作：重跑探测命令重建快照`);
+        if (typeof entry.source !== "string" || entry.source.trim() === "") errors.push(`toolchain ${entry.id ?? "?"} 缺 source（事实来源）；恢复动作：重跑探测命令重建快照`);
+      }
+    }
+  }
+  if (snapshot.testConfig !== undefined) {
+    const testConfig = Array.isArray(snapshot.testConfig) ? snapshot.testConfig : null;
+    if (!testConfig) errors.push("testConfig 缺失或不是数组；恢复动作：重跑探测命令重建快照");
+    else {
+      for (const entry of testConfig) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) { errors.push("testConfig 存在非对象条目；恢复动作：重跑探测命令重建快照"); continue; }
+        rejectUnknownKeys(entry, TEST_CONFIG_ENTRY_KEYS, "testConfig 条目");
+        if (typeof entry.runner !== "string" || entry.runner.trim() === "") errors.push("testConfig 存在缺 runner 的条目；恢复动作：重跑探测命令重建快照");
+        if (typeof entry.zeroTestPassThrough !== "boolean") errors.push(`testConfig ${entry.runner ?? "?"} 的 zeroTestPassThrough 必须是布尔；恢复动作：重跑探测命令重建快照`);
+        if (typeof entry.source !== "string" || entry.source.trim() === "") errors.push(`testConfig ${entry.runner ?? "?"} 缺 source（配置文件定位）；恢复动作：重跑探测命令重建快照`);
+      }
+    }
+  }
   return errors;
 }
 
@@ -470,7 +586,7 @@ function validateSnapshot(snapshot) {
 // ---------------------------------------------------------------------------
 
 function comparablePart(snapshot) {
-  return JSON.stringify({ inputHashes: snapshot.inputHashes, commands: snapshot.commands, verificationAssets: snapshot.verificationAssets, unknowns: snapshot.unknowns });
+  return JSON.stringify({ inputHashes: snapshot.inputHashes, commands: snapshot.commands, verificationAssets: snapshot.verificationAssets, toolchain: snapshot.toolchain ?? [], testConfig: snapshot.testConfig ?? [], unknowns: snapshot.unknowns });
 }
 
 function checkSnapshot(snapshotPath, projectRoot, skillsRoot) {
@@ -518,7 +634,7 @@ function checkSnapshot(snapshotPath, projectRoot, skillsRoot) {
     console.log("FAIL: drift: 输入未变但快照与重新探测结果不一致（疑似手改，或探测实现已变化）；权威源：探测命令的当前输出；恢复动作：重跑探测命令重建快照（纠错修项目来源或探测适配层，禁止手改快照）");
     process.exit(1);
   }
-  console.log(`PASS: 快照与重新探测一致（命令 ${fresh.commands.length}、验证资产 ${fresh.verificationAssets.length}、unknown ${fresh.unknowns.length}）`);
+  console.log(`PASS: 快照与重新探测一致（命令 ${fresh.commands.length}、验证资产 ${fresh.verificationAssets.length}、工具链 ${fresh.toolchain.length}、测试配置 ${fresh.testConfig.length}、unknown ${fresh.unknowns.length}）`);
 }
 
 // ---------------------------------------------------------------------------
@@ -535,6 +651,11 @@ function usage() {
     "  --skills-root   技能安装根（缺省 ~/.agents/skills；verification skill 场景清单在此定位）",
     "  --check         不写文件：重探测并与盘上快照比对（输入已变化 / 值不一致分别报告）",
     "  --validate      结构校验已有快照（命令有来源、资产存在且哈希一致、无执行证据字段、unknown 不当可用）",
+    "",
+    "派生事实（V6 §11.1 扩展，均只登记事实不缓存执行结果）：commands / verificationAssets /",
+    "toolchain（devDependencies 声明的工具链安装事实 available|missing）/ testConfig（runner 形态与",
+    "zeroTestPassThrough 空跑配置事实）。外部契约候选不写入本快照（唯一来源是",
+    "detect-external-contracts.mjs 候选快照）。",
     "",
     "退出码：0 成功（含 --check / --validate 通过）；1 输入不合法 / 校验失败 / --check 不通过；2 用法错误。",
   ].join("\n");
@@ -594,7 +715,7 @@ function main() {
       console.log(`共 ${errors.length} 条结构问题；权威源：detect-project-capabilities.mjs 输出契约（--help）；恢复动作：重跑探测命令重建快照（纠错修项目来源或探测适配层，不手改快照）`);
       process.exit(1);
     }
-    console.log(`PASS: 快照结构合法（命令 ${snapshot.commands.length}、验证资产 ${snapshot.verificationAssets.length}、unknown ${snapshot.unknowns.length}）`);
+    console.log(`PASS: 快照结构合法（命令 ${snapshot.commands.length}、验证资产 ${snapshot.verificationAssets.length}、工具链 ${(snapshot.toolchain ?? []).length}、测试配置 ${(snapshot.testConfig ?? []).length}、unknown ${snapshot.unknowns.length}）`);
     return;
   }
 
