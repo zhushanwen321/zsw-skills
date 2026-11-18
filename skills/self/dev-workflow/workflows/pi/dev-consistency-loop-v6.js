@@ -560,7 +560,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "6.2.0"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "6.2.1"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
 // W3 dev-consistency-loop-v6 — dev-flow-v6 D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：
@@ -583,6 +583,13 @@ const SKILL_VERSION = "6.2.0"; // 构建注入自 dev-flow-v6/SKILL.md frontmatt
 //    重试自愈，不在脚本层建 promise 链（promise 链容器路由对依赖分析器不友好）。
 // 零容忍绕过（Gate A）：本脚本不实现任何 SKIP/覆盖逻辑，也不向任何子进程传递
 // 环境变量（node -e 执行器只透传 argv）——绕过通道在结构上不存在。
+// 循环尝试记录（设计《V5 交付完整性改造》§8.1/§8.2「D2」循环接入）：设计目录
+// meta.acceptanceBinding 绑定交付任务时（独立流程无绑定，不登记——已知缺口），
+// 进入 R1 审查登记 started、finish 收尾按终态登记 finished（converged→passed；
+// stuck / gate-a-failed / review-failure / fix-failure→failed）。run 粒度（一次
+// workflow 执行 = 一次尝试，round=1）：run 内轮次预算已有 maxRounds+回注轮与
+// d2ItemReflowCap 单源，跨 run 重发失控由 started 计数覆盖。预算判定不迁移——
+// 现有各上限按动作计数（轮次/回流/改判），无「按成功结果计数」路径，迁移无收益。
 // ── 参数窄化与白名单 ──
 const VALID_ARG_KEYS = new Set([
     "execPlan",
@@ -1350,6 +1357,8 @@ async function gitRevProbe() {
     }
 }
 async function finish(terminated, roundsDone, message) {
+    // 尝试记录 finished 在 message 拼接前登记：登记失败的 attemptNote 才能进终态披露
+    await recordLoopAttempt("finished", d2TerminatedToOutcome(terminated));
     // 终态残留对账（2026-09-26 用户裁决承接面）：历轮留盘待认领、终态仍未被任何组申报的
     // 改动——主 agent 判归属后处置（补提交/清理/呈报），引擎不提交不回滚
     let residualFiles = [];
@@ -1380,7 +1389,7 @@ async function finish(terminated, roundsDone, message) {
         // 机器候选定位使用计数（设计 §9.2）：统计附加字段，终态处置与 message 语义不变——
         // 作为后续审查降载决策的实测输入，本轮不据此降载任何审查
         indexUsage,
-        message,
+        message: `${message}${attemptNote}`,
     };
     // §4.5：W3 终态回写 status.json events——consistency 终态一笔 + Gate A 结果一笔
     // （converged/gate-a-failed 恒写；stuck 在 stuckPending 收尾路径已跑过 Gate A，按
@@ -1524,6 +1533,39 @@ toRel = makeToRel(info.projectRoot);
     };
 }
 gateALogPath = null; // Gate A phase 开跑时才赋值——未执行到 Gate A 的终态必须带 null（字段契约）
+// ── 循环尝试记录（设计 §8.1 D2 接入；finish 内统一登记 finished）──
+// 绑定交付任务才登记（PREP 探针的 acceptanceBindingStatus=bound → 任务目录 = 验收包
+// 所在目录）；独立流程无绑定不登记（已知缺口）。runId = 观测 executionId 优先，缺省
+// 合成时间戳（与 acceptance-design 同款退化链）；round 恒 1（run 粒度）。登记失败不
+// 阻断主流程，缺陷经 attemptNote 进 finish 的终态 message（attemptNote 为 let 声明，
+// finish 定义先于此但调用发生在初始化之后，无 TDZ 风险）
+let attemptNote = "";
+const loopAttemptTaskDir = info.acceptancePath !== null && typeof info.acceptancePath === "string"
+    ? info.acceptancePath.split("/").slice(0, -1).join("/")
+    : "";
+const loopAttemptRunId = typeof args.executionId === "string" && args.executionId.trim() !== ""
+    ? args.executionId.trim()
+    : `d2-${Date.now()}`;
+async function recordLoopAttempt(event, outcome) {
+    if (loopAttemptTaskDir === "")
+        return;
+    const corePath = `${homeRes.stdout.trim()}/.agents/skills/delivery-v6/scripts/delivery-core.mjs`;
+    const res = await world.run("node", [
+        corePath,
+        "loop-attempt", "--task-dir", loopAttemptTaskDir, "--loop", "dev-consistency", "--path", "workflow",
+        "--run-id", loopAttemptRunId, "--round", "1", "--event", event,
+        ...(event === "finished" && outcome !== undefined ? ["--outcome", outcome] : []),
+    ]);
+    if (res.exitCode !== 0) {
+        attemptNote += `；尝试记录 loop-attempt ${event}（dev-consistency）登记失败（exit ${res.exitCode}）：${(res.stderr || res.stdout).trim()}——本次尝试未入账。恢复动作：按 delivery-core 输出修复任务目录状态后重发（同 runId 同轮重放幂等，不会双计）`;
+    }
+}
+// 终态词 → 尝试结果（枚举外终态按 failed 计——宁可多计不可漏计）。函数形态而非顶层
+// 对象字面量：pi 产物对账剥离正则按顶格 "};" 作切分记号，顶层多行对象结尾会新增该
+// 记号使剥离区间吞掉业务串（tech-review-loop-v6 实测，见其 terminatedToOutcome 注释）
+function d2TerminatedToOutcome(terminated) {
+    return terminated === "converged" ? "passed" : "failed";
+}
 // 分区名 → 该分区查询结果（查询成功才入表——r1Prompt 查无条目即不注入，输入与既有
 // 行为逐字一致）；indexUsage 供 finish 组装终态统计字段
 const seedsByPartition = new Map();
@@ -1899,6 +1941,8 @@ function r1Prompt(p) {
 }
 log(`W3 一致性审查循环：仓库 ${info.projectRoot}，基线 ${info.baseline}，diff ${info.diffFileCount} 文件 / ${info.diffChurn} 行，分区 ${info.partitions.length} 个（${info.partitions.map((p) => `${p.name}(${p.files.length})`).join("、")}）`);
 let r1Norm;
+// 进入审查循环即计数（设计 §8.1）：启动期失败（PREP/参数校验 throw）未进入循环不登记
+await recordLoopAttempt("started");
 await obsBegin("review", 1);
 try {
     const r1Raw = await mapBatch(info.partitions, (p) => {

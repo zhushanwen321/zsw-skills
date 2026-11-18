@@ -391,8 +391,19 @@ export function deriveRevisionProvenance(records, { currentRevision = null } = {
       // 断链：事件声称从 claimedFrom 续接，但链条当前在 explained——中间存在无来源变化
       revisions.push({ fromRevision: explained, toRevision: anchor.claimedFrom, source: "unknown", eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
     }
+    // 缺 from 的锚点分两类：RevisionBaselineConfirmed（external-baseline）无 from 属正常
+    // 形态——用户确认「当前内容是新基线」，链条从确认点续接，保持 external-baseline 分类；
+    // 其余（RepairRoundRecorded 缺 fromRevision）无法确认修复前基线，来源记 unknown 而非
+    // 猜链——claimedFrom 为 null 却按 anchor.source 正常分类，会把链条位到 to 之间的
+    // 未登记直改洗成已解释（探针实证：实现 r0→r2 直改到 r5 后补一条只带 to=r5 的修复
+    // 轮，unknownCount 被清零）
     const from = anchor.claimedFrom ?? explained;
-    revisions.push({ fromRevision: from, toRevision: anchor.to, source: anchor.claimedFrom === null && anchor.source === "external-baseline" ? "external-baseline" : anchor.source, eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
+    const source = anchor.claimedFrom !== null
+      ? anchor.source
+      : anchor.source === "external-baseline"
+        ? "external-baseline"
+        : "unknown";
+    revisions.push({ fromRevision: from, toRevision: anchor.to, source, eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
     explained = anchor.to;
   }
   if (explained !== null && currentRevision !== null && currentRevision !== explained) {

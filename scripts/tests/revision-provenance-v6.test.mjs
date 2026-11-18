@@ -110,6 +110,41 @@ test("deriveRevisionProvenance：用户确认外部基线（RevisionBaselineConf
   assert.deepEqual(result.revisions.map((item) => item.source), ["implementation", "external-baseline", "candidate-repair"]);
 });
 
+test("deriveRevisionProvenance：缺 from 的修复轮不把未登记直改洗成已解释（洗白通道封堵）", () => {
+  // 探针场景：实现 r0→r2 后项目树被直改到 r5（无任何事件），随后补一条只带 to=r5、
+  // 不带 fromRevision 的修复轮——修复轮未声称从 r2 续接，r2→r5 之间的变化无基线确认
+  const records = [
+    rec({ seq: 1, type: "ImplementationRecorded", mergeReceipt: { fromRevision: "r0", toRevision: "r2" } }),
+    rec({ seq: 2, type: "RepairRoundRecorded", toRevision: "r5", round: 1 }),
+  ];
+  const result = KERNEL.deriveRevisionProvenance(records, { currentRevision: "r5" });
+  assert.equal(result.explainedRevision, "r5");
+  assert.ok(result.unknownCount >= 1, "缺 from 的修复轮无法确认修复前基线，区间记 unknown");
+  const unknown = result.revisions.find((item) => item.source === "unknown");
+  assert.deepEqual(
+    { from: unknown.fromRevision, to: unknown.toRevision },
+    { from: "r2", to: "r5" },
+    "unknown 区间从链条已解释位指向该修复轮的 to",
+  );
+  assert.equal(
+    result.revisions.some((item) => item.toRevision === "r5" && item.source === "candidate-repair"),
+    false,
+    "缺 from 的修复轮不得按 candidate-repair 正常分类（否则直改被洗白）",
+  );
+});
+
+test("deriveRevisionProvenance：unknown 存在后再登记 AssuranceCompleted 不消除 unknown", () => {
+  const records = [
+    rec({ seq: 1, type: "ImplementationRecorded", mergeReceipt: { fromRevision: "r0", toRevision: "r2" } }),
+    rec({ seq: 2, type: "RepairRoundRecorded", toRevision: "r5", round: 1 }),
+    // 后续保证：AssuranceCompleted 不在来源锚点事件词表内，不产来源记录
+    rec({ seq: 3, type: "AssuranceCompleted", revision: "r5" }),
+  ];
+  const result = KERNEL.deriveRevisionProvenance(records, { currentRevision: "r5" });
+  assert.equal(result.unknownCount, 1, "unknown 不因后续保证完成被洗白（设计 §7.2：不得用下一次 AssuranceCompleted 变成正常历史）");
+  assert.equal(result.revisions.some((item) => item.source === "unknown" && item.toRevision === "r5"), true);
+});
+
 // ── 2-5. 真实任务目录端到端 ──
 
 function makeFixture(t, { taskId = "rev-prov" } = {}) {

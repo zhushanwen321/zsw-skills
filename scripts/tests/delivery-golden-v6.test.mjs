@@ -112,6 +112,7 @@ function currentRevision(fx) {
 const INTENT_OPTION_KEYS = new Map([
   ["reopenOf", "--reopen-of"], ["origin", "--origin"],
   ["consequenceRefutation", "--consequence-refutation"], ["consequenceRefutationType", "--consequence-refutation-type"],
+  ["emptyScopeRefutation", "--empty-scope-refutation"],
   ["firstDetectedStage", "--first-detected-stage"], ["expectedStage", "--expected-stage"],
   ["regressionTestRef", "--regression-test-ref"], ["mode", "--mode"],
   ["fromRevision", "--from-revision"], ["toRevision", "--to-revision"], ["nature", "--nature"],
@@ -276,7 +277,7 @@ function driveToApproval(fx) {
 }
 
 /** 登记一条 FindingRaised（actor=assurance），artifact 独立落 evidence 目录 */
-function raiseFinding(fx, revision, { findingId, category, severity, requirementIds, reopenOf, consequenceRefutation }) {
+function raiseFinding(fx, revision, { findingId, category, severity, requirementIds, reopenOf, consequenceRefutation, emptyScopeRefutation }) {
   const artifact = evidenceFile(fx.taskDir, `finding-${findingId}.md`, `# ${findingId}\n${category}/${severity} 发现。\n`);
   return appendEvent(fx, {
     type: "FindingRaised",
@@ -291,6 +292,8 @@ function raiseFinding(fx, revision, { findingId, category, severity, requirement
     artifact: artifact.artifact,
     ...(reopenOf !== undefined ? { reopenOf } : {}),
     ...(consequenceRefutation !== undefined ? { consequenceRefutation, consequenceRefutationType: "not-observable" } : {}),
+    // 空关联 boundary 必须附不影响任何需求的论证（空关联护栏：requirementIds=[] 不得绕过定级护栏）
+    ...(emptyScopeRefutation !== undefined ? { emptyScopeRefutation } : {}),
   }, "assurance");
 }
 
@@ -465,6 +468,8 @@ test("golden-defect：boundary 越权 / 非 blocker 无后果论证 / 改判熔�
   const halted = raiseFinding(fx, revision, {
     findingId: "F-G3", category: "boundary", severity: "non-blocker", requirementIds: [],
     reopenOf: "F-G0", consequenceRefutation: "该行为用户不可观察：仅内部计数变化",
+    // 空关联 boundary 的新合法形态：携带不影响任何需求的论证，使其抵达改判熔断检查
+    emptyScopeRefutation: "该发现只涉模拟环境内部计数路径，R1/R2 的断言行为均不经过该路径（逐条对照过）",
   });
   assertFailure(halted, "第 3 种定级组合应触发改判熔断");
   assert.match(halted.stderr, /定级组合数超过 2 种/);

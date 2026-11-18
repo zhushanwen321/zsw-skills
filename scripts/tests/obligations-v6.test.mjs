@@ -304,3 +304,36 @@ test("显式豁免绑定用户裁决：accepted_with_risk 场景缺口义务 sta
   assert.deepEqual(r2.evidenceRefs, [gap.gapId], "豁免绑定裁决指向的缺口 id");
   assert.equal(result.openRequired.length, 0, "豁免后无 open 必需义务");
 });
+
+test("pending-actions.json 损坏：判定路径报错（fail-closed），查询路径披露 unreadable", (t) => {
+  const { fx, revision } = driveToImplemented(t);
+  driveAssurance(fx, revision, [
+    ["R1", "A1", "AF1", "command"],
+    ["R1", "A1", "AF1", "inspection"],
+    ["R2", "A2", "AF2", "command"],
+  ]);
+  // 先登记待办再破坏文件：证明损坏不是「文件本来不存在」
+  ok(runCore(["pending", "add", "--task-dir", fx.taskDir, "--kind", "awaiting-restore", "--note", "额度中断，恢复后核对回执"], fx.home), "登记待办");
+  writeFileSync(join(fx.taskDir, "pending-actions.json"), "{ items: [ 语法损坏的 JSON");
+  // gate evaluate：判定输入损坏 → 报错退出非零，不得按空待办清单 accepted
+  const evaluated = runGate(["evaluate", "--task-dir", fx.taskDir], fx.home);
+  assert.notEqual(evaluated.status, 0, "pending 文件损坏时 evaluate 须报错（未知默认不接受交付）");
+  assert.equal(evaluated.stdout.includes('"accepted"'), false, "不得输出 accepted");
+  assert.match(evaluated.stderr, /pending-actions\.json 解析失败/, "报错定位到权威源文件");
+  assert.match(evaluated.stderr, /恢复动作/, "错误消息给出恢复动作");
+  // obligations 子命令：判定路径同口径报错退出非零
+  const obligations = runCore(["obligations", "--task-dir", fx.taskDir], fx.home);
+  assert.notEqual(obligations.status, 0, "obligations 判定输入损坏须报错退出");
+  assert.match(obligations.stderr, /pending-actions\.json 解析失败/);
+  // pending list 查询路径：容忍不崩，输出披露 unreadable
+  const list = runCore(["pending", "list", "--task-dir", fx.taskDir], fx.home);
+  ok(list, "查询路径维持可用（不崩）");
+  const listDoc = JSON.parse(parseStdout(list));
+  assert.equal(listDoc.unreadable, true, "损坏状态在输出中披露");
+  assert.deepEqual(listDoc.open, [], "容忍路径按空清单呈现（unreadable 已提示不可据此判定）");
+  // 修复 JSON 后 evaluate 恢复运行（报错确因损坏而非其他）
+  writeFileSync(join(fx.taskDir, "pending-actions.json"), `${JSON.stringify({ items: [] }, null, 2)}\n`);
+  const recovered = runGate(["evaluate", "--task-dir", fx.taskDir], fx.home);
+  ok(recovered, "修复 JSON 语法后 evaluate 恢复运行");
+  assert.equal(JSON.parse(parseStdout(recovered)).state, "accepted", "空待办清单不再阻断");
+});

@@ -172,6 +172,32 @@ const SCHEMA_RepairBuilderOutcome = {
     filesChanged: { type: "array", items: { type: "string" } },
     testEvidence: { type: "string" },
     affectedAssertionIds: { type: "array", items: { type: "string" } },
+    // 高风险修复的最小同族组合分析（设计《V5 交付完整性与语义可信性改造》§9.1：
+    // 复用修复报告，不新建事件流——报告结构，gate 判定不依赖）。可选字段：blocker 轮
+    // 缺失经一次修正重问仍缺 → 报告降级（defectFamilyIncomplete），不阻塞修复本身
+    defectFamily: {
+      type: ["object", "null"],
+      description: "按根因改变输入数量/故障位置/时序/路径形态选出的最小有区分度组合（不做笛卡尔积全展开）",
+      properties: {
+        rootCause: { type: "string", description: "根因一句话（如：关闭检查只在条目循环前执行一次）" },
+        dimensions: {
+          type: "array",
+          description: "会随缺陷形态变化的关键维度清单",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "维度名（输入数量/故障位置/时序/路径形态等）" },
+              values: { type: "array", items: { type: "string" }, description: "该维度上有区分度的取值样本" },
+            },
+          },
+        },
+        selectedCases: { type: "array", items: { type: "string" }, description: "最小组合的用例名；对应测试必须真实存在" },
+        redBeforeFix: { type: "array", items: { type: "string" }, description: "缺陷版本失败证据文件路径（复现原始缺陷的测试在修复前的失败记录留档）" },
+        greenAfterFix: { type: "array", items: { type: "string" }, description: "修复版本通过证据：selectedCases 对应测试的文件路径+用例名" },
+        mutationRefs: { type: "array", items: { type: "string" }, description: "撤销修复再失败证据文件路径（临时 revert 修复 commit 跑测试见红再恢复）" },
+        mutationWaiver: { type: "string", description: "mutationRefs 为空时的书面豁免论证（blocker 级撤销验证不可行时必须给）" },
+      },
+    },
   },
   required: ["summary", "filesChanged", "testEvidence", "affectedAssertionIds"],
 };
@@ -520,7 +546,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "6.3.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "6.4.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -673,6 +699,9 @@ const NODE_CHECK_EXISTS = "const fs=require('fs');const missing=process.argv.sli
 const NODE_CHECK_FILES = "const fs=require('fs');const bad=process.argv.slice(1).filter(p=>{try{return !fs.statSync(p).isFile()}catch(e){return true}});if(bad.length){process.stdout.write(bad.join(' | '));process.exit(1)}";
 const NODE_READ_FILE = "process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8'))";
 const NODE_WRITE_FILE = "require('fs').mkdirSync(require('path').dirname(process.argv[1]),{recursive:true});require('fs').writeFileSync(process.argv[1],process.argv[2],{flag:'wx'})";
+// 降级标记追加（defectFamilyIncomplete 事实由引擎补记进 builder 已写就的修复报告——
+// 报告是降级状态的唯一如实载体，追加先于登记哈希计算，sha 覆盖标记后内容）
+const NODE_APPEND_FILE = "require('fs').appendFileSync(process.argv[1],process.argv[2])";
 // 逐增量测试执行（cwd 可控——world.run 的 cwd 固定为 workspace，无法指定项目/干净目录）。
 // 超时入参（第 5 参）来自 increments 契约的 testCommand.timeoutMs（CLI validate-acceptance
 // 已校验 1000..3600000 整数）；非法或缺省回退 300000，与 CLI 缺省值一致。外层 world.run
@@ -1080,6 +1109,46 @@ function validateFindings(findings) {
     }
     return "";
 }
+/** defectFamily 结构校验（§9.1 报告结构）：返回 "missing" = 整体缺失（含 selectedCases
+ * 空——无组合即无分析）；其余非空文本 = 结构非法；"" = 合法。mutation 豁免义务只对
+ * blocker 轮生效（非 blocker 轮 mutationRefs 空且无 waiver 不算结构非法） */
+function defectFamilyError(value, blockerRound) {
+    const family = value.defectFamily;
+    if (family === undefined || family === null)
+        return "missing";
+    if (typeof family.rootCause !== "string" || family.rootCause.trim() === "")
+        return "defectFamily.rootCause 须为非空字符串（根因一句话）";
+    if (!Array.isArray(family.dimensions) || family.dimensions.length === 0) {
+        return "defectFamily.dimensions 须为非空数组（按根因列出会变化的关键维度：输入数量/故障位置/时序/路径形态等）";
+    }
+    for (const dimension of family.dimensions) {
+        if (dimension === null || typeof dimension !== "object" || Array.isArray(dimension))
+            return "defectFamily.dimensions 条目须为对象";
+        if (typeof dimension.name !== "string" || dimension.name.trim() === "")
+            return "defectFamily.dimensions[].name 须为非空字符串";
+        if (!Array.isArray(dimension.values) || dimension.values.length === 0 || dimension.values.some((v) => typeof v !== "string" || v.trim() === "")) {
+            return `维度 ${dimension.name} 的 values 须为非空字符串数组`;
+        }
+    }
+    if (!Array.isArray(family.selectedCases) || family.selectedCases.length === 0 || family.selectedCases.some((c) => typeof c !== "string" || c.trim() === "")) {
+        return "missing";
+    }
+    const refArrayError = (refs, field) => !Array.isArray(refs) || refs.length === 0 || refs.some((r) => typeof r !== "string" || r.trim() === "") ? `defectFamily.${field} 须为非空引用数组（${field === "greenAfterFix" ? "selectedCases 对应测试的文件路径+用例名" : "证据文件路径"}）` : "";
+    const redError = refArrayError(family.redBeforeFix, "redBeforeFix");
+    if (redError !== "")
+        return redError;
+    const greenError = refArrayError(family.greenAfterFix, "greenAfterFix");
+    if (greenError !== "")
+        return greenError;
+    if (!Array.isArray(family.mutationRefs) || family.mutationRefs.some((r) => typeof r !== "string" || r.trim() === "")) {
+        return "defectFamily.mutationRefs 须为字符串数组（撤销修复再失败证据文件路径）";
+    }
+    if (blockerRound && family.mutationRefs.length === 0 &&
+        (typeof family.mutationWaiver !== "string" || family.mutationWaiver.trim() === "")) {
+        return "blocker 修复 mutationRefs 为空时必须附 mutationWaiver 书面论证（撤销修复再验证为何不可行）——不得空白豁免";
+    }
+    return "";
+}
 /** askGuarded 耗尽分支的可挽救发现披露：最后一次尝试已返回的申报按 validateFindings
  * 单条口径过滤后进终态 message（不替 agent 登记 FindingRaised——事件登记须绑 agent
  * 亲自写就并通过后验的报告，耗尽时报告未通过后验） */
@@ -1305,6 +1374,13 @@ function statsTailNote() {
         ? `；耗时与 token 统计：node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --skill delivery-v6（阶段窗口来自观测文件 ${obsCtx.filePath}）`
         : "";
 }
+/** 终态披露：blocker 修复的缺陷族分析降级轮次（§9.1 报告降级不阻塞修复，但必须如实
+ * 进终态 message——静默降级 = 报告完备性缺口被掩盖） */
+function defectFamilyDisclosure() {
+    return defectFamilyDegradedRounds.length > 0
+        ? `；缺陷族组合分析降级披露：第 ${defectFamilyDegradedRounds.join("、")} 轮 blocker 修复的 defectFamily 经修正重问后仍缺失（defectFamilyIncomplete=true，修复报告已追加降级标记）`
+        : "";
+}
 async function failAssurance(message) {
     // 失败出口同样返回当前裁决：重新 evaluate 反映本轮已追加的事件；evaluate 失败则
     // verdict=null（不得回退到 setup 时的 initialVerdict——它可能早于本轮事件与 revision）
@@ -1322,7 +1398,7 @@ async function failAssurance(message) {
         revision,
         findingIds,
         verdict: reVerdict,
-        message: `${fullMessage}。恢复动作：修复报告/证据/事件问题后重新发起 assurance-repair-loop-v6${repairSummary()}${statsTailNote()}`,
+        message: `${fullMessage}。恢复动作：修复报告/证据/事件问题后重新发起 assurance-repair-loop-v6${repairSummary()}${defectFamilyDisclosure()}${statsTailNote()}`,
     };
 }
 await obsEnd("setup", null);
@@ -1333,7 +1409,7 @@ if (currentVerdict.state === "process-failed") {
     await obsCloseExecution("assurance-failed");
     return {
         terminated: "assurance-failed", taskDir, revision, findingIds: [], verdict: currentVerdict,
-        message: `交付已处于 process-failed，停止新的修复派发；先完成阶段归因与任务替换裁决${repairSummary()}${statsTailNote()}`,
+        message: `交付已处于 process-failed，停止新的修复派发；先完成阶段归因与任务替换裁决${repairSummary()}${defectFamilyDisclosure()}${statsTailNote()}`,
     };
 }
 // 修复轮预算：判定走内核单源（delivery-core repair-budget = kernel-judgments 唯一实现，
@@ -1342,6 +1418,9 @@ if (currentVerdict.state === "process-failed") {
 // evidence 的重试轮不占上限。轮次编号沿用事件流最大 round 递增（非 behavior 轮也占
 // 编号但计数只看 behavior）
 const repairRoundStart = events.reduce((max, e) => (e.type === "RepairRoundRecorded" && typeof e.round === "number" ? Math.max(max, e.round) : max), 0) + 1;
+// blocker 修复缺陷族分析降级轮次登记（§9.1）：defectFamily 软义务耗尽时修复不被阻塞，
+// 轮次号留此供终态 message 披露（defectFamilyDisclosure）
+const defectFamilyDegradedRounds = [];
 const coreRepairBudget = async () => {
     const budget = await runCoreJson(corePath, ["repair-budget", "--task-dir", taskDir]);
     return {
@@ -1386,6 +1465,11 @@ function machineAffectedAssertionIds(triggerRequirementIds, hasUnlinkedFinding) 
 for (let repairRound = repairRoundStart; actionableFindings().length > 0; repairRound += 1) {
     const actionable = actionableFindings();
     const triggerFindingIds = actionable.map((finding) => String(finding.findingId));
+    // 高风险修复判定（§9.1）：severity=blocker 的 must-fix（事件侧 category=defect +
+    // severity=blocker）。actionableFindings() 只返回 defect 类发现，「triggerFindingIds
+    // 含 defect 类」在本循环恒真——同族组合分析的 prompt 义务覆盖全部修复轮；硬校验
+    //（修正重问 + 报告降级）只在 blocker 轮执行
+    const familyHardCheck = actionable.some((finding) => finding.severity === "blocker" && finding.category === "defect");
     // 停止预判（内核同口径合计）：下一轮会使 behavior 轮 + off-loop 修订合计超上限
     //（gate evaluate 将判 process-failed；此处预判省一轮白跑）。跨 run 保证预算由
     // gate evaluate 终判兜底，不在此预判
@@ -1422,7 +1506,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
         return {
             terminated: "assurance-failed", taskDir, revision, findingIds,
             verdict: parseObject(stopped.stdout),
-            message: `需要第 ${repairRound} 轮实现性修复，已登记 process-failed；停止继续补丁，回验收、设计或实现阶段归因重做${repairSummary()}${statsTailNote()}`,
+            message: `需要第 ${repairRound} 轮实现性修复，已登记 process-failed；停止继续补丁，回验收、设计或实现阶段归因重做${repairSummary()}${defectFamilyDisclosure()}${statsTailNote()}`,
         };
     }
     if (args.allowCommit !== true) {
@@ -1483,14 +1567,24 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
             `cwd/projectRoot：${projectRoot}`,
             `taskDir：${taskDir}`,
             `修复计划：${JSON.stringify(plan)}`,
+            `本轮触发发现（severity 分级决定 defectFamily 硬校验档位）：${JSON.stringify(actionable)}`,
             `修复报告写入路径：${repairReportPath}`,
             "只修改修复所需代码与测试；每个 must-fix 新增或修正能证明缺陷版本失败的回归测试。运行相关测试，禁止 Git 写，禁止改验收。",
-            '返回结构（严格 JSON）：{ "summary": string, "filesChanged": string[], "testEvidence": string, "affectedAssertionIds": string[] }',
+            "高风险修复（本轮触发发现含 defect 类）必须在修复报告与返回 JSON 同时给 defectFamily 最小同族组合分析：rootCause=根因一句话；dimensions=按根因列出会变化的关键维度（输入数量/故障位置/时序/路径形态等）及取值；selectedCases=只选能区分实现正误的最小组合（不做笛卡尔积全展开），对应测试必须真实存在；redBeforeFix=缺陷版本失败证据文件路径（复现原始缺陷的测试在修复前的失败记录留档）；greenAfterFix=修复版本通过证据（测试文件路径+用例名）；mutationRefs=撤销修复再失败证据文件路径（临时 revert 修复 commit 跑测试见红再恢复）；blocker 级修复撤销验证不可行时必须给 mutationWaiver 书面论证，不得空白豁免。",
+            '返回结构（严格 JSON）：{ "summary": string, "filesChanged": string[], "testEvidence": string, "affectedAssertionIds": string[], "defectFamily": { "rootCause": string, "dimensions": [{ "name": string, "values": string[] }], "selectedCases": string[], "redBeforeFix": string[], "greenAfterFix": string[], "mutationRefs": string[], "mutationWaiver": string|null } | null }',
             ...(corrective === null ? [] : [corrective]),
         ].join("\n"));
         const reportCheck = await runNode([NODE_CHECK_FILES, repairReportPath]);
         if (reportCheck.exitCode !== 0)
             throw new Error(`修复报告未写入 ${repairReportPath}`);
+        // 文件级后验（仅 blocker 轮）：组合分析必须同时落盘报告——返回 JSON 有而报告无 =
+        // 证据只存在于易失的结构化返回里，复核与对账无从引用
+        if (familyHardCheck) {
+            const reportText = await runNode([NODE_READ_FILE, repairReportPath]);
+            if (reportText.exitCode !== 0 || !reportText.stdout.includes("defectFamily")) {
+                throw new Error(`修复报告 ${repairReportPath} 缺 defectFamily 段：blocker 修复的最小同族组合分析必须同时写进报告与返回 JSON`);
+            }
+        }
         return outcome;
     }, (value) => {
         if (!value || typeof value.summary !== "string" || value.summary.trim() === "")
@@ -1501,11 +1595,44 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
             return "testEvidence 必填";
         if (!Array.isArray(value.affectedAssertionIds))
             return "affectedAssertionIds 必须为数组";
-        return "";
+        // 缺陷族结构校验（§9.1 软义务）：提供了就必须结构合法（任何轮）；整体缺失只在
+        // blocker 轮触发修正重问——耗尽后走报告降级不 fail（修复正确性优先于报告完备性）
+        const familyError = defectFamilyError(value, familyHardCheck);
+        if (familyError === "missing") {
+            return familyHardCheck
+                ? "defectFamily 缺失：blocker 修复必须给最小同族组合分析（rootCause/dimensions/selectedCases/redBeforeFix/greenAfterFix/mutationRefs 或 mutationWaiver 书面论证）"
+                : "";
+        }
+        return familyError;
     }, { workflow: "assurance-repair-loop-v6", step: "fix", round: repairRound, target: `repair-builder-r${repairRound}` });
-    if (!builderGuard.ok || builderGuard.value === null)
-        return failAssurance(`builder 修复失败：${builderGuard.error}`);
-    const built = builderGuard.value;
+    let built;
+    if (builderGuard.ok && builderGuard.value !== null) {
+        built = builderGuard.value;
+    }
+    else {
+        // defectFamily 软义务降级（§9.1）：耗尽时 raw 若只剩 defectFamily 不合格（基础字段
+        // 全合法）→ 降级继续修复流程并在报告与终态如实标记；基础字段也缺 → 维持原有失败
+        // 路径。分级依据：修复正确性优先于报告完备性，gate 判定不依赖 defectFamily（报告
+        // 结构不是事件流）
+        const raw = builderGuard.raw;
+        const basicValid = (v) => v !== null && typeof v.summary === "string" && v.summary.trim() !== "" &&
+            Array.isArray(v.filesChanged) && v.filesChanged.length > 0 &&
+            typeof v.testEvidence === "string" && v.testEvidence.trim() !== "" &&
+            Array.isArray(v.affectedAssertionIds);
+        if (!familyHardCheck || !basicValid(raw) || defectFamilyError(raw, familyHardCheck) === "") {
+            return failAssurance(`builder 修复失败：${builderGuard.error}`);
+        }
+        built = raw;
+        defectFamilyDegradedRounds.push(repairRound);
+        // 降级标记由引擎补记进 builder 已写就的修复报告（降级事实的唯一如实载体；追加
+        // 先于登记哈希计算，artifactSha256 覆盖含标记内容）
+        const degradedFamilyError = defectFamilyError(built, familyHardCheck);
+        const degradeAppend = await runNode([NODE_APPEND_FILE, repairReportPath,
+            `\n\n--- 引擎降级标记 ---\ndefectFamilyIncomplete=true：本轮为 blocker 修复，但缺陷族组合分析经一次修正重问后仍缺失或结构非法（${degradedFamilyError === "missing" ? "整体缺失" : degradedFamilyError}）。修复本身不被阻塞，本标记供终态披露与对账。\n`]);
+        if (degradeAppend.exitCode !== 0) {
+            return failAssurance(`降级标记追加进修复报告失败：${repairReportPath}（${degradeAppend.stderr.trim()}）。恢复动作：确认报告文件可写后重新发起本 workflow（重发会跳过已清零的修复轮）`);
+        }
+    }
     await leaseHeartbeat();
     // 提交按精确文件路径 --only 提交：git add 仅为让 untracked 新文件可被 commit 识别，
     // commit --only 只纳入 builder 申报路径的工作区内容——暂存区里预先存在的无关内容
@@ -1585,9 +1712,17 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
     const repairReportSha = await artifactSha256Of(repairReportPath).catch(() => "");
     if (repairReportSha === "")
         return failAssurance(`修复报告哈希计算失败：${repairReportPath}`);
+    // defectFamily 摘要进登记 summary（§9.1：不新增命令参数，报告路径即 artifact——
+    // cases 数与 mutation 覆盖的简短统计随事件 summary 落盘供对账；完整结构与证据引用
+    // 写在报告本身）
+    const familySummaryNote = defectFamilyDegradedRounds.includes(repairRound)
+        ? "；defectFamilyIncomplete=true（blocker 修复缺陷族分析缺失，见报告降级标记）"
+        : built.defectFamily !== undefined && built.defectFamily.selectedCases.length > 0
+            ? `；同族组合 cases=${built.defectFamily.selectedCases.length}、mutation=${built.defectFamily.mutationRefs.length > 0 ? built.defectFamily.mutationRefs.length : "书面豁免"}`
+            : "";
     const repairEvent = {
         type: "RepairRoundRecorded", actor: "builder", acceptanceVersion, revision,
-        summary: `第 ${repairRound} 轮实现性修复：${built.summary}`,
+        summary: `第 ${repairRound} 轮实现性修复：${built.summary}${familySummaryNote}`,
         round: repairRound, triggerFindingIds,
         affectedAssertionIds: built.affectedAssertionIds.length > 0 ? built.affectedAssertionIds : plan.affectedAssertionIds,
         fromRevision, toRevision: revision,
@@ -1955,6 +2090,6 @@ const result = {
     revision,
     findingIds,
     verdict: finalVerdict,
-    message: `独立保证活动已完成，返回值携带 delivery-gate 生成的 verdict；workflow 本身不宣告 accepted；${triageNote}；本任务累计保证轮次 ${assuranceRoundsTotal}（重发前先核对累计成本再决定）${repairSummary()}${statsTailNote()}`,
+    message: `独立保证活动已完成，返回值携带 delivery-gate 生成的 verdict；workflow 本身不宣告 accepted；${triageNote}；本任务累计保证轮次 ${assuranceRoundsTotal}（重发前先核对累计成本再决定）${repairSummary()}${defectFamilyDisclosure()}${statsTailNote()}`,
 };
 return result;

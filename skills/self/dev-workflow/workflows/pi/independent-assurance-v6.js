@@ -502,7 +502,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "6.3.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "6.4.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -650,6 +650,9 @@ const VALID_ARG_KEYS = new Set([
     "mode",
 ]);
 // NODE_PROBE_HOME 由构建器从 workflows/src/skill-data.shared.ts 寻址层注入，此处不再声明
+// 送审输入哈希（loop-attempt 的 inputHash，设计 §8.1）：域分隔串 + 保证对象 revision + 模式，
+// 整体 sha256——供跨 run 对比「同一候选是否被重复保证」
+const NODE_HASH_ATTEMPT_INPUT = "const c=require('crypto');process.stdout.write(c.createHash('sha256').update(process.argv.slice(1).join('\\0')).digest('hex'))";
 const NODE_CHECK_EXISTS = "const fs=require('fs');const missing=process.argv.slice(1).filter(p=>!fs.existsSync(p));if(missing.length){process.stdout.write(missing.join(' | '));process.exit(1)}";
 const NODE_CHECK_FILES = "const fs=require('fs');const bad=process.argv.slice(1).filter(p=>{try{return !fs.statSync(p).isFile()}catch(e){return true}});if(bad.length){process.stdout.write(bad.join(' | '));process.exit(1)}";
 const NODE_READ_FILE = "process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8'))";
@@ -1050,6 +1053,29 @@ for (const entry of (coreOpen.open ?? [])) {
 const evidenceRoot = `${taskDir}/evidence/`;
 const rawAttemptTag = leaseRunId || (typeof args.executionId === "string" ? args.executionId.trim() : "") || `run-${events.filter((event) => event.type === "AssuranceCompleted" || event.type === "ExplorationCompleted").length + 1}`;
 const attemptTag = rawAttemptTag.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 96);
+// ── 循环尝试记录（设计 §8.1「保证」循环）：进入保证活动即计数，失败路径不逃出账外 ──
+// runId 复用 rawAttemptTag（租约 runId / 观测 executionId / 计数合成，同一来源不自造）；
+// round 恒 1（run 粒度：一次 workflow 执行 = 一次尝试，run 内无循环轮）。登记失败不阻断
+// 保证主流程，缺陷经 attemptNote 进终态披露（同 acceptance-design 模式）
+let attemptNote = "";
+async function recordAssuranceAttempt(event, outcome) {
+    // started 携带输入哈希（候选 revision + 模式）；finished 只带结果
+    let inputHash = "";
+    if (event === "started") {
+        const hashRes = await runNode([NODE_HASH_ATTEMPT_INPUT, `independent-assurance-v6 attempt-input v1`, revision, mode]);
+        if (hashRes.exitCode === 0 && /^[0-9a-f]{64}$/.test(hashRes.stdout.trim()))
+            inputHash = hashRes.stdout.trim();
+    }
+    const res = await runGate(corePath, [
+        "loop-attempt", "--task-dir", taskDir, "--loop", "assurance", "--path", "workflow",
+        "--run-id", rawAttemptTag, "--round", "1", "--event", event,
+        ...(event === "finished" && outcome !== undefined ? ["--outcome", outcome] : []),
+        ...(event === "started" && inputHash !== "" ? ["--input-hash", inputHash] : []),
+    ]);
+    if (res.exitCode !== 0) {
+        attemptNote += `；尝试记录 loop-attempt ${event}（assurance）登记失败（exit ${res.exitCode}）：${(res.stderr || res.stdout).trim()}——本次尝试未入账。恢复动作：按 delivery-core 输出修复任务目录状态后重发（同 runId 同轮重放幂等，不会双计）`;
+    }
+}
 const artifactTag = `${revisionHash(revision)}-${attemptTag}`;
 const coverageReportPath = `${evidenceRoot}coverage-${artifactTag}.md`;
 const explorationReportPath = `${evidenceRoot}exploration-${artifactTag}.md`;
@@ -1325,6 +1351,7 @@ function statsTailNote() {
 async function failAssurance(message) {
     // 失败出口同样返回当前裁决：重新 evaluate 反映本轮已追加的事件；evaluate 失败则
     // verdict=null（不得回退到 setup 时的 initialVerdict——它可能早于本轮事件与 revision）
+    await recordAssuranceAttempt("finished", "failed");
     await releaseLease();
     let fullMessage = message;
     const reEvaluation = await retryOnSpawnFailure(() => runGate(gatePath, ["evaluate", "--task-dir", taskDir]), { workflow: "independent-assurance-v6", step: "finalize", round: null, command: "evaluate" });
@@ -1339,7 +1366,7 @@ async function failAssurance(message) {
         revision,
         findingIds,
         verdict: reVerdict,
-        message: `${fullMessage}。恢复动作：修复报告/证据/事件问题后重新发起 independent-assurance-v6${repairSummary()}${statsTailNote()}`,
+        message: `${fullMessage}。恢复动作：修复报告/证据/事件问题后重新发起 independent-assurance-v6${attemptNote}${repairSummary()}${statsTailNote()}`,
     };
 }
 /** 第 11 条不同 must-fix 出现即停（合并稿 §7.2），不等待剩余探索——coverage/探索发现
@@ -1349,14 +1376,18 @@ async function stopIfProcessFailed() {
     const verdict = parseObject(check.stdout);
     if (check.exitCode !== 0 || verdict === null || verdict.state !== "process-failed")
         return null;
+    await recordAssuranceAttempt("finished", "failed");
     await releaseLease();
     await obsCloseExecution("assurance-failed");
     return {
         terminated: "assurance-failed", taskDir, revision, findingIds, verdict,
-        message: `evaluate 判定 process-failed（不同 must-fix 超过 10 条或修复轮超限）：停止后续探索与取证，停止修复派发，回验收、设计或实现阶段归因重做，不要重发本 workflow${repairSummary()}${statsTailNote()}`,
+        message: `evaluate 判定 process-failed（不同 must-fix 超过 10 条或修复轮超限）：停止后续探索与取证，停止修复派发，回验收、设计或实现阶段归因重做，不要重发本 workflow${attemptNote}${repairSummary()}${statsTailNote()}`,
     };
 }
 await obsEnd("setup", null);
+// 进入保证活动（设计 §8.1）：前置门禁全部通过后才计数——被门禁拒绝的 setup-failure
+// 出口（状态门禁/增量门禁/full-first 门禁）未进入循环，不属尝试
+await recordAssuranceAttempt("started");
 phase("独立覆盖核对与探索性审查");
 const explorationHistory = events
     .filter((event) => event.type === "ExplorationCompleted")
@@ -1405,11 +1436,12 @@ if (mode === "explore-only") {
     });
     const finalEvaluation = await runGate(gatePath, ["evaluate", "--task-dir", taskDir]);
     const finalVerdict = parseObject(finalEvaluation.stdout);
+    await recordAssuranceAttempt("finished", "passed");
     await releaseLease();
     await obsCloseExecution("exploration-completed");
     return {
         terminated: "exploration-completed", taskDir, revision, findingIds, verdict: finalVerdict,
-        message: `候选反例审查完成（ExplorationCompleted=${explorationEventId}）；本阶段不写 AssuranceCompleted，D4 前须处置 must-fix 并补回归测试${repairSummary()}${statsTailNote()}`,
+        message: `候选反例审查完成（ExplorationCompleted=${explorationEventId}）；本阶段不写 AssuranceCompleted，D4 前须处置 must-fix 并补回归测试${attemptNote}${repairSummary()}${statsTailNote()}`,
     };
 }
 // 两阶段串行：coverage 的证据事件与冻结清单落盘后，探索者才按本轮已冻结的覆盖集合启动——
@@ -1488,7 +1520,8 @@ async function environmentMetaOf(artifactPath) {
 // kind/capability 满足判定：证据 kind 须等于要求 kind；real-host 证据可满足
 // official-runner 要求（真实宿主强于官方 runner）；fake-host 不满足任何宿主要求。
 // capability 依赖元数据声明：声明了（capabilities 数组或 capability 单值）且不含要求
-// 值 → 不满足；未声明时无法证伪，按 kind 已满足放行——capability 级终判归 gate
+// 值 → 不满足；未声明时登记侧无法证伪、不降级——capability 在 IA 登记侧与 gate 终判
+// 双侧核对，未声明能力覆盖的保守拒绝由 gate environmentSatisfies 终判
 function satisfiesRequiredEnvironment(meta, required) {
     if (meta === null)
         return false;
@@ -1818,6 +1851,7 @@ if (typeof finalVerdict.revision !== "string" || finalVerdict.revision !== revis
     catch {
         // 漂移事件登记失败不掩盖原失败——事件流可在恢复时补记
     }
+    await recordAssuranceAttempt("finished", "failed");
     await releaseLease();
     await obsCloseExecution("assurance-failed");
     const result = {
@@ -1826,7 +1860,7 @@ if (typeof finalVerdict.revision !== "string" || finalVerdict.revision !== revis
         revision,
         findingIds,
         verdict: finalVerdict,
-        message: `revision 漂移：setup 记录 ${revision}，finalize evaluate 为 ${typeof finalVerdict.revision === "string" ? finalVerdict.revision : "（非法值）"}——assurance 期间项目内容发生变化，本轮以旧 revision 追加的证据已失效。恢复动作：排查并清理项目内临时产物后重新发起 independent-assurance-v6 重新取证（不要按旧证据补写结论）${repairSummary()}${statsTailNote()}`,
+        message: `revision 漂移：setup 记录 ${revision}，finalize evaluate 为 ${typeof finalVerdict.revision === "string" ? finalVerdict.revision : "（非法值）"}——assurance 期间项目内容发生变化，本轮以旧 revision 追加的证据已失效。恢复动作：排查并清理项目内临时产物后重新发起 independent-assurance-v6 重新取证（不要按旧证据补写结论）${attemptNote}${repairSummary()}${statsTailNote()}`,
     };
     return result;
 }
@@ -1853,12 +1887,14 @@ const triageNote = finalVerdict.state === "process-failed"
         : suggestionOpen.length + infoOpen.length > 0
             ? `三档停修判据满足（must-fix 清零）：攒批 ${suggestionOpen.length + infoOpen.length} 条（suggestion ${suggestionOpen.length} + info ${infoOpen.length}，清单见 verdict.openFindings）——执行最后一波统一修复后循环退出；info/boundary 档也可按风险预授权（preauthorize-risk）或用户裁决登记处置`
             : "三档停修判据满足：零未决发现，循环退出，按 verdict 进入裁决";
+// finished 先于 message 拼接登记：登记失败的 attemptNote 才能进本出口的终态披露
+await recordAssuranceAttempt("finished", "passed");
 const result = {
     terminated: "assurance-completed",
     taskDir,
     revision,
     findingIds,
     verdict: finalVerdict,
-    message: `独立保证活动已完成，返回值携带 delivery-gate 生成的 verdict；workflow 本身不宣告 accepted；${triageNote}；本任务累计保证轮次 ${assuranceRoundsTotal}（重发前先核对累计成本再决定）${degradedEnvironmentEvidence.length > 0 ? `；环境事实降级 ${degradedEnvironmentEvidence.length} 条（verified→partial，明细见保证总结）` : ""}${provenanceUnknownCount > 0 ? `；来源不明的 revision 变化 ${provenanceUnknownCount} 个（本保证结论不含对未知变化的背书，明细见保证总结）` : ""}${repairSummary()}${statsTailNote()}`,
+    message: `独立保证活动已完成，返回值携带 delivery-gate 生成的 verdict；workflow 本身不宣告 accepted；${triageNote}；本任务累计保证轮次 ${assuranceRoundsTotal}（重发前先核对累计成本再决定）${degradedEnvironmentEvidence.length > 0 ? `；环境事实降级 ${degradedEnvironmentEvidence.length} 条（verified→partial，明细见保证总结）` : ""}${provenanceUnknownCount > 0 ? `；来源不明的 revision 变化 ${provenanceUnknownCount} 个（本保证结论不含对未知变化的背书，明细见保证总结）` : ""}${attemptNote}${repairSummary()}${statsTailNote()}`,
 };
 return result;

@@ -270,3 +270,24 @@ test("验收复审预算未超限：正常尝试次数不误伤（interrupted �
   assert.notEqual(verdict.state, "process-failed", "未超限不得 process-failed");
   assert.equal(verdict.missing.loopAttempts ?? null, null, "未超限时 missing.loopAttempts 为空");
 });
+
+// ── 7. 源码结构断言：版本打回与 designer 失败均消耗预算（防回归形态锚定）──
+
+test("acceptance-design 源码结构：started 在轮内退出路径之前，designer 失败与版本打回均有 finished 配对", () => {
+  // workflow 内部逻辑（agent 调用）难以单测，按仓内既有防复刻断言模式锚定源码形态：
+  // 预算按 started 计数——started 必须先于全部轮内退出路径登记，退出路径必须有
+  // finished 配对，否则该路径不消耗预算（文档宣称「designer 失败、打回全部计入」）
+  const source = readFileSync(join(ROOT, "skills", "self", "dev-workflow", "workflows", "src", "acceptance-design-v6.shared.ts"), "utf8");
+  const startedAt = source.indexOf('await recordLoopAttempt("started"');
+  const designerFailAt = source.indexOf("if (!designedGuard.ok || designedGuard.value === null)");
+  const versionGateAt = source.indexOf("if (draftContractVersion <= approvedMaxVersion)");
+  const reviewerAt = source.indexOf("const reviewer = agent(");
+  assert.ok(startedAt !== -1, "存在 started 登记调用");
+  assert.ok(designerFailAt !== -1 && versionGateAt !== -1 && reviewerAt !== -1, "锚点路径齐全");
+  assert.ok(startedAt < designerFailAt, "started 登记在 designer 调用之前（designer 失败消耗预算）");
+  assert.ok(startedAt < versionGateAt, "started 登记在版本门禁之前（版本打回消耗预算）");
+  const designerFailBlock = source.slice(designerFailAt, source.indexOf("const designed = designedGuard.value;"));
+  assert.match(designerFailBlock, /recordLoopAttempt\("finished", round, \{ outcome: "failed" \}\)/, "designer 失败路径登记 finished(failed)");
+  const versionGateBlock = source.slice(versionGateAt, reviewerAt);
+  assert.match(versionGateBlock, /recordLoopAttempt\("finished", round, \{ outcome: "rejected" \}\)/, "版本未递增打回路径登记 finished(rejected)");
+});

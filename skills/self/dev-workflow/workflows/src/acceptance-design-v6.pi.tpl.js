@@ -83,7 +83,7 @@ const SCHEMA_DesignerOutcome = {
   required: ["summary"],
 };
 
-// contract reviewer（contract-reviewer.md 角色）结构化返回：独立审查问题清单
+// contract reviewer（contract-reviewer.md 角色）结构化返回：独立审查问题清单 + 反例实现检查记录
 const SCHEMA_ContractReviewOutcome = {
   type: "object",
   properties: {
@@ -101,8 +101,24 @@ const SCHEMA_ContractReviewOutcome = {
         required: ["target", "summary", "detail"],
       },
     },
+    // 反例实现检查记录（V5 完整性设计 §5.1 判别力检查；无强反例也须返回空数组）
+    counterImplementations: {
+      type: "array",
+      description: "每条核心目标的反例实现检查记录（wouldPassCurrentCriteria=true 是独立打回理由）",
+      items: {
+        type: "object",
+        properties: {
+          obligationId: { type: "string", description: "被检查的核心目标（需求/断言 id）" },
+          counterImplementation: { type: "string", description: "反例实现：明显不符合用户目标却可能通过当前全部断言的实现形态" },
+          violatesIntent: { type: "string", description: "为什么违反用户意图（对照 intent 原文）" },
+          discriminatingScenarioRef: { type: "string", description: "能区分正误实现的场景或测试资产引用" },
+          wouldPassCurrentCriteria: { type: "boolean", description: "true = 该反例能通过当前判据（判别力不足）" },
+        },
+        required: ["obligationId", "counterImplementation", "violatesIntent", "discriminatingScenarioRef", "wouldPassCurrentCriteria"],
+      },
+    },
   },
-  required: ["summary", "problems"],
+  required: ["summary", "problems", "counterImplementations"],
 };
 
 // wfAgent：公共体的 agent(name, persona).ask<T>(prompt) 的 pi 等价。构建管线把公共体

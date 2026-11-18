@@ -66,10 +66,10 @@ function evidenceFile(fx, name, content) {
   return `evidence/${name}`;
 }
 
-function environmentDocument({ kind, name = "pi-coding-agent", version = "1.0.0", source = "official release archive", sourceHash = sha256("official"), driver = "bin/pi" }) {
+function environmentDocument({ kind, name = "pi-coding-agent", version = "1.0.0", source = "official release archive", sourceHash = sha256("official"), driver = "bin/pi", ...rest }) {
   return {
     summary: "宿主集成证据",
-    environment: { kind, name, version, source, sourceHash, driver },
+    environment: { kind, name, version, source, sourceHash, driver, ...rest },
   };
 }
 
@@ -198,11 +198,12 @@ test("requiredEnvironment 校验：kind 限 official-runner|real-host，fake-hos
 // ── 2. 环境满足 → verified 保持 ──
 
 test("证据环境元数据满足要求：verified 保持，任务可 accepted；real-host 证据满足 official-runner 要求", (t) => {
-  // official-runner 要求 + real-host 证据（真实环境是官方运行器的超集，§6.2 分层规则）
+  // official-runner 要求 + real-host 证据（真实环境是官方运行器的超集，§6.2 分层规则）；
+  // capability 要求须由证据声明覆盖（gate 终判：未声明即不满足）
   const { fx, revisionB } = driveToCandidate(t, { required: { kind: "official-runner", capability: "slash-command-dispatch" } });
   driveEvidenceAndAssurance(fx, revisionB, {
-    commandArtifact: evidenceFile(fx, "ev-command.json", `${JSON.stringify(environmentDocument({ kind: "real-host", source: "host binary" }), null, 2)}\n`),
-    inspectionArtifact: evidenceFile(fx, "ev-inspection.json", `${JSON.stringify(environmentDocument({ kind: "official-runner" }), null, 2)}\n`),
+    commandArtifact: evidenceFile(fx, "ev-command.json", `${JSON.stringify(environmentDocument({ kind: "real-host", source: "host binary", capability: "slash-command-dispatch" }), null, 2)}\n`),
+    inspectionArtifact: evidenceFile(fx, "ev-inspection.json", `${JSON.stringify(environmentDocument({ kind: "official-runner", capability: "slash-command-dispatch" }), null, 2)}\n`),
   });
   const verdict = evaluate(fx);
   assert.equal(verdict.state, "accepted", "环境元数据满足要求时 verified 不降级");
@@ -252,4 +253,70 @@ test("fake-host 证据不能独立证明宿主类断言：official-runner 与 re
 test("环境词表落策略包 evidence-kinds.json（environmentKinds 三档，随快照冻结）", () => {
   assert.deepEqual(EVIDENCE_KINDS.environmentKinds, ["fake-host", "official-runner", "real-host"]);
   // 词表经 snapshot-policy 进入任务快照——改词表 = 策略升级通道（既有机制），测试只锚定包内词表存在
+});
+
+// ── 6. capability 终判（gate environmentSatisfies；与 IA 登记侧双侧核对）──
+
+const CAP = "slash-command-dispatch";
+const capDoc = (kind, rest = {}) => `${JSON.stringify(environmentDocument({ kind, source: "host binary", ...rest }), null, 2)}\n`;
+
+test("capability 终判：kind 维度组合缺口不因 capability 匹配放行（official-runner 证据 vs real-host 要求）", (t) => {
+  const { fx, revisionB } = driveToCandidate(t, { required: { kind: "real-host", capability: CAP } });
+  driveEvidenceAndAssurance(fx, revisionB, {
+    commandArtifact: evidenceFile(fx, "ev-command.json", capDoc("official-runner", { capability: CAP })),
+    inspectionArtifact: evidenceFile(fx, "ev-inspection.json", capDoc("official-runner", { capability: CAP })),
+  });
+  const verdict = evaluate(fx);
+  assert.notEqual(verdict.state, "accepted", "real-host 要求下 official-runner 证据不得放行（capability 匹配救不了 kind 缺口）");
+  const entry = verdict.requirements.find((r) => r.id === "R1").assertions[0].evidence[0];
+  assert.equal(entry.result, "partial");
+  assert.match(entry.environmentGap.reason, /不满足断言要求 real-host/);
+});
+
+test("capability 终判：real-host 证据 + capability 单值匹配 → accepted", (t) => {
+  const { fx, revisionB } = driveToCandidate(t, { required: { kind: "real-host", capability: CAP } });
+  driveEvidenceAndAssurance(fx, revisionB, {
+    commandArtifact: evidenceFile(fx, "ev-command.json", capDoc("real-host", { capability: CAP })),
+    inspectionArtifact: evidenceFile(fx, "ev-inspection.json", capDoc("real-host", { capability: CAP })),
+  });
+  const verdict = evaluate(fx);
+  assert.equal(verdict.state, "accepted", "kind 与 capability 双满足时不得误伤");
+  const entry = verdict.requirements.find((r) => r.id === "R1").assertions[0].evidence[0];
+  assert.equal(entry.result, "verified");
+});
+
+test("capability 终判：声明缺要求值 → 降级 partial，不因 IA 侧放行洗白", (t) => {
+  const { fx, revisionB } = driveToCandidate(t, { required: { kind: "real-host", capability: CAP } });
+  driveEvidenceAndAssurance(fx, revisionB, {
+    commandArtifact: evidenceFile(fx, "ev-command.json", capDoc("real-host", { capability: "other-capability" })),
+    inspectionArtifact: evidenceFile(fx, "ev-inspection.json", capDoc("real-host", { capability: "other-capability" })),
+  });
+  const verdict = evaluate(fx);
+  assert.notEqual(verdict.state, "accepted");
+  const entry = verdict.requirements.find((r) => r.id === "R1").assertions[0].evidence[0];
+  assert.equal(entry.result, "partial", "capability 声明不含要求值 → 不满足");
+  assert.match(entry.environmentGap.reason, /能力声明不含/);
+});
+
+test("capability 终判：未声明能力覆盖 → 保守不满足（gate 终判兜住 IA 登记侧放行缺口）", (t) => {
+  const { fx, revisionB } = driveToCandidate(t, { required: { kind: "real-host", capability: CAP } });
+  driveEvidenceAndAssurance(fx, revisionB, {
+    commandArtifact: evidenceFile(fx, "ev-command.json", capDoc("real-host")),
+    inspectionArtifact: evidenceFile(fx, "ev-inspection.json", capDoc("real-host")),
+  });
+  const verdict = evaluate(fx);
+  assert.notEqual(verdict.state, "accepted", "required.capability 存在而证据未声明能力覆盖不得 accepted");
+  const entry = verdict.requirements.find((r) => r.id === "R1").assertions[0].evidence[0];
+  assert.equal(entry.result, "partial");
+  assert.match(entry.environmentGap.reason, /未声明能力覆盖/);
+});
+
+test("capability 终判：capability 数组形态 includes 命中 → 通过", (t) => {
+  const { fx, revisionB } = driveToCandidate(t, { required: { kind: "real-host", capability: CAP } });
+  driveEvidenceAndAssurance(fx, revisionB, {
+    commandArtifact: evidenceFile(fx, "ev-command.json", capDoc("real-host", { capability: ["event-bridge", CAP] })),
+    inspectionArtifact: evidenceFile(fx, "ev-inspection.json", capDoc("real-host", { capabilities: [CAP, "tool-registry"] })),
+  });
+  const verdict = evaluate(fx);
+  assert.equal(verdict.state, "accepted", "capability 数组与 capabilities 数组（IA 登记字段形态）命中均通过");
 });

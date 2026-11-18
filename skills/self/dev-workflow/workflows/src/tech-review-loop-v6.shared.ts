@@ -27,7 +27,15 @@
 //    三审读渲染视图（需核对结构化字段时提示读章节 JSON）；修复者直接编辑章节 JSON
 //    （逐文件小步修改）、修改后重渲染并同步跨章节引用字段
 //  - 一切失败 failed-as-return（T8：throw 的 errored run 不可 resume）——含未知
-//    参数键白名单 fail-fast 也走 return（rfl 此处用 throw，本脚本按 T8 收紧）
+// 参数键白名单 fail-fast 也走 return（rfl 此处用 throw，本脚本按 T8 收紧）
+//  - 循环尝试记录（设计《V5 交付完整性改造》§8.1/§8.2「T2」循环接入）：设计目录
+//    meta.acceptanceBinding 绑定交付任务时，进入审查循环登记 started、finish 收尾按
+//    终态登记 finished（converged→passed、direction-rejected→rejected、escalated→
+//    interrupted、其余失败终态→failed）；独立设计任务无任务目录，不登记（已知缺口，
+//    设计段循环无交付任务可归属时无处登记）。run 粒度：一次 workflow 执行 = 一次尝试
+//    （round=1），run 内轮次预算已有 maxRounds 单源。预算判定不迁移——现有
+//    t2RewriteAttemptCap 按 attempt 序号（重写动作）经 runDir 历史扫描跨 run 累计，
+//    与 started 计数语义等价，切换无收益有回归风险
 // 数据传递 = 文件总线（沿 rfl 惯例）：报告 / 处置表落盘于 runDir，ask 只传路径；
 // 结构化返回值只承载控制数据（计数 / 对账 / 处置）。
 // ============================================================================
@@ -775,6 +783,52 @@ if (designRender.exitCode !== 0) {
 }
 if (designRender.stdout.trim() !== "") log(designRender.stdout.trim());
 
+// ── 循环尝试记录（设计 §8.1 T2 接入；终态收尾前定义，finish 内统一登记 finished）──
+// 绑定交付任务才登记（acceptanceBinding bound → 任务目录 = 验收包所在目录）；
+// 独立设计任务无任务目录不登记（已知缺口）。runId = 观测 executionId 优先，缺省合成
+// 时间戳（与 acceptance-design 同款退化链）；round 恒 1（run 粒度）。登记失败不阻断
+// 主流程，缺陷经 attemptNote 进 finish 的终态 message
+const loopAttemptTaskDir =
+  acceptanceBinding !== null && acceptanceBinding.status === "bound" && typeof acceptanceBinding.acceptancePath === "string"
+    ? acceptanceBinding.acceptancePath.split("/").slice(0, -1).join("/")
+    : "";
+const loopAttemptRunId =
+  typeof args.executionId === "string" && args.executionId.trim() !== ""
+    ? args.executionId.trim()
+    : `t2-${Date.now()}`;
+let attemptNote = "";
+async function recordLoopAttempt(event: "started" | "finished", outcome?: "passed" | "rejected" | "failed" | "interrupted"): Promise<void> {
+  if (loopAttemptTaskDir === "") return;
+  const corePath = `${home}/.agents/skills/delivery-v6/scripts/delivery-core.mjs`;
+  const res = await world.run("node", [
+    corePath,
+    "loop-attempt", "--task-dir", loopAttemptTaskDir, "--loop", "tech-review", "--path", "workflow",
+    "--run-id", loopAttemptRunId, "--round", "1", "--event", event,
+    ...(event === "finished" && outcome !== undefined ? ["--outcome", outcome] : []),
+  ]);
+  if (res.exitCode !== 0) {
+    attemptNote += `；尝试记录 loop-attempt ${event}（tech-review）登记失败（exit ${res.exitCode}）：${(res.stderr || res.stdout).trim()}——本次尝试未入账。恢复动作：按 delivery-core 输出修复任务目录状态后重发（同 runId 同轮重放幂等，不会双计）`;
+  }
+}
+// 终态词 → 尝试结果（finish 统一登记，覆盖全部终态出口；setup-failure 不经 finish 不登记）。
+// 函数形态而非顶层对象字面量：pi 产物的对账剥离正则按顶格 "};" 作切分记号，业务常量
+// SCHEMA_TILDE 恰以 SCHEMA_ 前缀撞名该正则——顶层多行对象结尾会新增一个顶格 ";}"，
+// 使剥离区间吞掉中间业务串（check-workflow-parity 实测），函数体不产生顶层对象字面量
+function terminatedToOutcome(terminated: string): "passed" | "rejected" | "failed" | "interrupted" {
+  switch (terminated) {
+    case "converged":
+      return "passed";
+    case "direction-rejected":
+      return "rejected";
+    case "escalated":
+      return "interrupted";
+    default:
+      // stuck / max-rounds / review-failure / aggregator-failure / fix-failure 及词表外终态：
+      // 宁可多计不可漏计
+      return "failed";
+  }
+}
+
 // ── 终态收尾（写 final.json + 发布终态 markdown；run 级状态在闭包中） ──
 const trajectory: number[] = [];
 const ledger: LedgerEntry[] = [];
@@ -787,6 +841,8 @@ async function finish(
   message: string,
   blocked: { items: string[]; reason: string } | null = null,
 ): Promise<LoopResult> {
+  // 尝试记录 finished 在 message 拼接前登记：登记失败的 attemptNote 才能进终态披露
+  await recordLoopAttempt("finished", terminatedToOutcome(terminated));
   // V6 代：remaining 逐条带 guidance/reportRefs——从最后一次聚合批次按 source ref 找回
   // 可执行处方与报告锚点，主 agent 按清单直接处置，不必再派复审 run 回读四份报告
   const lastRefGuidance = new Map<string, { guidance: string; refs: string[] }>();
@@ -816,7 +872,7 @@ async function finish(
     remaining,
     minorFindings: [...minorFindings],
     blocked,
-    message,
+    message: `${message}${attemptNote}`,
   };
   // V6 代：minor 收集清单独立落盘（final.json 是 dev-flow-v6 入口门契约，字段保持不动；
   // minor 清单经返回值与该文件双通道呈报，主 agent 最后一波统一处理或登记放行）
@@ -920,6 +976,9 @@ log(
 // T9（用户裁决 2026-09-26）：workflow 内无用户交互位，任何 agent 不得提问——随 persona 固化
 //（NO_ASK_RULE 定义在文件顶部常量区）
 if (obsCtx !== null) await obsEnd("setup", null);
+// 进入审查循环即计数（设计 §8.1）：setup-failure 出口未登记（未进入循环）；无绑定
+// 任务目录时为空操作（独立设计任务，已知缺口）
+await recordLoopAttempt("started");
 const AGGREGATOR_PERSONA =
   "你是审查聚合裁决员：把四席评审报告的发现合并为去重后的权威问题清单——同根因跨席位的发现合为一条（保留全部原始 ref，禁止静默丢弃任何一条），不同根因绝不合并；只读裁决，绝不修改设计文档与项目文件（验证样例可用管道或临时文件）；同根因判定依据是报告原文与设计文档原文，不是表面措辞相似；指令无法执行或有矛盾时如实说明，不伪造结论。" +
   NO_ASK_RULE;

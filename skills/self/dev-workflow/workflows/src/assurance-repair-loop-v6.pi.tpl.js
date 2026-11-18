@@ -172,6 +172,32 @@ const SCHEMA_RepairBuilderOutcome = {
     filesChanged: { type: "array", items: { type: "string" } },
     testEvidence: { type: "string" },
     affectedAssertionIds: { type: "array", items: { type: "string" } },
+    // 高风险修复的最小同族组合分析（设计《V5 交付完整性与语义可信性改造》§9.1：
+    // 复用修复报告，不新建事件流——报告结构，gate 判定不依赖）。可选字段：blocker 轮
+    // 缺失经一次修正重问仍缺 → 报告降级（defectFamilyIncomplete），不阻塞修复本身
+    defectFamily: {
+      type: ["object", "null"],
+      description: "按根因改变输入数量/故障位置/时序/路径形态选出的最小有区分度组合（不做笛卡尔积全展开）",
+      properties: {
+        rootCause: { type: "string", description: "根因一句话（如：关闭检查只在条目循环前执行一次）" },
+        dimensions: {
+          type: "array",
+          description: "会随缺陷形态变化的关键维度清单",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "维度名（输入数量/故障位置/时序/路径形态等）" },
+              values: { type: "array", items: { type: "string" }, description: "该维度上有区分度的取值样本" },
+            },
+          },
+        },
+        selectedCases: { type: "array", items: { type: "string" }, description: "最小组合的用例名；对应测试必须真实存在" },
+        redBeforeFix: { type: "array", items: { type: "string" }, description: "缺陷版本失败证据文件路径（复现原始缺陷的测试在修复前的失败记录留档）" },
+        greenAfterFix: { type: "array", items: { type: "string" }, description: "修复版本通过证据：selectedCases 对应测试的文件路径+用例名" },
+        mutationRefs: { type: "array", items: { type: "string" }, description: "撤销修复再失败证据文件路径（临时 revert 修复 commit 跑测试见红再恢复）" },
+        mutationWaiver: { type: "string", description: "mutationRefs 为空时的书面豁免论证（blocker 级撤销验证不可行时必须给）" },
+      },
+    },
   },
   required: ["summary", "filesChanged", "testEvidence", "affectedAssertionIds"],
 };

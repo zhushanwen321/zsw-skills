@@ -171,8 +171,10 @@ const CONDITIONAL_EVENT_FIELDS = {
 const OPTIONAL_EVENT_FIELDS = {
   EvidenceRecorded: ["assertionIds", "adversarialFormIds"],
   // consequenceRefutationType = 行为后果否决论证的三类声明（合并稿 §9：不会发生 /
-  // 用户不可观察 / 验收明确允许），正文存 consequenceRefutation，机器只认枚举
-  FindingRaised: ["consequenceRefutation", "consequenceRefutationType", "reopenOf", "origin", "firstDetectedStage", "expectedStage", "regressionTestRef"],
+  // 用户不可观察 / 验收明确允许），正文存 consequenceRefutation，机器只认枚举。
+  // emptyScopeRefutation = 空关联 boundary 的不影响任何需求论证（V5 完整性设计 §5.4：
+  // requirementIds=[] 曾绕过定级护栏——GLM F-5 实证；空关联必须证明其不影响任何需求）
+  FindingRaised: ["consequenceRefutation", "consequenceRefutationType", "reopenOf", "origin", "firstDetectedStage", "expectedStage", "regressionTestRef", "emptyScopeRefutation"],
   AssuranceCompleted: ["mode", "artifactSha256"],
   // 哈希绑定扩展到全部携带 artifact 的证据/回执事件（合并稿 §10.3 证据不可覆盖）：
   // OPTIONAL 起步兼容旧事件流，workflow 侧新登记必填
@@ -216,7 +218,7 @@ const HELP = `delivery-gate（V6）：delivery-v6 的确定性交付裁决器（
   # 意图提交命令组（执行器事件唯一通道；信封由 gate 构造：actor/revision/acceptanceVersion/domain/artifactSha256 缺省内核计算）
   delivery-gate record-implementation --task-dir D --increment-id INC-1 --summary S --artifact A --merge-receipt '<JSON>' --credential <builder credentialId> [--revision R]
   delivery-gate record-repair-round --task-dir D --round N --summary S --trigger-finding-ids '<JSON>' --affected-assertion-ids '<JSON>' --artifact A --credential <builder credentialId> [--from-revision R --to-revision R2 --nature behavior|environment|evidence --increment-receipts '<JSON>']
-  delivery-gate record-finding --task-dir D --summary S --category defect|boundary --severity blocker|non-blocker --requirement-ids '<JSON>' --artifact A --credential <builder|assurance credentialId> [--finding-id F --origin O --consequence-refutation S --consequence-refutation-type T --reopen-of F0]
+  delivery-gate record-finding --task-dir D --summary S --category defect|boundary --severity blocker|non-blocker --requirement-ids '<JSON>' --artifact A --credential <builder|assurance credentialId> [--finding-id F --origin O --consequence-refutation S --consequence-refutation-type T --reopen-of F0 --empty-scope-refutation S]  # schema 2 下 category=boundary 且 --requirement-ids '[]'（空关联）必须附 --empty-scope-refutation（不影响任何需求的论证）
   delivery-gate resolve-finding --task-dir D --finding-id F --summary S --artifact A --credential <assurance credentialId>
   delivery-gate reaffirm-resolution --task-dir D --finding-id F --original-resolution-event-id E --basis S --summary S --artifact A --credential <assurance credentialId>
   delivery-gate record-evidence --task-dir D --requirement-id R --kind K --result S --summary S --artifact A --credential <assurance credentialId> [--assertion-ids '<JSON>' --adversarial-form-ids '<JSON>']
@@ -1205,6 +1207,8 @@ function validateEventShape(event, { record = false } = {}) {
       if (Object.hasOwn(event, "firstDetectedStage")) requireNonEmptyString(event.firstDetectedStage, "event.firstDetectedStage");
       if (Object.hasOwn(event, "expectedStage")) requireNonEmptyString(event.expectedStage, "event.expectedStage");
       if (Object.hasOwn(event, "regressionTestRef")) requireNonEmptyString(event.regressionTestRef, "event.regressionTestRef");
+      // 空关联 boundary 的不影响任何需求论证：非空字符串（存在性由 fold 层护栏裁决）
+      if (Object.hasOwn(event, "emptyScopeRefutation")) requireNonEmptyString(event.emptyScopeRefutation, "event.emptyScopeRefutation");
       break;
     case "FindingResolved":
       requireFindingId(event.findingId, "event.findingId");
@@ -1806,6 +1810,26 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
             fold.guardrailWarnings.push(`${message}（历史记录，写入时未拦）`);
           }
         }
+        // 护栏②（V6 空关联护栏，V5 完整性设计 §5.4）：boundary 且 requirementIds=[] 的发现
+        // 必须附 emptyScopeRefutation（证明该发现不影响任何需求的论证）——空关联绕过护栏①
+        //（护栏①只检查已关联需求的断言覆盖，空数组使其恒不触发；GLM F-5 实证：真实宿主
+        // 命令解析问题以此形态归 boundary 规避定级）。同护栏①只在 schema 2 新写入执行；
+        // 历史记录加载容忍（guardrailWarnings 留档）。开关读 kernel rules.json 的
+        // guardrails.emptyScopeBoundaryRequiresRefutation，未登记时默认启用（!== false）——
+        // 与其余护栏键一致的可关闭形态，rules.json 键由内核规则统一登记后即可显式管理
+        if (
+          KERNEL_RULES.guardrails.emptyScopeBoundaryRequiresRefutation !== false &&
+          current && world.acceptance.schemaVersion === 2 && event.category === "boundary" &&
+          Array.isArray(event.requirementIds) && event.requirementIds.length === 0
+        ) {
+          if (!Object.hasOwn(event, "emptyScopeRefutation")) {
+            const message = `${lineLabel} 的 category=boundary 且 requirementIds 为空（空关联）但未附 emptyScopeRefutation——空关联不得成为绕过定级护栏的通道，必须证明该发现不影响任何需求。`;
+            if (guardrailStrict) {
+              fail(message, `三选一：① 补充 --empty-scope-refutation "<该发现不影响任何需求的论证>" 后重登；② 该发现实际影响需求时，把对应需求 id 填入 --requirement-ids 重登（已断言覆盖的需求禁归 boundary，见护栏①）；③ 判据本身无法覆盖该行为时走 open-revision 修订验收（递增 acceptanceVersion 重审重批）。`);
+            }
+            fold.guardrailWarnings.push(`${message}（历史记录，写入时未拦）`);
+          }
+        }
         // 护栏③（V6 定级护栏）：定级改判熔断——同一条目（reopenOf 根）累计 (category,severity)
         // 组合数超过上限即拒绝（改判必须停回用户裁决，不允许多次无声改写收敛与停机判据）
         if (KERNEL_RULES.guardrails.regradeHaltEnabled) {
@@ -2077,18 +2101,24 @@ function readLoopAttemptsBudget(taskDirValue, loop) {
   return { loop, ...loopAttemptsBudget(parseLoopAttemptsText(readFileSync(filePath, "utf8")), { loop, cap }) };
 }
 
-// pending-actions.json 的 open 条目读取（义务派生输入；文件缺失/损坏 → 无待办——
-// pending 实体由 delivery-core pending 命令管理，gate 只读不写）
+// pending-actions.json 的 open 条目读取（义务派生输入）。pending 实体由 delivery-core
+// pending 命令管理，gate 只读不写：文件缺失 = 无待办；解析失败 = fail loud——损坏文件中
+// 的 blocking 待办不得按不存在处理（设计 §14「未知默认不接受交付」），静默返回空清单会把
+// 损坏文件的待办全部洗掉、gate 照常 accepted
 function readPendingItems(taskDirValue) {
   const filePath = join(taskDirValue, "pending-actions.json");
   if (!existsSync(filePath)) return [];
+  let parsed;
   try {
-    const parsed = JSON.parse(readFileSync(filePath, "utf8"));
-    const items = Array.isArray(parsed.items) ? parsed.items : [];
-    return items.filter((item) => item !== null && typeof item === "object" && item.status === "open");
-  } catch {
-    return [];
+    parsed = JSON.parse(readFileSync(filePath, "utf8"));
+  } catch (error) {
+    fail(
+      `pending-actions.json 解析失败（${error.message}）：损坏文件中的 blocking 待办不得按不存在处理。`,
+      `修复 ${filePath} 的 JSON 语法后重跑 evaluate（权威源 = 该文件；修复前不得依据本次输出判定交付义务）`,
+    );
   }
+  const items = Array.isArray(parsed.items) ? parsed.items : [];
+  return items.filter((item) => item !== null && typeof item === "object" && item.status === "open");
 }
 
 // ── 证据环境元数据（机制二 §6.1/§6.2 gate 侧）──
@@ -2125,6 +2155,24 @@ function environmentSatisfies(world, environment, required) {
   }
   if (typeof environment.source !== "string" || environment.source.trim() === "") {
     return { ok: false, reason: "environment.source 缺失（须登记权威来源：真实 SDK / 宿主源码 / 正式文档）" };
+  }
+  // capability 终判（设计 §6.1 capability 字段，双侧核对中的 gate 侧）：IA 登记侧
+  //（independent-assurance 的 satisfiesRequiredEnvironment）只降级「已声明且不含要求值」
+  // 的证据、未声明时不降级；gate 终判侧保守兜住该缺口——required.capability 存在而证据未声明
+  // 能力覆盖即不满足（能力维度无法证伪时不得凭 kind 单独放行，否则 IA 侧降级会被
+  // evaluate 的 verified 洗掉）。字段口径与 IA 对齐：capability 单值严格相等，
+  // capability/capabilities 数组 includes
+  if (typeof required.capability === "string" && required.capability !== "") {
+    const declared = [];
+    if (typeof environment.capability === "string") declared.push(environment.capability);
+    else if (Array.isArray(environment.capability)) declared.push(...environment.capability.filter((item) => typeof item === "string"));
+    if (Array.isArray(environment.capabilities)) declared.push(...environment.capabilities.filter((item) => typeof item === "string"));
+    if (declared.length === 0) {
+      return { ok: false, reason: `environment 未声明能力覆盖（capability=${JSON.stringify(required.capability)} 要求）：证据未声明 capability/capabilities，不能证明该能力维度` };
+    }
+    if (!declared.includes(required.capability)) {
+      return { ok: false, reason: `environment 能力声明不含 ${JSON.stringify(required.capability)}（声明值：${declared.join(" / ")}）` };
+    }
   }
   // sourceHash 只登记不核对：其权威源内容的哈希比对通道不存在（本仓无权威源索引），
   // 核哈希会伪造确定性——如实不核，环境身份靠 kind + source 登记与人工可核查
@@ -3849,7 +3897,45 @@ function commandValidateAcceptance(args) {
     acceptanceVersion: world.acceptance.acceptanceVersion,
     acceptancePackageSha256: world.packageSha256,
     intentSha256: world.intentSha256,
+    // 检测/分流类判别力词面初筛 warning（不拒写入——词面有误伤率，硬判定留给 reviewer 语义审）
+    warnings: detectionRoutingCriteriaWarnings(world.acceptance),
   });
+}
+
+// ── 检测/分流类判据判别力词面初筛（V5 完整性设计 §5.4：恒真/恒假不得作为已实现证据）──
+// 为什么只做词面初筛记 warning：正负信号「行为不同」的硬判定是语义判断（空检测器 /
+// 恒 true 实现要通过反例输入才能证明被拒），机器词面匹配有误伤率，故本层只提示，
+// 不拦写入；reviewer 侧的语义审查是硬判定层（references/roles/acceptance-reviewer.md）。
+// 词表可扩展：命中新形态的检测/分流同义词或否定性标记时，直接补充下列两个常量
+//（它们是词面提示层，非语义权威——扩展不需要递增 acceptanceVersion 或走策略升级）。
+const DETECTION_ROUTING_KEYWORDS = ["detector", "classify", "classifier", "router", "retrieve", "retrieval", "inject", "检测", "分流", "检索", "注入"];
+const NEGATIVE_SCENARIO_MARKERS = ["negative", "拒绝", "不", "排除", "miss", "false", "负例", "不应", "不得"];
+
+/** 单条断言的词面描述域：statement + qualifiers + given/when/then（初筛只看文本词面） */
+function assertionText(assertion) {
+  return [assertion.statement, ...(Array.isArray(assertion.qualifiers) ? assertion.qualifiers : []), assertion.given, assertion.when, assertion.then]
+    .filter((part) => typeof part === "string")
+    .join("\n");
+}
+
+/** 逐需求筛查：断言描述含检测/分流关键词的需求组，若该组没有任何断言含否定性场景标记，记 warning */
+function detectionRoutingCriteriaWarnings(acceptance) {
+  if (acceptance.schemaVersion !== 2) return [];
+  const warnings = [];
+  for (const requirement of acceptance.requirements) {
+    const assertions = Array.isArray(requirement.assertions) ? requirement.assertions : [];
+    const keywordHit = assertions.some((assertion) =>
+      DETECTION_ROUTING_KEYWORDS.some((keyword) => assertionText(assertion).toLowerCase().includes(keyword.toLowerCase())));
+    if (!keywordHit) continue;
+    const hasNegativeScenario = assertions.some((assertion) =>
+      NEGATIVE_SCENARIO_MARKERS.some((marker) => assertionText(assertion).toLowerCase().includes(marker.toLowerCase())));
+    if (!hasNegativeScenario) {
+      warnings.push(
+        `需求 ${requirement.id} 含检测/分流类断言但未发现否定性场景标记（${NEGATIVE_SCENARIO_MARKERS.join(" / ")}）——恒真/恒假/空变量集不得作为已实现证据。恢复动作：补正负场景对照或书面论证不适用（正负信号场景且行为不同；不适用理由登记进该需求断言的 qualifierNotApplicable 或审查报告）。`,
+      );
+    }
+  }
+  return warnings;
 }
 
 function commandSnapshotPolicy(args) {
@@ -4078,7 +4164,7 @@ const INTENT_SPECS = {
     type: "FindingRaised",
     role: null, // actor 由凭据角色决定（builder 自报 / assurance 审查）
     required: ["task-dir", "summary", "category", "severity", "requirement-ids", "artifact", "credential"],
-    optional: ["finding-id", "origin", "consequence-refutation", "consequence-refutation-type", "reopen-of", "first-detected-stage", "expected-stage", "regression-test-ref", "revision", "run-id"],
+    optional: ["finding-id", "origin", "consequence-refutation", "consequence-refutation-type", "reopen-of", "first-detected-stage", "expected-stage", "regression-test-ref", "empty-scope-refutation", "revision", "run-id"],
     jsonFields: { "requirement-ids": "requirementIds" },
     build: (world, options, parsed) => ({
       findingId: options["finding-id"] ?? nextFindingId(world),
@@ -4087,6 +4173,7 @@ const INTENT_SPECS = {
       requirementIds: parsed["requirement-ids"],
       artifact: options.artifact,
       ...(options.origin !== undefined ? { origin: options.origin } : {}),
+      ...(options["empty-scope-refutation"] !== undefined ? { emptyScopeRefutation: options["empty-scope-refutation"] } : {}),
       ...(options["consequence-refutation"] !== undefined ? { consequenceRefutation: options["consequence-refutation"] } : {}),
       ...(options["consequence-refutation-type"] !== undefined ? { consequenceRefutationType: options["consequence-refutation-type"] } : {}),
       ...(options["reopen-of"] !== undefined ? { reopenOf: options["reopen-of"] } : {}),

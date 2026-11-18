@@ -250,15 +250,25 @@ function pendingPath(taskDir) {
   return join(taskDir, "pending-actions.json");
 }
 
-function readPending(taskDir) {
+function readPending(taskDir, { onUnparseable = "tolerate" } = {}) {
   const filePath = pendingPath(taskDir);
   if (!existsSync(filePath)) return { items: [] };
+  let parsed;
   try {
-    const parsed = JSON.parse(readFileSync(filePath, "utf8"));
-    return { items: Array.isArray(parsed.items) ? parsed.items : [] };
-  } catch {
-    return { items: [] };
+    parsed = JSON.parse(readFileSync(filePath, "utf8"));
+  } catch (error) {
+    // 判定路径（obligations）损坏即报错：损坏文件中的 blocking 待办不得按不存在处理
+    //（设计 §14「未知默认不接受交付」）；查询路径（pending list）容忍并在输出披露
+    // unreadable，不崩
+    if (onUnparseable === "fail") {
+      fail(
+        `pending-actions.json 解析失败（${error.message}）：损坏文件中的 blocking 待办不得按不存在处理。`,
+        `修复 ${filePath} 的 JSON 语法后重跑本命令（权威源 = 该文件；修复前不得依据本次输出判定交付义务）`,
+      );
+    }
+    return { items: [], unreadable: true, parseError: error.message };
   }
+  return { items: Array.isArray(parsed.items) ? parsed.items : [] };
 }
 
 function writePending(taskDir, document) {
@@ -272,7 +282,13 @@ function commandPending(args) {
   const core = loadTaskCore(options["task-dir"]);
   const document = readPending(core.taskDir);
   if (action === "list") {
-    printJson({ taskDir: core.taskDir, open: document.items.filter((item) => item.status === "open"), resolved: document.items.filter((item) => item.status !== "open") });
+    // 查询路径容忍损坏：unreadable 披露文件状态（open/resolved 为空清单不代表无待办）
+    printJson({
+      taskDir: core.taskDir,
+      ...(document.unreadable === true ? { unreadable: true, parseError: document.parseError } : {}),
+      open: document.items.filter((item) => item.status === "open"),
+      resolved: document.items.filter((item) => item.status !== "open"),
+    });
     return;
   }
   if (action === "add") {
@@ -1057,7 +1073,8 @@ function commandObligations(args) {
   const options = parseOptions(args, { required: ["task-dir"], optional: ["revision"] });
   const world = loadWorldAuto(options["task-dir"]);
   const revision = options.revision ?? computeRevision(world.task.projectRoot);
-  const pendingItems = readPending(world.taskDir).items.filter((item) => item.status === "open");
+  // 判定路径：pending 文件损坏即报错退出（fail-closed），不得按空清单派生义务
+  const pendingItems = readPending(world.taskDir, { onUnparseable: "fail" }).items.filter((item) => item.status === "open");
   if (world.acceptance === null) {
     // 无验收包：断言/阶段义务无判定源（不猜），只报 pending 义务——查询类命令不因包缺失崩溃
     const pendingObligations = pendingItems.map((item) => ({

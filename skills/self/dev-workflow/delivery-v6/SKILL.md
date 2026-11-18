@@ -1,7 +1,7 @@
 ---
 name: delivery-v6
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 6.3.0
+version: 6.4.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -38,7 +38,7 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 - **定级护栏**：关联需求已有断言级判据明文覆盖的发现禁止归 boundary；non-blocker 必须附 consequenceRefutation 三类论证；同一条目定级组合超过 2 种熔断停回用户；T2 聚合分级与 D2 聚合定性的改判必附理由留痕，同一 ref/条目连续改判达上限停回（aggregateRegradeHalt）。护栏只拦新写入；历史记录违规在加载折算时留档 guardrailWarnings（旧任务目录可读）。
 - **循环预算**：perVersion 修复 ≤3、不同 must-fix ≤10、跨 run 保证总轮 ≤6、验收复审轮 ≤6（按 started 尝试计数——打回、失败、中断全部计入，跨 run 与手工路径累计不重置）——超限判 process-failed 停回（`quality.budgets` 报用量）。尝试登记与查询走 `delivery-core loop-attempt` / `loop-budget`（记录文件 loop-attempts.jsonl，非签名事件）。
 - **待办实体**（pending-actions）：善后 / 待恢复 / 待登记 / 待裁决 / 待复盘落盘，`next` 优先回答；中断恢复 = 读待办 + 合法转移，不依赖会话记忆。
-- **交付义务与 revision 来源对账**：accepted 判定从「事件是否齐」扩展——`delivery-core obligations` 从验收断言 / 必需阶段 / 修复轮 / blocking 待办派生义务清单（不建人工总表），必需义务无 open 才可 accepted（`explicitly-waived` 须绑用户裁决，豁免通道按义务类型映射现有命令）；`delivery-core revision-provenance` 只读派生候选形成后每次 revision 变化的来源，来源不明（unknown）的代际不得被后续保证覆盖、不得 accepted，恢复动作 = 补做合法修复登记 / 恢复已知基线 / 用户确认外部基线（external-baseline 显式登记通道待建立）。
+- **交付义务与 revision 来源对账**：accepted 判定从「事件是否齐」扩展——`delivery-core obligations` 从验收断言 / 必需阶段 / 修复轮 / blocking 待办派生义务清单（不建人工总表），必需义务无 open 才可 accepted（`explicitly-waived` 须绑用户裁决，豁免通道按义务类型映射现有命令）；`delivery-core revision-provenance` 只读派生候选形成后每次 revision 变化的来源，来源不明（unknown）的代际不得被后续保证覆盖、不得 accepted，恢复动作 = 补做合法修复登记 / 恢复已知基线 / 用户确认外部基线（`confirm-baseline` 命令，登记 RevisionBaselineConfirmed 事件接链）。
 - **人工处置显式转移**：DAG 节点人工改判 done 的唯一合法通道 `node-transition --event manual-disposition --basis <依据> --task-dir <taskDir>`（自动登记待复盘待办）；禁止词表外事件与直改状态文件。
 - **验证体系**：转移表静态校验 + 编排链已知答案样例 + golden 任务端到端（`scripts/tests/delivery-golden-v6.test.mjs`：正常流与预置缺陷流，断言拦截阶段/定级/轮次；agent 语义行为的 golden 需活跑，见 dev-flow-v6 题库分级）+ 历史任务回放（`delivery-core replay --task-dir`：真实事件序列对转移表的可表达性核验）+ 全量机制单测，全部进 CI。
 
@@ -70,7 +70,7 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 | 有限修复 | **预算耗尽停回**（perVersion >3 / 不同 must-fix >10 / 跨 run 保证 >6） | 轮次预判走内核 repair-budget；reopenOf 根去重；environment/evidence 不计轮 |
 | 判定 | **风险接受逐项裁决** | 只有 evaluate 写 verdict；accepted / accepted_with_risk 才可交付；process-failed 不得作为成功交付；evaluate 前置机器核对：`obligations` 必需义务无 open、`revision-provenance` 无 unknown 来源代际、`loop-budget` 未超限 |
 
-收尾质量指标：交付终态确定后运行 `node ~/.agents/skills/delivery-v6/scripts/delivery-quality-stats.mjs <taskDir> --json` 输出 11 项交付质量指标（uniqueMustFix、repairRounds、findings、reopenedFindings、expectedStageAccuracy、escapedByStage、assuranceMustFixFirstRun、targetedReviewRate、finalExplorations、evidenceIntegrityFailures、stuckContinuationCount），呈报用户并存档。卡住续跑次数由主会话按 dev-flow 执行记录统计后经 `--stuck-continuation-count N` 传入。过程审查统计：taskDir 含 process-review.jsonl（dev-flow-v6 渐进式 review 的过程记录）时追加输出 processReview 字段，缺失不影响既有指标。
+收尾质量指标：交付终态确定后运行 `node ~/.agents/skills/delivery-v6/scripts/delivery-quality-stats.mjs <taskDir> --json` 输出 11 项交付质量指标（uniqueMustFix、repairRounds、findings、reopenedFindings、expectedStageAccuracy、escapedByStage、assuranceMustFixFirstRun、targetedReviewRate、finalExplorations、evidenceIntegrityFailures、stuckContinuationCount），呈报用户并存档。卡住续跑次数由主会话按 dev-flow 执行记录统计后经 `--stuck-continuation-count N` 传入。过程审查统计：taskDir 含 process-review.jsonl（dev-flow-v6 渐进式 review 的过程记录）时追加输出 processReview 字段，缺失不影响既有指标。终态报告：`node ~/.agents/skills/delivery-v6/scripts/generate-delivery-report.mjs --task-dir <taskDir> [--status-file <dev-flow status.json>] [--out <路径>]` 由权威记录（verdict.json / events.jsonl / loop-attempts.jsonl / self-repairs.jsonl / status.json / workflow 观测记录）机器生成分节报告（与 delivery-quality-stats 并列使用：前者面向用户的终态呈报，后者为质量指标数值）——数字与状态以报告文件为准，LLM 只做叙事解释；缺运行记录的项标 unknown，不按 0 或成功补齐，人工转述数字属违规。
 
 ## 任务目录、血统与凭据
 
