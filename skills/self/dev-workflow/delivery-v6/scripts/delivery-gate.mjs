@@ -5843,10 +5843,13 @@ function commandIntent(commandName, args) {
       summary: options.summary,
       ...content,
     };
-    // artifactSha256 缺省由内核计算（仅限事件契约允许该字段的内容哈希类型；发现类事件不绑内容哈希）
+    // artifactSha256 缺省由内核计算（仅限事件契约允许该字段的内容哈希类型；发现类事件不绑内容哈希）。
+    // 绝对 artifact 路径按原样解析——join 对绝对路径是拼接不是取根（与 probeArtifact 的
+    // isAbsolute 分支同口径；实测 candidate-build-v6 未显式传 --artifact-sha256 时绝对路径必 ENOENT）
     if (Object.hasOwn(event, "artifact") && ARTIFACT_HASH_CAPABLE_TYPES.has(spec.type)) {
       if (options["artifact-sha256"] === undefined && event.artifact !== "none") {
-        event.artifactSha256 = sha256File(join(world.taskDir, event.artifact), `--artifact ${event.artifact}`);
+        const artifactPath = isAbsolute(event.artifact) ? event.artifact : join(world.taskDir, event.artifact);
+        event.artifactSha256 = sha256File(artifactPath, `--artifact ${event.artifact}`);
       } else if (options["artifact-sha256"] !== undefined) {
         event.artifactSha256 = options["artifact-sha256"];
       }
