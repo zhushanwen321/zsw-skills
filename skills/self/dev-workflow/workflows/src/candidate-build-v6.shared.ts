@@ -466,6 +466,14 @@ async function appendFinding(draft: FindingDraft, artifact: string): Promise<str
     category: draft.category === "boundary" ? "boundary" : "defect",
     requirementIds: draft.requirementIds,
     severity: draft.severity,
+    // 可选字段逐字转抄（与探索器侧登记同款）：schema 2 非 blocker 的
+    // consequenceRefutation 缺失会被 gate 拒——实测 attempt-7：builder 自报发现
+    // 带合法反驳论证，本函数漏抄致登记失败
+    ...(draft.consequenceRefutation === undefined ? {} : { consequenceRefutation: draft.consequenceRefutation }),
+    ...(draft.consequenceRefutationType === undefined ? {} : { consequenceRefutationType: draft.consequenceRefutationType }),
+    ...(draft.origin === undefined ? {} : { origin: draft.origin }),
+    ...(draft.expectedStage === undefined ? {} : { expectedStage: draft.expectedStage }),
+    ...(draft.regressionTestRef === undefined ? {} : { regressionTestRef: draft.regressionTestRef }),
     artifact,
   };
   let error = await appendEvent(event);

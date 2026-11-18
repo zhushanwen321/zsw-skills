@@ -420,7 +420,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "7.5.4"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "7.5.5"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -1117,6 +1117,14 @@ async function appendFinding(draft: FindingDraft, artifact: string): Promise<str
     category: draft.category === "boundary" ? "boundary" : "defect",
     requirementIds: draft.requirementIds,
     severity: draft.severity,
+    // 可选字段逐字转抄（与探索器侧登记同款）：schema 2 非 blocker 的
+    // consequenceRefutation 缺失会被 gate 拒——实测 attempt-7：builder 自报发现
+    // 带合法反驳论证，本函数漏抄致登记失败
+    ...(draft.consequenceRefutation === undefined ? {} : { consequenceRefutation: draft.consequenceRefutation }),
+    ...(draft.consequenceRefutationType === undefined ? {} : { consequenceRefutationType: draft.consequenceRefutationType }),
+    ...(draft.origin === undefined ? {} : { origin: draft.origin }),
+    ...(draft.expectedStage === undefined ? {} : { expectedStage: draft.expectedStage }),
+    ...(draft.regressionTestRef === undefined ? {} : { regressionTestRef: draft.regressionTestRef }),
     artifact,
   };
   let error = await appendEvent(event);
