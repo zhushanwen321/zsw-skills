@@ -6,15 +6,18 @@
 // 本执行器把 ESM 源码转译为 CJS 后在 vm 沙箱内跑：零改动被测脚本，语义对齐点——
 //   argv 形态（argv[1] = 脚本真实路径）、env 注入（HOME 重定向）、os.homedir() 读 $HOME、
 //   import.meta.url = 脚本真实路径（模块尾 isMain 判定照常成立）、未捕获异常退出码 1 +
-//   堆栈进 stderr、process.exit 立即终止（异常模拟，退出码契约不变）。
+//   堆栈进 stderr、process.exit 立即终止（异常模拟，退出码契约不变）、process.exitCode
+//   属性赋值退出（delivery-gate v4/v5 整包 catch 的失败路径，桩上承载该语义）。
 // 脚本内部 require("./xxx.mjs") 走 Node 的 require(esm) 同步加载（脚本均无顶层 await）。
 // 适用边界：process.exit 以异常模拟——若脚本 main 为整包 catch（业务失败与 exit 模拟
 // 异常无法区分），退出语义失真，此类脚本不可转译（migrate-skill-data 先例），只能保留 spawn。
+// 顶层 await（TLA）脚本走 runMjsScriptAsync 第二路径：静态 import 文本转 require + 整包
+// async IIFE 包裹 + await 求值（v5 delivery-core 顶层分发先例）。
 
 import { readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { join as joinPath } from "node:path";
+import { dirname, join as joinPath } from "node:path";
 import { spawnSync as realSpawnSync } from "node:child_process";
 import vm from "node:vm";
 import ts from "typescript";
@@ -52,27 +55,16 @@ function compileMjs(file) {
   return script;
 }
 
-/**
- * 进程内等价执行一个 ESM CLI 脚本。
- * @param {string} file 脚本绝对路径
- * @param {string[]} args 命令行参数（不含 node 路径与脚本路径）
- * @param {{env?: object, cwd?: string, spawn?: (cmd, args, opts) => spawnSync 形态}} opts
- *   spawn 注入脚本内部的 child_process.spawnSync（缺省真实 spawnSync）
- * @returns {{status: number, stdout: string, stderr: string}} spawnSync 形态
- */
-export function runMjsScript(file, args, { env = process.env, cwd = process.cwd(), spawn } = {}) {
-  const fileReal = realpathSync(file);
-  const script = compileMjs(fileReal);
-  // 顶层 await 脚本不可 CJS 化——回退真实 spawn（保留 timeout 契约由调用方 opts 决定）
-  if (script === null) {
-    const r = realSpawnSync(process.execPath, [fileReal, ...args], {
-      encoding: "utf8", cwd, env: { ...process.env, ...env },
-    });
-    return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", error: r.error };
-  }
+/** 构建一次执行用的沙箱上下文（同步/TLA 两路径共用）。
+ *  退出语义优先级：stub exit()（立即终止，异常模拟）＞ 脚本显式 process.exitCode 赋值
+ *  （整包 catch 的正常失败路径）＞ 未捕获异常（退出码 1）＞ 0 */
+function buildExecutionContext(fileReal, args, { env = process.env, cwd = process.cwd(), spawn } = {}) {
   let stdout = "";
   let stderr = "";
   let status = 0;
+  let exitCodeValue;
+  let exited = false;
+  let failed = false;
   const mergedEnv = { ...process.env, ...env };
   const localRequire = createRequire(pathToFileURL(fileReal).href);
   const ctxRequire = (id) => {
@@ -111,18 +103,26 @@ export function runMjsScript(file, args, { env = process.env, cwd = process.cwd(
       env: mergedEnv,
       execPath: process.execPath,
       platform: process.platform,
+      // 脚本登记进程身份用（租约/锁 owner/原子写临时文件名），真实主进程 pid——
+      // delivery-gate 的 readLease 以 Number.isInteger(pid) 校验记录完整性，缺桩会让
+      // 写入的 undefined 被 JSON.stringify 丢弃、租约被判损坏
+      pid: process.pid,
       cwd: () => cwd,
+      get exitCode() { return exitCodeValue; },
+      // 脚本整包 catch 用属性赋值退出（如 delivery-gate 的 process.exitCode = exitCode）
+      set exitCode(v) { exitCodeValue = typeof v === "number" ? v : 0; },
       stdout: { write: (s) => { stdout += String(s); return true; } },
       stderr: { write: (s) => { stderr += String(s); return true; } },
       exit: (c) => {
         status = typeof c === "number" ? c : 0;
+        exited = true;
         throw RUNNER_EXIT;
       },
     },
     module: { exports: {} },
     exports: {},
     __filename: fileReal,
-    __dirname: realpathSync(cwd),
+    __dirname: dirname(fileReal),
     Buffer,
     setTimeout,
     clearTimeout,
@@ -130,19 +130,113 @@ export function runMjsScript(file, args, { env = process.env, cwd = process.cwd(
     clearInterval,
   };
   ctx.globalThis = ctx;
-  try {
-    const fn = script.runInNewContext(ctx);
-    fn(ctx.exports, ctxRequire, ctx.module, fileReal, ctx.__dirname, ctx.__stubImportMeta);
-  } catch (e) {
-    if (e instanceof RunnerExitSignal) {
-      // process.exit 模拟：退出码已记录
-    } else {
-      // 未捕获异常对齐真实 node：退出码 1、堆栈进 stderr
+  return {
+    ctx,
+    ctxRequire,
+    reportError(e) {
+      failed = true;
       stderr += String(e && e.stack ? e.stack : e) + "\n";
-      status = 1;
-    }
+    },
+    finish() {
+      if (failed) status = 1;
+      else if (!exited) status = exitCodeValue ?? 0;
+      return { status, stdout, stderr };
+    },
+  };
+}
+
+/**
+ * 进程内等价执行一个 ESM CLI 脚本（同步脚本；TLA 脚本用 runMjsScriptAsync）。
+ * @param {string} file 脚本绝对路径
+ * @param {string[]} args 命令行参数（不含 node 路径与脚本路径）
+ * @param {{env?: object, cwd?: string, spawn?: (cmd, args, opts) => spawnSync 形态}} opts
+ *   spawn 注入脚本内部的 child_process.spawnSync（缺省真实 spawnSync）
+ * @returns {{status: number, stdout: string, stderr: string}} spawnSync 形态
+ */
+export function runMjsScript(file, args, opts = {}) {
+  const fileReal = realpathSync(file);
+  const script = compileMjs(fileReal);
+  // 顶层 await 脚本不可 CJS 化——正常应走 runMjsScriptAsync；此处保底回退真实 spawn
+  if (script === null) {
+    const r = realSpawnSync(process.execPath, [fileReal, ...args], {
+      encoding: "utf8", cwd: opts.cwd ?? process.cwd(), env: { ...process.env, ...(opts.env ?? process.env) },
+    });
+    return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", error: r.error };
   }
-  return { status, stdout, stderr };
+  const ex = buildExecutionContext(fileReal, args, opts);
+  try {
+    const fn = script.runInNewContext(ex.ctx);
+    fn(ex.ctx.exports, ex.ctxRequire, ex.ctx.module, fileReal, ex.ctx.__dirname, ex.ctx.__stubImportMeta);
+  } catch (e) {
+    if (!(e instanceof RunnerExitSignal)) ex.reportError(e);
+  }
+  return ex.finish();
+}
+
+// ── TLA（顶层 await）脚本路径 ──
+// TS 的 CommonJS 转译对顶层 await 直接报错。第二路径：静态 import 文本转 require（行首
+// 锚定语句位置，不碰模板字符串/注释里的 import 字样）+ 整包 async IIFE 包裹（顶层 await
+// 在 async 函数体内合法）+ await 求值 Promise。ctxRequire 注入与同步路径完全一致。
+// 适用边界：发现 export 声明或转换后仍编译失败即放弃（回退真实 spawnSync）；process.exit
+// 的异常模拟若被脚本整包 catch 吞掉，退出码失真——此类用例保留 spawn 锚。
+const compileAsyncCache = new Map();
+function compileMjsAsync(file) {
+  let script = compileAsyncCache.get(file);
+  if (script === undefined) {
+    const src = readFileSync(file, "utf8");
+    const stripped = src.startsWith("#!") ? src.slice(src.indexOf("\n") + 1) : src;
+    const replaced = stripped.split("import.meta.url").join("__stubImportMeta.url")
+      // 动态 import 在 vm 经典 Script 里无 importModuleDynamically 回调会抛错——字面量描述符
+      // 场景转 Promise+require（delivery-core v5 的 await import("node:child_process") 先例）
+      .replace(/await\s+import\(\s*("[^"]+"|'[^']+')\s*\)/g, "Promise.resolve().then(() => require($1))");
+    const converted = replaced.replace(
+      /(^|\n)(import\s*\{[\s\S]*?\}\s*from\s*"[^"]+"\s*;?|import\s*\*\s*as\s*\w+\s*from\s*"[^"]+"\s*;?|import\s*\w+\s*,\s*\{[\s\S]*?\}\s*from\s*"[^"]+"\s*;?|import\s*\w+\s*from\s*"[^"]+"\s*;?)/g,
+      (whole, lead, stmt) => {
+        const m = stmt.match(/^import\s+([\s\S]*?)\s*from\s*("[^"]+")\s*;?$/);
+        const clause = m[1];
+        const req = `require(${m[2]});`;
+        if (clause.startsWith("{")) return `${lead}const ${clause} = ${req}`;
+        const ns = clause.match(/^\*\s*as\s+(\w+)$/);
+        if (ns) return `${lead}const ${ns[1]} = ${req}`;
+        const both = clause.match(/^(\w+)\s*,\s*\{([\s\S]*?)\}$/);
+        if (both) return `${lead}const ${both[1]} = ${req}\n${lead}const {${both[2]}} = ${req}`;
+        return `${lead}const ${clause} = ${req}`;
+      },
+    );
+    if (/^\s*(import|export)\b/m.test(converted)) {
+      script = null; // 转换面之外仍有 import/export 声明——放弃
+    } else {
+      const wrapper = `(async function (exports, require, module, __filename, __dirname, __stubImportMeta) {\n${converted}\n})`;
+      try {
+        script = new vm.Script(wrapper, { filename: file });
+      } catch {
+        script = null;
+      }
+    }
+    compileAsyncCache.set(file, script);
+  }
+  return script;
+}
+
+/** TLA 脚本进程内执行（spawnSync 形态结果同 runMjsScript）。不可转换时回退真实 spawnSync。 */
+export async function runMjsScriptAsync(file, args, opts = {}) {
+  const fileReal = realpathSync(file);
+  const script = compileMjsAsync(fileReal);
+  if (script === null) {
+    const r = realSpawnSync(process.execPath, [fileReal, ...args], {
+      encoding: "utf8", cwd: opts.cwd ?? process.cwd(), env: { ...process.env, ...(opts.env ?? process.env) },
+    });
+    return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", error: r.error };
+  }
+  const ex = buildExecutionContext(fileReal, args, opts);
+  try {
+    const fn = script.runInNewContext(ex.ctx);
+    const p = fn(ex.ctx.exports, ex.ctxRequire, ex.ctx.module, fileReal, ex.ctx.__dirname, ex.ctx.__stubImportMeta);
+    if (p && typeof p.then === "function") await p;
+  } catch (e) {
+    if (!(e instanceof RunnerExitSignal)) ex.reportError(e);
+  }
+  return ex.finish();
 }
 
 /**

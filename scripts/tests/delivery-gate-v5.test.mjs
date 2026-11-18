@@ -22,6 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runMjsScript } from "./helpers/mjs-runner.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const GATE = join(ROOT, "skills", "self", "dev-workflow", "delivery-v5", "scripts", "delivery-gate.mjs");
@@ -35,12 +36,10 @@ function sha256File(filePath) {
   return sha256(readFileSync(filePath, "utf8"));
 }
 
+// 门进程内执行：v5 gate 为同步脚本、失败路径走整包 catch + process.exitCode 赋值，
+// runner 的 exitCode 桩语义覆盖（无失真区）；git 内部 spawn（revision 计算）走真实 spawnSync。
 function runGate(args, home) {
-  return spawnSync(process.execPath, [GATE, ...args], {
-    encoding: "utf8",
-    env: { ...process.env, ...(home ? { HOME: home } : {}) },
-    timeout: 60_000,
-  });
+  return runMjsScript(GATE, args, { env: { HOME: home } });
 }
 
 function assertOk(result, message = "命令应成功") {
@@ -348,6 +347,19 @@ function evaluate(fx) {
   assertOk(result);
   return JSON.parse(parseStdout(result));
 }
+
+test("防漂移锚：门进程内执行 == CLI spawn（同 fixture 双跑逐字节对拍）", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  // validate-acceptance 只读：同一 task-dir 上两种执行形态结果必须逐字节一致
+  const inProc = runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home);
+  const cli = spawnSync(process.execPath, [GATE, "validate-acceptance", "--task-dir", fx.taskDir], {
+    encoding: "utf8", env: { ...process.env, HOME: fx.home },
+  });
+  assert.equal(inProc.status, cli.status);
+  assert.equal(inProc.stdout, cli.stdout);
+  assert.equal(inProc.stderr, cli.stderr);
+});
 
 // ── 1. init 与凭据文件 ──
 

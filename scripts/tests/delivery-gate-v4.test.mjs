@@ -22,6 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runMjsScript } from "./helpers/mjs-runner.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const GATE = join(ROOT, "skills", "self", "dev-workflow", "delivery-v4", "scripts", "delivery-gate.mjs");
@@ -35,7 +36,17 @@ function sha256File(filePath) {
   return sha256(readFileSync(filePath, "utf8"));
 }
 
+// 门进程内执行：v4 gate 为同步脚本、失败路径走整包 catch + process.exitCode 赋值，
+// runner 的 exitCode 桩语义覆盖（无失真区）；git 内部 spawn（revision 计算）走真实 spawnSync。
 function runGate(args, home) {
+  return runMjsScript(GATE, args, { env: { ...(home ? { HOME: home } : {}) } });
+}
+
+// 租约域用例保留真实 spawn：租约文件登记 pid 且读取端做 Number.isInteger 形状校验，进程内
+// process 桩无 pid（写出的租约缺 pid 字段 → 读取端按无租约处理，互斥判定失真）；且同进程
+// 多次执行共享 pid，失联接管路径会向测试进程自身进程组发信号——spawn 形态下每次 gate 是
+// 独立短命进程，pid 语义与生产一致。
+function runGateSpawn(args, home) {
   return spawnSync(process.execPath, [GATE, ...args], {
     encoding: "utf8",
     env: { ...process.env, ...(home ? { HOME: home } : {}) },
@@ -66,8 +77,9 @@ function evidenceFile(taskDir, name, content) {
   return { artifact: `evidence/${name}`, artifactSha256: sha256File(filePath) };
 }
 
-/** v2 fixture：真实 git 项目 + 隔离 HOME + 已 init 的任务目录与三把凭据 id（intent 传 null 则不带意图） */
-function makeV2Fixture(t, { taskId = "task-a", intent = "原始需求：开关关闭后零写入\n" } = {}) {
+/** v2 fixture：真实 git 项目 + 隔离 HOME + 已 init 的任务目录与三把凭据 id（intent 传 null 则不带意图）。
+ * spawnGate=true 时 gate 调用走真实 spawn（租约域用例专用，见 runGateSpawn 注释） */
+function makeV2Fixture(t, { taskId = "task-a", intent = "原始需求：开关关闭后零写入\n", spawnGate = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "delivery-gate-v2-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const projectDir = join(root, "project");
@@ -88,7 +100,7 @@ function makeV2Fixture(t, { taskId = "task-a", intent = "原始需求：开关�
   const initResult = runGate(initArgs, home);
   assertOk(initResult, "init 应成功");
   const initOutput = JSON.parse(parseStdout(initResult));
-  const gate = (...args) => runGate(args, home);
+  const gate = spawnGate ? (...args) => runGateSpawn(args, home) : (...args) => runGate(args, home);
   return {
     root,
     projectDir,
@@ -282,6 +294,21 @@ function evaluate(fx) {
   assertOk(result);
   return JSON.parse(parseStdout(result));
 }
+
+// ── 0. 防漂移锚：门进程内执行与 CLI spawn 等价（第 8 节租约用例另保留 runGateSpawn，见其注释）──
+
+test("防漂移锚：门进程内执行 == CLI spawn（同 fixture 双跑逐字节对拍）", (t) => {
+  const fx = makeV2Fixture(t);
+  writeAcceptancePackage(fx);
+  // validate-acceptance 只读：同一 task-dir 上两种执行形态结果必须逐字节一致
+  const inProc = fx.gate("validate-acceptance", "--task-dir", fx.taskDir);
+  const cli = spawnSync(process.execPath, [GATE, "validate-acceptance", "--task-dir", fx.taskDir], {
+    encoding: "utf8", env: { ...process.env, HOME: fx.home },
+  });
+  assert.equal(inProc.status, cli.status);
+  assert.equal(inProc.stdout, cli.stdout);
+  assert.equal(inProc.stderr, cli.stderr);
+});
 
 // ── 1. init 与凭据文件 ──
 
@@ -678,7 +705,7 @@ test("任务替换：prepare 占用 → 二次 prepare 拒 → commit 前任 sup
 // ── 8. 写事务租约 ──
 
 test("租约：acquire/heartbeat/release；append --run-id 非持有者被拒", (t) => {
-  const fx = makeV2Fixture(t);
+  const fx = makeV2Fixture(t, { spawnGate: true });
   writeAcceptancePackage(fx);
   assertOk(fx.gate("lease-acquire", "--project-root", fx.projectDir, "--run-id", "run-1"));
   assertOk(fx.gate("lease-heartbeat", "--project-root", fx.projectDir, "--run-id", "run-1"));
@@ -712,7 +739,7 @@ test("租约：acquire/heartbeat/release；append --run-id 非持有者被拒", 
 });
 
 test("租约持租互斥：心跳新鲜期间异 runId acquire 被拒（活性由心跳承重，不因登记进程退出而被接管）", (t) => {
-  const fx = makeV2Fixture(t);
+  const fx = makeV2Fixture(t, { spawnGate: true });
   writeAcceptancePackage(fx);
   assertOk(fx.gate("lease-acquire", "--project-root", fx.projectDir, "--run-id", "run-holder"));
   // 登记租约的 CLI 进程已退出（短命进程）——但心跳刚写入、仍在新鲜窗口内：

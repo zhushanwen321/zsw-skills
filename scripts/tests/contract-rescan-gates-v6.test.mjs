@@ -31,6 +31,15 @@
 // 编译/复扫 fixture 形态照 compile-contract-gate-v6.test.mjs（该文件不动，此处为新文件
 // 独立复刻——测试文件之间不互相 import，避免测试进程互相装载）。
 //
+// 提速通道（进程内转译执行）：fixture 渲染器（RENDERER）与真实 resolver（--write 三用例）
+// 走 runMjsScript，语义一致性由防漂移对拍锚钉住（进程内 == CLI spawn 逐字节一致）。
+// 保留真实 spawn 的点及原因：COMPILER（f.run）与 RESCAN_CLI（D3 三用例）经 require(esm)
+// 加载复扫库（delivery-v6 scripts/lib/contract-rescan.mjs）——该库转译后落主测试进程，
+// 其内部 detector spawn 不透传 env，子进程会继承主进程 HOME（真实安装位）并丢失
+// RESCAN_FIXTURE 注入，复扫判定失真；gate 侧 stub resolver/detector（makeEvalFixture /
+// makeGateTaskFixture）由进程内 gate 模块自行 spawn，测试不可注入。git 系 spawnSync
+// 全部保持真实。
+//
 // 运行：node --test scripts/tests/contract-rescan-gates-v6.test.mjs
 
 import test from "node:test";
@@ -41,6 +50,7 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSyn
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { runMjsScript } from "./helpers/mjs-runner.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V6 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6");
@@ -219,7 +229,9 @@ function makeContractFixture(t, opts = {}) {
   const plan = contractPlan(proj, opts.planOverrides ?? {});
   const planPath = join(proj, "demo-contract.impl-plan.json");
   writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`);
-  const rendered = spawnSync(process.execPath, [RENDERER, planPath], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+  // 渲染器进程内转译执行（CLI spawn 通道仅存于防漂移对拍锚）；进程内捕获无缓冲上限，
+  // 原为防大输出截断的 maxBuffer 放宽选项随 spawn 一起移除
+  const rendered = runMjsScript(RENDERER, [planPath]);
   assert.equal(rendered.status, 0, `fixture 渲染失败：${rendered.stderr}`);
 
   if (opts.increments !== null) {
@@ -294,6 +306,8 @@ function makeContractFixture(t, opts = {}) {
   const run = (args, extraEnv = {}) => {
     const env = { ...process.env, HOME: home, ...extraEnv };
     if (opts.detectorOutput !== undefined && opts.detectorOutput !== null) env.RESCAN_FIXTURE = join(taskDir, "detector-output.json");
+    // 保留真实 spawn（见文件头「提速通道」说明）：编译器加载的复扫库落主进程，
+    // 其 detector spawn 继承主进程 env 会让 RESCAN_FIXTURE 注入丢失、判定失真
     return spawnSync(process.execPath, [COMPILER, ...args], { cwd: proj, env, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
   };
   t.after(() => {
@@ -303,6 +317,19 @@ function makeContractFixture(t, opts = {}) {
   });
   return { home, proj, projReal, taskDir, planPath, productRoot, execPath, run, rewriteAcceptance };
 }
+
+// ── 防漂移锚：渲染器进程内执行 == CLI spawn（本文件唯一保留的渲染器 spawn 点）──
+
+test("防漂移锚：渲染器进程内执行 == CLI spawn（fixture 渲染双跑逐字节对拍）", (t) => {
+  // 渲染为同输入确定性输出（同一 planPath 双跑不涉及路径差异，严格逐字节）；
+  // 提速通道（fixture 渲染 + resolver --write 进程内转译）的语义一致性由本锚钉住
+  const f = makeContractFixture(t);
+  const inProc = runMjsScript(RENDERER, [f.planPath]);
+  const cli = spawnSync(process.execPath, [RENDERER, f.planPath], { encoding: "utf8" });
+  assert.equal(inProc.status, cli.status);
+  assert.equal(inProc.stdout, cli.stdout);
+  assert.equal(inProc.stderr, cli.stderr);
+});
 
 // ── A. D0/D3 复扫三条规则锚（审查发现 2）──
 
@@ -523,8 +550,9 @@ function overlayNpmProject(f, home) {
 }
 
 const runResolverWrite = (home, taskDir, projectRoot) =>
-  spawnSync(process.execPath, [RESOLVER, "--task-dir", taskDir, "--project-root", projectRoot, "--write"], {
-    encoding: "utf8",
+  // resolver 进程内转译执行：无复扫库依赖链（内部 git/npm 等探测 spawn 经 runner 缺省
+  // 注入保持真实），CLI spawn 通道仅存于防漂移对拍锚
+  runMjsScript(RESOLVER, ["--task-dir", taskDir, "--project-root", projectRoot, "--write"], {
     env: { ...process.env, HOME: home },
   });
 

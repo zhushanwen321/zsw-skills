@@ -24,6 +24,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realp
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runMjsScript, runMjsScriptAsync } from "./helpers/mjs-runner.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V5 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v5");
@@ -34,11 +35,22 @@ const KERNEL = await import(join(V5, "scripts", "lib", "kernel-judgments.mjs"));
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const parseStdout = (result) => result.stdout.slice(result.stdout.indexOf("{"));
+// core/gate 进程内执行：core 为 TLA 脚本（顶层 try 分发里 await commandNext/commandExploration），
+// 走 runMjsScriptAsync；gate 为同步脚本走 runMjsScript（delivery-gate-v5.test.mjs 同款）。
+// 两脚本业务失败均为整包 catch + process.exitCode 赋值（runner 桩语义覆盖，无失真）；
+// 脚本内部 spawn git（revision 计算）走真实 spawnSync。
+// 保留 spawn 的失真区（runCoreCli）：① usageFail 直接 process.exit(2)，进程内的异常模拟会被
+// 整包 catch 吞成 exitCode=1 且 stderr 带堆栈污染；② validate 建模错误用例靠临时改写
+// rules.json 再还原，而 KERNEL_RULES 是 kernel-judgments.mjs 模块顶层读盘且已被本测试文件
+// 顶层 import 固化缓存——进程内读到缓存旧值，改写不可见，行为不等价。
 function runCore(args, home) {
+  return runMjsScriptAsync(CORE, args, { env: home ? { HOME: home } : {} });
+}
+function runCoreCli(args, home) {
   return spawnSync(process.execPath, [CORE, ...args], { encoding: "utf8", env: { ...process.env, ...(home ? { HOME: home } : {}) }, timeout: 60_000 });
 }
 function runGate(args, home) {
-  return spawnSync(process.execPath, [GATE, ...args], { encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 60_000 });
+  return runMjsScript(GATE, args, { env: { HOME: home } });
 }
 function ok(result, label = "命令应成功") {
   assert.equal(result.status, 0, `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -46,19 +58,20 @@ function ok(result, label = "命令应成功") {
 
 // ── 静态校验器：合法表 + 六类建模错误逐一被抓 ──
 
-test("validate：内置五域表通过；六类建模错误被逐条检出", () => {
-  ok(runCore(["validate"]));
+test("validate：内置五域表通过；六类建模错误被逐条检出", async () => {
+  ok(await runCore(["validate"]));
   const broken = (mutate) => {
     const rules = JSON.parse(JSON.stringify(RULES));
     mutate(rules);
     return validateTable(rules);
   };
   function validateTable(rules) {
-    // 复用 core 的校验逻辑：临时改写 rules.json 后跑 CLI 再还原
+    // 复用 core 的校验逻辑：临时改写 rules.json 后跑 CLI 再还原（须真实 spawn：
+    // 进程内 KERNEL_RULES 已被模块缓存固化为开档时的 rules.json，改写不可见）
     const backup = readFileSync(join(V5, "scripts", "kernel", "rules.json"), "utf8");
     try {
       writeFileSync(join(V5, "scripts", "kernel", "rules.json"), JSON.stringify(rules, null, 2));
-      const result = runCore(["validate"]);
+      const result = runCoreCli(["validate"]);
       return result;
     } finally {
       writeFileSync(join(V5, "scripts", "kernel", "rules.json"), backup);
@@ -89,7 +102,22 @@ test("validate：内置五域表通过；六类建模错误被逐条检出", () 
     t.from = "pending"; t.to = "dead-end-state";
     r.domains.node.transitions.push(t);
   }, /死端/, "无出边死端");
-  ok(runCore(["validate"]));
+  ok(await runCore(["validate"]));
+});
+
+// ── 防漂移锚：core 进程内执行 == CLI spawn（同 fixture 双跑逐字节对拍）──
+
+test("防漂移锚：core 进程内执行 == CLI spawn（同 fixture 双跑逐字节对拍）", async (t) => {
+  const fx = makeFixture(t);
+  // validate（纯静态读 rules.json）+ budget（读任务事件流的只读命令）：两种执行形态
+  // 结果必须逐字节一致。CLI 侧与 validateTable 的 broken() 用例是本文件仅存的 core spawn。
+  for (const args of [["validate"], ["budget", "--task-dir", fx.taskDir]]) {
+    const inProc = await runCore(args, fx.home);
+    const cli = runCoreCli(args, fx.home);
+    assert.equal(inProc.status, cli.status, `status 应一致：${args.join(" ")}`);
+    assert.equal(inProc.stdout, cli.stdout, `stdout 应逐字节一致：${args.join(" ")}`);
+    assert.equal(inProc.stderr, cli.stderr, `stderr 应逐字节一致：${args.join(" ")}`);
+  }
 });
 
 // ── kernel-judgments 单源库 ──
@@ -253,9 +281,9 @@ function driveToImplementing(t) {
   return fx;
 }
 
-test("next 样例 A（V4 死锁场景回归）：schema2 增量未登记时 explore-only 即合法", (t) => {
+test("next 样例 A（V4 死锁场景回归）：schema2 增量未登记时 explore-only 即合法", async (t) => {
   const fx = driveToImplementing(t);
-  const next = JSON.parse(parseStdout(core(fx, "next", "--task-dir", fx.taskDir)));
+  const next = JSON.parse(parseStdout(await core(fx, "next", "--task-dir", fx.taskDir)));
   assert.equal(next.flowState, "implementing", "增量未登记，任务处于实现段");
   assert.equal(next.machineChecks.schema2, true);
   assert.equal(next.machineChecks.explorationDue, true, "尚无探索，due");
@@ -268,7 +296,7 @@ test("next 样例 A（V4 死锁场景回归）：schema2 增量未登记时 expl
   }
 });
 
-test("next 样例 B：must-fix open 时 machineChecks 计数 > 0 且预算可见", (t) => {
+test("next 样例 B：must-fix open 时 machineChecks 计数 > 0 且预算可见", async (t) => {
   const fx = driveToImplementing(t);
   const revText = gate(fx, "revision", "--project-root", fx.projectDir).stdout.trim();
   ok(gate(fx, "record-finding", "--task-dir", fx.taskDir,
@@ -276,14 +304,14 @@ test("next 样例 B：must-fix open 时 machineChecks 计数 > 0 且预算可见
     "--requirement-ids", JSON.stringify(["R1"]), "--finding-id", "F-1",
     "--artifact", evidence(fx, "f-1.md"), "--revision", revText,
     "--credential", fx.creds.assurance), "登记 must-fix");
-  const open = JSON.parse(parseStdout(core(fx, "open-findings", "--task-dir", fx.taskDir)));
+  const open = JSON.parse(parseStdout(await core(fx, "open-findings", "--task-dir", fx.taskDir)));
   assert.deepEqual(open.openIds, ["F-1"]);
-  const next = JSON.parse(parseStdout(core(fx, "next", "--task-dir", fx.taskDir)));
+  const next = JSON.parse(parseStdout(await core(fx, "next", "--task-dir", fx.taskDir)));
   assert.equal(next.machineChecks.mustFixOpen, 1, "D4 登记前置（mustFixOpenZero）不满足应可见");
   assert.ok(next.budgets.repair.perVersionCap === 3 && next.budgets.repair.crossRunCap === 6, "预算随 next 报出");
 });
 
-test("next 样例 C：跨 run 保证预算耗尽 → evaluate 判 process-failed 且 next 停回", (t) => {
+test("next 样例 C：跨 run 保证预算耗尽 → evaluate 判 process-failed 且 next 停回", async (t) => {
   const fx = driveToImplementing(t);
   // 制造 7 个保证 run（crossRun = runs 7 > 6）：exploration + 证据 + 保证事件 ×7
   const revisionText = (() => {
@@ -324,33 +352,33 @@ test("next 样例 C：跨 run 保证预算耗尽 → evaluate 判 process-failed
   assert.equal(verdict.state, "process-failed", "跨 run 预算（7>6）应判 process-failed");
   assert.equal(verdict.quality.budgets.assuranceCrossRun.used, 7);
   assert.match(verdict.nextAction, /预算耗尽停回用户/, "nextAction 应指向停回用户");
-  const next = JSON.parse(parseStdout(core(fx, "next", "--task-dir", fx.taskDir)));
+  const next = JSON.parse(parseStdout(await core(fx, "next", "--task-dir", fx.taskDir)));
   assert.equal(next.flowState, "process-failed");
   // 终态出边只余通配族（替换/漂移/预算），不得再出现常规推进边（登记实现/发起保证/接受交付）
   const forwardEvents = new Set(["register-implementation", "assurance-start", "explore-only", "accept-risk", "evaluate", "d3-passed", "route-build", "route-design", "acceptance-design-start"]);
   assert.ok(next.legalTransitions.every((tr) => !forwardEvents.has(tr.event)), "process-failed 不得给出常规推进转移");
 });
 
-test("pending 实体：add/list/resolve 往返；next 优先回答待办", (t) => {
+test("pending 实体：add/list/resolve 往返；next 优先回答待办", async (t) => {
   const fx = makeFixture(t);
-  ok(core(fx, "pending", "add", "--task-dir", fx.taskDir, "--kind", "awaiting-restore", "--note", "额度中断，恢复后先补登记 increments"));
-  ok(core(fx, "pending", "add", "--task-dir", fx.taskDir, "--kind", "cleanup", "--note", "善后：清理临时探针"));
-  const list = JSON.parse(parseStdout(core(fx, "pending", "list", "--task-dir", fx.taskDir)));
+  ok(await core(fx, "pending", "add", "--task-dir", fx.taskDir, "--kind", "awaiting-restore", "--note", "额度中断，恢复后先补登记 increments"));
+  ok(await core(fx, "pending", "add", "--task-dir", fx.taskDir, "--kind", "cleanup", "--note", "善后：清理临时探针"));
+  const list = JSON.parse(parseStdout(await core(fx, "pending", "list", "--task-dir", fx.taskDir)));
   assert.equal(list.open.length, 2);
-  const next = JSON.parse(parseStdout(core(fx, "next", "--task-dir", fx.taskDir)));
+  const next = JSON.parse(parseStdout(await core(fx, "next", "--task-dir", fx.taskDir)));
   assert.equal(next.pendingActions.length, 2, "next 输出待办优先");
   assert.equal(next.pendingActions[0].kind, "awaiting-restore");
-  ok(core(fx, "pending", "resolve", "--task-dir", fx.taskDir, "--id", "pa-1", "--outcome", "已补登记"));
-  const after = JSON.parse(parseStdout(core(fx, "pending", "list", "--task-dir", fx.taskDir)));
+  ok(await core(fx, "pending", "resolve", "--task-dir", fx.taskDir, "--id", "pa-1", "--outcome", "已补登记"));
+  const after = JSON.parse(parseStdout(await core(fx, "pending", "list", "--task-dir", fx.taskDir)));
   assert.equal(after.open.length, 1);
   assert.equal(after.resolved.length, 1);
-  const badKind = core(fx, "pending", "add", "--task-dir", fx.taskDir, "--kind", "unknown", "--note", "x");
+  const badKind = await core(fx, "pending", "add", "--task-dir", fx.taskDir, "--kind", "unknown", "--note", "x");
   assert.notEqual(badKind.status, 0, "非法 kind 应被拒");
 });
 
 // ── node-transition 对拍：pi 产物提取 vs 内核 dry-run ──
 
-test("node-transition 对拍：wave-executor 本地表与内核同表同口径（随机序列差分）", () => {
+test("node-transition 对拍：wave-executor 本地表与内核同表同口径（随机序列差分）", async () => {
   const piProduct = readFileSync(join(ROOT, "skills/self/dev-workflow/workflows/pi/wave-executor-v5.js"), "utf8");
   const tableMatch = /const NODE_TRANSITIONS[^;]+;/s.exec(piProduct);
   const fnMatch = /function computeNodeTransition\([\s\S]*?\n}/.exec(piProduct);
@@ -370,7 +398,7 @@ test("node-transition 对拍：wave-executor 本地表与内核同表同口径�
       if (eventName === "finish-done" || eventName === "reconcile-done") payloadArgs.push("--commit", "abc1234");
       if (eventName === "block" || eventName === "fail") payloadArgs.push("--reason", "测试原因");
       if (eventName === "manual-disposition") payloadArgs.push("--basis", "测试处置依据");
-      const coreResult = spawnSync(process.execPath, [CORE, "node-transition", "--dry-run", "--status", "/dev/null", "--node", "n1", "--event", eventName, ...payloadArgs, "--current-json", JSON.stringify(current)], { encoding: "utf8", timeout: 30_000 });
+      const coreResult = await runCore(["node-transition", "--dry-run", "--status", "/dev/null", "--node", "n1", "--event", eventName, ...payloadArgs, "--current-json", JSON.stringify(current)]);
       if (local.ok) {
         const coreDecision = JSON.parse(coreResult.stdout);
         assert.ok(coreDecision.ok, `内核应同样放行：${eventName} from ${current.status}`);
@@ -388,22 +416,22 @@ test("node-transition 对拍：wave-executor 本地表与内核同表同口径�
   assert.ok(compared >= 300, `对拍样本应足够（实际 ${compared}）`);
 });
 
-test("node-transition 落盘形态：manual-disposition 带 basis 留痕；非法转移拒绝写", (t) => {
+test("node-transition 落盘形态：manual-disposition 带 basis 留痕；非法转移拒绝写", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "node-trans-v5-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const statusPath = join(root, "plan.status.json");
   writeFileSync(statusPath, `${JSON.stringify({ name: "p", baseline: "b", nodes: { n1: { status: "blocked", attempts: 2, reason: "依赖缺失" } }, events: [] })}\n`);
-  const bad = spawnSync(process.execPath, [CORE, "node-transition", "--status", statusPath, "--node", "n1", "--event", "manual-disposition"], { encoding: "utf8" });
+  const bad = await runCore(["node-transition", "--status", statusPath, "--node", "n1", "--event", "manual-disposition"]);
   assert.notEqual(bad.status, 0, "manual-disposition 缺 basis 应被拒");
   assert.match(bad.stderr, /--basis/);
-  const applied = spawnSync(process.execPath, [CORE, "node-transition", "--status", statusPath, "--node", "n1", "--event", "manual-disposition", "--basis", "阻塞原因已消除：依赖已合入（commit abc123）"], { encoding: "utf8" });
+  const applied = await runCore(["node-transition", "--status", statusPath, "--node", "n1", "--event", "manual-disposition", "--basis", "阻塞原因已消除：依赖已合入（commit abc123）"]);
   ok(applied);
   const after = JSON.parse(readFileSync(statusPath, "utf8"));
   assert.equal(after.nodes.n1.status, "done");
   assert.equal(after.nodes.n1.attempts, 2, "人工处置保留 attempts");
   assert.match(after.nodes.n1.evidence, /人工处置：阻塞原因已消除/);
   assert.equal(after.events.at(-1).event, "manual-disposition");
-  const illegal = spawnSync(process.execPath, [CORE, "node-transition", "--status", statusPath, "--node", "n1", "--event", "begin"], { encoding: "utf8" });
+  const illegal = await runCore(["node-transition", "--status", statusPath, "--node", "n1", "--event", "begin"]);
   assert.notEqual(illegal.status, 0, "done 态 begin 非法应被拒");
 });
 
@@ -478,18 +506,18 @@ test("写入矩阵：builder 写 evidence 域被拒；非法阶段留给矩阵�
 
 // ── status.json 派生视图：node-project 重投影 / 篡改检测 / --write 恢复 ──
 
-test("node-project：事件重投影与在盘一致；篡改被检出；--write 按事件恢复", (t) => {
+test("node-project：事件重投影与在盘一致；篡改被检出；--write 按事件恢复", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "node-project-v5-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const statusPath = join(root, "plan.status.json");
-  const apply = (node, event, extra = []) => runCore(["node-transition", "--status", statusPath, "--node", node, "--event", event, ...extra]);
+  const apply = async (node, event, extra = []) => runCore(["node-transition", "--status", statusPath, "--node", node, "--event", event, ...extra]);
   writeFileSync(statusPath, `${JSON.stringify({ name: "p", baseline: "b", nodes: {}, events: [] })}\n`);
-  ok(apply("n1", "begin"));
-  ok(apply("n1", "finish-done", ["--commit", "abc123", "--evidence", "单测绿"]));
-  ok(apply("n2", "begin"));
-  ok(apply("n2", "block", ["--reason", "依赖缺失"]));
-  ok(apply("n2", "manual-disposition", ["--basis", "依赖已合入（commit abc123）"]));
-  const consistent = JSON.parse(parseStdout(runCore(["node-project", "--status", statusPath])));
+  ok(await apply("n1", "begin"));
+  ok(await apply("n1", "finish-done", ["--commit", "abc123", "--evidence", "单测绿"]));
+  ok(await apply("n2", "begin"));
+  ok(await apply("n2", "block", ["--reason", "依赖缺失"]));
+  ok(await apply("n2", "manual-disposition", ["--basis", "依赖已合入（commit abc123）"]));
+  const consistent = JSON.parse(parseStdout(await runCore(["node-project", "--status", statusPath])));
   assert.equal(consistent.consistent, true, "合法写入后投影与在盘一致");
   assert.equal(consistent.partialEvents, 0, "node-transition 写的事件带 payload（无损投影）");
   // 篡改：绕过转移入口手改节点状态
@@ -497,11 +525,11 @@ test("node-project：事件重投影与在盘一致；篡改被检出；--write 
   tampered.nodes.n1.status = "pending";
   tampered.nodes.n1.attempts = 9;
   writeFileSync(statusPath, `${JSON.stringify(tampered, null, 2)}\n`);
-  const detected = JSON.parse(parseStdout(runCore(["node-project", "--status", statusPath])));
+  const detected = JSON.parse(parseStdout(await runCore(["node-project", "--status", statusPath])));
   assert.equal(detected.consistent, false, "手工改写 nodes 应被投影检出");
   assert.ok(detected.mismatches.some((m) => m.node === "n1"), "n1 的差异应列入 mismatches");
   assert.match(detected.recovery, /node-project.*--write/s, "恢复动作应指向 --write");
-  const restored = JSON.parse(parseStdout(runCore(["node-project", "--status", statusPath, "--write"])));
+  const restored = JSON.parse(parseStdout(await runCore(["node-project", "--status", statusPath, "--write"])));
   assert.equal(restored.written, true);
   const after = JSON.parse(readFileSync(statusPath, "utf8"));
   assert.equal(after.nodes.n1.status, "done", "--write 后以事件为准恢复 done");
@@ -511,57 +539,57 @@ test("node-project：事件重投影与在盘一致；篡改被检出；--write 
 
 // ── 事件时间线读侧合流：交付事件 domain 章 + 过程记录 process 域 ──
 
-test("events 时间线：交付事件与过程记录按 domain 合流输出", (t) => {
+test("events 时间线：交付事件与过程记录按 domain 合流输出", async (t) => {
   const fx = driveToImplementing(t);
   writeFileSync(join(fx.taskDir, "process-review.jsonl"), [
     JSON.stringify({ domain: "process", id: "pr-1-u1", ts: "2026-11-17T10:00:00Z", nodeId: "u1", mechanism: "machine-check", verdict: "pass", summary: "机器检查通过", attempts: 1 }),
     JSON.stringify({ domain: "process", id: "pr-2-r1", ts: "2026-11-17T10:05:00Z", nodeId: "r1", mechanism: "behavioral-evidence", verdict: "fail", summary: "机器检查红灯", attempts: 1 }),
   ].join("\n") + "\n");
-  const timeline = JSON.parse(parseStdout(runCore(["events", "--task-dir", fx.taskDir])));
+  const timeline = JSON.parse(parseStdout(await runCore(["events", "--task-dir", fx.taskDir])));
   assert.ok(timeline.counts.acceptance >= 1, "交付事件按 acceptance 域计数");
   assert.equal(timeline.counts.process, 2, "过程记录按 process 域计数");
   assert.ok(timeline.timeline.some((item) => item.source === "process-review" && item.domain === "process"), "时间线应含过程记录条目");
-  const onlyProcess = JSON.parse(parseStdout(runCore(["events", "--task-dir", fx.taskDir, "--domain", "process"])));
+  const onlyProcess = JSON.parse(parseStdout(await runCore(["events", "--task-dir", fx.taskDir, "--domain", "process"])));
   assert.equal(onlyProcess.timeline.length, 2, "--domain 过滤生效");
 });
 
 // ── 历史任务回放：真实事件序列 vs 转移表可表达性 ──
 
-test("replay：合成事件序列全可表达；词表外事件被列为不可表达", (t) => {
+test("replay：合成事件序列全可表达；词表外事件被列为不可表达", async (t) => {
   const fx = driveToImplementing(t);
   const revText = runGate(["revision", "--project-root", fx.projectDir]).stdout.trim();
   ok(runGate(["record-exploration", "--task-dir", fx.taskDir, "--summary", "探索", "--dimensions", "[\"smoke\"]",
     "--coverage-manifest-sha256", sha256("cov"), "--artifact", evidence(fx, "exp.md"), "--revision", revText, "--credential", fx.creds.assurance], fx.home));
   ok(runGate(["record-implementation", "--task-dir", fx.taskDir, "--increment-id", "I1", "--summary", "实现",
     "--artifact", evidence(fx, "impl.md"), "--merge-receipt", JSON.stringify({ fromRevision: revText, toRevision: revText, patchSha256: sha256("p") }), "--credential", fx.creds.builder], fx.home));
-  const report = JSON.parse(parseStdout(runCore(["replay", "--task-dir", fx.taskDir])));
+  const report = JSON.parse(parseStdout(await runCore(["replay", "--task-dir", fx.taskDir])));
   assert.equal(report.unroutable.length, 0, `合法序列应全可表达（实际：${JSON.stringify(report.unroutable)}）`);
   assert.ok(report.stats.routed + report.stats.decision + report.stats.content > 0);
 });
 
 // ── manual-disposition 登记 pending 复盘项（人工通道 = 逃生口不是后门）──
 
-test("manual-disposition 带 --task-dir 时登记待复盘待办", (t) => {
+test("manual-disposition 带 --task-dir 时登记待复盘待办", async (t) => {
   const fx = makeFixture(t, { taskId: "md-review" });
   const statusPath = join(fx.taskDir, "plan.status.json");
   writeFileSync(statusPath, `${JSON.stringify({ name: "p", baseline: "b", nodes: { n1: { status: "blocked", attempts: 2, reason: "依赖缺失" } }, events: [] })}\n`);
-  const applied = runCore(["node-transition", "--status", statusPath, "--node", "n1", "--event", "manual-disposition",
+  const applied = await runCore(["node-transition", "--status", statusPath, "--node", "n1", "--event", "manual-disposition",
     "--basis", "阻塞原因已消除", "--task-dir", fx.taskDir]);
   ok(applied);
   const result = JSON.parse(parseStdout(applied));
   assert.equal(result.reviewRegistered, true, "应登记待复盘待办");
-  const pending = JSON.parse(parseStdout(runCore(["pending", "list", "--task-dir", fx.taskDir])));
+  const pending = JSON.parse(parseStdout(await runCore(["pending", "list", "--task-dir", fx.taskDir])));
   const review = pending.open.find((item) => item.kind === "awaiting-review");
   assert.ok(review, "pending 清单应含 awaiting-review 条目");
   assert.match(review.note, /人工处置复盘：节点 n1/);
-  ok(runCore(["pending", "resolve", "--task-dir", fx.taskDir, "--id", review.id, "--outcome", "复盘完成"]));
+  ok(await runCore(["pending", "resolve", "--task-dir", fx.taskDir, "--id", review.id, "--outcome", "复盘完成"]));
 });
 
 // ── next 转移分类：裁决点停回 / workflow 预填发起 / --auto 执行 evaluate ──
 
-test("next 转移分类与 launch 预填：workflow 转移带可照抄发起规格", (t) => {
+test("next 转移分类与 launch 预填：workflow 转移带可照抄发起规格", async (t) => {
   const fx = driveToImplementing(t, { taskId: "next-kind" });
-  const next = JSON.parse(parseStdout(runCore(["next", "--task-dir", fx.taskDir])));
+  const next = JSON.parse(parseStdout(await runCore(["next", "--task-dir", fx.taskDir])));
   assert.ok(next.legalTransitions.every((tr) => ["adjudication", "gate-command", "workflow", "skill", "engine"].includes(tr.kind)), "每个合法转移都应带 kind 分类");
   const explore = next.legalTransitions.find((tr) => tr.event === "explore-only");
   if (explore !== undefined) {

@@ -33,7 +33,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import vm from "node:vm";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { runMjsScript } from "./helpers/mjs-runner.mjs";
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -305,16 +306,91 @@ function agentStub(state, handlers) {
   return impl;
 }
 
+// node -e 探针进程内执行：与 helpers/mjs-runner.mjs 的 runNodeProbe 同语义，另加
+// os.homedir() 读 $HOME 包装——NODE_PROBE_HOME 探针（require('os').homedir()）经真实
+// spawn 时 homedir() 读注入 HOME，主进程直接求值会漏回用户真实 home
+class ProbeExitSignal {}
+const PROBE_EXIT = new ProbeExitSignal();
+const probeCache = new Map();
+function runProbe(script, restArgs, { env, cwd }) {
+  let stdout = "";
+  let stderr = "";
+  let status = 0;
+  const baseRequire = createRequire(pathToFileURL(join(cwd, "x")).href);
+  const osMod = baseRequire("os");
+  const osWrapped = Object.create(osMod);
+  osWrapped.homedir = () => env.HOME ?? osMod.homedir();
+  const ctxRequire = (id) => (id === "os" || id === "node:os" ? osWrapped : baseRequire(id));
+  const ctx = {
+    require: ctxRequire,
+    console: {
+      log: (...m) => { stdout += m.map(String).join(" ") + "\n"; },
+      error: (...m) => { stderr += m.map(String).join(" ") + "\n"; },
+    },
+    process: {
+      argv: [process.execPath, ...restArgs],
+      env,
+      platform: process.platform,
+      cwd: () => cwd,
+      stdout: { write: (s) => { stdout += String(s); return true; } },
+      stderr: { write: (s) => { stderr += String(s); return true; } },
+      exit: (c) => {
+        status = typeof c === "number" ? c : 0;
+        throw PROBE_EXIT;
+      },
+    },
+    Buffer,
+  };
+  ctx.globalThis = ctx;
+  let fn = probeCache.get(script);
+  if (fn === undefined) {
+    fn = new vm.Script(`(function(){\n${script}\n})`);
+    probeCache.set(script, fn);
+  }
+  try {
+    fn.runInNewContext(ctx)();
+  } catch (e) {
+    if (!(e instanceof PROBE_EXIT)) {
+      stderr += String(e && e.stack ? e.stack : e) + "\n";
+      status = 1;
+    }
+  }
+  return { status, stdout, stderr, error: undefined };
+}
+
+// world.run 提速通道：IA 桩脚本（gate/core/resolver，HOME 安装位自建桩）零改动转译进
+// 沙箱执行，node -e 探针进程内求值（os.homedir() 按 $HOME 语义包装），git/sh 等回退
+// 真实 spawn。CLI spawn 通道仅存于防漂移对拍锚（进程内 == spawn 逐字节一致）
+function makeWorldSpawn({ home, env }) {
+  const scriptsDir = join(home, ".agents", "skills", "delivery-v6", "scripts");
+  const mjsSet = new Set([
+    join(scriptsDir, "delivery-gate.mjs"),
+    join(scriptsDir, "delivery-core.mjs"),
+    join(scriptsDir, "resolve-external-contracts.mjs"),
+  ]);
+  return (cmd, args, opts = {}) => {
+    const a = args ?? [];
+    if (cmd === "node" || cmd === process.execPath) {
+      if (a[0] === "-e" && typeof a[1] === "string") return runProbe(a[1], a.slice(2), { env, cwd: home });
+      const target = a[0];
+      if (typeof target === "string" && target.endsWith(".mjs") && mjsSet.has(target)) {
+        return runMjsScript(target, a.slice(1), { env, cwd: home });
+      }
+    }
+    const r = spawnSync(cmd, a, { encoding: "utf8", cwd: home, ...opts, env: { ...env, ...(opts.env ?? {}) } });
+    return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", error: r.error };
+  };
+}
+
 async function runWorkflow(home, argsValue, agentImpl, { rejectAdditive = false } = {}) {
   const raw = readFileSync(DWF, "utf8");
   const js = transpile(raw);
   const logs = [];
+  const env = { ...process.env, HOME: home, ...(rejectAdditive ? { STUB_GATE_REJECT_ADDITIVE: "1" } : {}) };
+  const spawn = makeWorldSpawn({ home, env });
   const world = {
     run: async (cmd, a, opts) => {
-      const r = spawnSync(cmd, a ?? [], {
-        encoding: "utf8", cwd: home, env: { ...process.env, HOME: home, ...(rejectAdditive ? { STUB_GATE_REJECT_ADDITIVE: "1" } : {}) },
-        timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000,
-      });
+      const r = spawn(cmd, a ?? [], { timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000 });
       return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
     },
   };
@@ -932,6 +1008,27 @@ test("无外部契约：契约机器侧段整体跳过（resolver 不 spawn、�
     assert.equal(readEvidenceJson(s.taskDir, "contract-independence-"), null, "无外部契约时不得写契约记录");
     assert.equal(readEvidenceJson(s.taskDir, "contract-resolver-"), null, "无外部契约时不得写 resolver 复核记录");
     assert.ok(!/外部契约：resolver/.test(result.message), "非契约任务终态不应带契约披露");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ── 12. 防漂移锚：门桩进程内执行 == CLI spawn（本文件唯一保留的桩 spawn 点）──
+
+test("防漂移锚：门桩进程内执行 == CLI spawn（gate evaluate 双跑逐字节对拍）", () => {
+  // world.run 提速通道的防漂移约束：自建门桩零改动转译进沙箱执行，语义一致性由本锚钉住。
+  // verdictQueue 取单元素时 evaluate 取队首不 shift（桩语义）——进程内跑完后队列未变，
+  // CLI 侧从同一起点出发，双跑输出确定性成立
+  const home = tmpHome();
+  try {
+    const s = makeScaffold(home, { verdictQueue: [candidateVerdict] });
+    const gate = join(home, ".agents", "skills", "delivery-v6", "scripts", "delivery-gate.mjs");
+    const env = { ...process.env, HOME: home };
+    const inProc = runMjsScript(gate, ["evaluate", "--task-dir", s.taskDir], { env, cwd: home });
+    const cli = spawnSync(process.execPath, [gate, "evaluate", "--task-dir", s.taskDir], { encoding: "utf8", env, cwd: home });
+    assert.equal(inProc.status, cli.status);
+    assert.equal(inProc.stdout, cli.stdout);
+    assert.equal(inProc.stderr, cli.stderr);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
