@@ -7,12 +7,13 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   statSync,
@@ -74,8 +75,8 @@ function makeV2Fixture(t, { taskId = "task-a", intent = "原始需求：开关�
   mkdirSync(projectDir);
   mkdirSync(home);
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectDir });
+  // repo 级身份经追加 .git/config 写入（1 次文件写入替代 2 次 git spawn；后续 commit 依赖 repo config）
+  appendFileSync(join(projectDir, ".git", "config"), "[user]\n\temail = t@t\n\tname = t\n");
   writeFileSync(join(projectDir, "a.txt"), "hello\n");
   spawnSync("git", ["add", "."], { cwd: projectDir });
   spawnSync("git", ["commit", "-qm", "init"], { cwd: projectDir });

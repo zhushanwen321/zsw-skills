@@ -132,9 +132,29 @@ const CHARS_PER_TOKEN = 2.62; // 2026-11 双场实测 chars/token 系数
 const DEFAULT_TOKENS_PER_SEC = 76.3; // GLM 场次级加权实测生成速度（含 TTFT 开销）
 const DEFAULT_MODEL_NAME = "GLM-5.3";
 
+// ── 运行通道上下文（进程内入口 mainFor 与 CLI 共用同一份主流程）──
+// CLI 路径 = 缺省通道（直连真实 process.*）；进程内路径由 mainFor 覆盖后同步跑完 main()
+// 即恢复（主流程单线程一次执行完，不支持并发进程内调用）。退出以 CliExit 异常模拟——
+// 进程内调用方不能被 process.exit 真的杀掉；CLI 壳在进程外按退出码退出，退出码契约一致
+class CliExit extends Error {
+  constructor(code) {
+    super(`cli-exit-${code}`);
+    this.exitCode = code;
+  }
+}
+
+let RT = {
+  argv: process.argv.slice(2),
+  env: process.env,
+  out: (s) => process.stdout.write(s),
+  err: (s) => process.stderr.write(s),
+  spawn: spawnSync,
+  home: () => homedir(),
+};
+
 function fail(message, code) {
-  console.error(`${message}\n恢复动作：核对参数后重试；完整用法：${USAGE_LINE}`);
-  process.exit(code);
+  RT.err(`${message}\n恢复动作：核对参数后重试；完整用法：${USAGE_LINE}\n`);
+  throw new CliExit(code);
 }
 
 // ── 参数解析（未知参数 fail-fast）──
@@ -169,7 +189,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") {
-      console.log(
+      RT.out(
         [
           "统一统计：tech-design / dev-flow / delivery 三代（v1 / v2 / dev）+ dev-merge + pr-cr-fix 的耗时与 token 汇总",
           "",
@@ -201,9 +221,9 @@ function parseArgs(argv) {
           "唯一写入是 --output 指定的报告文件。",
           "口径：token 用 CLI 重算值（不读自报值）；observed（executionId 精确关联观测）与",
           "estimated（legacy 分类器估算）恒分开报；无用量证据的段 token 记 unknown 不写 0。",
-        ].join("\n"),
+        ].join("\n") + "\n",
       );
-      process.exit(0);
+      throw new CliExit(0);
     }
     if (!arg.startsWith("--")) {
       fail(`未知参数 ${JSON.stringify(arg)}（本命令不接受位置参数；技能用 --skill 指定）`, 2);
@@ -252,7 +272,7 @@ function parseArgs(argv) {
         if (!opts.groups.includes(value)) opts.groups.push(value);
         break;
       case "--pi-agent-dir": {
-        const expanded = value.startsWith("~") ? join(homedir(), value.slice(1)) : value;
+        const expanded = value.startsWith("~") ? join(RT.home(), value.slice(1)) : value;
         let real;
         try {
           real = realpathSync(expanded);
@@ -292,7 +312,7 @@ function parseArgs(argv) {
         break;
       case "--output":
         if (value.trim() === "") fail("--output 值不能为空（示例：--output /tmp/stats.json）", 2);
-        opts.output = value.startsWith("~") ? join(homedir(), value.slice(1)) : value;
+        opts.output = value.startsWith("~") ? join(RT.home(), value.slice(1)) : value;
         break;
     }
   }
@@ -467,7 +487,7 @@ function collectBackend(backend, since, until) {
   let res;
   try {
     // maxBuffer 放大到 512MB：--all 全量明细在大库上可达数十 MB，默认 1MB 直接 ENOBUFS
-    res = spawnSync("agent-session-reader", args, { encoding: "utf8", timeout: 600_000, maxBuffer: 512 * 1024 * 1024 });
+    res = RT.spawn("agent-session-reader", args, { encoding: "utf8", timeout: 600_000, maxBuffer: 512 * 1024 * 1024 });
   } catch (e) {
     fail(`调用 agent-session-reader 失败：${e && e.message ? e.message : String(e)}`, 1);
   }
@@ -1641,18 +1661,18 @@ function renderTable(report, opts) {
     );
   }
   if (opts.output) lines.push(`完整 JSON 报告已写入：${opts.output}`);
-  console.log(lines.join("\n"));
+  RT.out(lines.join("\n") + "\n");
 }
 
 // ── 主流程 ──
 function main() {
-  const opts = parseArgs(process.argv.slice(2));
-  const obsRoot = join(homedir(), ".agents", "skill-data", "workflow-observability");
+  const opts = parseArgs(RT.argv);
+  const obsRoot = join(RT.home(), ".agents", "skill-data", "workflow-observability");
 
   // pi agentDir：用户给定的替换缺省 ~/.pi/agent；realpath 去重
   let defaultPiDir;
   try {
-    defaultPiDir = realpathSync(join(homedir(), ".pi", "agent"));
+    defaultPiDir = realpathSync(join(RT.home(), ".pi", "agent"));
   } catch {
     defaultPiDir = null;
   }
@@ -1819,10 +1839,56 @@ function main() {
   }
 
   if (opts.format === "json") {
-    console.log(JSON.stringify(report, null, 2));
+    RT.out(JSON.stringify(report, null, 2) + "\n");
   } else {
     renderTable(report, opts);
   }
 }
 
-main();
+// ── 进程内入口（最小导出垫片；CLI 与测试共用同一份 main 主流程）──
+// argv = 命令行参数（不含 node 路径与脚本路径）；env = spawn（agent-session-reader 调用）
+// 与路径展开用环境；home = 落盘根（观测根 / 缺省 pi agentDir），缺省 homedir()（与 CLI 的
+// $HOME 语义一致）；spawn = usage CLI 执行器，缺省真实 spawnSync。返回
+// {code, stdout, stderr}；code = 退出码（0 成功 / 1 数据与落盘错 / 2 用法错，与 CLI 一致）
+export function mainFor(argv, { env = {}, home, spawn } = {}) {
+  const collected = { code: 0, stdout: "", stderr: "" };
+  const prev = RT;
+  RT = {
+    argv,
+    env: { ...process.env, ...env },
+    out: (s) => { collected.stdout += s; },
+    err: (s) => { collected.stderr += s; },
+    spawn: spawn ?? prev.spawn,
+    home: () => home ?? prev.home(),
+  };
+  try {
+    main();
+  } catch (e) {
+    if (e instanceof CliExit) {
+      collected.code = e.exitCode;
+    } else {
+      RT = prev;
+      throw e;
+    }
+  }
+  RT = prev;
+  return collected;
+}
+
+// CLI 壳：仅作为主模块直接运行时执行（被 import 时跳过——进程内调用方走 mainFor，且
+// import 侧不能误跑真实统计）。argv[1] 与模块路径经 realpath 归一
+import { realpathSync as _realpathSync } from "node:fs";
+import { fileURLToPath as _fileURLToPath } from "node:url";
+const _isMainModule =
+  process.argv[1] !== undefined &&
+  _realpathSync(_fileURLToPath(import.meta.url)) === _realpathSync(process.argv[1]);
+if (_isMainModule) {
+  try {
+    main();
+  } catch (e) {
+    if (e instanceof CliExit) {
+      process.exit(e.exitCode);
+    }
+    throw e;
+  }
+}

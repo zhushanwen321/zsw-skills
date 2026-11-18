@@ -19,10 +19,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V6 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6");
@@ -32,11 +32,15 @@ const KERNEL = await import(join(V6, "scripts", "lib", "kernel-judgments.mjs"));
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const parseStdout = (result) => result.stdout.slice(result.stdout.indexOf("{"));
-function runCore(args, home) {
-  return spawnSync(process.execPath, [CORE, ...args], { encoding: "utf8", env: { ...process.env, ...(home ? { HOME: home } : {}) }, timeout: 60_000 });
+async function runCore(args) {
+  return CORE_MODULE.runCoreCommandInProcess(args);
 }
+// 进程内调用（模块只加载一次，逐用例毫秒级）：垫片与 CLI 走同一分发，返回 { status, stdout, stderr } 与 spawnSync 同口径
+const GATE_MODULE = await import(pathToFileURL(GATE).href);
+const CORE_MODULE = await import(pathToFileURL(CORE).href);
+
 function runGate(args, home) {
-  return spawnSync(process.execPath, [GATE, ...args], { encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 60_000 });
+  return GATE_MODULE.runGateCommand(args, home);
 }
 function ok(result, label = "命令应成功") {
   assert.equal(result.status, 0, `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -46,7 +50,7 @@ function ok(result, label = "命令应成功") {
 
 const rec = (overrides) => ({ seq: 0, eventId: "E", actor: "builder", recordedAt: "T", ...overrides });
 
-test("deriveRevisionProvenance：implementation / candidate-repair / assurance-repair / environment 来源派生", () => {
+test("deriveRevisionProvenance：implementation / candidate-repair / assurance-repair / environment 来源派生", async () => {
   const records = [
     rec({ seq: 1, type: "AcceptanceApproved", revision: "r0" }),
     // 候选修复（首个保证之前）
@@ -66,7 +70,7 @@ test("deriveRevisionProvenance：implementation / candidate-repair / assurance-r
   assert.equal(result.revisions.every((item) => typeof item.eventRef === "string" && typeof item.actor === "string"), true, "来源条目带事件归因");
 });
 
-test("deriveRevisionProvenance：尾部漂移与断链记 unknown；无锚点不启用；drift 不充当来源", () => {
+test("deriveRevisionProvenance：尾部漂移与断链记 unknown；无锚点不启用；drift 不充当来源", async () => {
   // 尾部漂移：链条解释到 r2，当前 revision 是手工直改后的 rX
   const tail = KERNEL.deriveRevisionProvenance(
     [rec({ seq: 1, type: "ImplementationRecorded", mergeReceipt: { fromRevision: "r0", toRevision: "r2" } })],
@@ -97,7 +101,7 @@ test("deriveRevisionProvenance：尾部漂移与断链记 unknown；无锚点不
   assert.equal(withDrift.unknownCount, 1, "drift 不能解释 r1→r9 的变化，仍为 unknown");
 });
 
-test("deriveRevisionProvenance：用户确认外部基线（RevisionBaselineConfirmed）接链消除 unknown", () => {
+test("deriveRevisionProvenance：用户确认外部基线（RevisionBaselineConfirmed）接链消除 unknown", async () => {
   const records = [
     rec({ seq: 1, type: "ImplementationRecorded", mergeReceipt: { fromRevision: "r0", toRevision: "r1" } }),
     // 外部进程改写后用户确认新基线：confirmedRevision 就是当时 explained 的下一站
@@ -110,7 +114,7 @@ test("deriveRevisionProvenance：用户确认外部基线（RevisionBaselineConf
   assert.deepEqual(result.revisions.map((item) => item.source), ["implementation", "external-baseline", "candidate-repair"]);
 });
 
-test("deriveRevisionProvenance：缺 from 的修复轮不把未登记直改洗成已解释（洗白通道封堵）", () => {
+test("deriveRevisionProvenance：缺 from 的修复轮不把未登记直改洗成已解释（洗白通道封堵）", async () => {
   // 探针场景：实现 r0→r2 后项目树被直改到 r5（无任何事件），随后补一条只带 to=r5、
   // 不带 fromRevision 的修复轮——修复轮未声称从 r2 续接，r2→r5 之间的变化无基线确认
   const records = [
@@ -133,7 +137,7 @@ test("deriveRevisionProvenance：缺 from 的修复轮不把未登记直改洗�
   );
 });
 
-test("deriveRevisionProvenance：unknown 存在后再登记 AssuranceCompleted 不消除 unknown", () => {
+test("deriveRevisionProvenance：unknown 存在后再登记 AssuranceCompleted 不消除 unknown", async () => {
   const records = [
     rec({ seq: 1, type: "ImplementationRecorded", mergeReceipt: { fromRevision: "r0", toRevision: "r2" } }),
     rec({ seq: 2, type: "RepairRoundRecorded", toRevision: "r5", round: 1 }),
@@ -155,8 +159,8 @@ function makeFixture(t, { taskId = "rev-prov" } = {}) {
   mkdirSync(projectDir);
   mkdirSync(home);
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectDir });
+  // repo 级身份经追加 .git/config 写入（1 次文件写入替代 2 次 git spawn；后续 commit 依赖 repo config）
+  appendFileSync(join(projectDir, ".git", "config"), "[user]\n\temail = t@t\n\tname = t\n");
   writeFileSync(join(projectDir, "a.txt"), "one\n");
   spawnSync("git", ["add", "."], { cwd: projectDir });
   spawnSync("git", ["commit", "-qm", "init"], { cwd: projectDir });
@@ -261,9 +265,9 @@ function driveAssurance(fx, revisionB) {
     "--credential", fx.creds.assurance], fx.home), "full 保证登记");
 }
 
-test("revision-provenance 子命令：来源清单与 unknownCount（真实任务目录）", (t) => {
+test("revision-provenance 子命令：来源清单与 unknownCount（真实任务目录）", async (t) => {
   const { fx, revisionA, revisionB } = driveToImplemented(t);
-  const provenance = JSON.parse(parseStdout(runCore(["revision-provenance", "--task-dir", fx.taskDir], fx.home)));
+  const provenance = JSON.parse(parseStdout(await runCore(["revision-provenance", "--task-dir", fx.taskDir], fx.home)));
   assert.equal(provenance.taskDir, fx.taskDir);
   assert.equal(provenance.enabled, true, "存在实现锚点，对账启用");
   assert.equal(provenance.unknownCount, 0, "全登记任务无 unknown");
@@ -273,7 +277,7 @@ test("revision-provenance 子命令：来源清单与 unknownCount（真实任�
   assert.equal(typeof implRow.eventRef, "string", "来源条目可归因到事件 id");
 });
 
-test("正常全登记任务不误伤：evaluate 保持 accepted，missing.revisionProvenance 为空", (t) => {
+test("正常全登记任务不误伤：evaluate 保持 accepted，missing.revisionProvenance 为空", async (t) => {
   const { fx, revisionB } = driveToImplemented(t);
   driveAssurance(fx, revisionB);
   const verdict = JSON.parse(parseStdout(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home)));
@@ -281,7 +285,7 @@ test("正常全登记任务不误伤：evaluate 保持 accepted，missing.revisi
   assert.equal(verdict.missing.revisionProvenance ?? null, null, "无 unknown 时缺口为空");
 });
 
-test("手工直改产生 unknown：evaluate 阻断交付终态并给出三选一恢复动作", (t) => {
+test("手工直改产生 unknown：evaluate 阻断交付终态并给出三选一恢复动作", async (t) => {
   const { fx, revisionB } = driveToImplemented(t);
   driveAssurance(fx, revisionB);
   ok(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home), "直改前应 accepted");
@@ -304,12 +308,12 @@ test("手工直改产生 unknown：evaluate 阻断交付终态并给出三选一
   }, "unknown 区间从已解释基线指向直改后 revision");
   assert.match(verdict.missing.revisionProvenance.recovery, /record-repair-round/, "恢复动作一：补做合法修复登记");
   assert.match(verdict.missing.revisionProvenance.recovery, /confirm-baseline/, "恢复动作三：用户确认外部基线");
-  const provenance = JSON.parse(parseStdout(runCore(["revision-provenance", "--task-dir", fx.taskDir], fx.home)));
+  const provenance = JSON.parse(parseStdout(await runCore(["revision-provenance", "--task-dir", fx.taskDir], fx.home)));
   assert.equal(provenance.unknownCount, 1, "core 子命令与 gate 同口径");
   assert.equal(provenance.explainedRevision, revisionB);
 });
 
-test("用户确认外部基线（confirm-baseline）接链：unknown 区间消除", (t) => {
+test("用户确认外部基线（confirm-baseline）接链：unknown 区间消除", async (t) => {
   const { fx, revisionB } = driveToImplemented(t);
   driveAssurance(fx, revisionB);
   writeFileSync(join(fx.projectDir, "a.txt"), "external change\n");
@@ -321,6 +325,6 @@ test("用户确认外部基线（confirm-baseline）接链：unknown 区间消�
   ok(runGate(["confirm-baseline", "--task-dir", fx.taskDir, "--reason", "外部合法基线前进（依赖升级提交）", "--credential", fx.creds.user], fx.home), "用户确认外部基线");
   const after = JSON.parse(parseStdout(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home)));
   assert.equal(after.missing.revisionProvenance ?? null, null, "确认后 unknown 消除（external-baseline 接链）");
-  const provenance = JSON.parse(parseStdout(runCore(["revision-provenance", "--task-dir", fx.taskDir], fx.home)));
+  const provenance = JSON.parse(parseStdout(await runCore(["revision-provenance", "--task-dir", fx.taskDir], fx.home)));
   assert.deepEqual(provenance.revisions.map((item) => item.source), ["implementation", "external-baseline"]);
 });

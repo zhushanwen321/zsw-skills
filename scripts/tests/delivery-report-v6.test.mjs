@@ -18,10 +18,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+// 提速通道：gate/core/report 进程内转译执行（脚本本体零改动——转译 + vm 沙箱，语义
+// 对齐见 helper 头注）；core 内部递归 spawn gate、gate 内部 spawn git 经 stub 分发
+// （子脚本白名单内进程内执行，git 真实 spawn）。CLI spawn 保留在防漂移对拍锚
+import { runMjsScript, makeMjsStubSpawn } from "./helpers/mjs-runner.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V6 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6");
@@ -31,17 +35,35 @@ const REPORT = join(V6, "scripts", "generate-delivery-report.mjs");
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const parseStdout = (result) => result.stdout.slice(result.stdout.indexOf("{"));
+const DELIVERY_MJS = [GATE, CORE, REPORT];
 function runGate(args, home) {
-  return spawnSync(process.execPath, [GATE, ...args], { encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 60_000 });
+  return runMjsScript(GATE, args, { env: { ...process.env, HOME: home }, spawn: makeMjsStubSpawn({ mjs: DELIVERY_MJS }) });
 }
 function runCore(args, home) {
-  return spawnSync(process.execPath, [CORE, ...args], { encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 60_000 });
+  return runMjsScript(CORE, args, { env: { ...process.env, HOME: home }, spawn: makeMjsStubSpawn({ mjs: DELIVERY_MJS }) });
 }
 function runReport(args, home) {
-  return spawnSync(process.execPath, [REPORT, ...args], { encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 60_000 });
+  return runMjsScript(REPORT, args, { env: { ...process.env, HOME: home }, spawn: makeMjsStubSpawn({ mjs: DELIVERY_MJS }) });
 }
 function ok(result, label = "命令应成功") {
   assert.equal(result.status, 0, `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+}
+
+/** git 模板仓（init + config + a.txt commit 只做一次）：每用例复制副本替代逐用例
+ *  6 次 git spawn；模板落系统临时目录，进程退出后由 OS 清理 */
+let gitTemplate = null;
+function ensureGitTemplate() {
+  if (gitTemplate === null) {
+    const tpl = mkdtempSync(join(tmpdir(), "delivery-report-v6-tpl-"));
+    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: tpl });
+    spawnSync("git", ["config", "user.email", "t@t"], { cwd: tpl });
+    spawnSync("git", ["config", "user.name", "t"], { cwd: tpl });
+    writeFileSync(join(tpl, "a.txt"), "one\n");
+    spawnSync("git", ["add", "."], { cwd: tpl });
+    spawnSync("git", ["commit", "-qm", "init"], { cwd: tpl });
+    gitTemplate = tpl;
+  }
+  return gitTemplate;
 }
 
 function makeFixture(t, { taskId = "report-v6" } = {}) {
@@ -49,14 +71,8 @@ function makeFixture(t, { taskId = "report-v6" } = {}) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const projectDir = join(root, "project");
   const home = join(root, "home");
-  mkdirSync(projectDir);
+  cpSync(ensureGitTemplate(), projectDir, { recursive: true });
   mkdirSync(home);
-  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectDir });
-  writeFileSync(join(projectDir, "a.txt"), "one\n");
-  spawnSync("git", ["add", "."], { cwd: projectDir });
-  spawnSync("git", ["commit", "-qm", "init"], { cwd: projectDir });
   const intentPath = join(root, "intent.md");
   writeFileSync(intentPath, "关闭后任何路径零写入；开启时行为正常\n");
   const init = runGate(["init", "--project-root", projectDir, "--task-id", taskId, "--intent-file", intentPath], home);
@@ -418,4 +434,42 @@ test("参数校验：缺 --task-dir / 未知参数 / 目录不存在", () => {
   assert.notEqual(notDir.status, 0);
   assert.match(notDir.stderr, /任务目录不存在/);
   assert.match(notDir.stderr, /恢复动作/);
+});
+
+test("防漂移锚：进程内转译执行 == CLI spawn（gate init 双跑对拍）", (t) => {
+  // 提速通道的防漂移约束：同参数在两个独立 fixture 各跑一次 gate init，退出码、stdout、
+  // stderr 逐字段一致（taskDir 路径派生自各自 home——归一后比对）
+  const rootIn = mkdtempSync(join(tmpdir(), "delivery-report-v6-parity-"));
+  const rootCli = mkdtempSync(join(tmpdir(), "delivery-report-v6-parity-"));
+  t.after(() => {
+    rmSync(rootIn, { recursive: true, force: true });
+    rmSync(rootCli, { recursive: true, force: true });
+  });
+  const prep = (root) => {
+    const projectDir = join(root, "project");
+    const home = join(root, "home");
+    cpSync(ensureGitTemplate(), projectDir, { recursive: true });
+    mkdirSync(home);
+    const intentPath = join(root, "intent.md");
+    writeFileSync(intentPath, "关闭后任何路径零写入；开启时行为正常\n");
+    return { projectDir, home, intentPath };
+  };
+  const inPrep = prep(rootIn);
+  const cliPrep = prep(rootCli);
+  const args = (p) => ["init", "--project-root", p.projectDir, "--task-id", "parity", "--intent-file", p.intentPath];
+  const inProc = runGate(args(inPrep), inPrep.home);
+  const cli = spawnSync(process.execPath, [GATE, ...args(cliPrep)], {
+    encoding: "utf8",
+    env: { ...process.env, HOME: cliPrep.home },
+    timeout: 60_000,
+  });
+  assert.equal(inProc.status, cli.status, `退出码不一致：进程内 ${inProc.status} vs CLI ${cli.status}（stderr=${inProc.stderr}/${cli.stderr}）`);
+  // 归一 = 各自临时根 + 项目 slug（projectDir realpath 的 sha256 前 8 位，两仓必然不同）
+  // + PEM 公钥块（init 每次生成新密钥对，真随机内容不可逐字节比对——比对结构在场）
+  const normalize = (s, root) =>
+    s.split(root).join("<root>").split(/delivery-report-v6-parity-[A-Za-z0-9]+/).join("<root>")
+      .split(/project-[0-9a-f]{8}/).join("<project-slug>")
+      .replace(/-----BEGIN PUBLIC KEY-----\\n[A-Za-z0-9+/=\\n-]+?-----END PUBLIC KEY-----/g, "<public-key>");
+  assert.equal(normalize(inProc.stdout, rootIn), normalize(cli.stdout, rootCli), "stdout 不一致（路径归一后应逐字段相同）");
+  assert.equal(normalize(inProc.stderr, rootIn), normalize(cli.stderr, rootCli), "stderr 不一致");
 });

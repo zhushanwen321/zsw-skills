@@ -16,10 +16,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V6 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6");
@@ -30,11 +30,15 @@ const KERNEL = await import(join(V6, "scripts", "lib", "kernel-judgments.mjs"));
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const parseStdout = (result) => result.stdout.slice(result.stdout.indexOf("{"));
-function runCore(args, home) {
-  return spawnSync(process.execPath, [CORE, ...args], { encoding: "utf8", env: { ...process.env, ...(home ? { HOME: home } : {}) }, timeout: 60_000 });
+async function runCore(args) {
+  return CORE_MODULE.runCoreCommandInProcess(args);
 }
+// 进程内调用（模块只加载一次，逐用例毫秒级）：垫片与 CLI 走同一分发，返回 { status, stdout, stderr } 与 spawnSync 同口径
+const GATE_MODULE = await import(pathToFileURL(GATE).href);
+const CORE_MODULE = await import(pathToFileURL(CORE).href);
+
 function runGate(args, home) {
-  return spawnSync(process.execPath, [GATE, ...args], { encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 60_000 });
+  return GATE_MODULE.runGateCommand(args, home);
 }
 function ok(result, label = "命令应成功") {
   assert.equal(result.status, 0, `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -51,8 +55,8 @@ function makeFixture(t, { taskId = "loop-attempt" } = {}) {
   mkdirSync(projectDir);
   mkdirSync(home);
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectDir });
+  // repo 级身份经追加 .git/config 写入（1 次文件写入替代 2 次 git spawn；后续 commit 依赖 repo config）
+  appendFileSync(join(projectDir, ".git", "config"), "[user]\n\temail = t@t\n\tname = t\n");
   writeFileSync(join(projectDir, "a.txt"), "one\n");
   spawnSync("git", ["add", "."], { cwd: projectDir });
   spawnSync("git", ["commit", "-qm", "init"], { cwd: projectDir });
@@ -109,8 +113,8 @@ function driveToImplementing(t) {
   return fx;
 }
 
-function attempt(fx, { runId, round, event, outcome, inputHash, path = "workflow", loop = "acceptance-review" }) {
-  return runCore([
+async function attempt(fx, { runId, round, event, outcome, inputHash, path = "workflow", loop = "acceptance-review" }) {
+  return await runCore([
     "loop-attempt", "--task-dir", fx.taskDir, "--loop", loop, "--path", path,
     "--run-id", runId, "--round", String(round), "--event", event,
     ...(outcome !== undefined ? ["--outcome", outcome] : []),
@@ -120,12 +124,12 @@ function attempt(fx, { runId, round, event, outcome, inputHash, path = "workflow
 
 // ── 1-3. 登记、幂等与参数校验 ──
 
-test("loop-attempt 登记：started/finished 往返，行 schema 与 attemptKey 拼装", (t) => {
+test("loop-attempt 登记：started/finished 往返，行 schema 与 attemptKey 拼装", async (t) => {
   const fx = makeFixture(t);
-  const started = attempt(fx, { runId: "run-abc", round: 1, event: "started", inputHash: sha256("review-input") });
+  const started = await attempt(fx, { runId: "run-abc", round: 1, event: "started", inputHash: sha256("review-input") });
   ok(started, "started 应登记成功");
   assert.deepEqual(JSON.parse(parseStdout(started)), { recorded: true, attemptKey: "run-abc:1", event: "started", loop: "acceptance-review" });
-  ok(attempt(fx, { runId: "run-abc", round: 1, event: "finished", outcome: "rejected" }), "打回的 finished 应登记成功");
+  ok(await attempt(fx, { runId: "run-abc", round: 1, event: "finished", outcome: "rejected" }), "打回的 finished 应登记成功");
   const rows = readRows(fx.taskDir);
   assert.equal(rows.length, 2, "只追加不回写：两行记录");
   assert.deepEqual(rows[0], {
@@ -152,20 +156,20 @@ test("loop-attempt 登记：started/finished 往返，行 schema 与 attemptKey 
   assert.ok(rows[1].inputHash === undefined, "finished 未传 inputHash 时不含该字段");
 });
 
-test("loop-attempt 幂等：同 (attemptKey, event) 重复提交跳过；同 key 不同 event 放行", (t) => {
+test("loop-attempt 幂等：同 (attemptKey, event) 重复提交跳过；同 key 不同 event 放行", async (t) => {
   const fx = makeFixture(t);
-  ok(attempt(fx, { runId: "r1", round: 2, event: "started" }));
-  const replay = attempt(fx, { runId: "r1", round: 2, event: "started" });
+  ok(await attempt(fx, { runId: "r1", round: 2, event: "started" }));
+  const replay = await attempt(fx, { runId: "r1", round: 2, event: "started" });
   ok(replay, "重复提交不报错");
   assert.deepEqual(JSON.parse(parseStdout(replay)), { recorded: false, duplicate: true, attemptKey: "r1:2", event: "started", loop: "acceptance-review" });
-  ok(attempt(fx, { runId: "r1", round: 2, event: "finished", outcome: "passed" }), "同 key 的 finished 是另一事件，放行");
+  ok(await attempt(fx, { runId: "r1", round: 2, event: "finished", outcome: "passed" }), "同 key 的 finished 是另一事件，放行");
   assert.equal(readRows(fx.taskDir).length, 2, "重复 started 未落第二行");
   // 跨 run 同轮次是不同尝试（attemptKey 含 runId）：不互相去重
-  ok(attempt(fx, { runId: "r2", round: 2, event: "started" }));
+  ok(await attempt(fx, { runId: "r2", round: 2, event: "started" }));
   assert.equal(readRows(fx.taskDir).length, 3);
 });
 
-test("loop-attempt 参数校验：started 禁 outcome、finished 必 outcome、词表与 round", (t) => {
+test("loop-attempt 参数校验：started 禁 outcome、finished 必 outcome、词表与 round", async (t) => {
   const fx = makeFixture(t);
   const cases = [
     { args: ["--event", "started", "--outcome", "passed"], pattern: /started 不携带结果/, label: "started 带 outcome 应被拒" },
@@ -178,43 +182,43 @@ test("loop-attempt 参数校验：started 禁 outcome、finished 必 outcome、�
     { args: ["--event", "started", "--input-hash", " "], pattern: /--input-hash 为空字符串/, label: "空 input-hash 应被拒" },
   ];
   for (const item of cases) {
-    const result = runCore(["loop-attempt", "--task-dir", fx.taskDir, "--loop", "acceptance-review", "--path", "workflow", "--run-id", "r1", "--round", "1", ...item.args], fx.home);
+    const result = await runCore(["loop-attempt", "--task-dir", fx.taskDir, "--loop", "acceptance-review", "--path", "workflow", "--run-id", "r1", "--round", "1", ...item.args], fx.home);
     assert.notEqual(result.status, 0, item.label);
     assert.match(result.stderr, item.pattern, `${item.label} 的报错应可定位`);
     assert.match(result.stderr, /恢复动作/, "错误消息必须给恢复动作");
   }
   // 手工路径同表记录
-  ok(attempt(fx, { runId: "m1", round: 1, event: "started", path: "manual" }), "manual 路径应放行");
+  ok(await attempt(fx, { runId: "m1", round: 1, event: "started", path: "manual" }), "manual 路径应放行");
   assert.equal(readRows(fx.taskDir).at(-1).path, "manual");
 });
 
 // ── 4-5. 预算读取与纯函数 ──
 
-test("loop-budget：started 跨 run 累计、byOutcome、cap 对拍 rules.json、未接入循环披露缺口", (t) => {
+test("loop-budget：started 跨 run 累计、byOutcome、cap 对拍 rules.json、未接入循环披露缺口", async (t) => {
   const fx = makeFixture(t);
   // 三个 run 共 5 次尝试：passed/rejected/failed/interrupted/未完成（无 finished）
-  attempt(fx, { runId: "a", round: 1, event: "started" });
-  attempt(fx, { runId: "a", round: 1, event: "finished", outcome: "passed" });
-  attempt(fx, { runId: "a", round: 2, event: "started" });
-  attempt(fx, { runId: "a", round: 2, event: "finished", outcome: "rejected" });
-  attempt(fx, { runId: "b", round: 1, event: "started" });
-  attempt(fx, { runId: "b", round: 1, event: "finished", outcome: "failed" });
-  attempt(fx, { runId: "c", round: 1, event: "started" });
-  attempt(fx, { runId: "c", round: 1, event: "finished", outcome: "interrupted" });
-  attempt(fx, { runId: "d", round: 1, event: "started" });
-  const budget = JSON.parse(parseStdout(runCore(["loop-budget", "--task-dir", fx.taskDir, "--loop", "acceptance-review"], fx.home)));
+  await attempt(fx, { runId: "a", round: 1, event: "started" });
+  await attempt(fx, { runId: "a", round: 1, event: "finished", outcome: "passed" });
+  await attempt(fx, { runId: "a", round: 2, event: "started" });
+  await attempt(fx, { runId: "a", round: 2, event: "finished", outcome: "rejected" });
+  await attempt(fx, { runId: "b", round: 1, event: "started" });
+  await attempt(fx, { runId: "b", round: 1, event: "finished", outcome: "failed" });
+  await attempt(fx, { runId: "c", round: 1, event: "started" });
+  await attempt(fx, { runId: "c", round: 1, event: "finished", outcome: "interrupted" });
+  await attempt(fx, { runId: "d", round: 1, event: "started" });
+  const budget = JSON.parse(parseStdout(await runCore(["loop-budget", "--task-dir", fx.taskDir, "--loop", "acceptance-review"], fx.home)));
   assert.equal(budget.started, 5, "started 按任务累计（跨 run），不是成功事件数");
   assert.deepEqual(budget.byOutcome, { passed: 1, rejected: 1, failed: 1, interrupted: 1 });
   assert.equal(budget.cap, RULES.budgets.acceptanceReReviewRoundCap, "cap 与 rules.json 单源一致");
   assert.equal(budget.exceeded, false, "5 ≤ 6 未超限");
   // 未接入循环：cap=null + 缺口披露（§8.2），不猜上限
-  const unconnected = JSON.parse(parseStdout(runCore(["loop-budget", "--task-dir", fx.taskDir, "--loop", "d2-consistency"], fx.home)));
+  const unconnected = JSON.parse(parseStdout(await runCore(["loop-budget", "--task-dir", fx.taskDir, "--loop", "d2-consistency"], fx.home)));
   assert.equal(unconnected.cap, null, "未接入循环 cap=null");
   assert.equal(unconnected.exceeded, false);
   assert.match(unconnected.note, /未接入尝试预算（已知缺口）/);
 });
 
-test("loopAttemptsBudget 纯函数：半行容错与 (attemptKey, event) 去重", () => {
+test("loopAttemptsBudget 纯函数：半行容错与 (attemptKey, event) 去重", async () => {
   const text = [
     JSON.stringify({ loop: "acceptance-review", attemptKey: "r:1", event: "started" }),
     "{\"loop\": \"acceptance-review\", \"attemptKey\": \"r:1\", \"ev", // 崩溃半行
@@ -231,7 +235,7 @@ test("loopAttemptsBudget 纯函数：半行容错与 (attemptKey, event) 去重"
 
 // ── 6. 验收复审预算端到端：超限 process-failed；未超限不误伤 ──
 
-test("验收复审预算超限：started（含打回）超 cap → evaluate 判 process-failed 并给出停回指引", (t) => {
+test("验收复审预算超限：started（含打回）超 cap → evaluate 判 process-failed 并给出停回指引", async (t) => {
   const fx = driveToImplementing(t);
   // 7 次尝试跨 4 个 run（打回 4 + 失败 2 + 中断 1）> cap 6——按结果成功事件数是 0，旧口径完全漏计
   let round = 0;
@@ -240,8 +244,8 @@ test("验收复审预算超限：started（含打回）超 cap → evaluate 判 
     for (let local = 1; local <= roundsInRun; local += 1) {
       round += 1;
       const outcome = round <= 4 ? "rejected" : round <= 6 ? "failed" : "interrupted";
-      ok(attempt(fx, { runId, round: local, event: "started" }));
-      ok(attempt(fx, { runId, round: local, event: "finished", outcome }));
+      ok(await attempt(fx, { runId, round: local, event: "started" }));
+      ok(await attempt(fx, { runId, round: local, event: "finished", outcome }));
     }
   }
   const verdict = JSON.parse(parseStdout(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home)));
@@ -257,13 +261,13 @@ test("验收复审预算超限：started（含打回）超 cap → evaluate 判 
   assert.match(verdict.nextAction, /验收复审尝试 7\/6/, "nextAction 应追加尝试预算成因段");
 });
 
-test("验收复审预算未超限：正常尝试次数不误伤（interrupted 也只按次数计）", (t) => {
+test("验收复审预算未超限：正常尝试次数不误伤（interrupted 也只按次数计）", async (t) => {
   const fx = driveToImplementing(t);
   for (let round = 1; round <= 6; round += 1) {
-    ok(attempt(fx, { runId: "w1", round, event: "started" }));
-    ok(attempt(fx, { runId: "w1", round, event: "finished", outcome: round < 6 ? "rejected" : "interrupted" }));
+    ok(await attempt(fx, { runId: "w1", round, event: "started" }));
+    ok(await attempt(fx, { runId: "w1", round, event: "finished", outcome: round < 6 ? "rejected" : "interrupted" }));
   }
-  const budget = JSON.parse(parseStdout(runCore(["loop-budget", "--task-dir", fx.taskDir, "--loop", "acceptance-review"], fx.home)));
+  const budget = JSON.parse(parseStdout(await runCore(["loop-budget", "--task-dir", fx.taskDir, "--loop", "acceptance-review"], fx.home)));
   assert.equal(budget.started, 6);
   assert.equal(budget.exceeded, false, "6 = cap 未超（判定式为 >cap）");
   const verdict = JSON.parse(parseStdout(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home)));
@@ -273,7 +277,7 @@ test("验收复审预算未超限：正常尝试次数不误伤（interrupted �
 
 // ── 7. 源码结构断言：版本打回与 designer 失败均消耗预算（防回归形态锚定）──
 
-test("acceptance-design 源码结构：started 在轮内退出路径之前，designer 失败与版本打回均有 finished 配对", () => {
+test("acceptance-design 源码结构：started 在轮内退出路径之前，designer 失败与版本打回均有 finished 配对", async () => {
   // workflow 内部逻辑（agent 调用）难以单测，按仓内既有防复刻断言模式锚定源码形态：
   // 预算按 started 计数——started 必须先于全部轮内退出路径登记，退出路径必须有
   // finished 配对，否则该路径不消耗预算（文档宣称「designer 失败、打回全部计入」）

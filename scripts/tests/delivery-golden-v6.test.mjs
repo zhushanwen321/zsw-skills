@@ -13,10 +13,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const GATE = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6", "scripts", "delivery-gate.mjs");
@@ -29,12 +29,11 @@ function sha256File(filePath) {
   return sha256(readFileSync(filePath, "utf8"));
 }
 
+// 进程内调用（模块只加载一次，逐用例毫秒级）：垫片与 CLI 走同一分发，返回 { status, stdout, stderr } 与 spawnSync 同口径
+const GATE_MODULE = await import(pathToFileURL(GATE).href);
+
 function runGate(args, home) {
-  return spawnSync(process.execPath, [GATE, ...args], {
-    encoding: "utf8",
-    env: { ...process.env, ...(home ? { HOME: home } : {}) },
-    timeout: 60_000,
-  });
+  return GATE_MODULE.runGateCommand(args, home);
 }
 
 function assertOk(result, message = "命令应成功") {
@@ -75,8 +74,8 @@ function makeV2Fixture(t, { taskId = "task-a", intent = "原始需求：开关�
   mkdirSync(projectDir);
   mkdirSync(home);
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectDir });
+  // repo 级身份经追加 .git/config 写入（1 次文件写入替代 2 次 git spawn；后续 commit 依赖 repo config）
+  appendFileSync(join(projectDir, ".git", "config"), "[user]\n\temail = t@t\n\tname = t\n");
   writeFileSync(join(projectDir, "a.txt"), "hello\n");
   spawnSync("git", ["add", "."], { cwd: projectDir });
   spawnSync("git", ["commit", "-qm", "init"], { cwd: projectDir });
@@ -305,7 +304,7 @@ function evaluate(fx) {
 
 // ── golden-normal：schema 1 正常流，全生命周期走通 ──
 
-test("golden-normal：init→set-intent→…→complete-assurance→evaluate 全生命周期 accepted，预算零缺陷消耗", (t) => {
+test("golden-normal：init→set-intent→…→complete-assurance→evaluate 全生命周期 accepted，预算零缺陷消耗", async (t) => {
   const fx = makeV2Fixture(t, { taskId: "golden-normal", intent: null });
   const intentFile = join(fx.root, "golden-intent.md");
   writeFileSync(intentFile, "原始需求：开关关闭后零写入\n");
@@ -407,7 +406,7 @@ test("golden-normal：init→set-intent→…→complete-assurance→evaluate �
 
 // ── golden-defect：schema 2 预置缺陷流，四条护栏/预算断言 ──
 
-test("golden-defect：boundary 越权 / 非 blocker 无后果论证 / 改判熔断 / 预算熔断 四缺陷在预期阶段被拦", (t) => {
+test("golden-defect：boundary 越权 / 非 blocker 无后果论证 / 改判熔断 / 预算熔断 四缺陷在预期阶段被拦", async (t) => {
   const fx = makeV2Fixture(t, { taskId: "golden-defect" });
   writeSchema2AcceptancePackage(fx);
   const revision = driveToApproval(fx);

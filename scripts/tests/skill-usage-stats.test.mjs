@@ -30,6 +30,10 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+// 提速通道：被测脚本 mainFor 垫片（与 CLI 共用同一份主流程）+ 桩 CLI 进程内执行器；
+// CLI spawn 通道保留在防漂移对拍锚（进程内结果必须与真实 spawn 逐字段一致）
+import { mainFor } from "../skill-usage-stats.mjs";
+import { makeStubSpawn } from "./helpers/node-stub.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = join(ROOT, "scripts", "skill-usage-stats.mjs");
@@ -707,19 +711,21 @@ function setupEnv(t) {
     rmSync(home, { recursive: true, force: true });
     rmSync(binDir, { recursive: true, force: true });
   });
-  const runScript = (args, extraEnv = {}) =>
-    spawnSync(process.execPath, [SCRIPT, ...args], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: home,
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
-        FAKE_FIXTURE_PATH: fixturePath,
-        FAKE_CLI_LOG: logPath,
-        FAKE_CLI_MODE: "ok",
-        ...extraEnv,
-      },
-    });
+  const runScript = (args, extraEnv = {}) => {
+    const env = {
+      ...process.env,
+      HOME: home,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      FAKE_FIXTURE_PATH: fixturePath,
+      FAKE_CLI_LOG: logPath,
+      FAKE_CLI_MODE: "ok",
+      ...extraEnv,
+    };
+    // 进程内通道：mainFor 垫片 + 桩 CLI 进程内执行（spawnSync 形态注入）——与
+    // spawn node SCRIPT 语义等价，一致性由防漂移对拍锚锚定
+    const r = mainFor(args, { env, home, spawn: makeStubSpawn({ "agent-session-reader": FAKE_CLI }, { env }) });
+    return { status: r.code, stdout: r.stdout, stderr: r.stderr };
+  };
   return { home, binDir, obsRoot, logPath, runScript };
 }
 
@@ -1179,13 +1185,11 @@ test("两后端零匹配且观测根为空 → exit 1 带恢复动作", (t) => {
     }),
   );
   try {
-    const res = spawnSync(process.execPath, [SCRIPT, "--format", "json"], {
-      encoding: "utf8",
-      env: { ...process.env, HOME: home, PATH: `${binDir}:${process.env.PATH ?? ""}`, FAKE_FIXTURE_PATH: fixturePath, FAKE_CLI_LOG: "", FAKE_CLI_MODE: "ok" },
-    });
-    assert.equal(res.status, 1);
-    assert.match(res.stderr, /没有任何数据/);
-    assert.match(res.stderr, /恢复动作/);
+    const env = { ...process.env, HOME: home, PATH: `${binDir}:${process.env.PATH ?? ""}`, FAKE_FIXTURE_PATH: fixturePath, FAKE_CLI_LOG: "", FAKE_CLI_MODE: "ok" };
+    const r = mainFor(["--format", "json"], { env, home, spawn: makeStubSpawn({ "agent-session-reader": FAKE_CLI }, { env }) });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /没有任何数据/);
+    assert.match(r.stderr, /恢复动作/);
   } finally {
     rmSync(home, { recursive: true, force: true });
     rmSync(binDir, { recursive: true, force: true });
@@ -1193,6 +1197,39 @@ test("两后端零匹配且观测根为空 → exit 1 带恢复动作", (t) => {
 });
 
 // ── 12. 技能版本分组（--group skillVersion）与 unknown 桶自洽 ──
+test("防漂移锚：mainFor 进程内结果 == CLI spawn 结果（空数据错误形态双跑对拍）", (t) => {
+  // 进程内提速通道的防漂移约束：同 fixture 两个独立 home 各跑一次，退出码、stdout、
+  // stderr 逐字段一致（含错误消息与恢复动作全文）
+  const home = mkdtempSync(join(tmpdir(), "sus-test-parity-"));
+  const binDir = mkdtempSync(join(tmpdir(), "sus-test-parity-bin-"));
+  makeFakeCli(binDir);
+  mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+  const fixturePath = join(home, "fixtures.json");
+  writeFileSync(
+    fixturePath,
+    JSON.stringify({
+      zcode: { count: "0 of 0 total", backend: "zcode", runs: [], totals: {}, skipped: {} },
+      pi: { count: "0 of 0 total", backend: "pi", runs: [], totals: {}, skipped: {} },
+    }),
+  );
+  t.after(() => {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  });
+  const spawnEnv = {
+    ...process.env,
+    HOME: home,
+    PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    FAKE_FIXTURE_PATH: fixturePath,
+    FAKE_CLI_LOG: "",
+    FAKE_CLI_MODE: "ok",
+  };
+  const inProc = mainFor(["--format", "json"], { env: spawnEnv, home, spawn: makeStubSpawn({ "agent-session-reader": FAKE_CLI }, { env: spawnEnv }) });
+  const cli = spawnSync(process.execPath, [SCRIPT, "--format", "json"], { encoding: "utf8", env: spawnEnv });
+  assert.equal(inProc.code, cli.status, `退出码不一致：进程内 ${inProc.code} vs CLI ${cli.status}`);
+  assert.equal(inProc.stdout, cli.stdout, "stdout 不一致");
+  assert.equal(inProc.stderr, cli.stderr, "stderr 不一致");
+});
 test("--group skillVersion：observed 读事件、estimated 读产物；老 JSONL 与产物缺失归 unknown 且与 dataQuality 自洽", (t) => {
   const { runScript } = setupEnv(t);
   const res = runScript(["--format", "json", "--group", "skillVersion"]);
@@ -1349,11 +1386,9 @@ test("seed-only run 不归 unknown 且继承量不双计；unknown run 的全零
     rmSync(home, { recursive: true, force: true });
     rmSync(binDir, { recursive: true, force: true });
   });
-  const res = spawnSync(process.execPath, [SCRIPT, "--format", "json"], {
-    encoding: "utf8",
-    env: { ...process.env, HOME: home, PATH: `${binDir}:${process.env.PATH ?? ""}`, FAKE_FIXTURE_PATH: fixturePath, FAKE_CLI_MODE: "ok" },
-  });
-  assert.equal(res.status, 0, res.stderr);
+  const env = { ...process.env, HOME: home, PATH: `${binDir}:${process.env.PATH ?? ""}`, FAKE_FIXTURE_PATH: fixturePath, FAKE_CLI_MODE: "ok" };
+  const res = mainFor(["--format", "json"], { env, home, spawn: makeStubSpawn({ "agent-session-reader": FAKE_CLI }, { env }) });
+  assert.equal(res.code, 0, res.stderr);
   const report = JSON.parse(res.stdout);
 
   // seed-only：已知零新生消耗（estimated 非 unknown），继承 500 不进任何合计

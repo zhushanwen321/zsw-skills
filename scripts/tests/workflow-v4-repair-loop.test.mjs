@@ -19,7 +19,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -36,20 +36,72 @@ const transpile = (code) =>
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText;
 
+// 产物 transpile 结果按文件路径缓存（同一产物在多个用例中重复执行，源码只读不变）
+const transpileCache = new Map();
+const transpileFile = (file) => {
+  let js = transpileCache.get(file);
+  if (js === undefined) {
+    js = transpile(readFileSync(file, "utf8"));
+    transpileCache.set(file, js);
+  }
+  return js;
+};
+
 const tmpHome = () => mkdtempSync(join(tmpdir(), "v4-repair-loop-"));
+
+// ── 提速通道：产物引擎的 node -e 探针与 node <桩CLI> 进程内等价执行（vm + mock process，
+// 与真实 spawn 子进程语义逐字段对齐，见 helper 头注）；sh -c 复合命令与 git 仍走真实
+// spawnSync（git 行为是被测语义的一部分）──
+import { runNodeScript } from "./helpers/node-stub.mjs";
+
+const fastWorldRun = (home, cmd, a, opts) => {
+  const args = a ?? [];
+  if (cmd === "node" || cmd === process.execPath) {
+    if (args[0] === "-e" && typeof args[1] === "string") {
+      const r = runNodeScript(args[1], args.slice(2), { env: { ...process.env, HOME: home }, cwd: home });
+      return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr };
+    }
+    const f = args[0];
+    // 桩 CLI（.mjs，CJS 语法）进程内执行；其余 .mjs 回退 spawn
+    if (typeof f === "string" && f.endsWith(".mjs") && existsSync(f)) {
+      const r = runNodeScript(readFileSync(f, "utf8"), args.slice(1), {
+        env: { ...process.env, HOME: home },
+        cwd: home,
+        scriptPath: f,
+      });
+      return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr };
+    }
+  }
+  const r = spawnSync(cmd, args, {
+    encoding: "utf8", cwd: home, env: { ...process.env, HOME: home },
+    timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000,
+  });
+  return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+};
 
 /** 修复循环脚手架：真实 git 项目 + 任务目录 + 预置事件（full 保证 + 历史探索 + blocker）
  *  + 桩 delivery-gate（evaluate 按 verdicts 队列出参；append 校验凭据与 actor 匹配后
  *  落盘并返回递增 eventId；revision 返回修复后 revision）+ 技能角色文件 */
+/** git 模板仓（init + config + a.txt commit 只做一次）：每用例复制副本替代逐用例
+ *  6 次 git spawn；withStagedNoise 变体在副本上追加暂存改动（语义与逐用例全新 init 等价） */
+let gitTemplate = null;
+function ensureGitTemplate() {
+  if (gitTemplate === null) {
+    const tpl = mkdtempSync(join(tmpdir(), "v4-repair-loop-tpl-"));
+    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: tpl });
+    spawnSync("git", ["config", "user.email", "t@t"], { cwd: tpl });
+    spawnSync("git", ["config", "user.name", "t"], { cwd: tpl });
+    writeFileSync(join(tpl, "a.txt"), "one\n");
+    spawnSync("git", ["add", "."], { cwd: tpl });
+    spawnSync("git", ["commit", "-qm", "init"], { cwd: tpl });
+    gitTemplate = tpl;
+  }
+  return gitTemplate;
+}
+
 function makeScaffold(home, { withFull = true, withForeignVersionFull = false, withStagedNoise = false, withUnresolvableEvidenceFull = false, withBrokenLatestExploration = false } = {}) {
   const projectRoot = join(home, "proj");
-  mkdirSync(projectRoot, { recursive: true });
-  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectRoot });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectRoot });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectRoot });
-  writeFileSync(join(projectRoot, "a.txt"), "one\n");
-  spawnSync("git", ["add", "."], { cwd: projectRoot });
-  spawnSync("git", ["commit", "-qm", "init"], { cwd: projectRoot });
+  cpSync(ensureGitTemplate(), projectRoot, { recursive: true });
   if (withStagedNoise) {
     // 预置一笔与修复无关的暂存改动：修复提交必须排除它（commit --only 鉴别锚点）
     writeFileSync(join(projectRoot, "unrelated.txt"), "noise\n");
@@ -129,9 +181,11 @@ function makeScaffold(home, { withFull = true, withForeignVersionFull = false, w
     },
     { state: "candidate", revision: "rev-after-fix", acceptanceVersion: 1, missing: { incrementIds: [] }, openFindings: [] },
   ];
+  // 桩 CLI 用 CJS 语法：测试提速通道以 vm 进程内执行 node 桩调用（vm.Script 不认 ESM
+  // import 语句）；被测产物只消费退出码与 stdout，语法形态不影响语义
   writeFileSync(join(scripts, "delivery-gate.mjs"), [
-    "import fs from 'node:fs';",
-    "import path from 'node:path';",
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
     "const cmd = process.argv[2];",
     "const argv = process.argv.slice(3);",
     "const opt = (n) => { const i = argv.indexOf('--' + n); return i >= 0 ? argv[i + 1] : undefined; };",
@@ -203,17 +257,10 @@ function repairAgentStub(s) {
 }
 
 async function runZcode(home, argsValue, agentImpl) {
-  const raw = readFileSync(join(WF, "assurance-repair-loop-v4.dwf.ts"), "utf8");
-  const js = transpile(raw);
+  const js = transpileFile(join(WF, "assurance-repair-loop-v4.dwf.ts"));
   const logs = [];
   const world = {
-    run: async (cmd, a, opts) => {
-      const r = spawnSync(cmd, a ?? [], {
-        encoding: "utf8", cwd: home, env: { ...process.env, HOME: home },
-        timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000,
-      });
-      return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
-    },
+    run: async (cmd, a, opts) => fastWorldRun(home, cmd, a, opts),
   };
   const fn = new vm.Script(`(async function __main__(args, world, log, phase, report, artifact, agent) {\n${js}\n})`).runInNewContext({});
   const result = await fn(
@@ -228,16 +275,24 @@ async function runPi(home, argsValue, agentImpl) {
   const raw = readFileSync(join(WF, "pi", "assurance-repair-loop-v4.js"), "utf8");
   const logs = [];
   const world = {
-    run: async (cmd, a, opts) => {
-      const r = spawnSync(cmd, a ?? [], {
-        encoding: "utf8", cwd: home, env: { ...process.env, HOME: home },
-        timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000,
-      });
-      return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
-    },
+    run: async (cmd, a, opts) => fastWorldRun(home, cmd, a, opts),
   };
   const context = {
-    require,
+    // pi 壳 shim 经 require("node:child_process") 自建 world（spawnSync 形态）——注入层
+    // 拦截换快速通道（node -e 探针 / node <桩CLI> 进程内执行；git / sh -c 真实 spawn），
+    // 其余模块原样放行
+    require: (id) => {
+      if (id === "node:child_process" || id === "child_process") {
+        const mod = require(id);
+        const wrapped = Object.create(mod);
+        wrapped.spawnSync = (cmd, args, opts) => {
+          const r = fastWorldRun(home, cmd, args, opts);
+          return { status: r.exitCode === -1 ? null : r.exitCode, stdout: r.stdout, stderr: r.stderr };
+        };
+        return wrapped;
+      }
+      return require(id);
+    },
     console: { log: (...m) => logs.push(m.map(String).join(" ")), error: () => {}, warn: () => {} },
     process: { ...process, env: { ...process.env, HOME: home }, cwd: () => home },
     $ARGS: { ...argsValue },

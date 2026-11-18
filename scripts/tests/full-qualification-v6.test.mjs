@@ -19,10 +19,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V6 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6");
@@ -32,11 +32,15 @@ const KERNEL = await import(join(V6, "scripts", "lib", "kernel-judgments.mjs"));
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const parseStdout = (result) => result.stdout.slice(result.stdout.indexOf("{"));
-function runCore(args, home) {
-  return spawnSync(process.execPath, [CORE, ...args], { encoding: "utf8", env: { ...process.env, ...(home ? { HOME: home } : {}) }, timeout: 60_000 });
+async function runCore(args) {
+  return CORE_MODULE.runCoreCommandInProcess(args);
 }
+// 进程内调用（模块只加载一次，逐用例毫秒级）：垫片与 CLI 走同一分发，返回 { status, stdout, stderr } 与 spawnSync 同口径
+const GATE_MODULE = await import(pathToFileURL(GATE).href);
+const CORE_MODULE = await import(pathToFileURL(CORE).href);
+
 function runGate(args, home) {
-  return spawnSync(process.execPath, [GATE, ...args], { encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 60_000 });
+  return GATE_MODULE.runGateCommand(args, home);
 }
 function ok(result, label = "命令应成功") {
   assert.equal(result.status, 0, `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -50,8 +54,8 @@ function makeFixture(t, { taskId = "full-qual" } = {}) {
   mkdirSync(projectDir);
   mkdirSync(home);
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectDir });
+  // repo 级身份经追加 .git/config 写入（1 次文件写入替代 2 次 git spawn；后续 commit 依赖 repo config）
+  appendFileSync(join(projectDir, ".git", "config"), "[user]\n\temail = t@t\n\tname = t\n");
   writeFileSync(join(projectDir, "a.txt"), "one\n");
   spawnSync("git", ["add", "."], { cwd: projectDir });
   spawnSync("git", ["commit", "-qm", "init"], { cwd: projectDir });
@@ -98,8 +102,8 @@ function writeSchema2Package(fx) {
 function gate(fx, ...args) {
   return runGate(args, fx.home);
 }
-function core(fx, ...args) {
-  return runCore(args, fx.home);
+async function core(fx, ...args) {
+  return runCore(args);
 }
 function evidence(fx, name) {
   const path = join(fx.taskDir, "evidence", name);
@@ -173,7 +177,7 @@ function appendRecheck(fx, { explorationId, evidenceEvent }) {
 
 // ── 纯函数层（不经 CLI，直接对拍库导出）──
 
-test("priorFullQualification 纯函数：beforeSeq 只判早于参照 seq 的 full", () => {
+test("priorFullQualification 纯函数：beforeSeq 只判早于参照 seq 的 full", async () => {
   const full = (seq) => ({
     type: "AssuranceCompleted", mode: "full", eventId: `A-${seq}`, seq,
     incrementReceipts: [{ incrementId: "I1" }], evidenceEventIds: ["E-1"], explorationEventId: "X-1",
@@ -193,7 +197,7 @@ test("priorFullQualification 纯函数：beforeSeq 只判早于参照 seq 的 fu
   assert.deepEqual(none.inspections, [], "无候选 full 时 inspections 为空");
 });
 
-test("priorFullQualification 纯函数：逐条不合格原因（回执缺口 / 证据不可解析 / 探索引用缺失）", () => {
+test("priorFullQualification 纯函数：逐条不合格原因（回执缺口 / 证据不可解析 / 探索引用缺失）", async () => {
   const bad = {
     assurances: [{
       type: "AssuranceCompleted", mode: "full", eventId: "A-bad", seq: 3,
@@ -213,10 +217,10 @@ test("priorFullQualification 纯函数：逐条不合格原因（回执缺口 / 
 
 // ── CLI 层（真实任务夹具端到端）──
 
-test("full-qualification：合格 prior full → qualified=true", (t) => {
+test("full-qualification：合格 prior full → qualified=true", async (t) => {
   const fx = driveToImplementing(t);
   const { assuranceEvent } = driveFullAssurance(fx);
-  const result = JSON.parse(parseStdout(core(fx, "full-qualification", "--task-dir", fx.taskDir)));
+  const result = JSON.parse(parseStdout(await core(fx, "full-qualification", "--task-dir", fx.taskDir)));
   assert.equal(result.taskDir, fx.taskDir);
   assert.equal(result.acceptanceVersion, 1);
   assert.equal(result.qualified, true, "回执覆盖全部增量 + 证据可解析 + 探索引用存在 → 合格");
@@ -225,13 +229,13 @@ test("full-qualification：合格 prior full → qualified=true", (t) => {
   assert.deepEqual(result.inspections[0].reasons, []);
 });
 
-test("full-qualification：证据工件被篡改 → qualified=false 且原因指向该证据事件", (t) => {
+test("full-qualification：证据工件被篡改 → qualified=false 且原因指向该证据事件", async (t) => {
   const fx = driveToImplementing(t);
   const { evidenceEvent } = driveFullAssurance(fx);
   // 篡改 full 引用的证据工件内容（磁盘哈希 ≠ 事件绑定哈希）——gate 同款折算把失效证据
   // 滤出证据集合，引用它的 full 随之不可解析（旧 workflow 本地副本只查存在性，此处放行）
   writeFileSync(join(fx.taskDir, "evidence", "ev-1.md"), "# 被篡改的内容\n");
-  const result = JSON.parse(parseStdout(core(fx, "full-qualification", "--task-dir", fx.taskDir)));
+  const result = JSON.parse(parseStdout(await core(fx, "full-qualification", "--task-dir", fx.taskDir)));
   assert.equal(result.qualified, false, "引用失效证据的 full 不能给 recheck 背书");
   assert.deepEqual(result.qualifiedEventIds, []);
   assert.equal(result.inspections.length, 1, "full 保证事件自身工件完好，仍入 inspections");
@@ -241,15 +245,15 @@ test("full-qualification：证据工件被篡改 → qualified=false 且原因�
   );
 });
 
-test("full-qualification：无任何 full 保证 → qualified=false", (t) => {
+test("full-qualification：无任何 full 保证 → qualified=false", async (t) => {
   const fx = driveToImplementing(t);
-  const result = JSON.parse(parseStdout(core(fx, "full-qualification", "--task-dir", fx.taskDir)));
+  const result = JSON.parse(parseStdout(await core(fx, "full-qualification", "--task-dir", fx.taskDir)));
   assert.equal(result.qualified, false);
   assert.deepEqual(result.qualifiedEventIds, []);
   assert.deepEqual(result.inspections, []);
 });
 
-test("full-qualification：与 gate evaluate 同口径——无合格 full 的 recheck 触发 assuranceFullFirst", (t) => {
+test("full-qualification：与 gate evaluate 同口径——无合格 full 的 recheck 触发 assuranceFullFirst", async (t) => {
   const fx = driveToImplementing(t);
   // 场景 A：只登记探索 + 证据，直接以 recheck 收尾（无先前 full）
   const explorationArtifact = evidence(fx, "exploration-1.md");
@@ -269,16 +273,16 @@ test("full-qualification：与 gate evaluate 同口径——无合格 full 的 r
   appendRecheck(fx, { explorationId, evidenceEvent: JSON.parse(parseStdout(evidenceAppend)) });
   const verdict = JSON.parse(parseStdout(gate(fx, "evaluate", "--task-dir", fx.taskDir)));
   assert.ok(verdict.missing.assuranceFullFirst, "基础校验通过的 recheck 在无先前 full 时触发 full-first 判定");
-  const qual = JSON.parse(parseStdout(core(fx, "full-qualification", "--task-dir", fx.taskDir)));
+  const qual = JSON.parse(parseStdout(await core(fx, "full-qualification", "--task-dir", fx.taskDir)));
   assert.equal(qual.qualified, false, "core 子命令同口径判不合格");
 });
 
-test("full-qualification：有合格 prior full 的 recheck 两侧均通过", (t) => {
+test("full-qualification：有合格 prior full 的 recheck 两侧均通过", async (t) => {
   const fx = driveToImplementing(t);
   const { explorationId, evidenceEvent } = driveFullAssurance(fx);
   appendRecheck(fx, { explorationId, evidenceEvent });
   const verdict = JSON.parse(parseStdout(gate(fx, "evaluate", "--task-dir", fx.taskDir)));
   assert.equal(verdict.missing.assuranceFullFirst ?? null, null, "合格 prior full 使 recheck 不触发 full-first 判定");
-  const qual = JSON.parse(parseStdout(core(fx, "full-qualification", "--task-dir", fx.taskDir)));
+  const qual = JSON.parse(parseStdout(await core(fx, "full-qualification", "--task-dir", fx.taskDir)));
   assert.equal(qual.qualified, true, "core 子命令同口径判合格");
 });

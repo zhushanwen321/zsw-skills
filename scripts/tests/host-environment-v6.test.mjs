@@ -18,10 +18,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V6 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6");
@@ -31,8 +31,12 @@ const EVIDENCE_KINDS = JSON.parse(readFileSync(join(V6, "policies", "evidence-ki
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const parseStdout = (result) => result.stdout.slice(result.stdout.indexOf("{"));
+// 进程内调用（模块只加载一次，逐用例毫秒级）：垫片与 CLI 走同一分发，返回 { status, stdout, stderr } 与 spawnSync 同口径
+const GATE_MODULE = await import(pathToFileURL(GATE).href);
+const CORE_MODULE = await import(pathToFileURL(CORE).href);
+
 function runGate(args, home) {
-  return spawnSync(process.execPath, [GATE, ...args], { encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 60_000 });
+  return GATE_MODULE.runGateCommand(args, home);
 }
 function ok(result, label = "命令应成功") {
   assert.equal(result.status, 0, `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -46,8 +50,8 @@ function makeFixture(t, { taskId = "host-env" } = {}) {
   mkdirSync(projectDir);
   mkdirSync(home);
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectDir });
+  // repo 级身份经追加 .git/config 写入（1 次文件写入替代 2 次 git spawn；后续 commit 依赖 repo config）
+  appendFileSync(join(projectDir, ".git", "config"), "[user]\n\temail = t@t\n\tname = t\n");
   writeFileSync(join(projectDir, "a.txt"), "one\n");
   spawnSync("git", ["add", "."], { cwd: projectDir });
   spawnSync("git", ["commit", "-qm", "init"], { cwd: projectDir });
@@ -160,7 +164,7 @@ function evaluate(fx) {
 
 // ── 1. 断言字段校验 ──
 
-test("requiredEnvironment 校验：kind 限 official-runner|real-host，fake-host 不得作为要求，未知键拒绝", (t) => {
+test("requiredEnvironment 校验：kind 限 official-runner|real-host，fake-host 不得作为要求，未知键拒绝", async (t) => {
   const fx = makeFixture(t);
   const base = (requiredEnvironment) => ({
     schemaVersion: 2, acceptanceVersion: 1, taskId: basename(fx.taskDir), projectRoot: realpathSync(fx.projectDir),
@@ -197,7 +201,7 @@ test("requiredEnvironment 校验：kind 限 official-runner|real-host，fake-hos
 
 // ── 2. 环境满足 → verified 保持 ──
 
-test("证据环境元数据满足要求：verified 保持，任务可 accepted；real-host 证据满足 official-runner 要求", (t) => {
+test("证据环境元数据满足要求：verified 保持，任务可 accepted；real-host 证据满足 official-runner 要求", async (t) => {
   // official-runner 要求 + real-host 证据（真实环境是官方运行器的超集，§6.2 分层规则）；
   // capability 要求须由证据声明覆盖（gate 终判：未声明即不满足）
   const { fx, revisionB } = driveToCandidate(t, { required: { kind: "official-runner", capability: "slash-command-dispatch" } });
@@ -214,7 +218,7 @@ test("证据环境元数据满足要求：verified 保持，任务可 accepted�
 
 // ── 3. 无环境元数据 → verified 降级 partial ──
 
-test("证据无环境元数据（markdown artifact）：verified 降级 partial，environmentGap 披露，不得 accepted", (t) => {
+test("证据无环境元数据（markdown artifact）：verified 降级 partial，environmentGap 披露，不得 accepted", async (t) => {
   const { fx, revisionB } = driveToCandidate(t, { required: { kind: "real-host" } });
   driveEvidenceAndAssurance(fx, revisionB, {
     commandArtifact: evidenceFile(fx, "ev-command.md", "# 纯文字证据（无环境元数据）\n"),
@@ -233,7 +237,7 @@ test("证据无环境元数据（markdown artifact）：verified 降级 partial�
 
 // ── 4. 模拟环境不能独立证明宿主类断言 ──
 
-test("fake-host 证据不能独立证明宿主类断言：official-runner 与 real-host 要求均降级", (t) => {
+test("fake-host 证据不能独立证明宿主类断言：official-runner 与 real-host 要求均降级", async (t) => {
   for (const requiredKind of ["official-runner", "real-host"]) {
     const { fx, revisionB } = driveToCandidate(t, { required: { kind: requiredKind } });
     driveEvidenceAndAssurance(fx, revisionB, {
@@ -250,7 +254,7 @@ test("fake-host 证据不能独立证明宿主类断言：official-runner 与 re
 
 // ── 5. 词表与快照保护 ──
 
-test("环境词表落策略包 evidence-kinds.json（environmentKinds 三档，随快照冻结）", () => {
+test("环境词表落策略包 evidence-kinds.json（environmentKinds 三档，随快照冻结）", async () => {
   assert.deepEqual(EVIDENCE_KINDS.environmentKinds, ["fake-host", "official-runner", "real-host"]);
   // 词表经 snapshot-policy 进入任务快照——改词表 = 策略升级通道（既有机制），测试只锚定包内词表存在
 });
@@ -260,7 +264,7 @@ test("环境词表落策略包 evidence-kinds.json（environmentKinds 三档，�
 const CAP = "slash-command-dispatch";
 const capDoc = (kind, rest = {}) => `${JSON.stringify(environmentDocument({ kind, source: "host binary", ...rest }), null, 2)}\n`;
 
-test("capability 终判：kind 维度组合缺口不因 capability 匹配放行（official-runner 证据 vs real-host 要求）", (t) => {
+test("capability 终判：kind 维度组合缺口不因 capability 匹配放行（official-runner 证据 vs real-host 要求）", async (t) => {
   const { fx, revisionB } = driveToCandidate(t, { required: { kind: "real-host", capability: CAP } });
   driveEvidenceAndAssurance(fx, revisionB, {
     commandArtifact: evidenceFile(fx, "ev-command.json", capDoc("official-runner", { capability: CAP })),
@@ -273,7 +277,7 @@ test("capability 终判：kind 维度组合缺口不因 capability 匹配放行�
   assert.match(entry.environmentGap.reason, /不满足断言要求 real-host/);
 });
 
-test("capability 终判：real-host 证据 + capability 单值匹配 → accepted", (t) => {
+test("capability 终判：real-host 证据 + capability 单值匹配 → accepted", async (t) => {
   const { fx, revisionB } = driveToCandidate(t, { required: { kind: "real-host", capability: CAP } });
   driveEvidenceAndAssurance(fx, revisionB, {
     commandArtifact: evidenceFile(fx, "ev-command.json", capDoc("real-host", { capability: CAP })),
@@ -285,7 +289,7 @@ test("capability 终判：real-host 证据 + capability 单值匹配 → accepte
   assert.equal(entry.result, "verified");
 });
 
-test("capability 终判：声明缺要求值 → 降级 partial，不因 IA 侧放行洗白", (t) => {
+test("capability 终判：声明缺要求值 → 降级 partial，不因 IA 侧放行洗白", async (t) => {
   const { fx, revisionB } = driveToCandidate(t, { required: { kind: "real-host", capability: CAP } });
   driveEvidenceAndAssurance(fx, revisionB, {
     commandArtifact: evidenceFile(fx, "ev-command.json", capDoc("real-host", { capability: "other-capability" })),
@@ -298,7 +302,7 @@ test("capability 终判：声明缺要求值 → 降级 partial，不因 IA 侧�
   assert.match(entry.environmentGap.reason, /能力声明不含/);
 });
 
-test("capability 终判：未声明能力覆盖 → 保守不满足（gate 终判兜住 IA 登记侧放行缺口）", (t) => {
+test("capability 终判：未声明能力覆盖 → 保守不满足（gate 终判兜住 IA 登记侧放行缺口）", async (t) => {
   const { fx, revisionB } = driveToCandidate(t, { required: { kind: "real-host", capability: CAP } });
   driveEvidenceAndAssurance(fx, revisionB, {
     commandArtifact: evidenceFile(fx, "ev-command.json", capDoc("real-host")),
@@ -311,7 +315,7 @@ test("capability 终判：未声明能力覆盖 → 保守不满足（gate 终�
   assert.match(entry.environmentGap.reason, /未声明能力覆盖/);
 });
 
-test("capability 终判：capability 数组形态 includes 命中 → 通过", (t) => {
+test("capability 终判：capability 数组形态 includes 命中 → 通过", async (t) => {
   const { fx, revisionB } = driveToCandidate(t, { required: { kind: "real-host", capability: CAP } });
   driveEvidenceAndAssurance(fx, revisionB, {
     commandArtifact: evidenceFile(fx, "ev-command.json", capDoc("real-host", { capability: ["event-bridge", CAP] })),

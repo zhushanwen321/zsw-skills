@@ -33,7 +33,7 @@
 // 单源纪律：判定逻辑一律 import lib/kernel-judgments.mjs 或读 kernel/rules.json，
 // 本文件不另立判定副本。gate 内部函数经 delivery-gate.mjs 导入复用（同一份实现）。
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1127,89 +1127,149 @@ function commandObligations(args) {
   });
 }
 
-// ── main 分发 ──
-const command = process.argv[2];
-const commandArgs = process.argv.slice(3);
-try {
-  switch (command) {
-    case "validate": {
-      const errors = validateRules(KERNEL_RULES);
-      if (errors.length > 0) {
-        for (const error of errors) process.stderr.write(`delivery-core: ${error}\n`);
-        process.exitCode = 1;
-        process.stderr.write("恢复动作：修正 kernel/rules.json 后重跑 validate（转移表错误 = 流程顺序矛盾，提交前必须清零）。\n");
-      } else {
-        printJson({ valid: true, domains: Object.keys(KERNEL_RULES.domains), budgets: KERNEL_RULES.budgets });
-      }
-      break;
-    }
-    case "rules": {
-      printJson(KERNEL_RULES);
-      break;
-    }
-    case "next":
-      await commandNext(commandArgs);
-      break;
-    case "pending": {
-      const action = process.argv[3];
-      if (!["add", "resolve", "list"].includes(action ?? "")) {
-        usageFail(`用法：delivery-core pending <add|resolve|list> --task-dir D [--kind K --note N] / [--id PA-N [--outcome S]]。`);
-      }
-      commandPending([action, ...process.argv.slice(4)]);
-      break;
-    }
-    case "budget": {
-      const options = parseOptions(commandArgs, { required: ["task-dir"], optional: [] });
-      const world = loadWorldAuto(options["task-dir"]);
-      const records = recordsOf(world);
-      printJson({ taskDir: world.taskDir, repair: repairBudgetFromEvents(records), findingRegrades: findingRegrades(records) });
-      break;
-    }
-    case "open-findings":
-    case "repair-budget":
-      commandJudgment(command, commandArgs);
-      break;
-    case "usable-explorations":
-    case "exploration-due":
-      await commandExploration(command, commandArgs);
-      break;
-    case "full-qualification":
-      commandFullQualification(commandArgs);
-      break;
-    case "node-transition":
-      commandNodeTransition(commandArgs);
-      break;
-    case "node-project":
-      commandNodeProject(commandArgs);
-      break;
-    case "events":
-      commandEventsTimeline(commandArgs);
-      break;
-    case "replay":
-      commandReplay(commandArgs);
-      break;
-    case "loop-attempt":
-      commandLoopAttempt(commandArgs);
-      break;
-    case "loop-budget":
-      commandLoopBudget(commandArgs);
-      break;
-    case "revision-provenance":
-      commandRevisionProvenance(commandArgs);
-      break;
-    case "obligations":
-      commandObligations(commandArgs);
-      break;
-    default:
-      usageFail(
-        `未知命令 ${JSON.stringify(command ?? "")}。合法命令：validate / rules / next / pending / budget / open-findings / usable-explorations / exploration-due / repair-budget / full-qualification / node-transition / node-project / events / replay / loop-attempt / loop-budget / revision-provenance / obligations。`,
-      );
+// ── main 分发（包成 async 函数：CLI 直接执行与进程内测试垫片共用同一实现）──
+
+// usageFail 的 process.exit(2) 在进程内垫片中经临时替换的 process.exit 抛出此信号；
+// 定义在 runCoreCommand 之前使 catch 分支可引用
+class ExitSignal extends Error {
+  constructor(code) {
+    super(`exit ${code}`);
+    this.exitCode = code;
   }
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`delivery-core: ${message}\n`);
-  if (!/恢复动作/.test(message)) {
-    process.stderr.write("恢复动作：检查参数与任务目录状态后重试；若仍失败，保留此错误并排查 delivery-core.mjs。\n");
-  }
-  process.exitCode = 1;
 }
+
+async function runCoreCommand(args) {
+  const command = args[0];
+  const commandArgs = args.slice(1);
+  try {
+    switch (command) {
+      case "validate": {
+        const errors = validateRules(KERNEL_RULES);
+        if (errors.length > 0) {
+          for (const error of errors) process.stderr.write(`delivery-core: ${error}\n`);
+          process.exitCode = 1;
+          process.stderr.write("恢复动作：修正 kernel/rules.json 后重跑 validate（转移表错误 = 流程顺序矛盾，提交前必须清零）。\n");
+        } else {
+          printJson({ valid: true, domains: Object.keys(KERNEL_RULES.domains), budgets: KERNEL_RULES.budgets });
+        }
+        break;
+      }
+      case "rules": {
+        printJson(KERNEL_RULES);
+        break;
+      }
+      case "next":
+        await commandNext(commandArgs);
+        break;
+      case "pending": {
+        const action = args[1];
+        if (!["add", "resolve", "list"].includes(action ?? "")) {
+          usageFail(`用法：delivery-core pending <add|resolve|list> --task-dir D [--kind K --note N] / [--id PA-N [--outcome S]]。`);
+        }
+        commandPending([action, ...args.slice(2)]);
+        break;
+      }
+      case "budget": {
+        const options = parseOptions(commandArgs, { required: ["task-dir"], optional: [] });
+        const world = loadWorldAuto(options["task-dir"]);
+        const records = recordsOf(world);
+        printJson({ taskDir: world.taskDir, repair: repairBudgetFromEvents(records), findingRegrades: findingRegrades(records) });
+        break;
+      }
+      case "open-findings":
+      case "repair-budget":
+        commandJudgment(command, commandArgs);
+        break;
+      case "usable-explorations":
+      case "exploration-due":
+        await commandExploration(command, commandArgs);
+        break;
+      case "full-qualification":
+        commandFullQualification(commandArgs);
+        break;
+      case "node-transition":
+        commandNodeTransition(commandArgs);
+        break;
+      case "node-project":
+        commandNodeProject(commandArgs);
+        break;
+      case "events":
+        commandEventsTimeline(commandArgs);
+        break;
+      case "replay":
+        commandReplay(commandArgs);
+        break;
+      case "loop-attempt":
+        commandLoopAttempt(commandArgs);
+        break;
+      case "loop-budget":
+        commandLoopBudget(commandArgs);
+        break;
+      case "revision-provenance":
+        commandRevisionProvenance(commandArgs);
+        break;
+      case "obligations":
+        commandObligations(commandArgs);
+        break;
+      default:
+        usageFail(
+          `未知命令 ${JSON.stringify(command ?? "")}。合法命令：validate / rules / next / pending / budget / open-findings / usable-explorations / exploration-due / repair-budget / full-qualification / node-transition / node-project / events / replay / loop-attempt / loop-budget / revision-provenance / obligations。`,
+        );
+    }
+  } catch (error) {
+    if (error instanceof ExitSignal) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`delivery-core: ${message}\n`);
+    if (!/恢复动作/.test(message)) {
+      process.stderr.write("恢复动作：检查参数与任务目录状态后重试；若仍失败，保留此错误并排查 delivery-core.mjs。\n");
+    }
+    process.exitCode = 1;
+  }
+}
+
+// 直接执行才跑 main；被 import（测试进程内垫片）时不跑——realpath 比对同 delivery-gate 的直接执行检查
+const invokedPath = process.argv[1] !== undefined ? realpathSync(resolve(process.argv[1])) : null;
+if (invokedPath !== null && invokedPath === realpathSync(fileURLToPath(import.meta.url))) {
+  await runCoreCommand(process.argv.slice(2));
+}
+
+// ── 进程内调用垫片（测试提速）：走与 CLI 完全相同的 runCoreCommand 分发，返回与
+// spawnSync 同口径的结构化结果 { status, stdout, stderr }。usageFail 的 process.exit(2)
+// 硬退出经临时替换 process.exit 捕获为退出码（子进程语义 = 进程退出，垫片内 = 返回值）。
+// node --test 用例串行执行，临时替换全局口径安全；函数保证恢复现场 ──
+async function runCoreCommandInProcess(argv) {
+  const previousArgv = process.argv;
+  const previousExitCode = process.exitCode;
+  const previousStdoutWrite = process.stdout.write;
+  const previousStderrWrite = process.stderr.write;
+  const previousExit = process.exit;
+  const chunks = { stdout: [], stderr: [] };
+  process.argv = [previousArgv[0], previousArgv[1], ...argv];
+  process.exitCode = 0;
+  process.stdout.write = (chunk) => { chunks.stdout.push(chunk); return true; };
+  process.stderr.write = (chunk) => { chunks.stderr.push(chunk); return true; };
+  process.exit = (code) => {
+    throw new ExitSignal(code);
+  };
+  let exitSignal = null;
+  try {
+    await runCoreCommand(argv);
+  } catch (error) {
+    if (!(error instanceof ExitSignal)) throw error;
+    exitSignal = error;
+  } finally {
+    process.argv = previousArgv;
+    process.stdout.write = previousStdoutWrite;
+    process.stderr.write = previousStderrWrite;
+    process.exit = previousExit;
+  }
+  const result = {
+    status: exitSignal !== null ? exitSignal.exitCode : process.exitCode ?? 0,
+    stdout: chunks.stdout.join(""),
+    stderr: chunks.stderr.join(""),
+  };
+  process.exitCode = previousExitCode;
+  return result;
+}
+
+export { runCoreCommandInProcess };

@@ -45,6 +45,137 @@ const transpile = (code) =>
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText;
 
+// ── 提速机制（只作用于测试执行通道，不改被测产物与断言语义）──
+// 产物 transpile 结果按文件路径缓存：同一产物在几十个用例中重复执行，源码在测试进程
+// 生命周期内只读不变（测试不写产物文件），重复 transpile 纯属浪费（单次 6-64ms × 40+ 次）
+const transpileCache = new Map();
+const transpileFile = (file) => {
+  let js = transpileCache.get(file);
+  if (js === undefined) {
+    js = transpile(readFileSync(file, "utf8"));
+    transpileCache.set(file, js);
+  }
+  return js;
+};
+
+// 产物引擎的文件/时间戳/git 探针全部以 `node -e <script>`、桩 CLI 以 `node <file.mjs>`
+// 形态经 world.run 执行，单次 spawn 17-32ms、单次产物执行 14-51 个探针——把 node 形态
+// 改为进程内等价执行（vm 沙箱 + mock process），git 与其余命令仍走真实 spawnSync。被测
+// 产物只消费 {exitCode, stdout, stderr}，进程内执行与之逐字段等价（产物源码零改动）。
+class NodeExitSignal {}
+const NODE_EXIT = new NodeExitSignal();
+// 探针脚本常量在产物内高度复用，编译结果按源码串缓存
+const nodeScriptCache = new Map();
+
+/**
+ * 进程内等价执行一段 node -e / node <file> 脚本。
+ * @param {string} script 脚本源码
+ * @param {string[]} restArgs 附加参数（node 命令行里脚本之后的参数）
+ * @param {{cwd?: string, scriptPath?: string}} opts cwd = 探针工作目录（world.run 的 cwd）；
+ *   scriptPath 给出时为文件形态（argv[1] = 脚本路径），否则为 -e 形态（argv[1] = 首个参数）
+ */
+function runNodeInProcess(script, restArgs, { cwd = process.cwd(), scriptPath } = {}) {
+  const argv = [process.execPath, ...(scriptPath !== undefined ? [scriptPath] : []), ...restArgs];
+  let stdout = "";
+  let stderr = "";
+  let exitCode = 0;
+  // env 与 os.homedir 对齐真实 spawn 语义：子进程 env 注入 HOME=home（world.run 的 env），
+  // os.homedir() 在 POSIX 上读 $HOME——进程内版本两者都要指向测试 home，否则产物经
+  // NODE_PROBE_HOME 探测到的 skill 安装位会指向真实用户目录（fixture 全部落测试 home）
+  const env = { ...process.env, HOME: cwd };
+  const ctx = {
+    require: (id) => {
+      if (id === "os" || id === "node:os") {
+        const mod = require(id);
+        const wrapped = Object.create(mod);
+        wrapped.homedir = () => cwd;
+        return wrapped;
+      }
+      return require(id);
+    },
+    console: {
+      log: (...m) => { stdout += m.map(String).join(" ") + "\n"; },
+      error: (...m) => { stderr += m.map(String).join(" ") + "\n"; },
+    },
+    process: {
+      argv,
+      env,
+      platform: process.platform,
+      cwd: () => cwd,
+      stdout: { write: (s) => { stdout += String(s); return true; } },
+      stderr: { write: (s) => { stderr += String(s); return true; } },
+      exit: (c) => {
+        exitCode = typeof c === "number" ? c : 0;
+        throw NODE_EXIT;
+      },
+    },
+    module: { exports: {} },
+    exports: {},
+    __filename: scriptPath ?? "",
+    __dirname: scriptPath !== undefined ? dirname(scriptPath) : cwd,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    Buffer,
+  };
+  ctx.globalThis = ctx;
+  let fn = nodeScriptCache.get(script);
+  if (fn === undefined) {
+    // node -e 允许顶层 return——包一层函数使其在 vm 中同样合法（语义 = 从模块 wrapper 返回）
+    fn = new vm.Script(`(function(){\n${script}\n})`);
+    nodeScriptCache.set(script, fn);
+  }
+  try {
+    fn.runInNewContext(ctx)();
+  } catch (e) {
+    if (e instanceof NodeExitSignal) {
+      // process.exit 模拟：退出码已在 ctx.process.exit 记录
+    } else {
+      // 未捕获异常对齐真实 node 语义：退出码 1、堆栈进 stderr（探针脚本对缺路径的
+      // realpathSync 等会这样失败；产物按 exitCode 判失败，不逃逸异常进测试进程）
+      stderr += String(e && e.stack ? e.stack : e) + "\n";
+      exitCode = 1;
+    }
+  }
+  return { exitCode, stdout, stderr };
+}
+
+/**
+ * spawnSync 形态的快速通道（zcode world.run 与 pi 壳 require 注入共用）：
+ * node 探针形态进程内执行，其余（git 等）真实 spawnSync。返回 {status, stdout, stderr}。
+ */
+function fastSpawnSync(cmd, args, opts, cwd = process.cwd()) {
+  const a = args ?? [];
+  if (cmd === "node" || cmd === process.execPath) {
+    if (a[0] === "-e" && typeof a[1] === "string") {
+      const r = runNodeInProcess(a[1], a.slice(2), { cwd });
+      return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+    }
+    // 文件形态（测试自写桩 CLI，CJS 语法）：读源码进程内执行；非 .mjs 或文件缺失回退 spawn
+    const f = a[0];
+    if (typeof f === "string" && f.endsWith(".mjs") && existsSync(f)) {
+      const r = runNodeInProcess(readFileSync(f, "utf8"), a.slice(1), { cwd, scriptPath: f });
+      return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+    }
+  }
+  const r = spawnSync(cmd, a, {
+    encoding: "utf8",
+    cwd,
+    env: { ...process.env, HOME: cwd },
+    timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000,
+  });
+  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", error: r.error };
+}
+
+/** zcode 执行器的 world.run 快速版（返回形态与原实现逐字段一致） */
+const makeFastWorld = (home) => ({
+  run: async (cmd, a, opts) => {
+    const r = fastSpawnSync(cmd, a, opts, home);
+    return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  },
+});
+
 const tmpHome = () => mkdtempSync(join(tmpdir(), "wf-obs-test-"));
 
 /** 构造 tech-review-loop 走到「必读文件探针失败」（setup-failure）或更远所需的最小环境 */
@@ -84,23 +215,13 @@ const obsArgs = (taskId, executionId, extra = {}) => ({
   ...(extra.sampleType !== undefined ? { sampleType: extra.sampleType } : {}),
 });
 
-/** zcode 产物执行器：transpile + vm，facade 全部由参数注入；world.run 真实 spawn（HOME 指向 home）。
+/** zcode 产物执行器：transpile（缓存）+ vm，facade 全部由参数注入；world.run 走快速通道
+ *  （node 探针进程内执行，git 等真实 spawn，HOME 指向 home）。
  *  dir 默认归档 v1 目录（与默认 name=tech-review-loop 配套）；测现行 workflow 时显式传 WF */
 async function runZcodeArtifact(home, argsValue, agentImpl, name = "tech-review-loop", dir = WF_V1) {
-  const raw = readFileSync(join(dir, `${name}.dwf.ts`), "utf8");
-  const js = transpile(raw);
+  const js = transpileFile(join(dir, `${name}.dwf.ts`));
   const logs = [];
-  const world = {
-    run: async (cmd, a, opts) => {
-      const r = spawnSync(cmd, a ?? [], {
-        encoding: "utf8",
-        cwd: home,
-        env: { ...process.env, HOME: home },
-        timeout: opts && opts.timeoutMs ? opts.timeoutMs : 30000,
-      });
-      return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
-    },
-  };
+  const world = makeFastWorld(home);
   const agent = agentImpl ?? (() => { throw new Error("测试场景不应派发 agent"); });
   const fn = new vm.Script(`(async function __main__(args, world, log, phase, report, artifact, agent) {\n${js}\n})`)
     .runInNewContext({});
@@ -116,12 +237,22 @@ async function runZcodeArtifact(home, argsValue, agentImpl, name = "tech-review-
   return { result, logs };
 }
 
-/** pi 产物执行器：vm + require/$ARGS/$WORKSPACE 注入（pi 宿主注入形态）；dir 语义同 zcode 执行器 */
+/** pi 产物执行器：vm + require/$ARGS/$WORKSPACE 注入（pi 宿主注入形态）；dir 语义同 zcode 执行器。
+ *  require 注入层拦截 child_process：pi 壳自带的 spawnSync world.run 换成快速通道（node 探针
+ *  进程内执行、git 等真实 spawn），其余模块与函数原样放行 */
 async function runPiArtifact(home, argsValue, agentImpl, name = "tech-review-loop", dir = WF_V1) {
   const raw = readFileSync(join(dir, "pi", `${name}.js`), "utf8");
   const logs = [];
   const context = {
-    require,
+    require: (id) => {
+      if (id === "node:child_process" || id === "child_process") {
+        const mod = require(id);
+        const wrapped = Object.create(mod);
+        wrapped.spawnSync = (cmd, args, opts) => fastSpawnSync(cmd, args, opts, home);
+        return wrapped;
+      }
+      return require(id);
+    },
     console,
     process: { env: { ...process.env, HOME: home }, cwd: () => home, stdout: process.stdout, stderr: process.stderr },
     $ARGS: { ...argsValue },
@@ -400,23 +531,27 @@ test("并发两次执行（不同 executionId）：各自 JSONL 完整互不串�
 
 // ── 5. 观测层单元行为（单一构建输入 observability.shared.ts + 壳钩子拼接执行）──
 
-test("withStage/obsBegin/obsCloseExecution：正常 end、fn 抛异常补 script-error、阶段重叠披露 abandoned、终态统一补记", { skip: V1_SKIP }, async () => {
-  const home = tmpHome();
-  try {
-    // 直接消费单一构建输入全文（与产物同一份文本，非测试内复制）
+// 观测层单元执行输入：壳 O 区钩子 + observability.shared.ts 拼接（与产物同一份文本，
+// 非测试内复制）——两用例共用同一拼接结果，缓存避免重复 transpile
+let obsLayerCodeCache = null;
+const obsLayerCode = () => {
+  if (obsLayerCodeCache === null) {
     const layerSrc = readFileSync(join(WF, "src/observability.shared.ts"), "utf8");
     const shellSrc = readFileSync(join(WF_V1, "src/tech-review-loop.zcode.tpl.ts"), "utf8");
     const hookStart = shellSrc.indexOf("// ── O 区观测平台钩子");
     const hookEnd = shellSrc.indexOf("@@STITCH@@");
     assert.ok(hookStart > 0 && hookEnd > hookStart, "壳 O 区锚点定位失败");
-    const code = transpile(`${shellSrc.slice(hookStart, hookEnd)}\n${layerSrc}`);
+    obsLayerCodeCache = transpile(`${shellSrc.slice(hookStart, hookEnd)}\n${layerSrc}`);
+  }
+  return obsLayerCodeCache;
+};
+
+test("withStage/obsBegin/obsCloseExecution：正常 end、fn 抛异常补 script-error、阶段重叠披露 abandoned、终态统一补记", { skip: V1_SKIP }, async () => {
+  const home = tmpHome();
+  try {
+    const code = obsLayerCode();
     const logs = [];
-    const world = {
-      run: async (cmd, a) => {
-        const r = spawnSync(cmd, a ?? [], { encoding: "utf8", env: { ...process.env, HOME: home } });
-        return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
-      },
-    };
+    const world = makeFastWorld(home);
     const ctx = { args: { taskId: "t-ws", executionId: "e-ws" } };
     const fn = new vm.Script(
       `(async function __main__(args, world, log) {\n${code}\n
@@ -470,18 +605,9 @@ test("withStage/obsBegin/obsCloseExecution：正常 end、fn 抛异常补 script
 test("obsEnd 配对检查：错名/round 错位给实际打开阶段补 abandoned、重复 end 不伪造事件", { skip: V1_SKIP }, async () => {
   const home = tmpHome();
   try {
-    const layerSrc = readFileSync(join(WF, "src/observability.shared.ts"), "utf8");
-    const shellSrc = readFileSync(join(WF_V1, "src/tech-review-loop.zcode.tpl.ts"), "utf8");
-    const hookStart = shellSrc.indexOf("// ── O 区观测平台钩子");
-    const hookEnd = shellSrc.indexOf("@@STITCH@@");
-    const code = transpile(`${shellSrc.slice(hookStart, hookEnd)}\n${layerSrc}`);
+    const code = obsLayerCode();
     const logs = [];
-    const world = {
-      run: async (cmd, a) => {
-        const r = spawnSync(cmd, a ?? [], { encoding: "utf8", env: { ...process.env, HOME: home } });
-        return { exitCode: r.status === null ? -1 : r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
-      },
-    };
+    const world = makeFastWorld(home);
     const ctx = { args: { taskId: "t-pair", executionId: "e-pair" } };
     const fn = new vm.Script(
       `(async function __main__(args, world, log) {\n${code}\n
@@ -526,7 +652,18 @@ test("obsEnd 配对检查：错名/round 错位给实际打开阶段补 abandone
 
 // ── 6. workflow-observe.mjs ──
 
-const runObserve = (home, args) =>
+// 进程内通道：observeMain 垫片（scripts/workflow-observe.mjs 导出）与 CLI 共用同一份参数
+// 解析与落盘逻辑；返回 {code, stdout, stderr}，消费字段与 spawnSync 对齐（status→code）
+import { main as observeMain } from "../workflow-observe.mjs";
+
+const runObserve = (home, args) => {
+  const r = observeMain(args, { home });
+  // status 别名对齐 spawnSync 消费字段——既有断言（r.status / r.stdout / r.stderr）逐条保留不改
+  return { ...r, status: r.code };
+};
+
+// CLI spawn 通道：仅防漂移对拍锚使用（进程内结果必须与真实 CLI spawn 逐字段一致）
+const runObserveSpawn = (home, args) =>
   spawnSync(process.execPath, [join(ROOT, "scripts/workflow-observe.mjs"), ...args], {
     encoding: "utf8",
     env: { ...process.env, HOME: home },
@@ -630,6 +767,32 @@ test("workflow-observe.mjs：裸 --help / -h 打印用法 exit 0（先于子命�
     assert.ok(!existsSync(join(home, ".agents/skill-data/workflow-observability")));
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("防漂移锚：observeMain 进程内结果 == CLI spawn 结果（成功路径双跑对拍）", () => {
+  // 进程内提速通道的防漂移约束：同参数在两个独立 home 各跑一次（observeMain 进程内 vs
+  // 真实 CLI spawn），退出码、stdout（去掉各自 home 前缀）与落盘 JSONL 事件（除 timestamp
+  // ——两次执行时刻必然不同）必须逐字段一致
+  const args = [
+    "start", "--task-id", "t-parity", "--execution-id", "e-parity", "--skill", "dev-flow-v1",
+    "--stage", "D0", "--step", "compile", "--sample-type", "selftest", "--skill-version", "0.1.0",
+  ];
+  const inHome = tmpHome();
+  const cliHome = tmpHome();
+  try {
+    const inProc = runObserve(inHome, args);
+    const cli = runObserveSpawn(cliHome, args);
+    assert.equal(inProc.status, cli.status, `退出码不一致：进程内 ${inProc.status} vs CLI ${cli.status}（stderr=${inProc.stderr}/${cli.stderr}）`);
+    const stripHome = (s, home) => s.split(home).join("<home>");
+    assert.equal(stripHome(inProc.stdout, inHome), stripHome(cli.stdout, cliHome), "stdout 不一致");
+    assert.equal(inProc.stderr, cli.stderr, "stderr 不一致");
+    const inLines = readJsonl(inHome, "t-parity", "e-parity").map(({ timestamp, ...rest }) => rest);
+    const cliLines = readJsonl(cliHome, "t-parity", "e-parity").map(({ timestamp, ...rest }) => rest);
+    assert.deepEqual(inLines, cliLines, "落盘 JSONL 事件（除 timestamp）应逐字段一致");
+  } finally {
+    rmSync(inHome, { recursive: true, force: true });
+    rmSync(cliHome, { recursive: true, force: true });
   }
 });
 
@@ -1540,9 +1703,11 @@ function makeDeliveryScaffold(home, { withSkill = true, verdicts = [], events = 
       writeFileSync(join(roles, `${r}.md`), `# ${r} 桩角色\n`);
     }
     writeFileSync(join(scripts, "gate-verdicts.json"), JSON.stringify(verdicts.length > 0 ? verdicts : [DELIVERY_BASE_VERDICT]));
+    // 桩 CLI 用 CJS 语法（require 形态）：测试提速通道以 vm 进程内执行 node 桩调用，
+    // vm.Script 不认 ESM import 语句；被测产物只消费退出码与 stdout，语法形态不影响语义
     writeFileSync(join(scripts, "delivery-gate.mjs"), [
-      "import fs from 'node:fs';",
-      "import path from 'node:path';",
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
       "const cmd = process.argv[2];",
       "const argv = process.argv.slice(3);",
       "const opt = (n) => { const i = argv.indexOf('--' + n); return i >= 0 ? argv[i + 1] : undefined; };",

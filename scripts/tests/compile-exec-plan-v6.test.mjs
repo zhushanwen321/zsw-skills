@@ -20,7 +20,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +30,24 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const COMPILER = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v6", "scripts", "compile-exec-plan.mjs");
 const CHECKER = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v6", "scripts", "check-exec-plan.mjs");
 const RENDERER = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v6", "scripts", "render-impl-plan.mjs");
+const GEN_WRAPPER = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v6", "scripts", "gen-acceptance-wrapper.mjs");
+const VERIFY_INDEX = join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v6", "scripts", "verification-index.mjs");
+
+// ── 提速通道（编译器与 fixture 渲染器进程内转译执行，与 CLI spawn 语义一致）──
+// COMPILER 内部还会 spawn 校验器 / wrapper 生成器 / 索引构建器（node <file>.mjs）与
+// node -e 寻址探针——子脚本白名单内进程内执行，git 等真实 spawn。CLI spawn 通道保留在
+// 两处：真校验器独立复跑（生成即校验门的独立口径）+ 防漂移对拍锚（进程内 == spawn 逐字段一致）
+import { runMjsScript, makeMjsStubSpawn } from "./helpers/mjs-runner.mjs";
+const MJS_INNER = [CHECKER, RENDERER, GEN_WRAPPER, VERIFY_INDEX];
+
+const runCompiler = (args, { cwd, env } = {}) =>
+  runMjsScript(COMPILER, args, {
+    cwd,
+    env: env ?? process.env,
+    spawn: makeMjsStubSpawn({ mjs: MJS_INNER, cwd }),
+  });
+
+const runRenderer = (planPath) => runMjsScript(RENDERER, [planPath]);
 
 /** dev-flow-v6 SKILL.md frontmatter version 实值（exec-plan.skillVersion 断言基准） */
 const SKILL_VERSION = readFileSync(join(ROOT, "skills", "self", "dev-workflow", "dev-flow-v6", "SKILL.md"), "utf8").match(/^version:\s*([^\s#]+)/m)[1];
@@ -104,29 +122,49 @@ function implPlanFixture(proj) {
   };
 }
 
+/** git 模板仓（init + config + 初始文件 commit 一次成型）：每用例直接复制副本替代
+ *  逐用例 git init/add/commit（4 次 git spawn ~100ms × 10 用例）——编译器读 HEAD 与
+ *  working tree，副本语义与全新 init 等价；模板落系统临时目录，进程退出后由 OS 清理 */
+let gitTemplate = null;
+function ensureGitTemplate() {
+  if (gitTemplate === null) {
+    const tpl = mkdtempSync(join(tmpdir(), "cep-git-tpl-"));
+    const git = (args) => spawnSync("git", ["-c", "user.email=f@x", "-c", "user.name=f", ...args], { cwd: tpl, encoding: "utf8" });
+    assert.equal(git(["init", "-q"]).status, 0, "git init 失败");
+    // 剧本与关联声明文件（associations 对账要求 trigger/related 在 territory 内——文件无需真实存在，
+    // 校验器只对账 territory 覆盖；剧本本体必须是真实存在且可指认的文件）
+    mkdirSync(join(tpl, "src", "shared"), { recursive: true });
+    mkdirSync(join(tpl, "scripts"), { recursive: true });
+    writeFileSync(join(tpl, "scripts", "verify-a1.mjs"), "process.exit(0);\n");
+    // runner 与三个场景桩（wrapper 形态 / verifyAsset=new / flags 超界三用例共用）——
+    // 预置进模板让手写 fixture 零 git 操作（gen-acceptance-wrapper 只核存在性与扩展名）
+    writeFileSync(join(tpl, "scripts", "fake-runner.mjs"), "process.exit(0);\n");
+    for (const scene of ["scene-a1.mjs", "scene-new.mjs", "scene-x.mjs"]) {
+      writeFileSync(join(tpl, "scripts", scene), "process.exit(0);\n");
+    }
+    writeFileSync(join(tpl, "README.md"), "fixture\n");
+    writeDesignStub(tpl);
+    assert.equal(git(["add", "."]).status, 0);
+    assert.equal(git(["commit", "-q", "-m", "init"]).status, 0);
+    gitTemplate = tpl;
+  }
+  return gitTemplate;
+}
+
 /** 构造临时 git 项目 + 临时 HOME + impl-plan（渲染视图一并生成，过编译前置门）。
  *  返回产物根与常用路径；cleanup() 删除全部临时目录。 */
 function makeFixture(t, planOverrides = {}) {
   const home = mkdtempSync(join(tmpdir(), "cep-home-"));
   const proj = mkdtempSync(join(tmpdir(), "cep-proj-"));
-  const git = (args) => spawnSync("git", ["-c", "user.email=f@x", "-c", "user.name=f", ...args], { cwd: proj, encoding: "utf8" });
-  assert.equal(git(["init", "-q"]).status, 0, "git init 失败");
-  // 剧本与关联声明文件（associations 对账要求 trigger/related 在 territory 内——文件无需真实存在，
-  // 校验器只对账 territory 覆盖；剧本本体必须是真实存在且可指认的文件）
-  mkdirSync(join(proj, "src", "shared"), { recursive: true });
-  mkdirSync(join(proj, "scripts"), { recursive: true });
-  writeFileSync(join(proj, "scripts", "verify-a1.mjs"), "process.exit(0);\n");
-  writeFileSync(join(proj, "README.md"), "fixture\n");
-  writeDesignStub(proj);
-  assert.equal(git(["add", "."]).status, 0);
-  assert.equal(git(["commit", "-q", "-m", "init"]).status, 0);
+  cpSync(ensureGitTemplate(), proj, { recursive: true });
+  const git = (args) => spawnSync("git", args, { cwd: proj, encoding: "utf8" });
   const head = git(["rev-parse", "HEAD"]).stdout.trim();
 
   const plan = { ...implPlanFixture(proj), ...planOverrides };
   const planPath = join(proj, "demo-compile.impl-plan.json");
   writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`);
   // 渲染视图（编译前置门 render --check 需要）
-  const rendered = spawnSync(process.execPath, [RENDERER, planPath], { encoding: "utf8" });
+  const rendered = runRenderer(planPath);
   assert.equal(rendered.status, 0, `fixture 渲染失败：${rendered.stderr}`);
 
   const projReal = realpathSync(proj);
@@ -134,11 +172,7 @@ function makeFixture(t, planOverrides = {}) {
   const productRoot = join(home, ".agents", "skill-data", "dev-flow", slug);
 
   const run = (args, extraEnv = {}) =>
-    spawnSync(process.execPath, [COMPILER, ...args], {
-      cwd: proj,
-      encoding: "utf8",
-      env: { ...process.env, HOME: home, ...extraEnv },
-    });
+    runCompiler(args, { cwd: proj, env: { ...process.env, HOME: home, ...extraEnv } });
   const cleanup = () => {
     rmSync(home, { recursive: true, force: true });
     rmSync(proj, { recursive: true, force: true });
@@ -274,7 +308,7 @@ test("缺必填字段报语义缺口（列路径、三段式）且全体不生�
   f2base.units[0] = { ...f2base.units[0], territory: undefined };
   const planPath2 = join(proj2, "demo-compile.impl-plan.json");
   writeFileSync(planPath2, `${JSON.stringify(f2base, null, 2)}\n`);
-  const r2 = spawnSync(process.execPath, [COMPILER, "--impl-plan", planPath2], { cwd: proj2, encoding: "utf8", env: { ...process.env, HOME: home2 } });
+  const r2 = runCompiler(["--impl-plan", planPath2], { cwd: proj2, env: { ...process.env, HOME: home2 } });
   assert.equal(r2.status, 1);
   assert.ok(r2.stderr.includes("units[0].territory"), `渲染缺口须列缺失路径：${r2.stderr}`);
 });
@@ -328,15 +362,11 @@ test("wrapper 形态：runner+scenario 契约齐备时生成 wrapper，verify sc
     rmSync(proj, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   });
-  const runnerPath = writeRunner(proj);
+  // git 仓 = 模板副本（README / design stub / verify 剧本 / runner / 场景桩已带，零 git 操作）
+  cpSync(ensureGitTemplate(), proj, { recursive: true });
+  const runnerPath = join(proj, "scripts", "fake-runner.mjs");
   const scenarioPath = join(proj, "scripts", "scene-a1.mjs");
-  writeFileSync(scenarioPath, "process.exit(0);\n");
-  writeDesignStub(proj);
-  // 编译器从 cwd 推导 projectRoot（git 仓库根）——手写 fixture 项目同样先成 git 仓
-  writeFileSync(join(proj, "README.md"), "fixture\n");
-  for (const args of [["init", "-q"], ["add", "."], ["commit", "-q", "-m", "init"]]) {
-    assert.equal(spawnSync("git", ["-c", "user.email=f@x", "-c", "user.name=f", ...args], { cwd: proj, encoding: "utf8" }).status, 0, "fixture git 操作失败");
-  }
+  // 编译器从 cwd 推导 projectRoot（git 仓库根）
   const plan = implPlanFixture(proj);
   plan.acceptancePlan[0] = {
     id: "A1",
@@ -351,9 +381,9 @@ test("wrapper 形态：runner+scenario 契约齐备时生成 wrapper，verify sc
   };
   const planPath = join(proj, "demo-compile.impl-plan.json");
   writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`);
-  assert.equal(spawnSync(process.execPath, [RENDERER, planPath], { encoding: "utf8" }).status, 0);
+  assert.equal(runRenderer(planPath).status, 0);
   const run = (args) =>
-    spawnSync(process.execPath, [COMPILER, ...args], { cwd: proj, encoding: "utf8", env: { ...process.env, HOME: home } });
+    runCompiler(args, { cwd: proj, env: { ...process.env, HOME: home } });
   assert.equal(run(["--impl-plan", planPath]).status, 0);
   const r = run(["--impl-plan", planPath, "--mode", "acceptance"]);
   assert.equal(r.status, 0, `wrapper 形态 acceptance 编译失败：${r.stderr}`);
@@ -377,14 +407,10 @@ test("verifyAsset=new 实装单元未完成报缺口不生成；完成后可编�
     rmSync(proj, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   });
-  const runnerPath = writeRunner(proj);
+  // git 仓 = 模板副本（runner / 场景桩已带，零 git 操作）
+  cpSync(ensureGitTemplate(), proj, { recursive: true });
+  const runnerPath = join(proj, "scripts", "fake-runner.mjs");
   const scenarioPath = join(proj, "scripts", "scene-new.mjs");
-  writeFileSync(scenarioPath, "process.exit(0);\n");
-  writeDesignStub(proj);
-  writeFileSync(join(proj, "README.md"), "fixture\n");
-  for (const args of [["init", "-q"], ["add", "."], ["commit", "-q", "-m", "init"]]) {
-    assert.equal(spawnSync("git", ["-c", "user.email=f@x", "-c", "user.name=f", ...args], { cwd: proj, encoding: "utf8" }).status, 0, "fixture git 操作失败");
-  }
   const plan = implPlanFixture(proj);
   plan.acceptancePlan[0] = {
     id: "A1",
@@ -400,9 +426,9 @@ test("verifyAsset=new 实装单元未完成报缺口不生成；完成后可编�
   };
   const planPath = join(proj, "demo-compile.impl-plan.json");
   writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`);
-  assert.equal(spawnSync(process.execPath, [RENDERER, planPath], { encoding: "utf8" }).status, 0);
+  assert.equal(runRenderer(planPath).status, 0);
   const run = (args) =>
-    spawnSync(process.execPath, [COMPILER, ...args], { cwd: proj, encoding: "utf8", env: { ...process.env, HOME: home } });
+    runCompiler(args, { cwd: proj, env: { ...process.env, HOME: home } });
   assert.equal(run(["--impl-plan", planPath]).status, 0);
   // 实装单元未完成（status.json 里 u-main 仍 pending）→ 缺口、全体不生成
   const r1 = run(["--impl-plan", planPath, "--mode", "acceptance"]);
@@ -447,14 +473,10 @@ test("runner flags 超界在缺口阶段拦截（exec-plan 保持 dev 形态、�
     rmSync(proj, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   });
-  const runnerPath = writeRunner(proj);
+  // git 仓 = 模板副本（runner / 场景桩已带，零 git 操作）
+  cpSync(ensureGitTemplate(), proj, { recursive: true });
+  const runnerPath = join(proj, "scripts", "fake-runner.mjs");
   const scenarioPath = join(proj, "scripts", "scene-x.mjs");
-  writeFileSync(scenarioPath, "process.exit(0);\n");
-  writeDesignStub(proj);
-  writeFileSync(join(proj, "README.md"), "fixture\n");
-  for (const args of [["init", "-q"], ["add", "."], ["commit", "-q", "-m", "init"]]) {
-    assert.equal(spawnSync("git", ["-c", "user.email=f@x", "-c", "user.name=f", ...args], { cwd: proj, encoding: "utf8" }).status, 0, "fixture git 操作失败");
-  }
   const plan = implPlanFixture(proj);
   plan.acceptancePlan[0] = {
     id: "A1",
@@ -469,9 +491,9 @@ test("runner flags 超界在缺口阶段拦截（exec-plan 保持 dev 形态、�
   };
   const planPath = join(proj, "demo-compile.impl-plan.json");
   writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`);
-  assert.equal(spawnSync(process.execPath, [RENDERER, planPath], { encoding: "utf8" }).status, 0);
+  assert.equal(runRenderer(planPath).status, 0);
   const run = (args) =>
-    spawnSync(process.execPath, [COMPILER, ...args], { cwd: proj, encoding: "utf8", env: { ...process.env, HOME: home } });
+    runCompiler(args, { cwd: proj, env: { ...process.env, HOME: home } });
   assert.equal(run(["--impl-plan", planPath]).status, 0, "dev 编译应先行通过");
   const execPath = join(home, ".agents", "skill-data", "dev-flow", joinSlug(home), "demo-compile.exec-plan.json");
   const r = run(["--impl-plan", planPath, "--mode", "acceptance"]);
@@ -576,4 +598,44 @@ test("--replay-compare 对自生成产物零差异；baseline 演进差异如实
   assert.ok(r2.stdout.includes("nodes[0].designRef"), "须报告差异字段路径");
   // 重放只读：旧文件不被重写
   assert.equal(JSON.parse(readFileSync(execPath, "utf8")).nodes[0].designRef, "§9.9");
+});
+
+test("防漂移锚：进程内转译执行 == CLI spawn（同 fixture dev 编译双跑对拍）", (t) => {
+  // 提速通道的防漂移约束：同 fixture 两个独立 (home, proj) 各跑一次 dev 编译，退出码、
+  // stdout、stderr 逐字段一致（slug 派生自 proj realpath——两个 proj 路径不同会使产物
+  // 摘要里的路径不同，统一把各自临时根归一后再比）
+  const fIn = makeFixture(t);
+  const inProc = runCompiler(["--impl-plan", fIn.planPath], { cwd: fIn.proj, env: { ...process.env, HOME: fIn.home } });
+  assert.equal(inProc.status, 0, `进程内 dev 编译应成功：${inProc.stderr}`);
+  // CLI 通道：独立 fixture（同 plan 模板、独立临时目录）真实 spawn
+  const projCli = mkdtempSync(join(tmpdir(), "cep-proj-"));
+  const homeCli = mkdtempSync(join(tmpdir(), "cep-home-"));
+  t.after(() => {
+    rmSync(projCli, { recursive: true, force: true });
+    rmSync(homeCli, { recursive: true, force: true });
+  });
+  const git = (args) => spawnSync("git", ["-c", "user.email=f@x", "-c", "user.name=f", ...args], { cwd: projCli, encoding: "utf8" });
+  assert.equal(git(["init", "-q"]).status, 0);
+  mkdirSync(join(projCli, "src", "shared"), { recursive: true });
+  mkdirSync(join(projCli, "scripts"), { recursive: true });
+  writeFileSync(join(projCli, "scripts", "verify-a1.mjs"), "process.exit(0);\n");
+  writeFileSync(join(projCli, "README.md"), "fixture\n");
+  writeDesignStub(projCli);
+  assert.equal(git(["add", "."]).status, 0);
+  assert.equal(git(["commit", "-q", "-m", "init"]).status, 0);
+  const planPathCli = join(projCli, "demo-compile.impl-plan.json");
+  writeFileSync(planPathCli, `${JSON.stringify(implPlanFixture(projCli), null, 2)}\n`);
+  assert.equal(spawnSync(process.execPath, [RENDERER, planPathCli], { encoding: "utf8" }).status, 0, "fixture 渲染失败");
+  const cli = spawnSync(process.execPath, [COMPILER, "--impl-plan", planPathCli], {
+    cwd: projCli,
+    encoding: "utf8",
+    env: { ...process.env, HOME: homeCli },
+  });
+  assert.equal(cli.status, inProc.status, `退出码不一致：CLI ${cli.status} vs 进程内 ${inProc.status}（stderr=${cli.stderr}/${inProc.stderr}）`);
+  // slug 目录名 = mkdtemp 前缀-随机段-sha256 前 8 位（两 fixture 必然不同）——一并归一
+  const normalize = (s, home, proj) =>
+    s.split(home).join("<home>").split(proj).join("<proj>").split(realpathSync(proj)).join("<proj>")
+      .replace(/(proj|home|task)-?[\w]*-[0-9a-f]{8}/g, "<tmp-slug>");
+  assert.equal(normalize(inProc.stdout, fIn.home, fIn.proj), normalize(cli.stdout, homeCli, projCli), "stdout 不一致（路径归一后应逐字段相同）");
+  assert.equal(normalize(inProc.stderr, fIn.home, fIn.proj), normalize(cli.stderr, homeCli, projCli), "stderr 不一致（路径归一后应逐字段相同）");
 });

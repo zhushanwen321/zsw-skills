@@ -20,11 +20,19 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const GATE = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6", "scripts", "delivery-gate.mjs");
 const POLICY_DIR = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6", "policies");
+
+// 进程内调用 gate（模块只加载一次，逐用例毫秒级）：垫片与 CLI 走同一 main 分发，
+// 返回 { status, stdout, stderr } 与 spawnSync 同口径；HOME 隔离由垫片按调用切换。
+// CLI 进程级语义（--help 文本等）由文末对拍用例经 spawn 钉住
+const gateModule = await import(pathToFileURL(GATE).href);
+function runGate(args, home) {
+  return gateModule.runGateCommand(args, home);
+}
 
 function sha256(text) {
   return createHash("sha256").update(text, "utf8").digest("hex");
@@ -34,7 +42,8 @@ function sha256File(filePath) {
   return sha256(readFileSync(filePath, "utf8"));
 }
 
-function runGate(args, home) {
+/** spawn 直跑 CLI：仅供防漂移对拍（进程内结果 vs CLI 结果一致性），常规用例走 runGate */
+function runGateSpawn(args, home) {
   return spawnSync(process.execPath, [GATE, ...args], {
     encoding: "utf8",
     env: { ...process.env, ...(home ? { HOME: home } : {}) },
@@ -73,12 +82,11 @@ function makeV2Fixture(t, { taskId = "task-a", intent = "原始需求：开关�
   const home = join(root, "home");
   mkdirSync(projectDir);
   mkdirSync(home);
+  // git 身份经 commit 的 -c 内联（省两次 spawn：fixture 是全部用例的公共前缀成本）
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectDir });
   writeFileSync(join(projectDir, "a.txt"), "hello\n");
   spawnSync("git", ["add", "."], { cwd: projectDir });
-  spawnSync("git", ["commit", "-qm", "init"], { cwd: projectDir });
+  spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: projectDir });
   const intentPath = join(root, "intent.md");
   if (intent !== null) writeFileSync(intentPath, intent);
 
@@ -1229,4 +1237,58 @@ test("DEV 收敛：preauthorize-risk 输入校验——未登记分类与非法�
   const event = JSON.parse(parseStdout(ok));
   assert.equal(event.maxSeverity, "non-blocker", "severity 上限硬编码 non-blocker（blocker 永不可预授权）");
   assert.equal(event.confirmation, "user-explicit");
+});
+
+// ── 防漂移对拍：进程内垫片与 CLI spawn 同输入必须同结果（钉住垫片与 CLI 的一致性）──
+
+test("垫片对拍：两份同构 fixture 各走一条通道，命令序列结果归一化后逐字段一致", (t) => {
+  // init 等命令有副作用，同一 fixture 无法双通道重放——用两份同构 fixture 各走一条通道，
+  // 输出中的 fixture 根路径归一化后逐字段比对（含退出码与 stderr 文本）
+  const makeParityFixture = (label) => {
+    const root = mkdtempSync(join(tmpdir(), `delivery-gate-parity-${label}-`));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const projectDir = join(root, "project");
+    const home = join(root, "home");
+    mkdirSync(projectDir);
+    mkdirSync(home);
+    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
+    writeFileSync(join(projectDir, "a.txt"), "hello\n");
+    spawnSync("git", ["add", "."], { cwd: projectDir });
+    spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: projectDir });
+    return { root, projectDir, home };
+  };
+  // stdout/stderr 含 fixture 绝对路径（tmp 根与 realpath 两形态）与每次运行天然不同的
+  // 派生值（projectSlug=绝对路径哈希、init 新生成公钥），归一化后才能逐字节比
+  const normalize = (text, fixture) => {
+    let normalized = text;
+    for (const pathForm of [realpathSync(fixture.root), fixture.root]) {
+      normalized = normalized.split(pathForm).join("<FIXTURE>");
+    }
+    return normalized
+      .replace(/project-[0-9a-f]{8}/g, "<SLUG>")
+      .replace(/-----BEGIN PUBLIC KEY-----[\s\S]*?-----END PUBLIC KEY-----/g, "<PUBLIC KEY>");
+  };
+  const inProcessFx = makeParityFixture("a");
+  const cliFx = makeParityFixture("b");
+  const commandSequences = [
+    { args: ["init", "--project-root", inProcessFx.projectDir, "--task-id", "task-a"], cliArgs: ["init", "--project-root", cliFx.projectDir, "--task-id", "task-a"], expectStatus: 0 },
+    { args: ["revision", "--project-root", inProcessFx.projectDir], cliArgs: ["revision", "--project-root", cliFx.projectDir], expectStatus: 0 },
+    { args: ["no-such-command"], cliArgs: ["no-such-command"], expectStatus: 2 },
+  ];
+  for (const { args, cliArgs, expectStatus } of commandSequences) {
+    const inProcess = runGate(args, inProcessFx.home);
+    const viaCli = runGateSpawn(cliArgs, cliFx.home);
+    assert.equal(inProcess.status, expectStatus, `进程内预期退出码：${args.join(" ")}\nstderr：${inProcess.stderr}`);
+    assert.equal(inProcess.status, viaCli.status, `status 应一致：${args.join(" ")}`);
+    assert.equal(
+      normalize(inProcess.stdout, inProcessFx),
+      normalize(viaCli.stdout, cliFx),
+      `stdout 归一化后应逐字节一致：${args.join(" ")}`,
+    );
+    assert.equal(
+      normalize(inProcess.stderr, inProcessFx),
+      normalize(viaCli.stderr, cliFx),
+      `stderr 归一化后应逐字节一致：${args.join(" ")}`,
+    );
+  }
 });

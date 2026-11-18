@@ -193,10 +193,12 @@ const UNTRACKED_SYMLINK_BUDGET_BYTES = 8 * 1024 * 1024;
 const UNTRACKED_DIRECTORY_MAX_DEPTH = 16;
 const SIGNING_KEY_NAMES = { builder: "builderKey", assurance: "assuranceKey", user: "userKey" };
 const SIGNING_KEY_ROLES = ["builder", "assurance", "user"];
-const CREDENTIAL_KEY_DIR = join(homedir(), ".agents", "skill-data", "delivery-keys");
-const POLICY_USER_DIR = join(homedir(), ".agents", "skill-data", "delivery-policies");
-const DELIVERY_DATA_DIR = join(homedir(), ".agents", "skill-data", "delivery");
-const LEASE_DIR = join(homedir(), ".agents", "skill-data", "delivery-leases");
+// HOME 派生目录惰性求值（调用时读 os.homedir()）：CLI 单次进程语义不变；进程内测试垫片
+// 按用例切换 HOME 时路径必须跟随变化，顶层固化会让 HOME 隔离失效并把测试数据写进真实用户目录
+const CREDENTIAL_KEY_DIR = () => join(homedir(), ".agents", "skill-data", "delivery-keys");
+const POLICY_USER_DIR = () => join(homedir(), ".agents", "skill-data", "delivery-policies");
+const DELIVERY_DATA_DIR = () => join(homedir(), ".agents", "skill-data", "delivery");
+const LEASE_DIR = () => join(homedir(), ".agents", "skill-data", "delivery-leases");
 const LEASE_STALE_MS = 120_000;
 const HELP = `delivery-gate（V6）：delivery-v6 的确定性交付裁决器（状态/转移/计数归 delivery-core 内核，判定单源 = scripts/lib/kernel-judgments.mjs）
 
@@ -481,11 +483,11 @@ function credentialFilePath(credentialId) {
     fail(`credentialId ${JSON.stringify(credentialId)} 非法。`, `使用 init 输出的 credentialId（形态 <分组>/<任务id>/${SIGNING_KEY_ROLES.join("|")}）重试当前命令。`);
   }
   validateTaskId(parts[1]);
-  return join(CREDENTIAL_KEY_DIR, parts[0], parts[1], `${parts[2]}.key`);
+  return join(CREDENTIAL_KEY_DIR(), parts[0], parts[1], `${parts[2]}.key`);
 }
 
 function writeCredentialKeys(groupSlug, taskId, pairs) {
-  const dir = join(CREDENTIAL_KEY_DIR, groupSlug, taskId);
+  const dir = join(CREDENTIAL_KEY_DIR(), groupSlug, taskId);
   mkdirSync(dir, { recursive: true });
   for (const role of SIGNING_KEY_ROLES) {
     const filePath = join(dir, `${role}.key`);
@@ -568,9 +570,9 @@ function loadPolicySources() {
     sources[name] = readPolicyJson(join(installed, name), "技能安装目录");
   }
   // 用户级覆盖：同名文件整体替换（L1/L2 数据与声明式规则）；L3 代码插件不在本 CLI 的加载范围
-  if (existsSync(POLICY_USER_DIR)) {
+  if (existsSync(POLICY_USER_DIR())) {
     for (const name of POLICY_FILE_NAMES) {
-      const override = join(POLICY_USER_DIR, name);
+      const override = join(POLICY_USER_DIR(), name);
       if (existsSync(override)) sources[name] = readPolicyJson(override, "用户级策略目录");
     }
   }
@@ -2902,7 +2904,7 @@ function terminateProcessGroup(pid) {
 }
 
 function leasePath(projectRoot) {
-  return join(LEASE_DIR, `${projectSlug(projectRoot)}.json`);
+  return join(LEASE_DIR(), `${projectSlug(projectRoot)}.json`);
 }
 
 function readLease(projectRoot) {
@@ -3493,10 +3495,10 @@ function computeRevision(projectRootValue) {
 // ── 血统辅助：枚举全部分组任务、查同仓库身份的开放任务与未完成 prepare ──
 function iterateAllTaskDirs() {
   const tasks = [];
-  if (!existsSync(DELIVERY_DATA_DIR)) return tasks;
-  for (const group of readdirSync(DELIVERY_DATA_DIR, { withFileTypes: true })) {
+  if (!existsSync(DELIVERY_DATA_DIR())) return tasks;
+  for (const group of readdirSync(DELIVERY_DATA_DIR(), { withFileTypes: true })) {
     if (!group.isDirectory()) continue;
-    const groupDir = join(DELIVERY_DATA_DIR, group.name);
+    const groupDir = join(DELIVERY_DATA_DIR(), group.name);
     for (const entry of readdirSync(groupDir, { withFileTypes: true })) {
       if (entry.isDirectory() && existsSync(join(groupDir, entry.name, "task.json"))) {
         tasks.push({ taskId: entry.name, taskDir: join(groupDir, entry.name) });
@@ -3714,7 +3716,7 @@ function commandInit(args) {
   requireExistingDirectory(options["project-root"], "--project-root");
   const projectRoot = realpathSync(options["project-root"]);
   const groupSlug = projectSlug(projectRoot);
-  const groupDir = join(DELIVERY_DATA_DIR, groupSlug);
+  const groupDir = join(DELIVERY_DATA_DIR(), groupSlug);
   const worktree = isGitWorktree(projectRoot);
   const evalIdentity = readEvalIdentity(projectRoot);
   const identityNote = evalIdentity
@@ -3853,7 +3855,7 @@ function commandInit(args) {
             "init 前必须确认本会话对该 worktree 的归属：任务目录不是本会话创建时立即停止并核实；评测等多会话同题环境，每场评测必须基于干净基线新建自己的 worktree，禁止读写他人任务目录。",
         }
       : {}),
-    credentialDir: join(CREDENTIAL_KEY_DIR, groupSlug, taskId),
+    credentialDir: join(CREDENTIAL_KEY_DIR(), groupSlug, taskId),
     // 凭据 id 即调用方出示给 --credential 的值；私钥不在 stdout 出现
     credentials,
     intentSha256: intentSha,
@@ -4997,4 +4999,35 @@ if (invokedPath !== null && invokedPath === realpathSync(fileURLToPath(import.me
 
 // ── 内核复用导出（V6）：delivery-core.mjs 同进程消费的世界加载与裁决组装。
 // 导出的是既有实现本身，不是副本——改这些函数只改一处，两侧同步生效 ──
-export { buildVerdict, computeRevision, loadTaskCore, loadWorld };
+
+// 进程内调用垫片（测试提速）：走与 CLI 完全相同的 main 分发执行一段 argv，返回与
+// spawnSync 同口径的结构化结果 { status, stdout, stderr }。stdout/stderr 经临时替换
+// write 口径捕获（gate 全部输出都走这两处），status 取 process.exitCode 终值（未设即 0，
+// 与进程退出码一致）；home 参数与 spawn 时的 HOME env 等价（HOME 派生目录已惰性化）。
+// node --test 用例串行执行，临时替换全局口径安全；函数保证恢复现场，失败也不例外
+function runGateCommand(argv, home) {
+  const previousArgv = process.argv;
+  const previousHome = process.env.HOME;
+  const previousExitCode = process.exitCode;
+  const previousStdoutWrite = process.stdout.write;
+  const previousStderrWrite = process.stderr.write;
+  const chunks = { stdout: [], stderr: [] };
+  process.argv = [previousArgv[0], previousArgv[1], ...argv];
+  if (home !== undefined) process.env.HOME = home;
+  process.exitCode = 0;
+  process.stdout.write = (chunk) => { chunks.stdout.push(chunk); return true; };
+  process.stderr.write = (chunk) => { chunks.stderr.push(chunk); return true; };
+  try {
+    main();
+  } finally {
+    process.argv = previousArgv;
+    if (home !== undefined) process.env.HOME = previousHome;
+    process.stdout.write = previousStdoutWrite;
+    process.stderr.write = previousStderrWrite;
+  }
+  const result = { status: process.exitCode ?? 0, stdout: chunks.stdout.join(""), stderr: chunks.stderr.join("") };
+  process.exitCode = previousExitCode;
+  return result;
+}
+
+export { buildVerdict, computeRevision, loadTaskCore, loadWorld, runGateCommand };

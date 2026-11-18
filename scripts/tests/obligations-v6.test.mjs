@@ -17,10 +17,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V6 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6");
@@ -30,11 +30,15 @@ const KERNEL = await import(join(V6, "scripts", "lib", "kernel-judgments.mjs"));
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const parseStdout = (result) => result.stdout.slice(result.stdout.indexOf("{"));
-function runCore(args, home) {
-  return spawnSync(process.execPath, [CORE, ...args], { encoding: "utf8", env: { ...process.env, ...(home ? { HOME: home } : {}) }, timeout: 60_000 });
+async function runCore(args) {
+  return CORE_MODULE.runCoreCommandInProcess(args);
 }
+// 进程内调用（模块只加载一次，逐用例毫秒级）：垫片与 CLI 走同一分发，返回 { status, stdout, stderr } 与 spawnSync 同口径
+const GATE_MODULE = await import(pathToFileURL(GATE).href);
+const CORE_MODULE = await import(pathToFileURL(CORE).href);
+
 function runGate(args, home) {
-  return spawnSync(process.execPath, [GATE, ...args], { encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 60_000 });
+  return GATE_MODULE.runGateCommand(args, home);
 }
 function ok(result, label = "命令应成功") {
   assert.equal(result.status, 0, `${label}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -68,7 +72,7 @@ const verdictView = (overrides = {}) => ({
 });
 const acceptanceView = { schemaVersion: 2 };
 
-test("deriveObligations：断言义务三级 state 映射 + 非必需需求不进 openRequired", () => {
+test("deriveObligations：断言义务三级 state 映射 + 非必需需求不进 openRequired", async () => {
   const result = KERNEL.deriveObligations({ verdict: verdictView(), acceptance: acceptanceView });
   const byId = new Map(result.obligations.map((item) => [item.id, item]));
   assert.equal(byId.get("assert-A1-command").state, "open", "未接受的必需断言缺口 → open");
@@ -82,7 +86,7 @@ test("deriveObligations：断言义务三级 state 映射 + 非必需需求不�
   assert.deepEqual(result.openRequired.map((item) => item.id), ["assert-A1-command"], "必需断言 open 进 openRequired");
 });
 
-test("deriveObligations：schema 1 降级需求×类型粒度；阶段义务复用 missing；修复轮与 pending 派生", () => {
+test("deriveObligations：schema 1 降级需求×类型粒度；阶段义务复用 missing；修复轮与 pending 派生", async () => {
   const verdict = verdictView({
     requirements: [
       {
@@ -110,7 +114,7 @@ test("deriveObligations：schema 1 降级需求×类型粒度；阶段义务复�
   assert.ok(result.openRequired.some((item) => item.id === "stage-assurance"));
 });
 
-test("deriveObligations：策略允许跳过 design 与 verificationOnly 时不生成 design 阶段义务", () => {
+test("deriveObligations：策略允许跳过 design 与 verificationOnly 时不生成 design 阶段义务", async () => {
   const verdict = verdictView();
   const withDesign = KERNEL.deriveObligations({ verdict, acceptance: acceptanceView, designStageRequired: true });
   assert.ok(withDesign.obligations.some((item) => item.id === "stage-design-approval"), "必需 design 时生成阶段义务");
@@ -130,8 +134,8 @@ function makeFixture(t, { taskId = "obligations" } = {}) {
   mkdirSync(projectDir);
   mkdirSync(home);
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.email", "t@t"], { cwd: projectDir });
-  spawnSync("git", ["config", "user.name", "t"], { cwd: projectDir });
+  // repo 级身份经追加 .git/config 写入（1 次文件写入替代 2 次 git spawn；后续 commit 依赖 repo config）
+  appendFileSync(join(projectDir, ".git", "config"), "[user]\n\temail = t@t\n\tname = t\n");
   writeFileSync(join(projectDir, "a.txt"), "one\n");
   spawnSync("git", ["add", "."], { cwd: projectDir });
   spawnSync("git", ["commit", "-qm", "init"], { cwd: projectDir });
@@ -240,14 +244,14 @@ function evaluate(fx) {
   return JSON.parse(parseStdout(result));
 }
 
-test("obligations 子命令：全登记任务无 openRequired（正常路径零误伤）", (t) => {
+test("obligations 子命令：全登记任务无 openRequired（正常路径零误伤）", async (t) => {
   const { fx, revision } = driveToImplemented(t);
   driveAssurance(fx, revision, [
     ["R1", "A1", "AF1", "command"],
     ["R1", "A1", "AF1", "inspection"],
     ["R2", "A2", "AF2", "command"],
   ]);
-  const result = JSON.parse(parseStdout(runCore(["obligations", "--task-dir", fx.taskDir], fx.home)));
+  const result = JSON.parse(parseStdout(await runCore(["obligations", "--task-dir", fx.taskDir], fx.home)));
   assert.equal(result.acceptanceVersion, 1);
   assert.equal(result.openRequired.length, 0, "全登记任务无 open 必需义务");
   const byId = new Map(result.obligations.map((item) => [item.id, item]));
@@ -261,29 +265,29 @@ test("obligations 子命令：全登记任务无 openRequired（正常路径零�
   assert.deepEqual(verdict.missing.openObligations, [], "无 open 义务时清单为空");
 });
 
-test("blocking 待办进入 accepted 前置：open pending 阻断，resolve 后恢复", (t) => {
+test("blocking 待办进入 accepted 前置：open pending 阻断，resolve 后恢复", async (t) => {
   const { fx, revision } = driveToImplemented(t);
   driveAssurance(fx, revision, [
     ["R1", "A1", "AF1", "command"],
     ["R1", "A1", "AF1", "inspection"],
     ["R2", "A2", "AF2", "command"],
   ]);
-  ok(runCore(["pending", "add", "--task-dir", fx.taskDir, "--kind", "awaiting-restore", "--note", "额度中断，恢复后先核对保证回执"], fx.home), "登记待办");
-  const before = JSON.parse(parseStdout(runCore(["obligations", "--task-dir", fx.taskDir], fx.home)));
+  ok(await runCore(["pending", "add", "--task-dir", fx.taskDir, "--kind", "awaiting-restore", "--note", "额度中断，恢复后先核对保证回执"], fx.home), "登记待办");
+  const before = JSON.parse(parseStdout(await runCore(["obligations", "--task-dir", fx.taskDir], fx.home)));
   assert.deepEqual(before.openRequired.map((item) => item.id), ["pending-pa-1"], "子命令视角：open 待办即 open 必需义务");
   const blocked = evaluate(fx);
   assert.notEqual(blocked.state, "accepted", "open 必需义务阻断 accepted");
   assert.notEqual(blocked.state, "accepted_with_risk");
   assert.deepEqual(blocked.missing.openObligations.map((item) => item.id), ["pending-pa-1"]);
   assert.match(blocked.missing.openObligations[0].recovery, /pending resolve/, "恢复动作指向既有 pending 命令");
-  ok(runCore(["pending", "resolve", "--task-dir", fx.taskDir, "--id", "pa-1", "--outcome", "回执已核对"], fx.home), "关闭待办");
-  const after = JSON.parse(parseStdout(runCore(["obligations", "--task-dir", fx.taskDir], fx.home)));
+  ok(await runCore(["pending", "resolve", "--task-dir", fx.taskDir, "--id", "pa-1", "--outcome", "回执已核对"], fx.home), "关闭待办");
+  const after = JSON.parse(parseStdout(await runCore(["obligations", "--task-dir", fx.taskDir], fx.home)));
   assert.equal(after.openRequired.length, 0, "resolve 后义务闭环");
   const restored = evaluate(fx);
   assert.equal(restored.state, "accepted", "待办关闭后 accepted 恢复");
 });
 
-test("显式豁免绑定用户裁决：accepted_with_risk 场景缺口义务 state=explicitly-waived", (t) => {
+test("显式豁免绑定用户裁决：accepted_with_risk 场景缺口义务 state=explicitly-waived", async (t) => {
   const { fx, revision } = driveToImplemented(t);
   // R2（riskAcceptable=true）证据不登记留缺口；R1 全登记
   driveAssurance(fx, revision, [
@@ -298,14 +302,14 @@ test("显式豁免绑定用户裁决：accepted_with_risk 场景缺口义务 sta
     "--credential", fx.creds.user], fx.home), "用户裁决接受 R2 缺口");
   const waived = evaluate(fx);
   assert.equal(waived.state, "accepted_with_risk", "缺口经用户裁决后进入 accepted_with_risk");
-  const result = JSON.parse(parseStdout(runCore(["obligations", "--task-dir", fx.taskDir], fx.home)));
+  const result = JSON.parse(parseStdout(await runCore(["obligations", "--task-dir", fx.taskDir], fx.home)));
   const r2 = result.obligations.find((item) => item.id === "assert-A2-command");
   assert.equal(r2.state, "explicitly-waived", "豁免义务 state=explicitly-waived（源头是签名 RiskAccepted 事件）");
   assert.deepEqual(r2.evidenceRefs, [gap.gapId], "豁免绑定裁决指向的缺口 id");
   assert.equal(result.openRequired.length, 0, "豁免后无 open 必需义务");
 });
 
-test("pending-actions.json 损坏：判定路径报错（fail-closed），查询路径披露 unreadable", (t) => {
+test("pending-actions.json 损坏：判定路径报错（fail-closed），查询路径披露 unreadable", async (t) => {
   const { fx, revision } = driveToImplemented(t);
   driveAssurance(fx, revision, [
     ["R1", "A1", "AF1", "command"],
@@ -313,7 +317,7 @@ test("pending-actions.json 损坏：判定路径报错（fail-closed），查询
     ["R2", "A2", "AF2", "command"],
   ]);
   // 先登记待办再破坏文件：证明损坏不是「文件本来不存在」
-  ok(runCore(["pending", "add", "--task-dir", fx.taskDir, "--kind", "awaiting-restore", "--note", "额度中断，恢复后核对回执"], fx.home), "登记待办");
+  ok(await runCore(["pending", "add", "--task-dir", fx.taskDir, "--kind", "awaiting-restore", "--note", "额度中断，恢复后核对回执"], fx.home), "登记待办");
   writeFileSync(join(fx.taskDir, "pending-actions.json"), "{ items: [ 语法损坏的 JSON");
   // gate evaluate：判定输入损坏 → 报错退出非零，不得按空待办清单 accepted
   const evaluated = runGate(["evaluate", "--task-dir", fx.taskDir], fx.home);
@@ -322,11 +326,11 @@ test("pending-actions.json 损坏：判定路径报错（fail-closed），查询
   assert.match(evaluated.stderr, /pending-actions\.json 解析失败/, "报错定位到权威源文件");
   assert.match(evaluated.stderr, /恢复动作/, "错误消息给出恢复动作");
   // obligations 子命令：判定路径同口径报错退出非零
-  const obligations = runCore(["obligations", "--task-dir", fx.taskDir], fx.home);
+  const obligations = await runCore(["obligations", "--task-dir", fx.taskDir], fx.home);
   assert.notEqual(obligations.status, 0, "obligations 判定输入损坏须报错退出");
   assert.match(obligations.stderr, /pending-actions\.json 解析失败/);
   // pending list 查询路径：容忍不崩，输出披露 unreadable
-  const list = runCore(["pending", "list", "--task-dir", fx.taskDir], fx.home);
+  const list = await runCore(["pending", "list", "--task-dir", fx.taskDir], fx.home);
   ok(list, "查询路径维持可用（不崩）");
   const listDoc = JSON.parse(parseStdout(list));
   assert.equal(listDoc.unreadable, true, "损坏状态在输出中披露");

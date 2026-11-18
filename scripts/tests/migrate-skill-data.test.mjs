@@ -97,6 +97,9 @@ function setOld(abs) {
 }
 
 function runScript(args) {
+  // 保持 spawn 通道：该脚本 main 为整包 catch（业务失败与进程内执行器的 process.exit
+  // 模拟异常无法区分——转译执行的退出语义失真），且 spawn 仅 3 次、基线大头是 fixture
+  // 文件 IO，转换收益不抵语义风险
   return spawnSync(process.execPath, [SCRIPT, ...args], { encoding: "utf8", cwd: ROOT });
 }
 
@@ -458,3 +461,4 @@ test("活动检测：目录近期写入与观测 JSONL 近期写入都拒绝实�
     rmSync(ws.seed, { recursive: true, force: true });
   }
 });
+

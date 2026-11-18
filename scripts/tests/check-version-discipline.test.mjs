@@ -18,10 +18,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+// 提速通道：检查器进程内转译执行（内部 git 调用仍走真实 spawn，判定的索引行为不变）；
+// fixture 仓 = 模板副本（git init/config/add/commit 只做一次）；CLI spawn 保留在防漂移对拍锚
+import { runMjsScript } from "./helpers/mjs-runner.mjs";
 
 const CHECKER = join(dirname(fileURLToPath(import.meta.url)), "..", "check-version-discipline.mjs");
 const WORKFLOWS = "skills/self/dev-workflow/workflows";
@@ -60,22 +63,35 @@ function git(root, args) {
   return r.stdout;
 }
 
-/** 最小 fixture 仓：三技能 frontmatter + 各自一个自有文件 + 共享源 + 全部带版本戳的产物 */
+/** fixture 模板仓（内容固定的最小仓：三技能 frontmatter + 各自一个自有文件 + 共享源 +
+ *  全部带版本戳的产物，init/config/add/commit 只做一次）——每用例复制副本替代逐用例
+ *  10 次 git spawn（~250ms × 7 用例）；模板落系统临时目录，进程退出后由 OS 清理 */
+let fixtureTemplate = null;
+function ensureFixtureTemplate() {
+  if (fixtureTemplate === null) {
+    const tpl = mkdtempSync(join(tmpdir(), "version-discipline-tpl-"));
+    for (const [skill, dir] of Object.entries(SKILL_DIRS)) {
+      writeFile(tpl, `${dir}/SKILL.md`, skillMd(skill, "0.1.0"));
+      writeFile(tpl, `${dir}/flow/step.md`, `# ${skill} fixture 步骤\n`);
+    }
+    writeFile(tpl, `${WORKFLOWS}/src/skill-data.shared.ts`, "// fixture 共享源\n");
+    for (const rel of PRODUCTS) writeFile(tpl, `${WORKFLOWS}/${rel}`, product("0.1.0"));
+    git(tpl, ["init", "-q", "-b", "main"]);
+    git(tpl, ["config", "user.email", "fixture@example.com"]);
+    git(tpl, ["config", "user.name", "fixture"]);
+    git(tpl, ["config", "commit.gpgsign", "false"]);
+    git(tpl, ["config", "core.hooksPath", ".no-hooks"]);
+    git(tpl, ["add", "-A"]);
+    git(tpl, ["commit", "-qm", "fixture baseline"]);
+    fixtureTemplate = tpl;
+  }
+  return fixtureTemplate;
+}
+
+/** 最小 fixture 仓：模板副本（内容与逐用例全新 init 等价） */
 function makeFixture() {
   const root = mkdtempSync(join(tmpdir(), "version-discipline-"));
-  for (const [skill, dir] of Object.entries(SKILL_DIRS)) {
-    writeFile(root, `${dir}/SKILL.md`, skillMd(skill, "0.1.0"));
-    writeFile(root, `${dir}/flow/step.md`, `# ${skill} fixture 步骤\n`);
-  }
-  writeFile(root, `${WORKFLOWS}/src/skill-data.shared.ts`, "// fixture 共享源\n");
-  for (const rel of PRODUCTS) writeFile(root, `${WORKFLOWS}/${rel}`, product("0.1.0"));
-  git(root, ["init", "-q", "-b", "main"]);
-  git(root, ["config", "user.email", "fixture@example.com"]);
-  git(root, ["config", "user.name", "fixture"]);
-  git(root, ["config", "commit.gpgsign", "false"]);
-  git(root, ["config", "core.hooksPath", ".no-hooks"]);
-  git(root, ["add", "-A"]);
-  git(root, ["commit", "-qm", "fixture baseline"]);
+  cpSync(ensureFixtureTemplate(), root, { recursive: true });
   return root;
 }
 
@@ -84,8 +100,9 @@ function stageAll(root) {
 }
 
 function runChecker(root) {
-  const r = spawnSync("node", [CHECKER, "--root", root], { encoding: "utf8" });
-  assert.notEqual(r.status, null, `检查器应正常启动：${r.error?.message ?? r.stderr}`);
+  // 进程内转译执行：与 CLI spawn 语义一致（一致性由防漂移对拍锚锚定）；检查器内部的
+  // git 调用经 ctx.require 真实 spawnSync 在 fixture 仓上执行——判定的索引行为不变
+  const r = runMjsScript(CHECKER, ["--root", root], { env: process.env });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, output: `${r.stdout}\n${r.stderr}` };
 }
 
@@ -205,4 +222,22 @@ test("工作区未暂存改动不参与判定 → 放行", (t) => {
 
   const r = runChecker(root);
   assert.equal(r.status, 0, `索引无改动应放行，实际输出：${r.output}`);
+});
+
+test("防漂移锚：进程内转译执行 == CLI spawn（规则 1 红灯形态双跑对拍）", (t) => {
+  // 提速通道的防漂移约束：同改动在两个独立 fixture 仓各跑一次，退出码与 stdout/stderr
+  // 逐字段一致（仓路径不同不影响输出——检查器只报相对路径与版本值）
+  const rootIn = makeFixture();
+  cleanup(t, rootIn);
+  appendLine(rootIn, `${SKILL_DIRS["tech-design-v6"]}/flow/step.md`, "补充一行");
+  stageAll(rootIn);
+  const rootCli = makeFixture();
+  cleanup(t, rootCli);
+  appendLine(rootCli, `${SKILL_DIRS["tech-design-v6"]}/flow/step.md`, "补充一行");
+  stageAll(rootCli);
+  const inProc = runChecker(rootIn);
+  const cli = spawnSync("node", [CHECKER, "--root", rootCli], { encoding: "utf8" });
+  assert.equal(inProc.status, cli.status, `退出码不一致：进程内 ${inProc.status} vs CLI ${cli.status}`);
+  assert.equal(inProc.stdout, cli.stdout, "stdout 不一致");
+  assert.equal(inProc.stderr, cli.stderr, "stderr 不一致");
 });
