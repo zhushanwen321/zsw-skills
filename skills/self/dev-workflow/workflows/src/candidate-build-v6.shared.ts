@@ -501,6 +501,20 @@ async function writeEvidenceExclusive(path: string, content: string): Promise<st
   return "";
 }
 
+/** 空闲证据路径探测：按 -2/-3 递增试名直到盘上不存在（NODE_CHECK_EXISTS exit 0 = 在盘），
+ * 返回第一个空闲名。同 revision 重发（attempt 重试）时避免证据文件名冲突——实现/探索报告
+ * 由 agent 按 prompt 内给定路径写入、测试日志由引擎写，revision 未变时同名覆写会破坏已登记
+ * 事件的内容哈希绑定（实测 attempt-3：探索报告被覆写致同路径新发现登记被 gate 拒）。
+ * 沙箱禁用 Date.now/random，唯一性只能来自盘上事实 */
+async function freshEvidencePath(base: string): Promise<string> {
+  for (let attempt = 1; attempt <= 20; attempt += 1) {
+    const candidate = attempt === 1 ? base : base.replace(/(\.[^.]*)?$/, (ext) => `-${attempt}${ext}`);
+    const res = await runNode([NODE_CHECK_EXISTS, candidate]);
+    if (res.exitCode !== 0) return candidate;
+  }
+  return `${base.replace(/(\.[^.]*)?$/, (ext) => `-x${ext}`)}`;
+}
+
 /** 证据文件内容哈希（evidence/ 内绝对路径） */
 async function artifactSha256Of(artifactPath: string): Promise<string> {
   const script = "const c=require('crypto'),f=process.argv[1];process.stdout.write(c.createHash('sha256').update(require('fs').readFileSync(f)).digest('hex'))";
@@ -546,10 +560,6 @@ async function failBuild(message: string, artifact: string, drafts: FindingDraft
 
 await obsEnd("setup", null);
 phase("逐增量形成候选实现");
-// 运行次 token：同 revision 重发（attempt 重试）时避免证据文件名冲突——实现/探索报告由
-// agent 按 prompt 内给定路径写入、测试日志由引擎写，revision 未变时同名覆写会破坏已登记
-// 事件的内容哈希绑定（实测 attempt-3：探索报告被覆写致同路径新发现登记被 gate 拒）
-const runToken = `r${Date.now().toString(36)}`;
 // 回执链衔接：每增量 fromRevision = 上一已完成增量的 postRevision（初始为 setup 基线），
 // 多增量时逐条衔接而非全部挂 setup 基线
 let lastCompletedRevision = revision;
@@ -578,9 +588,9 @@ for (let index = 0; index < increments.length; index += 1) {
     log(`跳过增量 ${item.id}：当前 acceptanceVersion 已有实现记录且无修复信号（未决发现/失败证据），不因 revision 变化重做`);
     continue;
   }
-  const tag = `${index + 1}-${revisionHash(revision)}-${runToken}`;
-  const reportPath = `${taskDir}/evidence/implementation-${tag}.md`;
-  const testLogPath = `${taskDir}/evidence/test-${tag}.log`;
+  const tag = `${index + 1}-${revisionHash(revision)}`;
+  const reportPath = await freshEvidencePath(`${taskDir}/evidence/implementation-${tag}.md`);
+  const testLogPath = await freshEvidencePath(`${taskDir}/evidence/test-${tag}.log`);
   const failurePath = `${taskDir}/evidence/build-failure-${tag}.md`;
   await obsBegin("execute", index + 1);
   const builder = agent(`builder-${item.id}`, builderPersona);
@@ -758,7 +768,7 @@ for (let index = 0; index < increments.length; index += 1) {
   // 候选反例审查对全部 schema 2 任务执行（合并稿 §2.1/§5.3：D3 后 D4 前无风险门控；
   // 探索维度按验收包 reviewDimensions 派生，可为空数组）
   if (acceptanceDoc?.schemaVersion === 2) {
-    const explorationReportPath = `${taskDir}/evidence/candidate-exploration-${item.id}-${revisionHash(postRevision)}-${runToken}.md`;
+    const explorationReportPath = await freshEvidencePath(`${taskDir}/evidence/candidate-exploration-${item.id}-${revisionHash(postRevision)}.md`);
     const dimensions = Array.isArray(acceptanceDoc.reviewDimensions) ? acceptanceDoc.reviewDimensions as string[] : [];
     const explorer = agent(`candidate-explorer-${item.id}`, explorerRoleRes.stdout);
     const history = events.filter((event) => event.type === "ExplorationCompleted").map((event) => ({ eventId: event.eventId, revision: event.revision, artifact: event.artifact }));
