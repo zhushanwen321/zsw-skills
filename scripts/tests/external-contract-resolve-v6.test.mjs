@@ -162,7 +162,9 @@ test("installed-npm-package：lockfile 完整性 + 包缓存互核通过 → res
   const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8"));
   assert.equal(snapshot.snapshotSha256, summary.snapshotSha256);
   assert.equal(snapshot.contracts[0].resolver.resolution, "project-dependency");
-  const pointer = JSON.parse(readFileSync(join(contractsDir, "environment-contracts.current.json"), "utf8"));
+  // current 指针落 taskDir 根（2026-11-18 审查修复 P0-1：resolver 与全部消费端对齐设计 §4.3 的根路径；
+  // 旧嵌套布局仅由 readCurrentPointer 兼容读，不产生新文件）
+  const pointer = JSON.parse(readFileSync(join(fx.taskDir, "environment-contracts.current.json"), "utf8"));
   assert.equal(pointer.snapshotSha256, summary.snapshotSha256);
   const copy = join(contractsDir, "surfaces", summary.snapshotSha256, "EC-npm", "dist", "types.d.ts");
   assert.ok(existsSync(copy), "surface 只读副本应复制进 taskDir");

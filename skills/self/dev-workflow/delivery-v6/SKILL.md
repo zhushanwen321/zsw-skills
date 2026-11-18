@@ -1,7 +1,7 @@
 ---
 name: delivery-v6
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 7.0.0
+version: 7.1.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -24,6 +24,7 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 3. **唯一交付判定**：只有 `delivery-gate evaluate` 能写 `verdict.json`；自动和手工路径使用同一判据。
 4. **独立保证**：由不参与实现的角色核对验收覆盖，并按风险进行探索性审查——主动寻找验收与测试遗漏。独立保证不得只复用实现方的契约解释与模拟环境：须独立取得权威环境事实（真实 SDK、宿主源码或正式文档），无法取得时登记为证据缺口（详细责任在 coverage-reviewer 提示词，此处不重复）。
 5. **未知不等于通过**：`partial` 不是 `verified`；用户接受风险也不改写成已验证。schema 2 缺口逐「断言×证据类型」判定，schema 1 保持「需求×证据类型」兼容语义。
+6. **外部契约运行可用性**：交付物依赖外部系统（真实宿主 / 官方运行器 / 外部 SDK）时，`accepted` 必须意味着真实运行环境可用——权威工件已登记、runtime 义务在当前 revision 被 official-runner 或 real-host 证据满足；mock 绿或代码存在不构成运行可用。
 
 ## 交付事务内核（delivery-core）
 
@@ -38,7 +39,7 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 - **定级护栏**：关联需求已有断言级判据明文覆盖的发现禁止归 boundary；non-blocker 必须附 consequenceRefutation 三类论证；同一条目定级组合超过 2 种熔断停回用户；T2 聚合分级与 D2 聚合定性的改判必附理由留痕，同一 ref/条目连续改判达上限停回（aggregateRegradeHalt）。护栏只拦新写入；历史记录违规在加载折算时留档 guardrailWarnings（旧任务目录可读）。
 - **循环预算**：perVersion 修复 ≤3、不同 must-fix ≤10、跨 run 保证总轮 ≤6、验收复审轮 ≤6——超限判 process-failed 停回（`quality.budgets` 报用量）。计数口径分两类：验收复审轮按 started 尝试计数（打回、失败、中断全部计入，跨 run 与手工路径累计不重置）；其余三项按签名事件计数（既有口径，environment/evidence 类不计轮）。尝试登记与查询走 `delivery-core loop-attempt` / `loop-budget`（记录文件 loop-attempts.jsonl，非签名事件）。
 - **待办实体**（pending-actions）：善后 / 待恢复 / 待登记 / 待裁决 / 待复盘落盘，`next` 优先回答；中断恢复 = 读待办 + 合法转移，不依赖会话记忆。
-- **交付义务与 revision 来源对账**：accepted 判定从「事件是否齐」扩展——`delivery-core obligations` 从验收断言 / 必需阶段 / 修复轮 / blocking 待办派生义务清单（不建人工总表），必需义务无 open 才可 accepted（`explicitly-waived` 须绑用户裁决，豁免通道按义务类型映射现有命令）；`delivery-core revision-provenance` 只读派生候选形成后每次 revision 变化的来源，来源不明（unknown）的代际不得被后续保证覆盖、不得 accepted，恢复动作 = 补做合法修复登记 / 恢复已知基线 / 用户确认外部基线（`confirm-baseline` 命令，登记 RevisionBaselineConfirmed 事件接链）。
+- **交付义务与 revision 来源对账**：accepted 判定从「事件是否齐」扩展——`delivery-core obligations` 从验收断言 / 必需阶段 / 修复轮 / blocking 待办 / 外部契约能力派生义务清单（不建人工总表），必需义务无 open 才可 accepted（`explicitly-waived` 须绑用户裁决，豁免通道按义务类型映射现有命令）；其中 kind=runtime（外部契约运行可用性）义务不可豁免——`accept-risk` 与 `preauthorize-risk` 均不消化，满足形态 = 当前 revision 由 assurance 登记、`runtimeProbe=true` 且认领该契约能力的证据；`delivery-core revision-provenance` 只读派生候选形成后每次 revision 变化的来源，来源不明（unknown）的代际不得被后续保证覆盖、不得 accepted，恢复动作 = 补做合法修复登记 / 恢复已知基线 / 用户确认外部基线（`confirm-baseline` 命令，登记 RevisionBaselineConfirmed 事件接链）。
 - **人工处置显式转移**：DAG 节点人工改判 done 的唯一合法通道 `node-transition --event manual-disposition --basis <依据> --task-dir <taskDir>`（自动登记待复盘待办）；禁止词表外事件与直改状态文件。
 - **验证体系**：转移表静态校验 + 编排链已知答案样例 + golden 任务端到端（`scripts/tests/delivery-golden-v6.test.mjs`：正常流与预置缺陷流，断言拦截阶段/定级/轮次；agent 语义行为的 golden 需活跑，见 dev-flow-v6 题库分级）+ 历史任务回放（`delivery-core replay --task-dir`：真实事件序列对转移表的可表达性核验）+ 全量机制单测，全部进 CI。
 
@@ -63,12 +64,12 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 | 阶段 | 裁决点（停回用户） | 机器门（内核/gate） |
 |------|--------------------|---------------------|
 | init | 血统冲突走替换或独立声明 | init 血统检查；`--verification-only` 标记 |
-| 验收设计 | **用户批准验收**（呈报目标/非目标/风险/覆盖对照） | 审查与机器校验双通过才可批准；批准即冻结（0444 + frozen 快照）；复审轮预算 ≤6 超限停回 |
+| 验收设计 | **用户批准验收**（呈报目标/非目标/风险/覆盖对照） | 审查与机器校验双通过才可批准；批准即冻结（0444 + frozen 快照）；复审轮预算 ≤6 超限停回；声明 externalContracts 时增跑外部契约守门（候选探测与处置、essential 契约权威解析、capability 回溯与 mock-only 检查、契约冒烟增量），审查与批准绑定 authoritySnapshotSha256 |
 | 方案 | **用户确认方案包** | record-design-approved 绑哈希清单；保证后修订按轮入预算 |
 | 候选实现 | — | 入口门校验批准与 DesignApproved；schema 2 登记实现前必须已有当前 revision 探索（探索通道不要求实现先登记——转移表死锁防护）且 must-fix 清零 |
 | 独立保证 | — | full/recheck/explore-only 三模式语义门；探索 due 与 open 集由内核单源判定 |
 | 有限修复 | **预算耗尽停回**（perVersion >3 / 不同 must-fix >10 / 跨 run 保证 >6） | 轮次预判走内核 repair-budget；reopenOf 根去重；environment/evidence 不计轮 |
-| 判定 | **风险接受逐项裁决** | 只有 evaluate 写 verdict；accepted / accepted_with_risk 才可交付；process-failed 不得作为成功交付；evaluate 前置机器核对：`obligations` 必需义务无 open、`revision-provenance` 无 unknown 来源代际、`loop-budget` 未超限 |
+| 判定 | **风险接受逐项裁决** | 只有 evaluate 写 verdict；accepted / accepted_with_risk 才可交付；process-failed 不得作为成功交付；evaluate 前置机器核对：`obligations` 必需义务无 open、`revision-provenance` 无 unknown 来源代际、`loop-budget` 未超限、外部契约 runtime readiness 为 established / not-applicable 且环境历史链完好 |
 
 收尾质量指标：交付终态确定后运行 `node ~/.agents/skills/delivery-v6/scripts/delivery-quality-stats.mjs <taskDir> --json` 输出 11 项交付质量指标（uniqueMustFix、repairRounds、findings、reopenedFindings、expectedStageAccuracy、escapedByStage、assuranceMustFixFirstRun、targetedReviewRate、finalExplorations、evidenceIntegrityFailures、stuckContinuationCount），呈报用户并存档。卡住续跑次数由主会话按 dev-flow 执行记录统计后经 `--stuck-continuation-count N` 传入。过程审查统计：taskDir 含 process-review.jsonl（dev-flow-v6 渐进式 review 的过程记录）时追加输出 processReview 字段，缺失不影响既有指标。终态报告：`node ~/.agents/skills/delivery-v6/scripts/generate-delivery-report.mjs --task-dir <taskDir> [--status-file <dev-flow status.json>] [--out <路径>]` 由权威记录（verdict.json / events.jsonl / loop-attempts.jsonl / self-repairs.jsonl / status.json / workflow 观测记录）机器生成分节报告（与 delivery-quality-stats 并列使用：前者面向用户的终态呈报，后者为质量指标数值）——数字与状态以报告文件为准，LLM 只做叙事解释；缺运行记录的项标 unknown，不按 0 或成功补齐，人工转述数字属违规。两项已知缺口登记：① 层间漏检阈值触发的检查规则修订提案不自动化——发现来源（origin）与预期阶段（expectedStage）分布已进 delivery-quality-stats 与终态报告，阈值人工判读；② 过程记录（process-review.jsonl）条目较 V4 设计建议精简（无输入快照哈希 / 三值分类 / 重开引用），条目级「过程发现漏出到末端」对照待实跑需要时再建。
 
@@ -141,4 +142,4 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 
 ## 与归档代（v1 / v2 / v3）/ v4 的关系
 
-v1 / v2 / v3 已归档（仓库根 `.archived/`，不入版本库），不再作为正式技能；v4 为质量传递线（冻结维护）。v5 在 v4 基础上落地交付事务内核（delivery-core）：五域转移表与静态校验、判定单源库（open 集/探索集/due/预算只此一份）、验收包写入防护（冻结 + open-revision + 篡改检测）、FindingRaised 定级护栏（boundary 禁令/后果论证强制/改判熔断）、循环预算三档（新增跨 run 保证 ≤6）、pending-actions 待办实体、节点人工处置显式转移。判定语义与 v4 兼容（schema 1/2 双轨不变）；新增事件 RevisionOpened、新增命令 open-revision 与内核命令组。v6 在 v5 基线上叠加《三技能结构化优化设计》第二至五步（能力快照、D0 编译器、双索引、reviewer 种子定位），为现行开发代；v5 为冻结参照。
+v1 / v2 / v3 已归档（仓库根 `.archived/`，不入版本库），不再作为正式技能；v4 为质量传递线（冻结维护）。v5 在 v4 基础上落地交付事务内核（delivery-core）：五域转移表与静态校验、判定单源库（open 集/探索集/due/预算只此一份）、验收包写入防护（冻结 + open-revision + 篡改检测）、FindingRaised 定级护栏（boundary 禁令/后果论证强制/改判熔断）、循环预算三档（新增跨 run 保证 ≤6）、pending-actions 待办实体、节点人工处置显式转移。判定语义与 v4 兼容（schema 1/2 双轨不变）；新增事件 RevisionOpened、新增命令 open-revision 与内核命令组。v6 在 v5 基线上叠加三份设计：《三技能结构化优化设计》第二至五步（能力快照、D0 编译器、双索引、reviewer 种子定位）、《V5 交付完整性与语义可信性改造设计》六机制（判据判别力检查、证据环境与独立校验、交付义务与 revision 来源对账、循环尝试记录、缺陷族修复、派生产物与终态报告）与《V6 运行可用性与外部契约守门升级设计》（外部契约登记 externalContracts / externalContractReview、权威工件解析与环境历史链、kind=runtime 义务与真实环境 probe、契约冒烟增量），为现行开发代；v5 为冻结参照。7.0.0 bump 理由（数据契约变更）：事件词表 +2（ExternalAuthorityDeclared、EnvironmentBaselineConfirmed）、verdict 增 runtimeReadiness、obligations 增 kind=runtime、验收包 additive 两字段（externalContracts / externalContractReview）。迁移边界：升级前任务（task.json 无 deliveryProfile 元数据）与未声明 externalContracts 的验收包零新约束，外部契约全链仅在验收包声明该键后生效。

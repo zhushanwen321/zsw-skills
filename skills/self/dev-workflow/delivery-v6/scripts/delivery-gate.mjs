@@ -54,8 +54,16 @@ import {
   parseLoopAttemptsText,
   priorFullQualification,
   repairBudgetFromEvents,
+  runtimeEvidenceIntegrityGap,
   taskPhaseFromEvents,
 } from "./lib/kernel-judgments.mjs";
+import {
+  loadClassTables,
+  renderRescanErrorGate,
+  rescanRecoveryGate,
+  runContractRescan,
+  strongCandidateClasses,
+} from "./lib/contract-rescan.mjs";
 
 const GATE_COMMAND = "node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs";
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -1930,7 +1938,16 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
       case "ExplorationCompleted":
         if (current && artifactUsable) {
           if (!coversDimensions(event.dimensions, world.acceptance.reviewDimensions)) {
-            fail(`${lineLabel} 未完整覆盖 acceptance.reviewDimensions。`, `补齐维度 ${world.acceptance.reviewDimensions.join(", ")} 后重新追加 ExplorationCompleted；允许同时申报验收外额外维度。`);
+            // a 级契约任务的维度由 IA 机器降档（只取「外部契约 / 故障形态」两类）——降档词表
+            // 与验收 reviewDimensions 不一致时在此响亮失败，恢复消息须同时给出两条出路，
+            // 不能只让调用方「补齐维度」（降档侧补不回来）
+            const profileNarrowed = world.task.deliveryProfile === "a" && externalContractsOf(world.acceptance).length > 0;
+            fail(
+              `${lineLabel} 未完整覆盖 acceptance.reviewDimensions。`,
+              profileNarrowed
+                ? `两因二选一：① 验收声明的 reviewDimensions（${world.acceptance.reviewDimensions.join(", ")}）超出 a 级机器降档词表（${PROFILE_A_EXPLORATION_DIMENSIONS.join(" / ")}）——收窄验收维度后重新起草并递增 acceptanceVersion；② 确需更多探索维度——由用户执行 ${GATE_COMMAND} set-delivery-profile --task-dir <dir> --profile b --credential <user credentialId> 改为 b 级后重跑探索。补齐维度 ${world.acceptance.reviewDimensions.join(", ")} 后重新追加 ExplorationCompleted 亦允许（允许同时申报验收外额外维度）。`
+                : `补齐维度 ${world.acceptance.reviewDimensions.join(", ")} 后重新追加 ExplorationCompleted；允许同时申报验收外额外维度。`,
+            );
           }
           fold.explorations.push(event);
         }
@@ -2446,18 +2463,11 @@ function externalContractClassesPolicy(world) {
   return document === null || document === undefined ? null : document;
 }
 
-/** classId → {minEnvironment, implies[]}；策略文件缺失或 classes 为空 → null。 */
+/** classId → {minEnvironment, implies[]}；策略文件缺失或 classes 为空 → null。
+ * 表由 contract-rescan 单源库派生（D0/D3/evaluate 三处复扫与 validate 的词表校验同一份）。 */
 function classFloorTable(policyDocument) {
-  if (policyDocument === null || !Array.isArray(policyDocument.classes) || policyDocument.classes.length === 0) return null;
-  const table = new Map();
-  for (const entry of policyDocument.classes) {
-    if (entry === null || typeof entry !== "object" || typeof entry.id !== "string") continue;
-    table.set(entry.id, {
-      minEnvironment: typeof entry.minEnvironment === "string" ? entry.minEnvironment : null,
-      implies: Array.isArray(entry.impliesObservationClasses) ? entry.impliesObservationClasses.filter((item) => typeof item === "string") : [],
-    });
-  }
-  return table.size > 0 ? table : null;
+  const tables = loadClassTables(policyDocument);
+  return tables.classes.size > 0 ? tables.classes : null;
 }
 
 /** 验收包全部「契约 × 能力」条目（sourceRef 指向 acceptance.externalContracts 的能力项）。 */
@@ -2508,27 +2518,12 @@ function readCandidateSnapshot(taskDir, acceptanceVersion) {
   return { available: true, path: filePath, document, sha256: sha256Text(text) };
 }
 
-/** strong 候选信号命中的调用类集合。词表缺失时退化为取信号末段（manifest:pi.extensions →
- * pi.extensions；call-class:register-command → register-command）。 */
-function strongCandidateClasses(candidateSnapshot, floorTable) {
-  const classes = new Set();
-  if (candidateSnapshot?.available !== true) return classes;
-  const candidates = Array.isArray(candidateSnapshot.document?.candidates) ? candidateSnapshot.document.candidates : [];
-  const known = floorTable === null ? [] : [...floorTable.keys()];
-  for (const candidate of candidates) {
-    if (candidate?.strength !== "strong") continue;
-    const signals = Array.isArray(candidate.signals) ? candidate.signals.filter((item) => typeof item === "string") : [];
-    for (const signal of signals) {
-      for (const classId of known) {
-        if (signal.includes(classId)) classes.add(classId);
-      }
-      if (known.length === 0) {
-        const tail = signal.split(":").filter(Boolean).at(-1);
-        if (tail !== undefined) classes.add(tail);
-      }
-    }
-  }
-  return classes;
+/** strong 候选信号命中的调用类集合（含蕴含观察类）——实现 = contract-rescan 单源库的提取
+ * 口径（call-class 段正则 + manifest-field 映射 + regex 还原 + 词表缺席时的末段退化），
+ * 与 D0/D3/evaluate 复扫同一份，不再子串匹配。词表缺失时退化为取信号末段
+ * （manifest:pi.extensions → pi.extensions；call-class:register-command → register-command）。 */
+function strongClassesFromSnapshot(candidateSnapshot, policyDocument) {
+  return strongCandidateClasses(candidateSnapshot, loadClassTables(policyDocument));
 }
 
 /** 机器强制按 essential 处理的能力（设计 §4.1 字段规则 + §7.3 D0）：源码/manifest strong
@@ -2874,13 +2869,16 @@ function validateExternalContractStructure(acceptance, sources) {
     }
   }
   // 检查 7：capability 绑定断言的 given/when 把 mock/fake/自写 harness 作为唯一装载或
-  // 分发环境时拒绝（mock 可以是补充场景，不能是该 capability 的唯一声明来源）
+  // 分发环境时拒绝（mock 可以是补充场景，不能是该 capability 的唯一声明来源）。
+  // 判定 = 出现 mock 类词且全文无任何真实环境词/档位枚举才拒——真实环境词表须覆盖
+  // 连字符与空格两种写法（official-runner / official runner）与中文写法（官方运行器 /
+  // 真实宿主），否则词面变体即误伤（F17）
   for (const assertion of assertions) {
     const capability = assertion.requiredEnvironment?.capability;
     if (typeof capability !== "string" || capability === "" || !capabilityByReference.has(capability)) continue;
     const text = `${assertion.given}\n${assertion.when}`.toLowerCase();
     const mockHit = /(mock|fake|harness|stub|模拟|自写|假宿主)/.test(text);
-    const realHit = /(真实|real|official-runner|real-host|官方|生产环境|实际宿主)/.test(text);
+    const realHit = /(真实|real|official-runner|real-host|official runner|real host|官方|官方运行器|真实宿主|生产环境|实际宿主)/.test(text);
     if (mockHit && !realHit) {
       fail(
         `断言 ${assertion.id}（绑定能力 ${capability}）的 given/when 只把 mock/fake/自写 harness 作为装载或分发环境。`,
@@ -2890,15 +2888,16 @@ function validateExternalContractStructure(acceptance, sources) {
   }
 }
 
-/** 声明层检查（设计 §5.1 第 2/3 条）：候选处置表与 resolved 权威快照。
- * candidateSnapshot 由调用方读盘（taskDir/evidence/acceptance-v<N>/external-contract-candidates.json），
- * 权威快照经 resolver 现场解析（validate-acceptance 是声明期检查，resolver 不可用时允许回落到
- * current 指针——该指针由工作流在解析后刚写过）。 */
+/** 声明层检查（设计 §5.1 第 2/3/5/8 条）：候选处置表、resolved 权威快照与（强制 essential
+ * 口径下的）契约冒烟增量。candidateSnapshot 由调用方读盘
+ * （taskDir/evidence/acceptance-v<N>/external-contract-candidates.json），权威快照经 resolver
+ * 现场解析（validate-acceptance 是声明期检查，resolver 不可用时允许回落到 current 指针——
+ * 该指针由工作流在解析后刚写过）。返回声明层算出的强类集合（检查 8 透传用）。 */
 function validateExternalContractDeclarations(acceptance, taskDir, sources, candidateSnapshot) {
   const contracts = externalContractsOf(acceptance);
   const policyDocument = sources?.[EXTERNAL_CONTRACT_CLASSES_FILE] ?? null;
   const floorTable = classFloorTable(policyDocument);
-  const strongClasses = strongCandidateClasses(candidateSnapshot, floorTable);
+  const strongClasses = strongClassesFromSnapshot(candidateSnapshot, policyDocument);
   const forced = forcedEssentialCapabilityIds(acceptance, strongClasses);
   const essentialContracts = effectivelyEssentialContracts(acceptance, forced);
   const seenContractIds = new Set(externalContractsOf(acceptance).map((contract) => contract.id));
@@ -3008,13 +3007,18 @@ function validateExternalContractDeclarations(acceptance, taskDir, sources, cand
       );
     }
   }
+  // 强类集合回传：检查 8（契约冒烟增量）的 forced essential 口径与检查 3/5 同源
+  return strongClasses;
 }
 
-/** 检查 8：验收含（有效）essential 契约时，increments 必须存在 kind=contract-smoke 增量。 */
-function validateContractSmokeIncrement(increments, acceptance) {
+/** 检查 8：验收含（有效）essential 契约时，increments 必须存在 kind=contract-smoke 增量。
+ * strongClasses = 声明层从候选快照算出的强类集合（检查 3/5 同源）；validateIncrements 在
+ * loadWorld 热路径上以空集合调用（只覆盖自报 essential），这里用实算集合补覆盖「源码强
+ * 信号强制按 essential」的契约——两处调用同一判定，数据源对齐。 */
+function validateContractSmokeIncrement(increments, acceptance, strongClasses = new Set()) {
   const contracts = externalContractsOf(acceptance);
   if (contracts.length === 0) return;
-  const forced = forcedEssentialCapabilityIds(acceptance, new Set());
+  const forced = forcedEssentialCapabilityIds(acceptance, strongClasses);
   const essentialContracts = effectivelyEssentialContracts(acceptance, forced);
   if (essentialContracts.size === 0) return;
   const hasSmoke = (increments.items ?? []).some((item) => item.kind === "contract-smoke");
@@ -3022,6 +3026,28 @@ function validateContractSmokeIncrement(increments, acceptance) {
   fail(
     `验收含 essential 外部契约（${[...essentialContracts].join(", ")}）但 increments 无 kind=contract-smoke 的契约冒烟增量。`,
     "增加一个契约冒烟增量（kind=contract-smoke，testCommand 指向 runtime probe 入口），让 API 形态/签名/回执通道在业务实现前先被真实环境揭示。",
+  );
+}
+
+/** profile=a 探索维度词表（设计 §13 机器降档）：a 级契约任务的探索维度只取契约与故障两类。
+ * 与 independent-assurance-v6 workflow 的 PROFILE_A_DIMENSIONS 逐字一致——两侧是不变量：
+ * IA 按此降档产出 ExplorationCompleted.dimensions，gate 的维度覆盖检查要求完整覆盖
+ * acceptance.reviewDimensions，词表不一致时 full 保证循环无法收敛。 */
+const PROFILE_A_EXPLORATION_DIMENSIONS = ["外部契约", "故障形态"];
+
+/** E 类对账：deliveryProfile=a 且验收含外部契约时，acceptance.reviewDimensions 必须 ⊆
+ * 降档词表。只在 validate-acceptance 命令执行（不进 loadWorld 热路径：批准后由用户改分级
+ * 不应把任务锁死在「任何命令都跑不了」的状态，那种情形的兜底是 ExplorationCompleted 追加时
+ * 的维度覆盖失败，消息里指明两条出路）。 */
+function validateProfileADimensionScope(acceptance, task) {
+  if (task?.deliveryProfile !== "a") return;
+  if (externalContractsOf(acceptance).length === 0) return;
+  const outOfScope = (Array.isArray(acceptance.reviewDimensions) ? acceptance.reviewDimensions : [])
+    .filter((dimension) => !PROFILE_A_EXPLORATION_DIMENSIONS.includes(dimension));
+  if (outOfScope.length === 0) return;
+  fail(
+    `deliveryProfile=a 且验收含外部契约时，acceptance.reviewDimensions 只能取 ${PROFILE_A_EXPLORATION_DIMENSIONS.join(" / ")}（当前超出：${outOfScope.join(", ")}）。`,
+    `两种改法二选一：① 把 reviewDimensions 收窄到「${PROFILE_A_EXPLORATION_DIMENSIONS.join("」与「")}」两类（a 级任务探索维度按机器降档只做契约与故障两类，降档不减必做机器门）；② 需要更多探索维度时由用户执行 ${GATE_COMMAND} set-delivery-profile --task-dir <dir> --profile b --credential <user credentialId> 改为 b 级后重跑 validate-acceptance。`,
   );
 }
 
@@ -3087,43 +3113,74 @@ function runtimeEvidenceRecordsOf(world, revision) {
 
 /** 证据级权威核对（§8.1 第 4-6 条，与能力无关的维度）：sourceHash 与当前权威
  * aggregateHash 一致、driver 与 driverHash 可核、probe subject.revision 与事件 revision 一致。
+ * 判定走 kernel-judgments.runtimeEvidenceIntegrityGap 单源（与 deriveRuntimeObligations 的
+ * 证据核对同一函数，不各写一份）；消息措辞保持 gate 侧既有形态（测试冻结）。
  * 返回 null = 无缺口；非 null = 该证据最多 partial 的原因。 */
 function runtimeEvidenceAuthorityGap(world, record, snapshot) {
-  if (record.artifactReadable !== true) return "runtime probe artifact 不可读或不是 JSON 对象";
-  if (record.driverHashOk !== true) return "environment.driver 缺失、文件不可解析或 driverHash 与驱动文件内容不一致";
-  const environment = record.environment;
-  if (environment === null || environment === undefined) return "artifact 无 environment 元数据";
-  if (typeof environment.sourceHash !== "string" || environment.sourceHash === "") return "environment.sourceHash 缺失";
-  const contractIds = new Set(
-    record.contractCapabilityIds
-      .map((id) => (id.includes(":") ? id.slice(0, id.indexOf(":")) : (externalContractsOf(world.acceptance).length === 1 ? externalContractsOf(world.acceptance)[0].id : null)))
-      .filter((id) => typeof id === "string"),
-  );
-  for (const contractId of contractIds) {
-    const entry = snapshot.contracts.find((item) => item?.id === contractId);
-    const currentHash = entry === undefined ? null : contractAggregateHashOf(entry);
-    if (currentHash === null) {
-      return `契约 ${contractId} 当前权威不可解析（status=${entry?.status ?? "不在快照中"}）——无法核对证据 environment.sourceHash`;
-    }
-    if (environment.sourceHash !== currentHash) {
-      return `environment.sourceHash 与契约 ${contractId} 当前权威 aggregateHash 不一致（证据 ${environment.sourceHash.slice(0, 12)}…，权威 ${currentHash.slice(0, 12)}…）`;
-    }
+  const contracts = externalContractsOf(world.acceptance);
+  const authorityHashes = record.contractCapabilityIds
+    .map((id) => (id.includes(":") ? id.slice(0, id.indexOf(":")) : (contracts.length === 1 ? contracts[0].id : null)))
+    .filter((id) => typeof id === "string")
+    .map((contractId) => {
+      const entry = snapshot.contracts.find((item) => item?.id === contractId);
+      return {
+        contractId,
+        hash: entry === undefined ? null : contractAggregateHashOf(entry),
+        status: entry?.status ?? "不在快照中",
+      };
+    });
+  const gap = runtimeEvidenceIntegrityGap({
+    artifactReadable: record.artifactReadable,
+    driverHashOk: record.driverHashOk,
+    environment: record.environment,
+    authorityHashes,
+    subjectRevision: record.subject?.revision,
+    eventRevision: record.revision,
+  });
+  if (gap === null) return null;
+  switch (gap.kind) {
+    case "artifact-unreadable":
+      return "runtime probe artifact 不可读或不是 JSON 对象";
+    case "driver-unverifiable":
+      return "environment.driver 缺失、文件不可解析或 driverHash 与驱动文件内容不一致";
+    case "environment-missing":
+      return "artifact 无 environment 元数据";
+    case "sourceHash-missing":
+      return "environment.sourceHash 缺失";
+    case "authority-unresolved":
+      return `契约 ${gap.contractId} 当前权威不可解析（status=${gap.status ?? "不在快照中"}）——无法核对证据 environment.sourceHash`;
+    case "sourceHash-mismatch":
+      return `environment.sourceHash 与契约 ${gap.contractId} 当前权威 aggregateHash 不一致（证据 ${gap.evidenceHash.slice(0, 12)}…，权威 ${gap.authorityHash.slice(0, 12)}…）`;
+    case "subject-revision-mismatch":
+      return `probe subject.revision（${gap.subjectRevision ?? "缺失"}）与证据事件 revision（${gap.eventRevision}）不一致——早期 spike 不能替代 final`;
+    default:
+      return `runtime 证据核对拒绝（未登记 kind ${String(gap.kind)}）`;
   }
-  const subjectRevision = typeof record.subject?.revision === "string" ? record.subject.revision : null;
-  if (subjectRevision === null || subjectRevision !== record.revision) {
-    return `probe subject.revision（${subjectRevision ?? "缺失"}）与证据事件 revision（${record.revision}）不一致——早期 spike 不能替代 final`;
-  }
-  return null;
 }
 
-/** runtime 义务 + readiness 组装（evaluate / obligations 共用）。 */
+/** runtime 义务 + readiness 组装（evaluate / obligations 共用）。
+ * 结果按 world 对象身份 × revision memo（F12：delivery-core obligations 命令先跑 buildVerdict
+ * 再显式调用本函数，同一 world 同一 revision 的两次完整组装（resolver spawn + 探测器 spawn +
+ * artifact 读取）共享一次）。key = world 对象（每次 loadWorld 新建，天然按命令隔离）。 */
+const RUNTIME_OBLIGATIONS_MEMO = new WeakMap();
 function runtimeObligationsOf(world, revision) {
+  let byRevision = RUNTIME_OBLIGATIONS_MEMO.get(world);
+  if (byRevision === undefined) {
+    byRevision = new Map();
+    RUNTIME_OBLIGATIONS_MEMO.set(world, byRevision);
+  }
+  if (byRevision.has(revision)) return byRevision.get(revision);
+  const result = assembleRuntimeObligations(world, revision);
+  byRevision.set(revision, result);
+  return result;
+}
+
+function assembleRuntimeObligations(world, revision) {
   const acceptance = world.acceptance;
   const contracts = externalContractsOf(acceptance);
   if (contracts.length === 0) {
-    return { obligations: [], readiness: { overall: "not-applicable", contracts: [] }, snapshot: null, baseline: null, chainBroken: [], forced: new Set(), strongClasses: new Set(), rescanAvailable: true, rescanReason: null };
+    return { obligations: [], readiness: { overall: "not-applicable", contracts: [] }, snapshot: null, baseline: null, chainBroken: [], chainGaps: [], chainDisclosed: [], forced: new Set(), strongClasses: new Set(), rescanAvailable: true, rescanReason: null };
   }
-  const floorTable = classFloorTable(externalContractClassesPolicy(world));
   // evaluate 侧必须现场重解析权威（不允许读 taskDir 旧快照结论蒙混，设计 §4.4 第 6/7 条）
   const snapshot = resolveEnvironmentContracts(world.taskDir, world.task.projectRoot, { allowPointerFallback: false });
   const baseline = approvalBaselineHashes(world);
@@ -3131,14 +3188,37 @@ function runtimeObligationsOf(world, revision) {
   const strongClasses = rescan.classes;
   const forced = forcedEssentialCapabilityIds(acceptance, strongClasses);
   const essentialContracts = effectivelyEssentialContracts(acceptance, forced);
-  const chainBroken = [];
   const chainOk = new Set();
+  const chainGaps = [];
   for (const contract of contracts) {
     const entry = snapshot.contracts.find((item) => item?.id === contract.id);
     const currentHash = entry === undefined ? null : contractAggregateHashOf(entry);
+    // 批准时与当前均无该契约条目 = 从未有权威：无漂移可判（两快照相同，报「哈希不一致」
+    // 自相矛盾）——设计 §6.2 豁免规则 4 / §17 例 18：非 essential 权威不可得走风险接受，
+    // readiness 记 not-established，不 Chain 断裂
+    const baselineHashes = baseline.hashes;
+    const absentInBoth = entry === undefined && baselineHashes !== null && !baselineHashes.has(contract.id);
+    if (absentInBoth) {
+      chainOk.add(contract.id);
+      continue;
+    }
     if (currentHash !== null && environmentChainOk(contract.id, currentHash, baseline, world)) chainOk.add(contract.id);
-    else chainBroken.push(contract.id);
+    else {
+      chainGaps.push({
+        contractId: contract.id,
+        essential: essentialContracts.has(contract.id),
+        kind: entry === undefined
+          ? (baselineHashes !== null && baselineHashes.has(contract.id) ? "authority-lost" : "approval-snapshot-unavailable")
+          : "authority-drift",
+        baselineHash: baselineHashes === null || !baselineHashes.has(contract.id) ? null : baselineHashes.get(contract.id),
+        currentHash,
+      });
+    }
   }
+  // 环境历史链阻断只覆盖 essential 契约；非 essential 契约的链缺口降为披露（进
+  // missing.nonEssentialEnvironmentChain，不进 environmentChainBlock）
+  const chainBroken = chainGaps.filter((gap) => gap.essential).map((gap) => gap.contractId);
+  const chainDisclosed = chainGaps.filter((gap) => !gap.essential);
   const obligations = deriveRuntimeObligations({
     acceptance,
     environmentSnapshot: snapshot,
@@ -3148,7 +3228,7 @@ function runtimeObligationsOf(world, revision) {
     chainOkContracts: chainOk,
   });
   const readiness = buildRuntimeReadiness(acceptance, obligations, essentialContracts, snapshot, rescan);
-  return { obligations, readiness, snapshot, baseline, chainBroken, forced, strongClasses, rescanAvailable: rescan.available, rescanReason: rescan.reason };
+  return { obligations, readiness, snapshot, baseline, chainBroken, chainGaps, chainDisclosed, forced, strongClasses, rescanAvailable: rescan.available, rescanReason: rescan.reason };
 }
 
 /** readiness 汇总（§12.1）：overall 只看 effectively essential 契约；非增强契约的能力缺失
@@ -3196,6 +3276,26 @@ function buildRuntimeReadiness(acceptance, obligations, essentialContracts, snap
   };
 }
 
+/** 探测 CLI 输出（按 world 对象身份 memo，F12：evaluate 前置的复扫与 runtimeObligationsOf
+ * 的复扫共享一次探测器 spawn——同一输入跑两遍既慢又可能给出两个结论）。key = world 对象
+ * （loadWorld 每次命令新建，天然按次隔离，不会跨命令残留）× 项目根。 */
+const DETECTOR_OUTPUT_MEMO = new WeakMap();
+function detectorOutputOf(world) {
+  let byProjectRoot = DETECTOR_OUTPUT_MEMO.get(world);
+  if (byProjectRoot === undefined) {
+    byProjectRoot = new Map();
+    DETECTOR_OUTPUT_MEMO.set(world, byProjectRoot);
+  }
+  const key = world.task.projectRoot;
+  if (byProjectRoot.has(key)) return byProjectRoot.get(key);
+  const intentPath = join(world.taskDir, "intent.md");
+  const args = ["--project-root", world.task.projectRoot];
+  if (existsSync(intentPath)) args.push("--intent-file", intentPath);
+  const outcome = runExternalContractScript(detectorScriptPath(), args);
+  byProjectRoot.set(key, outcome);
+  return outcome;
+}
+
 /** 候选复扫（§8.1 第 1 条 / §7.3 D3）：对当前候选源码重跑完整候选探测，strong 信号与蕴含
  * 观察类必须映射到已声明 capability，unresolved 外部访问必须清零。
  * 返回 {available, classes}——探测脚本不可用时 available=false（调用方按 fail-closed 处理，
@@ -3203,17 +3303,18 @@ function buildRuntimeReadiness(acceptance, obligations, essentialContracts, snap
 function rescanStrongClasses(world) {
   const acceptance = world.acceptance;
   if (externalContractsOf(acceptance).length === 0) return { available: true, classes: new Set(), reason: null };
-  const intentPath = join(world.taskDir, "intent.md");
-  const args = ["--project-root", world.task.projectRoot];
-  if (existsSync(intentPath)) args.push("--intent-file", intentPath);
-  const outcome = runExternalContractScript(detectorScriptPath(), args);
+  const outcome = detectorOutputOf(world);
   if (!outcome.ok) return { available: false, classes: new Set(), reason: outcome.reason };
-  const floorTable = classFloorTable(externalContractClassesPolicy(world));
-  return { available: true, classes: strongCandidateClasses({ available: true, document: outcome.parsed }, floorTable), reason: null };
+  return {
+    available: true,
+    classes: strongClassesFromSnapshot({ available: true, document: outcome.parsed }, externalContractClassesPolicy(world)),
+    reason: null,
+  };
 }
 
-/** evaluate 前置（§8.1）：候选复扫 + EnvironmentBaselineConfirmed 预算规则。复扫命中未登记
- * strong 信号或未解外部访问 → 直接拒绝 evaluate（不是判个 candidate 了事）。 */
+/** evaluate 前置（§8.1）：候选复扫（判定单源 = contract-rescan 库，D0/D3 同一实现）+
+ * EnvironmentBaselineConfirmed 预算规则。复扫命中未登记 strong 信号、未处置 strong 候选或
+ * 未解外部访问 → 直接拒绝 evaluate（不是判个 candidate 了事）。 */
 function externalContractPreflight(world) {
   const acceptance = world.acceptance;
   if (externalContractsOf(acceptance).length === 0) return;
@@ -3226,55 +3327,25 @@ function externalContractPreflight(world) {
       "外部环境再次漂移时停回用户裁决：① 走 open-revision 重新核对验收（递增 acceptanceVersion）；② 或由用户重新定义目标；不得继续用环境基线确认重试。",
     );
   }
-  const floorTable = classFloorTable(externalContractClassesPolicy(world));
-  const declaredClasses = new Set();
-  for (const entry of contractCapabilityEntries(acceptance)) {
-    for (const classId of Array.isArray(entry.capability.detectionClasses) ? entry.capability.detectionClasses : []) declaredClasses.add(classId);
-  }
-  const intentPath = join(world.taskDir, "intent.md");
-  const args = ["--project-root", world.task.projectRoot];
-  if (existsSync(intentPath)) args.push("--intent-file", intentPath);
-  const outcome = runExternalContractScript(detectorScriptPath(), args);
-  if (!outcome.ok) {
+  // 复扫判定：探测器输出与 runtimeObligationsOf 的复扫共享一次 spawn（detectorOutputOf memo）
+  const rescan = runContractRescan({
+    taskDir: world.taskDir,
+    projectRoot: world.task.projectRoot,
+    acceptance,
+    detection: detectorOutputOf(world),
+    detectorPath: detectorScriptPath(),
+    policyDocument: externalContractClassesPolicy(world),
+  });
+  if (rescan.detectorAvailable !== true) {
     // 探测脚本不可用：不伪造「无信号」结论——复扫缺口进 verdict 披露并阻断 accepted
-    process.stderr.write(`delivery-gate: 外部契约候选复扫不可用（${outcome.reason}）：本次 evaluate 无法确认无未登记 strong 信号，accepted 判定按 fail-closed 处理。\n`);
+    const first = rescan.errors[0];
+    const detail = first === undefined ? "未说明" : renderRescanErrorGate(first);
+    process.stderr.write(`delivery-gate: 外部契约候选复扫不可用（${detail}）：本次 evaluate 无法确认无未登记 strong 信号，accepted 判定按 fail-closed 处理。\n`);
     return;
   }
-  const candidates = Array.isArray(outcome.parsed.candidates) ? outcome.parsed.candidates : [];
-  const unresolved = Array.isArray(outcome.parsed.unresolved) ? outcome.parsed.unresolved : [];
-  const unmappedStrong = [];
-  for (const candidate of candidates) {
-    if (candidate?.strength !== "strong") continue;
-    const signals = Array.isArray(candidate.signals) ? candidate.signals.filter((item) => typeof item === "string") : [];
-    const known = floorTable === null ? [] : [...floorTable.keys()];
-    const hit = new Set();
-    for (const signal of signals) {
-      for (const classId of known) if (signal.includes(classId)) hit.add(classId);
-      if (known.length === 0) {
-        const tail = signal.split(":").filter(Boolean).at(-1);
-        if (tail !== undefined) hit.add(tail);
-      }
-    }
-    // 蕴含观察类：命中注册类时必须同时覆盖其蕴含的分发观察类
-    for (const classId of [...hit]) {
-      for (const implied of floorTable?.get(classId)?.implies ?? []) hit.add(implied);
-    }
-    const missing = [...hit].filter((classId) => !declaredClasses.has(classId));
-    if (hit.size === 0 || missing.length > 0) {
-      unmappedStrong.push({ candidateId: candidate.id ?? "未命名候选", signals, missing });
-    }
-  }
-  if (unresolved.length > 0) {
-    fail(
-      `外部契约候选复扫发现 ${unresolved.length} 项未解外部访问（${unresolved.map((item) => item?.signal ?? "未说明").join("；")}）。`,
-      "计算式外部成员访问、动态 import、eval/Function/vm 等运行时代码生成无法静态归类时停回人工裁决：要么改写为可静态归类的显式调用，要么由用户裁决该外部访问的契约归属后重试；不做字面白名单放行。",
-    );
-  }
-  if (unmappedStrong.length > 0) {
-    fail(
-      `外部契约候选复扫发现未登记 strong 信号：${unmappedStrong.map((item) => `${item.candidateId}（缺调用类 ${item.missing.join(", ") || "无匹配调用类"}）`).join("；")}。`,
-      "能力清单低报的主机器门：在 acceptance.externalContracts 补声明对应调用类的 capability（含 minEnvironment/detectionClasses/surfaceRefs），递增 acceptanceVersion 重新审查批准后重试；确不构成外部契约时由用户裁决并修订验收。",
-    );
+  if (!rescan.ok) {
+    const first = rescan.errors[0];
+    fail(`外部契约候选复扫未过：${renderRescanErrorGate(first)}`, rescanRecoveryGate(first));
   }
 }
 
@@ -3847,15 +3918,30 @@ function buildVerdict(world, revision, revisionSource = "computed") {
             note: "当前 revision 存在基础校验通过的 recheck 保证，但其之前无登记时点完整的 full（同验收版本、receipts 覆盖全部增量、证据可解析、探索引用存在——任意 revision）——首次完整保证不可被定向复核替代。恢复动作：先运行 independent-assurance-v6（mode=full）完成首次完整取证，再以 recheck 做修复后定向复核",
           }
         : null,
-    // 外部环境历史链断裂（§4.3/§10）：契约当前权威哈希与批准时不一致，且事件链无覆盖该
-    // contractId 的 EnvironmentBaselineConfirmed 接链。恢复三选一：环境恢复到批准版本 /
-    // 用户确认新基线并重跑 probe / 走 open-revision 重新核对验收
+    // 外部环境历史链断裂（§4.3/§10）：契约当前权威哈希与批准时不一致（或批准时快照不可用），
+    // 且事件链无覆盖该 contractId 的 EnvironmentBaselineConfirmed 接链。只阻断 essential
+    // 契约；非 essential 契约的链缺口降为披露（见 missing.nonEssentialEnvironmentChain）。
+    // 「批准时与当前均无该契约条目」按无漂移（从未有权威），不进本字段
     environmentChain: runtime.chainBroken.length > 0
       ? {
           contractIds: runtime.chainBroken,
+          gaps: runtime.chainGaps.filter((gap) => gap.essential),
           approvalSnapshotSha256: runtime.baseline.approval?.authoritySnapshotSha256 ?? null,
           currentSnapshotSha256: runtime.snapshot?.snapshotSha256 ?? null,
-          recovery: `契约 ${runtime.chainBroken.join(", ")} 的当前权威哈希与批准时不一致且无 EnvironmentBaselineConfirmed 接链：① 把外部环境恢复到批准版本；② 或由用户执行 ${GATE_COMMAND} confirm-environment-baseline 确认新基线，然后在当前环境重跑 runtime probe；③ 契约语义确实变化时走 open-revision 重新核对验收。同一 acceptanceVersion 内最多确认一次基线。`,
+          // 两成因并列（恢复动作按成因给，不默认全是「哈希漂移」）：① 批准时与当前均无该
+          // 契约条目——权威从未建立；② 当前权威缺失或与批准时不一致——环境变化/权威丢失
+          // 未经用户确认
+          reason: `契约 ${runtime.chainBroken.join(", ")} 的环境历史链不完整（两成因：① 批准时与当前均无该契约条目——权威从未建立；② 当前权威缺失或与批准时不一致——环境变化或权威丢失未经用户确认）`,
+          recovery: `先跑 node ~/.agents/skills/delivery-v6/scripts/resolve-external-contracts.mjs --task-dir ${JSON.stringify(world.taskDir)} --project-root ${JSON.stringify(world.task.projectRoot)} --write 重建/确认当前权威快照，再按成因三选一：① 把外部环境恢复到批准版本；② 或由用户执行 ${GATE_COMMAND} confirm-environment-baseline 确认新基线，然后在当前环境重跑 runtime probe；③ 契约语义确实变化时走 open-revision 重新核对验收。同一 acceptanceVersion 内最多确认一次基线。`,
+        }
+      : null,
+    // 非 essential 契约的环境链缺口（披露不阻断）：设计 §6.2 豁免规则 4 / §17 例 18——
+    // 未进入验收断言的可选集成权威不可得时走普通风险接受，readiness 记 not-established
+    nonEssentialEnvironmentChain: runtime.chainDisclosed.length > 0
+      ? {
+          contractIds: runtime.chainDisclosed.map((gap) => gap.contractId),
+          gaps: runtime.chainDisclosed,
+          recovery: `契约 ${runtime.chainDisclosed.map((gap) => gap.contractId).join(", ")} 为非增强契约：链缺口不阻断 accepted/accepted_with_risk，按普通风险接受通道处理（accept-risk），runtimeReadiness 如实记 not-established。恢复动作三选一：① 补跑 resolve --write 建立权威；② 由用户执行 ${GATE_COMMAND} declare-external-authority 登记 local-path / executable 权威后重跑 resolve；③ 确不需要该集成时走风险接受并披露。`,
         }
       : null,
   };
@@ -3871,6 +3957,11 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     unacceptedFailed: unacceptedFailed.map((requirement) => requirement.id),
     unacceptedBlockers: unacceptedBlockers.map((finding) => finding.findingId),
     unlinkedNonBlockers,
+    // 运行可用性阻断的下一步指引（F8/F9）：readiness 未建立或环境链断裂时直接输出对应
+    // recovery 三段式，不走通用 accept-risk 文案（runtime 义务没有豁免通道）
+    runtimeReadiness: runtime.readiness,
+    runtimeOpenObligations: openObligations.filter((obligation) => obligation.kind === "runtime"),
+    environmentChain: missing.environmentChain,
   });
 
   return {
@@ -3937,6 +4028,9 @@ function buildNextAction({
   unacceptedFailed,
   unacceptedBlockers,
   unlinkedNonBlockers = [],
+  runtimeReadiness = null,
+  runtimeOpenObligations = [],
+  environmentChain = null,
 }) {
   const taskArg = JSON.stringify(taskDir);
   const revisionArg = JSON.stringify(revision);
@@ -3993,6 +4087,18 @@ function buildNextAction({
   }
   if (unlinkedNonBlockers.length > 0) {
     return `未接受的 non-blocker ${unlinkedNonBlockers.join(", ")} 无关联需求——修复时全部增量复查（或对其执行 accept-risk）；再运行 delivery-v6/independent-assurance-v6（taskDir=${taskArg}）补齐 missing.evidence 与当前保证，然后执行 ${evaluate}。`;
+  }
+  // 运行可用性阻断（§6.2/§12.1）：readiness 未建立/未知或环境链断裂时，直接给对应的恢复
+  // 三段式——runtime 义务没有豁免通道，通用 accept-risk 文案在这里是错误指引
+  const readinessBlocked = runtimeReadiness !== null
+    && runtimeReadiness.overall !== "established"
+    && runtimeReadiness.overall !== "not-applicable";
+  if (readinessBlocked || environmentChain !== null) {
+    const details = runtimeOpenObligations.length > 0
+      ? runtimeOpenObligations.map((obligation) => obligation.recovery).join("；")
+      : `外部契约 runtime readiness=${runtimeReadiness?.overall ?? "未知"}：逐契约能力结论见 verdict.runtimeReadiness（unknown 不写成成功）。`;
+    const chainNote = environmentChain !== null ? `环境历史链：${environmentChain.recovery}` : "";
+    return `运行可用性未建立（runtimeReadiness.overall=${runtimeReadiness?.overall ?? "未知"}${environmentChain !== null ? "，环境历史链断裂" : ""}）——不得按通用风险接受处理（runtime 义务没有豁免通道）。${details}${chainNote}然后执行 ${evaluate}。`;
   }
   return `运行 delivery-v6/independent-assurance-v6（taskDir=${taskArg}）补齐 missing.evidence、当前保证与探索审查；对允许风险的缺口执行 accept-risk（多缺口时用 --gap-id 指定其一），然后执行 ${evaluate}。`;
 }
@@ -5039,15 +5145,27 @@ function commandValidateAcceptance(args) {
   const world = loadWorld(options["task-dir"], { withEvents: false });
   // 验收包首次成型时执行血统包对账（intent 对账已在 init 完成）
   requireNoPackageLineageConflict(world);
-  // 外部契约声明层静态检查（设计 §5.1 检查 2/3）：候选处置表 + resolved 权威快照。
-  // 放在结构层之后：结构先合法才有对账对象
+  // 外部契约声明层静态检查（设计 §5.1 检查 2/3/5/8）：候选处置表 + resolved 权威快照。
+  // 放在结构层之后：结构先合法才有对账对象。返回声明层算出的强类集合（检查 8 透传）
+  let externalContractStrongClasses = new Set();
   if (Object.hasOwn(world.acceptance, "externalContracts")) {
-    validateExternalContractDeclarations(
+    // profile=a 机器降档与验收探索维度的对账（设计 §13）：IA 侧把探索维度降为
+    // 「外部契约 / 故障形态」两类，gate 的 ExplorationCompleted 维度覆盖检查要求完整覆盖
+    // acceptance.reviewDimensions——两侧词表不一致时 full 模式必败且循环无法收敛，
+    // 故在验收侧机器约束。放在声明层之前：维度词表是纯静态作者约束，先于需要 IO 的
+    // 候选快照/权威对账给出错误。只在 validate-acceptance 命令执行（不进 loadWorld 热
+    // 路径——否则批准后改分级会把任务锁死在「任何命令都跑不了」的状态，那种情形的兜底
+    // 是 ExplorationCompleted 追加时的维度覆盖失败，消息里指明两条出路）
+    validateProfileADimensionScope(world.acceptance, world.task);
+    externalContractStrongClasses = validateExternalContractDeclarations(
       world.acceptance,
       world.taskDir,
       world.policy,
       readCandidateSnapshot(world.taskDir, world.acceptance.acceptanceVersion),
     );
+    // 检查 8（强制 essential 口径）：源码强信号命中的契约同样必须有契约冒烟增量——
+    // 与检查 3/5 用同一强类集合（loadWorld 热路径上的那次只覆盖自报 essential）
+    validateContractSmokeIncrement(world.increments, world.acceptance, externalContractStrongClasses);
   }
   const warnings = detectionRoutingCriteriaWarnings(world.acceptance);
   // 外部契约声明存在但调用类目录策略未落盘：词表与环境底线校验整体关闭——如实披露，
@@ -5715,6 +5833,17 @@ function commandConfirmEnvironmentBaseline(args) {
       fail(
         `--contract-ids 含未声明契约 ${unknown.join(", ")}。`,
         "只允许确认 acceptance.externalContracts 中已登记的契约 id；新契约先修订验收再确认基线。",
+      );
+    }
+    // 新基线快照必须在盘（environment-contracts/<sha>.json，按哈希分文件、不覆盖）：
+    // 确认一个不存在的快照 = 接上一条空链，后续 evaluate 的批准基线对账必然失败——
+    // 恢复动作不是重试本命令，而是先把权威解析落盘
+    const newSnapshotSha256 = options["new-authority-snapshot-sha256"];
+    const newSnapshotDocument = readEnvironmentSnapshotFile(world.taskDir, newSnapshotSha256);
+    if (newSnapshotDocument === null) {
+      fail(
+        `--new-authority-snapshot-sha256 指向的快照文件不存在或不可解析：${environmentSnapshotFilePath(world.taskDir, newSnapshotSha256)}。`,
+        `先跑 node ~/.agents/skills/delivery-v6/scripts/resolve-external-contracts.mjs --task-dir ${JSON.stringify(world.taskDir)} --project-root ${JSON.stringify(world.task.projectRoot)} --write 生成新环境的权威快照（按哈希分文件落 environment-contracts/<sha>.json），用其 snapshotSha256 重试本命令；快照手改或损坏的恢复动作是重跑 resolve --write 重建，不手工修复。`,
       );
     }
     const sameVersionBaselines = world.fold.environmentBaselines.filter(

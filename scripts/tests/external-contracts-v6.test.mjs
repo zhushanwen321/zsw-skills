@@ -166,10 +166,10 @@ function writePackage(fx, acceptance, increments) {
 /** 合法基线包：essential 契约 + resolved 快照 + 已处置 strong 候选。 */
 function legalPackage(fx, overrides = {}) {
   const detectionSha256 = writeCandidates(fx, { candidates: [{ id: "candidate-host", strength: "strong", signals: ["call-class:register-tool"] }] });
-  writeSnapshot(fx, [resolvedContract("EC-host")]);
+  const { snapshotSha256 } = writeSnapshot(fx, [resolvedContract("EC-host")]);
   const acceptance = acceptanceSkeleton(fx, { capabilities: overrides.capabilities ?? [capability("register-tool-and-invoke", { detectionClasses: ["register-tool", "invoke-tool"] })], detectionSha256, ...overrides.acceptance });
   writePackage(fx, acceptance, overrides.increments);
-  return { acceptance, detectionSha256 };
+  return { acceptance, detectionSha256, snapshotSha256 };
 }
 
 // ── 1. 升级兼容：无外部契约的验收包不受新检查约束 ──
@@ -500,7 +500,7 @@ test("ExternalAuthorityDeclared：user 凭据登记本地/可执行权威；越�
 
 test("EnvironmentBaselineConfirmed：未知契约拒绝；同一 acceptanceVersion 最多一次（命令层 + evaluate 层）", async (t) => {
   const fx = makeFixture(t);
-  const { acceptance, detectionSha256 } = legalPackage(fx);
+  const { acceptance, detectionSha256, snapshotSha256 } = legalPackage(fx);
   writePackage(fx, acceptance);
   ok(runGate(["snapshot-policy", "--task-dir", fx.taskDir], fx.home, fx.env), "snapshot-policy");
   writeFileSync(join(fx.taskDir, "evidence", "acceptance-review-v1.md"), "# review\n");
@@ -508,17 +508,26 @@ test("EnvironmentBaselineConfirmed：未知契约拒绝；同一 acceptanceVersi
   ok(runGate(["approve-acceptance", "--task-dir", fx.taskDir, "--confirmation", "user-explicit", "--summary", "批准", "--credential", fx.creds.user], fx.home, fx.env), "approve-acceptance");
   const approved = JSON.parse(parseStdout(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home, fx.env)));
   const approvalEvent = readFileSync(join(fx.taskDir, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((event) => event.type === "AcceptanceApproved");
-  assert.equal(approvalEvent.authoritySnapshotSha256, approved.runtimeReadiness.contracts[0].authorityHash !== null ? approvalEvent.authoritySnapshotSha256 : null, "批准事件绑定权威快照哈希（审计事实）");
+  // F15 修复（测试审查发现 11）：原断言是自指式（actual 与 expected 同表达式，恒真）——
+  // 改为实值断言：批准事件绑定的快照哈希必须等于 resolver 输出的 snapshotSha256
+  assert.equal(approvalEvent.authoritySnapshotSha256, snapshotSha256, "批准事件绑定权威快照哈希（审计事实：值 = resolver 摘要的 snapshotSha256）");
   assert.match(approvalEvent.authoritySnapshotSha256 ?? "", /^[0-9a-f]{64}$/, "声明外部契约时批准自动绑定快照哈希");
   // 未知契约
   denied(runGate(["confirm-environment-baseline", "--task-dir", fx.taskDir, "--contract-ids", JSON.stringify(["EC-unknown"]),
     "--new-authority-snapshot-sha256", sha256("new-snap"), "--credential", fx.creds.user], fx.home, fx.env), /含未声明契约 EC-unknown/, "只能确认已登记契约");
+  // F13（审查修复）：确认的新快照哈希必须对应盘上快照文件——先落盘再确认（否则拒绝）
+  const newSnapshotSha = sha256("new-snap");
+  mkdirSync(join(fx.taskDir, "environment-contracts"), { recursive: true });
+  writeFileSync(join(fx.taskDir, "environment-contracts", `${newSnapshotSha}.json`), `${JSON.stringify({ schemaVersion: 1, contracts: [resolvedContract("EC-host")], snapshotSha256: newSnapshotSha }, null, 2)}\n`);
   // 第一次确认成功
   ok(runGate(["confirm-environment-baseline", "--task-dir", fx.taskDir, "--contract-ids", JSON.stringify(["EC-host"]),
-    "--new-authority-snapshot-sha256", sha256("new-snap"), "--credential", fx.creds.user], fx.home, fx.env), "首次基线确认应成功");
-  // 第二次（同版本）被命令层拒绝
+    "--new-authority-snapshot-sha256", newSnapshotSha, "--credential", fx.creds.user], fx.home, fx.env), "首次基线确认应成功");
+  // 第二次（同版本）被命令层拒绝（快照文件先落盘，确保走到的是预算拒绝而非存在校验——
+  // F13 的存在校验在未知契约与预算校验之前，fixture 必须满足它才测得到目标分支）
+  const secondSnapshotSha = sha256("new-snap-2");
+  writeFileSync(join(fx.taskDir, "environment-contracts", `${secondSnapshotSha}.json`), `${JSON.stringify({ schemaVersion: 1, contracts: [resolvedContract("EC-host")], snapshotSha256: secondSnapshotSha }, null, 2)}\n`);
   denied(runGate(["confirm-environment-baseline", "--task-dir", fx.taskDir, "--contract-ids", JSON.stringify(["EC-host"]),
-    "--new-authority-snapshot-sha256", sha256("new-snap-2"), "--credential", fx.creds.user], fx.home, fx.env), /已登记过 EnvironmentBaselineConfirmed/, "同一 acceptanceVersion 最多一次");
+    "--new-authority-snapshot-sha256", secondSnapshotSha, "--credential", fx.creds.user], fx.home, fx.env), /已登记过 EnvironmentBaselineConfirmed/, "同一 acceptanceVersion 最多一次");
   // 新事件进事件流后，next / replay / events 仍可正常消费（转移表联动）
   const next = await CORE_MODULE.runCoreCommandInProcess(["next", "--task-dir", fx.taskDir]);
   assert.equal(next.status, 0, `next 应成功\n${next.stderr}`);

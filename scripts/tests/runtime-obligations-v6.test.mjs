@@ -518,7 +518,11 @@ test("权威变化无基线确认：环境历史链断裂阻断 accepted；用�
   recordProbeEvidence(fx, revision);
   // 外部环境升级：当前权威哈希变化（approve 时绑定的是 AUTHORITY_HASH）
   const newHash = sha256("authority-v2");
-  writeSnapshot(fx, [{ id: CONTRACT_ID, status: "resolved", authorityAggregateHash: newHash, identity: { name: "host", version: "2.0.0" }, surfaces: [{ surfaceRef: "dist/types.d.ts", sha256: sha256("t2") }], snapshotSha256: sha256("s2") }], sha256("snap-v2"));
+  // 落盘当前（漂移后）环境快照并取其真实 snapshotSha256——confirm-environment-baseline 的
+  // F13 校验要求该 sha 对应 environment-contracts/<sha>.json 存在，故此处同步落盘
+  const driftedSnapshotSha = writeSnapshot(fx, [{ id: CONTRACT_ID, status: "resolved", authorityAggregateHash: newHash, identity: { name: "host", version: "2.0.0" }, surfaces: [{ surfaceRef: "dist/types.d.ts", sha256: sha256("t2") }], snapshotSha256: sha256("s2") }], sha256("snap-v2"));
+  mkdirSync(join(fx.taskDir, "environment-contracts"), { recursive: true });
+  writeFileSync(join(fx.taskDir, "environment-contracts", `${driftedSnapshotSha}.json`), JSON.stringify({ schemaVersion: 1, snapshotSha256: driftedSnapshotSha }));
   const drifted = evaluate(fx);
   assert.notEqual(drifted.state, "accepted", "环境漂移未经用户确认不得 accepted");
   assert.equal(drifted.runtimeReadiness.overall, "unknown", "环境变化未经确认 = 无法判定");
@@ -526,7 +530,7 @@ test("权威变化无基线确认：环境历史链断裂阻断 accepted；用�
   assert.match(drifted.missing.environmentChain.recovery, /confirm-environment-baseline/, "恢复动作指向用户确认基线");
   // 用户确认新基线 → 接链；但 probe 证据的 sourceHash 仍是旧权威 → 仍须重跑 probe
   ok(runGate(["confirm-environment-baseline", "--task-dir", fx.taskDir, "--contract-ids", JSON.stringify([CONTRACT_ID]),
-    "--new-authority-snapshot-sha256", sha256("s2"), "--credential", fx.creds.user], fx.home, fx.env), "确认新基线");
+    "--new-authority-snapshot-sha256", driftedSnapshotSha, "--credential", fx.creds.user], fx.home, fx.env), "确认新基线");
   const confirmed = evaluate(fx);
   assert.equal(confirmed.missing.environmentChain, null, "确认后环境历史链接上");
   assert.notEqual(confirmed.state, "accepted", "接链不等于满足——仍须在当前环境重跑 probe");

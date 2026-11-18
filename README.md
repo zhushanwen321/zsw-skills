@@ -36,9 +36,9 @@ v6 三技能（tech-design-v6 / dev-flow-v6 / delivery-v6）为现行开发代�
 | tech-design-v5 | 在 V4 基线上接入 delivery-core 内核：T2 方向审重写回边至多 2 次（超限停回用户），验收复审轮预算 ≤6 |
 | dev-flow-v5 | 在 V4 基线上接入 delivery-core 内核：W2 节点状态六写入点收敛为单一转移入口（attempts 修复——派发即计数、重派不清零）、D2 条目回流上限 ≤2、人工处置显式转移（node-transition manual-disposition） |
 | delivery-v5 | 在 V4 基线上落地交付事务内核 delivery-core：五域转移表与静态校验（进 CI）、判定单源库（open 集/探索集/due/修复轮预算唯一实现）、事件意图提交（信封内核构造 + 写入矩阵「角色×阶段×目标域」+ domain 章，append 退役）、验收包写入防护（冻结 + open-revision + 篡改检测）、status.json 派生视图（node-project）、过程记录读侧合流（events）、定级护栏（发现域三护栏 + T2/D2 聚合改判熔断）、循环预算三档、pending-actions 待办实体、golden 任务端到端与历史回放（replay） |
-| tech-design-v6 | 在 V5 基线上实施结构化交付优化（设计二至五步）：计划单源渲染承接 + 项目静态能力快照（只读探测）+ D0 编译器接管生成（dev/acceptance 分阶段）+ 逐断言引用索引与证据内容索引 + reviewer 候选定位 |
-| dev-flow-v6 | 在 V5 基线上实施结构化交付优化：D0 编译器分阶段接管（exec-plan/promptFile/status 生成）、D2 审查索引定位入口、D3 证据内容索引、执行期写入方全走 JSON 单源 + 重渲染 |
-| delivery-v6 | 在 V5 基线上实施结构化交付优化：验收起草前置项目能力快照（命令/资产一次探测、unknown 显式）、验收审查断言×证据×资产表自动生成、独立保证按统一证据内容索引定位原始记录 |
+| tech-design-v6 | 在 V5 基线上实施结构化交付优化（设计二至五步）：计划单源渲染承接 + 项目静态能力快照（只读探测）+ D0 编译器接管生成（dev/acceptance 分阶段）+ 逐断言引用索引与证据内容索引 + reviewer 候选定位；外部契约任务的契约 spike 单元规划 |
+| dev-flow-v6 | 在 V5 基线上实施结构化交付优化：D0 编译器分阶段接管（exec-plan/promptFile/status 生成）、D2 审查索引定位入口、D3 证据内容索引、执行期写入方全走 JSON 单源 + 重渲染；外部契约编译门与复扫门、runtime probe wrapper |
+| delivery-v6 | 在 V5 基线上实施结构化交付优化：验收起草前置项目能力快照（命令/资产一次探测、unknown 显式）、验收审查断言×证据×资产表自动生成、独立保证按统一证据内容索引定位原始记录；外部契约守门（externalContracts 登记、权威工件解析、runtime 义务、真实环境 probe） |
 | symbol-watchlist | 符号词表生成与自验工具（extract-backticks.mjs）：tech-design-v5 T3 产词表、dev-flow-v5 D5 发起前自验的共享契约载体 |
 | design-code-sync | 校准代码实现与设计文档的一致性 |
 | architecture-clean-domain-design | 以 DDD 与六边形架构为分析视角的领域建模与架构分析：统一语言、限界上下文、聚合不变量、圈层性质判定；只做映射与登记，不输出结构改造设计 |

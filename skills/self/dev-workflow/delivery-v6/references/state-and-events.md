@@ -11,7 +11,7 @@
 | RevisionOpened | user | 解封已冻结验收包进入修订起草的唯一合法通道（`open-revision` 留痕）；绑 target 与 reason，要求递增 acceptanceVersion 并重新审查批准 |
 | DesignApproved | user | 方案包确认；绑包文件哈希清单（packageFiles）与决策参照 |
 | ImplementationRecorded | builder | 增量在某指纹下实现完成；附合并回执（起始指纹、合并后指纹、补丁哈希） |
-| EvidenceRecorded | assurance | 某需求或断言某证据类型的结论；schema 2 附 assertionIds/adversarialFormIds；绑 artifact 内容哈希（禁止覆盖写）；宿主类证据的 JSON artifact 附 environment 元数据（kind/name/version/source/sourceHash/driver，见「宿主类断言与证据环境」节） |
+| EvidenceRecorded | assurance | 某需求或断言某证据类型的结论；schema 2 附 assertionIds/adversarialFormIds；additive 可选字段 contractCapabilityIds（认领的外部契约能力 id）与 runtimeProbe（真实 runner / 宿主驱动产生的 runtime probe 证据，runtime 义务唯一可满足形态）；绑 artifact 内容哈希（禁止覆盖写）；宿主类证据的 JSON artifact 附 environment 元数据（kind/name/version/source/sourceHash/driver，见「宿主类断言与证据环境」节） |
 | FindingRaised | builder/assurance | 登记发现；category=defect/boundary、severity、关联需求（可空）；非 blocker 附 consequenceRefutation；重开附 reopenOf；可附来源阶段与回归测试 |
 | FindingResolved | assurance | 发现解决（当前指纹有效）；boundary 的确认也走此事件，附对照论证 |
 | ResolutionReaffirmed | assurance | 原解决事件在当前 revision 的逐项重认领；必须有原解决事件与复核依据，不允许只凭全量测试绿 |
@@ -94,11 +94,35 @@
 { "kind": "official-runner | real-host | fake-host", "name": "<宿主或执行器名>", "version": "<版本>", "source": "<权威来源>", "sourceHash": "<来源内容哈希>", "driver": "<实际驱动入口>" }
 ```
 
+认领外部契约能力的 runtime probe 证据（EvidenceRecorded 带 contractCapabilityIds 且 runtimeProbe=true）在同一 environment 元数据上扩展驱动哈希、能力清单与逐能力观察：
+
+```jsonc
+{
+  "environment": {
+    "kind": "official-runner | real-host",
+    "name": "<宿主或执行器名>",
+    "version": "<版本>",
+    "source": "<权威 locator>",
+    "sourceHash": "<该契约当前权威 aggregateHash>",
+    "driver": "<probe 脚本或命令入口>",
+    "driverHash": "<驱动文件全文 sha256>",
+    "capabilities": ["load-extension", "register-tool-and-invoke"]
+  },
+  "subject": { "revision": "<当前代码指纹>", "entrypoint": "<扩展入口>" },
+  "cases": [
+    { "capabilityId": "register-tool-and-invoke", "operation": "<按真实宿主调用签名调用工具>", "observed": { "<键>": "<值>" }, "passed": true }
+  ],
+  "summary": { "passed": 1, "failed": 0, "skipped": 0 }
+}
+```
+
+driver 限定为单文件、无动态 import、无运行时生成代码，driverHash 覆盖该文件全文（需要辅助模块时全部纳入 import 闭包并逐文件登记哈希）；观察值不得只有 passed 布尔，必须保留能定位契约形态的键值；skipped 必须有理由并导致对应能力 open。probe artifact 的完整形态与独立保证侧的执行责任见 `references/roles/coverage-reviewer.md`。
+
 判定规则（delivery-gate evaluate 执行）：
 
 1. gate 对宿主类断言核对证据 artifact 的 environment 是否满足该断言的 requiredEnvironment——不满足时该证据最多判 partial/unknown，**不得 verified**。
 2. 模拟环境（fake-host）不能独立证明宿主契约：宿主专属语义（命令解析、注册、回执、事件语义）必须至少一条 official-runner 或 real-host 证据；真实环境不可用只能 unknown/partial，用户是否接受该风险走既有裁决通道。
-3. environment 的 `sourceHash` 用于核对证据来源身份；其与权威来源内容的一致性核对通道待建立——当前 gate 只读取与绑定元数据，不核 sourceHash 内容（如实声明，不虚报核对能力）。
+3. environment 的 `sourceHash` 核对口径按证据是否认领外部契约能力分裂：无外部契约的宿主证据仍只登记不核（读取与绑定元数据）；认领外部契约能力（EvidenceRecorded 带 contractCapabilityIds）的证据，其 `sourceHash` 与 resolver 现场重解析出的该契约当前权威 aggregateHash 机器核对，不一致时该证据不得 verified、对应 runtime 义务保持 open；`sourceHash` 缺失、driver 缺失或 driverHash 与驱动文件内容不一致同样不得 verified。
 4. 已知缺口：分层证据规则第 4 条（模拟环境用于宿主语义证明前，须用相同样本与真实环境对照，证明未改写关键语义）未实施——当前拦截依赖 kind 词表 + 独立保证环境责任 + gate 降级三道防线；对照记录机制登记待实施。
 
 ## 循环尝试记录与预算

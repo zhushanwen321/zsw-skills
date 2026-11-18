@@ -645,13 +645,23 @@ export function deriveRuntimeObligations(runtimeFacts = {}) {
         readiness = "unknown";
         reasons.push(`契约 ${contract.id} 环境历史链断裂（当前权威哈希与批准时不一致且无覆盖该契约的 EnvironmentBaselineConfirmed 接链）`);
       } else if (!authorityResolved) {
-        // 权威不可解析 = 无法判定（不是「观察失败」）：essential 契约保持 open 并停回
-        readiness = "unknown";
-        reasons.push(environmentSnapshot.available === true && snapshotEntry === undefined
-          ? `当前权威解析快照不含契约 ${contract.id}`
-          : snapshotEntry !== undefined && snapshotEntry.status !== "resolved"
-            ? `契约 ${contract.id} 权威状态=${snapshotEntry.status}（不可解析）`
-            : `权威解析不可用（${environmentSnapshot.reason ?? "未说明"}）`);
+        // 权威不可解析：默认 unknown（无法判定，不是「观察失败」）。例外——非增强契约
+        // 「从未有权威」（resolver 正常解析、快照在场但不含该契约条目）是确定的未建立：
+        // 设计 §6.2 豁免规则 4 / §17 例 18，可走普通风险接受，报告记 not-established。
+        // unknown 留给「权威存在但解析失败」（条目在但非 resolved）与「解析通道不可用」
+        const required = contract.essential === true || forcedEssential.has(qualified) || forcedEssential.has(capability.id);
+        const neverHadAuthority = environmentSnapshot.available === true && snapshotEntry === undefined;
+        if (neverHadAuthority && !required) {
+          readiness = "not-established";
+          reasons.push(`契约 ${contract.id} 从未登记权威（当前解析快照不含该契约条目）——非增强契约按未建立披露，可走普通风险接受`);
+        } else {
+          readiness = "unknown";
+          reasons.push(environmentSnapshot.available === true && snapshotEntry === undefined
+            ? `当前权威解析快照不含契约 ${contract.id}`
+            : snapshotEntry !== undefined && snapshotEntry.status !== "resolved"
+              ? `契约 ${contract.id} 权威状态=${snapshotEntry.status}（不可解析）`
+              : `权威解析不可用（${environmentSnapshot.reason ?? "未说明"}）`);
+        }
       }
       let satisfiedEvidence = null;
       for (const record of claiming) {
@@ -695,29 +705,83 @@ export function deriveRuntimeObligations(runtimeFacts = {}) {
   return obligations;
 }
 
+/** runtime probe 证据的与能力无关核对（设计 §8.1 第 4-6 条）：artifact 可读、driver 可核、
+ * sourceHash 与当前权威一致、probe subject.revision 与事件 revision 一致。纯函数——
+ * deriveRuntimeObligations（义务判定）与 delivery-gate runtimeEvidenceAuthorityGap（证据级
+ * partial 判定）共同消费，两侧不各写一份。输入由调用方取数后传入（本函数不碰磁盘）：
+ *   artifactReadable  probe artifact 可读且为 JSON 对象
+ *   driverHashOk      driver 存在且 driverHash 与驱动文件全文一致
+ *   environment       artifact.environment（null = 缺元数据）
+ *   authorityHashes   [{contractId, hash, status}]：当前权威逐契约哈希；hash 为 null =
+ *                     该契约当前权威不可解析（快照无条目或非 resolved）
+ *   subjectRevision   artifact.subject.revision；eventRevision = 证据事件 revision
+ * 输出：null = 无缺口；非 null = 结构化缺口 {kind, …}。消息呈现归消费方（kernel 义务 reason
+ * 与 gate 证据提示各有已冻结措辞），判定单源在本函数。 */
+export function runtimeEvidenceIntegrityGap({ artifactReadable, driverHashOk, environment, authorityHashes = [], subjectRevision, eventRevision }) {
+  if (artifactReadable !== true) return { kind: "artifact-unreadable" };
+  if (driverHashOk !== true) return { kind: "driver-unverifiable" };
+  if (environment === null || environment === undefined) return { kind: "environment-missing" };
+  if (typeof environment.sourceHash !== "string" || environment.sourceHash === "") return { kind: "sourceHash-missing" };
+  for (const entry of authorityHashes) {
+    if (typeof entry.hash !== "string" || entry.hash === "") {
+      return { kind: "authority-unresolved", contractId: entry.contractId, status: entry.status ?? null };
+    }
+    if (environment.sourceHash !== entry.hash) {
+      return { kind: "sourceHash-mismatch", contractId: entry.contractId, evidenceHash: environment.sourceHash, authorityHash: entry.hash };
+    }
+  }
+  const subject = typeof subjectRevision === "string" ? subjectRevision : null;
+  if (subject === null || subject !== eventRevision) {
+    return { kind: "subject-revision-mismatch", subjectRevision: subject, eventRevision };
+  }
+  return null;
+}
+
+/** 结构化缺口 → kernel 义务 reason 措辞（与能力相关的失败项由调用方在本函数之后追加）。 */
+export function renderRuntimeEvidenceGapKernel(gap) {
+  switch (gap.kind) {
+    case "artifact-unreadable":
+      return "probe artifact 不可读或不是 JSON 对象";
+    case "driver-unverifiable":
+      return "environment.driver 缺失或 driverHash 与驱动文件内容不一致";
+    case "environment-missing":
+      return "artifact 无 environment 元数据";
+    case "sourceHash-missing":
+      return "environment.sourceHash 缺失";
+    case "authority-unresolved":
+      return `契约 ${gap.contractId} 当前权威不可解析（status=${gap.status ?? "不在快照中"}）——无法核对证据 environment.sourceHash`;
+    case "sourceHash-mismatch":
+      return `environment.sourceHash 与当前权威 aggregateHash 不一致（证据 ${gap.evidenceHash.slice(0, 12)}…，权威 ${gap.authorityHash.slice(0, 12)}…）`;
+    case "subject-revision-mismatch":
+      return `probe subject.revision（${gap.subjectRevision ?? "缺失"}）与证据事件 revision（${gap.eventRevision}）不一致——早期 spike 不能替代 final`;
+    default:
+      return `runtime 证据核对拒绝（未登记 kind ${String(gap.kind)}）`;
+  }
+}
+
 /** 单条 runtime probe 证据对某能力的失败原因（null = 六条件全满足）。
  * 六条件（§6.1）：有效证据 / 环境档位满足 minEnvironment / 环境声明含该能力 /
  * sourceHash 与当前权威 aggregateHash 一致 / probe artifact 记录该能力观察通过 /
  * probe subject.revision 与事件 revision 一致。driver 缺失或 driverHash 不一致同样不满足
- * （§8.1 第 6 条）。 */
+ * （§8.1 第 6 条）。与能力无关的四项（artifact/driver/sourceHash/subject.revision）走
+ * runtimeEvidenceIntegrityGap 单源；authorityHash 为 null（权威不可解析）时不传 authorityHashes
+ * ——该情形由 deriveRuntimeObligations 的权威分支单独披露，避免同一事实两条 reason。 */
 function runtimeEvidenceFailure(record, capability, authorityHash, contractId) {
-  if (record.artifactReadable !== true) return "probe artifact 不可读或不是 JSON 对象";
-  if (record.driverHashOk !== true) return "environment.driver 缺失或 driverHash 与驱动文件内容不一致";
+  const common = runtimeEvidenceIntegrityGap({
+    artifactReadable: record.artifactReadable,
+    driverHashOk: record.driverHashOk,
+    environment: record.environment,
+    authorityHashes: authorityHash === null ? [] : [{ contractId, hash: authorityHash }],
+    subjectRevision: record.subject?.revision,
+    eventRevision: record.revision,
+  });
+  if (common !== null) return renderRuntimeEvidenceGapKernel(common);
   const environment = record.environment;
-  if (environment === null || environment === undefined) return "artifact 无 environment 元数据";
-  if (typeof environment.sourceHash !== "string" || environment.sourceHash === "") return "environment.sourceHash 缺失";
-  if (authorityHash !== null && environment.sourceHash !== authorityHash) {
-    return `environment.sourceHash 与当前权威 aggregateHash 不一致（证据 ${environment.sourceHash.slice(0, 12)}…，权威 ${authorityHash.slice(0, 12)}…）`;
-  }
   if (!environmentKindSatisfies(environment.kind, capability.minEnvironment)) {
     return `环境档位 ${environment.kind ?? "缺失"} 不满足能力底线 ${capability.minEnvironment}`;
   }
   if (!declaredCapabilitiesOf(environment).some((id) => id === capability.id || id === qualifiedCapabilityId(contractId, capability.id))) {
     return `environment 未声明能力覆盖 ${capability.id}`;
-  }
-  const subjectRevision = typeof record.subject?.revision === "string" ? record.subject.revision : null;
-  if (subjectRevision === null || subjectRevision !== record.revision) {
-    return `probe subject.revision（${subjectRevision ?? "缺失"}）与证据事件 revision（${record.revision}）不一致——早期 spike 不能替代 final`;
   }
   const cases = Array.isArray(record.cases) ? record.cases : [];
   const probeCase = cases.find((item) => item?.capabilityId === capability.id);

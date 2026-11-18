@@ -39,9 +39,13 @@
 //
 // 快照产物（--write 时）：
 //   taskDir/environment-contracts/<snapshotSha256>.json   按哈希分文件，不覆盖旧快照
-//   taskDir/environment-contracts.current.json             派生指针（可重建）
+//   taskDir/environment-contracts.current.json             派生指针（可重建），落任务目录根
 //   taskDir/environment-contracts/surfaces/<snapshotSha256>/<contractId>/<surface 相对路径>
 //                                                          权威 surface 文件的只读副本（chmod 0444）
+//
+// 指针布局：current 指针在任务目录根，快照文件在 environment-contracts/ 子目录——全部消费端
+// （delivery-gate 指针回落、dev-flow D0 编译门、tech-design/tech-review/dev-consistency 各线）
+// 都读根路径；升级前曾把指针写进子目录，readCurrentPointer 兼容读旧形态（见该函数注）。
 //
 // 事件读取通道：直接读 taskDir/events.jsonl，逐行 JSON 解析后过滤 type=ExternalAuthorityDeclared
 // 且 actor=user 的记录（不 import delivery-gate，避免与内核线并行改动的耦合）。密码学验签由
@@ -96,7 +100,7 @@ function usage() {
     "  --task-dir        任务目录绝对路径（events.jsonl 与缺省验收包所在目录）",
     "  --project-root    项目根（或 worktree 根）绝对路径；node_modules 与 lockfile 解析基准",
     "  --acceptance-file 验收包路径（缺省 = <task-dir>/acceptance.json）",
-    "  --write           落盘：environment-contracts/<snapshotSha256>.json + current 指针 + surface 只读副本",
+    "  --write           落盘：environment-contracts/<snapshotSha256>.json + current 指针（任务目录根 environment-contracts.current.json）+ surface 只读副本",
     "  --contract-id     只解析指定契约（缺省全部；可重复传入多个）",
     "",
     "stdout 输出 JSON 摘要（contracts / snapshotSha256 / unresolvedContracts）；",
@@ -625,6 +629,27 @@ function copySurfacesToTaskDir(taskDir, snapshotSha256, contracts) {
   }
 }
 
+/** current 指针读取（旧任务目录兼容）：先看任务目录根（现行落点），再看
+ * environment-contracts/ 内的历史嵌套形态（升级前 resolver 的落点）。指针损坏与缺失
+ * 同等对待（返回 null）——恢复动作是重跑 --write 重建，不手工修复。 */
+function readCurrentPointer(taskDir) {
+  for (const candidate of [
+    join(taskDir, CURRENT_POINTER_FILENAME),
+    join(taskDir, CONTRACTS_DIRNAME, CURRENT_POINTER_FILENAME),
+  ]) {
+    if (!existsSync(candidate)) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(candidate, "utf8"));
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && typeof parsed.snapshotSha256 === "string") {
+        return { path: candidate, snapshotSha256: parsed.snapshotSha256 };
+      }
+    } catch {
+      // 指针损坏：按缺失处理
+    }
+  }
+  return null;
+}
+
 function writeSnapshot(taskDir, snapshot) {
   const dir = join(taskDir, CONTRACTS_DIRNAME);
   mkdirSync(dir, { recursive: true });
@@ -636,14 +661,22 @@ function writeSnapshot(taskDir, snapshot) {
   } else {
     console.error(`OK: 环境契约快照已存在（同哈希不重复生成）：${snapshotPath}`);
   }
+  // current 指针落任务目录根（设计 §4.3：taskDir/environment-contracts.current.json）——
+  // 全部消费端（gate 指针回落、dev-flow D0 编译门、tech-design/tech-review/dev-consistency）
+  // 都读根路径；快照文件仍在子目录（按哈希分文件），只有指针回根
+  const previous = readCurrentPointer(taskDir); // 新指针尚未落盘：读到的是迁移前的指针
+  const pointerPath = join(taskDir, CURRENT_POINTER_FILENAME);
   const pointer = {
     schemaVersion: SCHEMA_VERSION,
     snapshotSha256: snapshot.snapshotSha256,
     snapshotPath: `${CONTRACTS_DIRNAME}/${snapshot.snapshotSha256}.json`,
     updatedAt: new Date().toISOString(),
   };
-  writeFileSync(join(dir, CURRENT_POINTER_FILENAME), `${JSON.stringify(pointer, null, 2)}\n`);
-  console.error(`OK: current 指针已更新 ${join(dir, CURRENT_POINTER_FILENAME)}`);
+  writeFileSync(pointerPath, `${JSON.stringify(pointer, null, 2)}\n`);
+  const transition = previous !== null && previous.snapshotSha256 !== snapshot.snapshotSha256
+    ? `（原 ${previous.snapshotSha256.slice(0, 12)}…${previous.path === pointerPath ? "" : "，历史嵌套指针"} → 新 ${snapshot.snapshotSha256.slice(0, 12)}…）`
+    : "";
+  console.error(`OK: current 指针已更新 ${pointerPath}${transition}`);
 }
 
 function main() {

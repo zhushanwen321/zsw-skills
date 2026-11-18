@@ -108,7 +108,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
 import { checkPlan, checkIncrementContract, checkAcceptanceBinding, checkRuntimeProbeRows, checkRuntimeProbeNodes } from "./check-exec-plan.mjs";
-import { runContractRescan } from "./check-contract-rescan.mjs";
+import { runContractRescan, renderRescanErrorDevFlow } from "./check-contract-rescan.mjs";
 
 const GENERATOR_VERSION = 1;
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -1263,13 +1263,14 @@ function checkExternalContractGate(execPlan, ctx) {
     }
   }
 
-  // ③ D0 复扫（判定单一实现 = check-contract-rescan.mjs；D3 候选完成门与 evaluate 侧共用）：
-  //    重新运行完整候选探测（当前源码 + intent），不只看源码调用——unresolved 停回、strong
-  //    候选调用类（含蕴含观察类）必须映射到已声明 capability、实际使用的契约强制按 essential
+  // ③ D0 复扫（判定单一实现 = delivery-v6 scripts/lib/contract-rescan.mjs；D3 候选完成门与
+  //    evaluate 侧共用）：重新运行完整候选探测（当前源码 + intent），不只看源码调用——
+  //    unresolved 停回、strong 候选调用类（含蕴含观察类）必须映射到已声明 capability、
+  //    实际使用的契约强制按 essential。判定数据（code + 参数字段）经 dev-flow 渲染器转文案
   const rescan = runContractRescan({ taskDir, projectRoot, acceptance, stage: "d0" });
   for (const e of rescan.errors) {
     gap(
-      `D0 外部契约复扫未过：${e.message}`,
+      `D0 外部契约复扫未过：${renderRescanErrorDevFlow(e)}`,
       "复扫判定权威 = detect-external-contracts.mjs 候选快照 × 验收包 externalContracts / externalContractReview（设计 §4.2 D0 复扫规则 / §7.3 D0）",
       "按明细回 delivery-v6 修订验收包（递增验收版本重批）或修掉未登记外部调用 / unresolved 访问后重新编译——本地 re-export 穿透归因由探测线承担，本门只消费其输出",
     );
