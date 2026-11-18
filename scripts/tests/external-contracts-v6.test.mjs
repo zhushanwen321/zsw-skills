@@ -30,6 +30,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const V6 = join(ROOT, "skills", "self", "dev-workflow", "delivery-v6");
 const GATE = join(V6, "scripts", "delivery-gate.mjs");
 const CORE = join(V6, "scripts", "delivery-core.mjs");
+const REAL_RESOLVER = join(V6, "scripts", "resolve-external-contracts.mjs");
 const CLASS_POLICY = JSON.parse(readFileSync(join(V6, "policies", "external-contract-classes.json"), "utf8"));
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
@@ -104,6 +105,76 @@ function makeFixture(t, { taskId = "ext-contract" } = {}) {
 
 const AUTHORITY_HASH = sha256("authority-v1");
 const EMPTY_SNAPSHOT_SHA = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+// gate 侧快照身份复算（delivery-gate.mjs environmentSnapshotStableFacts 的测试镜像，与
+// resolver stableContractFacts 同源映射）：手写快照 fixture 的文件名必须用本函数计算——
+// 修复 1 后 gate 读取快照时重算内容规范哈希与文件名对账，文件名与内容不符即拒
+const canonicalJsonOf = (value) => {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJsonOf).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJsonOf(value[key])}`).join(",")}}`;
+};
+const snapshotShaOf = (contracts) => sha256(canonicalJsonOf(contracts.map((contract) => {
+  const resolver = contract.resolver ?? {};
+  return {
+    id: contract.id,
+    status: contract.status,
+    resolver: { kind: resolver.kind, locator: resolver.locator, resolution: resolver.resolution },
+    identity: contract.identity,
+    surfaces: contract.surfaces,
+    aggregateHash: contract.aggregateHash,
+  };
+})));
+
+/** 把快照文件直接写进任务目录（environment-contracts/<sha>.json），返回文件名哈希。
+ * 文件名哈希由调用方给（合法 fixture 传 snapshotShaOf(contracts)，篡改场景传任意值）。 */
+function writeSnapshotFile(fx, contracts, fileNameSha) {
+  mkdirSync(join(fx.taskDir, "environment-contracts"), { recursive: true });
+  const path = join(fx.taskDir, "environment-contracts", `${fileNameSha}.json`);
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, contracts, snapshotSha256: fileNameSha }, null, 2)}\n`);
+  return fileNameSha;
+}
+
+/** 推进到「验收批准」：合法包 + snapshot-policy + 通过审查 + 用户批准。 */
+function approvePackage(fx, acceptance) {
+  writePackage(fx, acceptance);
+  ok(runGate(["snapshot-policy", "--task-dir", fx.taskDir], fx.home, fx.env), "snapshot-policy");
+  mkdirSync(join(fx.taskDir, "evidence"), { recursive: true });
+  writeFileSync(join(fx.taskDir, "evidence", "acceptance-review-v1.md"), "# review\n");
+  ok(runGate(["record-review", "--task-dir", fx.taskDir, "--conclusion", "pass", "--summary", "通过", "--credential", fx.creds.assurance], fx.home, fx.env), "record-review");
+  ok(runGate(["approve-acceptance", "--task-dir", fx.taskDir, "--confirmation", "user-explicit", "--summary", "批准", "--credential", fx.creds.user], fx.home, fx.env), "approve-acceptance");
+}
+
+/** runtime probe 证据登记（含 driver fixture 落盘与 revision 对齐），返回事件 id。 */
+function recordProbeEvidence(fx, { dynamicImport = false, runtimeProbe = true, sourceHash = AUTHORITY_HASH, capabilityId = "register-tool-and-invoke" } = {}) {
+  const revision = runGate(["revision", "--project-root", fx.projectDir], fx.home).stdout.trim();
+  const driverBody = dynamicImport
+    ? "// runtime probe driver\nconst target = process.env.PROBE_TARGET;\nexport async function main() {\n  const mod = await import(target);\n  return mod;\n}\n"
+    : "// runtime probe driver\nexport function main() { return { ok: true }; }\n";
+  mkdirSync(join(fx.taskDir, "evidence"), { recursive: true });
+  const driverPath = join(fx.taskDir, "evidence", "probe-driver.mjs");
+  writeFileSync(driverPath, driverBody);
+  const artifact = {
+    summary: "runtime probe",
+    environment: {
+      kind: "official-runner", name: "host", version: "1.1.0", source: "@scope/host",
+      sourceHash, driver: "evidence/probe-driver.mjs", driverHash: sha256(driverBody),
+      capabilities: [capabilityId],
+    },
+    subject: { revision, entrypoint: "src/extension.ts" },
+    cases: [{ capabilityId, operation: "按真实宿主签名调用", observed: { called: true, resultAccepted: true }, passed: true }],
+  };
+  const artifactPath = join(fx.taskDir, "evidence", "runtime-probe.json");
+  writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
+  const args = ["record-evidence", "--task-dir", fx.taskDir, "--requirement-id", "R1", "--kind", "command",
+    "--result", "verified", "--summary", "probe 取证", "--artifact", "evidence/runtime-probe.json",
+    "--assertion-ids", JSON.stringify(["A1"]), "--adversarial-form-ids", JSON.stringify(["AF1"]),
+    "--contract-capability-ids", JSON.stringify([`EC-host:${capabilityId}`])];
+  if (runtimeProbe) args.push("--runtime-probe");
+  const appended = runGate([...args, "--revision", revision, "--credential", fx.creds.assurance], fx.home, fx.env);
+  ok(appended, "probe 证据应登记");
+  return JSON.parse(parseStdout(appended)).eventId;
+}
 
 /** 权威解析快照（桩脚本读它后原样输出）。 */
 function writeSnapshot(fx, contracts, snapshotSha256 = sha256(`snap-${contracts.map((c) => c.id).join(",")}`)) {
@@ -182,9 +253,9 @@ function legalPackage(fx, overrides = {}) {
   return { acceptance, detectionSha256, snapshotSha256 };
 }
 
-// ── 1. 升级兼容：无外部契约的验收包不受新检查约束 ──
+// ── 1. 升级兼容与世代判别：externalContractReview 键必填（检查 2）──
 
-test("未声明 externalContracts 的验收包照常通过（升级兼容；无外部依赖的普通任务不受影响）", async (t) => {
+test("V6 世代新任务两键全无被拒（externalContractReview 键必填）；空处置表 + 空候选快照放行", async (t) => {
   const fx = makeFixture(t);
   const acceptance = acceptanceSkeleton(fx, { capabilities: [capability("register-tool-and-invoke")] });
   delete acceptance.externalContracts;
@@ -193,12 +264,21 @@ test("未声明 externalContracts 的验收包照常通过（升级兼容；无�
     schemaVersion: 1, acceptanceVersion: 1,
     items: [{ id: "I1", title: "普通增量", requirementIds: ["R1"], testCommand: { program: "true", args: [] } }],
   });
-  // 任务由升级后 init 创建（task.json 带 deliveryProfile），但验收包未声明外部契约——
-  // 缺候选快照、缺 externalContractReview 都不被拦
-  const result = runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home, fx.env);
-  ok(result, "无外部契约的验收包应通过");
+  // 世代判别锚 = task.json.deliveryProfile（init 统一写入；validateTaskRecord 注释明示该字段
+  // 是「升级后新建任务」的判定锚）。V6 新任务两键全无不再通过：键缺席 = 候选探测与处置
+  // 判定无可绑定对象（§5.1 检查 2——设计允许空处置表，不允许键缺席）
+  denied(runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home, fx.env),
+    /externalContractReview 缺失/, "新任务缺候选处置表键应被拒");
   const task = JSON.parse(readFileSync(join(fx.taskDir, "task.json"), "utf8"));
   assert.equal(task.deliveryProfile, "b", "init 缺省写入 deliveryProfile=b");
+  // 补键（空处置表 + 空候选快照哈希，§4.5 无外部候选也生成空快照）后放行：无外部契约
+  // 任务不受新检查其余部分约束（升级兼容保留的部分）
+  acceptance.externalContractReview = { detectionSha256: writeCandidates(fx, { candidates: [] }), dispositions: [] };
+  writePackage(fx, acceptance, {
+    schemaVersion: 1, acceptanceVersion: 1,
+    items: [{ id: "I1", title: "普通增量", requirementIds: ["R1"], testCommand: { program: "true", args: [] } }],
+  });
+  ok(runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home, fx.env), "空处置表 + 空候选快照的新任务应放行");
 });
 
 test("未知顶层字段与空 externalContracts 均被拒（检查 1）", async (t) => {
@@ -521,17 +601,17 @@ test("EnvironmentBaselineConfirmed：未知契约拒绝；同一 acceptanceVersi
   // 未知契约
   denied(runGate(["confirm-environment-baseline", "--task-dir", fx.taskDir, "--contract-ids", JSON.stringify(["EC-unknown"]),
     "--new-authority-snapshot-sha256", sha256("new-snap"), "--credential", fx.creds.user], fx.home, fx.env), /含未声明契约 EC-unknown/, "只能确认已登记契约");
-  // F13（审查修复）：确认的新快照哈希必须对应盘上快照文件——先落盘再确认（否则拒绝）
-  const newSnapshotSha = sha256("new-snap");
-  mkdirSync(join(fx.taskDir, "environment-contracts"), { recursive: true });
-  writeFileSync(join(fx.taskDir, "environment-contracts", `${newSnapshotSha}.json`), `${JSON.stringify({ schemaVersion: 1, contracts: [resolvedContract("EC-host")], snapshotSha256: newSnapshotSha }, null, 2)}\n`);
+  // F13（审查修复）：确认的新快照哈希必须对应盘上快照文件——先落盘再确认（否则拒绝）。
+  // 修复 1 后文件名哈希 = 内容规范哈希（gate 读取时身份复核），fixture 用 snapshotShaOf 计算
+  const newSnapshotSha = writeSnapshotFile(fx, [resolvedContract("EC-host")], snapshotShaOf([resolvedContract("EC-host")]));
   // 第一次确认成功
   ok(runGate(["confirm-environment-baseline", "--task-dir", fx.taskDir, "--contract-ids", JSON.stringify(["EC-host"]),
     "--new-authority-snapshot-sha256", newSnapshotSha, "--credential", fx.creds.user], fx.home, fx.env), "首次基线确认应成功");
   // 第二次（同版本）被命令层拒绝（快照文件先落盘，确保走到的是预算拒绝而非存在校验——
-  // F13 的存在校验在未知契约与预算校验之前，fixture 必须满足它才测得到目标分支）
-  const secondSnapshotSha = sha256("new-snap-2");
-  writeFileSync(join(fx.taskDir, "environment-contracts", `${secondSnapshotSha}.json`), `${JSON.stringify({ schemaVersion: 1, contracts: [resolvedContract("EC-host")], snapshotSha256: secondSnapshotSha }, null, 2)}\n`);
+  // F13 的存在校验在未知契约与预算校验之前，fixture 必须满足它才测得到目标分支）。
+  // 第二份快照用不同 identity 保证文件名不同；写盘内容与文件名哈希必须同源（修复 1 身份复核）
+  const secondContracts = [{ ...resolvedContract("EC-host"), identity: { name: "host", version: "9.9.9" } }];
+  const secondSnapshotSha = writeSnapshotFile(fx, secondContracts, snapshotShaOf(secondContracts));
   denied(runGate(["confirm-environment-baseline", "--task-dir", fx.taskDir, "--contract-ids", JSON.stringify(["EC-host"]),
     "--new-authority-snapshot-sha256", secondSnapshotSha, "--credential", fx.creds.user], fx.home, fx.env), /已登记过 EnvironmentBaselineConfirmed/, "同一 acceptanceVersion 最多一次");
   // 新事件进事件流后，next / replay / events 仍可正常消费（转移表联动）
@@ -597,4 +677,156 @@ test("FindingRaised authority 反驳组：结构命中外部契约时三段必�
     "--artifact", "evidence/finding.md", "--credential", fx.creds.assurance, "--empty-scope-refutation", "不影响任何需求",
     "--consequence-refutation", "该发现不改变任何用户可观察行为", "--consequence-refutation-type", "not-observable"];
   ok(runGate(other, fx.home, fx.env), "未结构命中外部契约的发现不要求 authority 组");
+});
+
+// ── 10. 快照身份复核与两侧公式对拍（§4.4 规则 7）──
+
+test("环境快照身份复核：文件名哈希与内容规范哈希不一致即拒；真实 resolver 落盘快照 gate 可消费（双实现对拍）", (t) => {
+  const fx = makeFixture(t);
+  // local-path 契约：SDK 目录在 git 项目外（仓库身份覆盖 worktree 的信任规则不误伤）
+  const sdkDist = join(fx.root, "local-sdk", "dist");
+  mkdirSync(sdkDist, { recursive: true });
+  writeFileSync(join(sdkDist, "types.d.ts"), "export interface ToolDefinition { name: string }\n");
+  const detectionSha256 = writeCandidates(fx, { candidates: [{ id: "candidate-host", strength: "strong", signals: ["call-class:register-tool"] }] });
+  const acceptance = acceptanceSkeleton(fx, { capabilities: [capability("register-tool-and-invoke", { detectionClasses: ["register-tool", "invoke-tool"] })], detectionSha256 });
+  acceptance.externalContracts[0].authorityRequest = { resolverKind: "local-path", locator: join(fx.root, "local-sdk") };
+  writePackage(fx, acceptance);
+  ok(runGate(["declare-external-authority", "--task-dir", fx.taskDir, "--contract-id", "EC-host",
+    "--resolver-kind", "local-path", "--locator", join(fx.root, "local-sdk"), "--snapshot-sha256", sha256("local"),
+    "--summary", "用户登记本地 SDK", "--credential", fx.creds.user], fx.home), "user 可登记本地权威");
+  // 真实 resolver（不经桩）现场解析并 --write：文件名哈希由 resolver 的 stableContractFacts 公式定
+  const resolved = spawnSync(process.execPath, [REAL_RESOLVER, "--task-dir", fx.taskDir, "--project-root", fx.projectDir, "--write"], { encoding: "utf8" });
+  ok(resolved, `真实 resolver --write 应成功\n${resolved.stderr}`);
+  const resolverSha = JSON.parse(parseStdout(resolved)).snapshotSha256;
+  // 双实现对拍：gate 读取该快照（confirm-environment-baseline 走身份复核）必须通过——
+  // gate 复算公式与 resolver stableContractFacts 任一侧漂移，本断言变红
+  ok(runGate(["confirm-environment-baseline", "--task-dir", fx.taskDir, "--contract-ids", JSON.stringify(["EC-host"]),
+    "--new-authority-snapshot-sha256", resolverSha, "--credential", fx.creds.user], fx.home, fx.env),
+    "gate 消费真实 resolver 快照应通过（stableContractFacts 双实现对拍）");
+  // 复核负向：改写快照内容（放宽权威事实）后借用另一文件名——文件名哈希与内容规范哈希
+  // 不一致，不得静默通过（§4.4 规则 7：不能通过重写 taskDir 快照蒙混）
+  const snapshotPath = join(fx.taskDir, "environment-contracts", `${resolverSha}.json`);
+  const tampered = JSON.parse(readFileSync(snapshotPath, "utf8"));
+  tampered.contracts[0].surfaces[0].sha256 = sha256("forged-surface");
+  const tamperedPath = join(fx.taskDir, "environment-contracts", `${sha256("tampered")}.json`);
+  writeFileSync(tamperedPath, `${JSON.stringify(tampered, null, 2)}\n`);
+  denied(runGate(["confirm-environment-baseline", "--task-dir", fx.taskDir, "--contract-ids", JSON.stringify(["EC-host"]),
+    "--new-authority-snapshot-sha256", sha256("tampered"), "--credential", fx.creds.user], fx.home, fx.env),
+    /快照身份不一致/, "文件名与内容不符的快照应被拒");
+});
+
+// ── 11. evaluate 前置与 D0 对齐（§8.1）──
+
+test("review-only 验收包（有处置表无 externalContracts）evaluate 同样跑候选复扫", async (t) => {
+  const fx = makeFixture(t);
+  const acceptance = acceptanceSkeleton(fx, { capabilities: [capability("register-tool-and-invoke")] });
+  delete acceptance.externalContracts;
+  // 探测桩输出 strong 候选（复扫视角：候选源码/清单出现未登记外部信号）
+  const candidatesPath = join(fx.root, "candidates-strong.json");
+  writeFileSync(candidatesPath, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [{ id: "candidate-x", strength: "strong", signals: ["call-class:register-tool"] }], unresolved: [] }, null, 2)}\n`);
+  fx.env.STUB_DETECTOR_CANDIDATES = candidatesPath;
+  acceptance.externalContractReview = { detectionSha256: writeCandidates(fx, { candidates: [] }), dispositions: [] };
+  writePackage(fx, acceptance, {
+    schemaVersion: 1, acceptanceVersion: 1,
+    items: [{ id: "I1", title: "普通增量", requirementIds: ["R1"], testCommand: { program: "true", args: [] } }],
+  });
+  ok(runGate(["validate-acceptance", "--task-dir", fx.taskDir], fx.home, fx.env), "review-only 验收包声明层应通过");
+  // evaluate 前置复扫（判定单源 = contract-rescan 库，D0 同一实现）：未处置 strong 候选
+  // 直接拒绝 evaluate——修复前 contracts 为空即 return，review-only 验收包 D0 有复扫、
+  // evaluate 没有，同一验收包两侧判定不一致
+  denied(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home, fx.env),
+    /复扫发现未登记 strong 信号|复扫发现未处置 strong 候选/, "review-only 验收包的 evaluate 必须跑候选复扫（review-only 无能力清单，strong 候选按未登记信号拒绝）");
+});
+
+// ── 12. driver 形态约束（§6.3）与非 probe 宿主证据 sourceHash（§8.1 第 4 条）──
+
+test("driver 含动态 import：driverHash 一致也不得 verified（driver 限定单文件、无动态 import）；无动态 import 对照 verified 保持", async (t) => {
+  const fx = makeFixture(t);
+  const { acceptance } = legalPackage(fx);
+  approvePackage(fx, acceptance);
+  recordProbeEvidence(fx, { dynamicImport: true });
+  const verdict = JSON.parse(parseStdout(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home, fx.env)));
+  assert.notEqual(verdict.state, "accepted", "动态 import driver 的 probe 证据不得放行 accepted");
+  const entry = verdict.requirements.find((r) => r.id === "R1").assertions[0].evidence[0];
+  assert.equal(entry.result, "partial", "动态 import 命中 → driver 不可核 → 证据最多 partial");
+  assert.match(entry.runtimeEvidenceGap.reason, /动态 import/, "缺口原因应点名 driver 形态约束（§6.3）");
+  // 对照：无动态 import 的 driver（哈希一致）→ verified 保持，不误伤
+  const fx2 = makeFixture(t);
+  const { acceptance: acceptance2 } = legalPackage(fx2);
+  approvePackage(fx2, acceptance2);
+  recordProbeEvidence(fx2, { dynamicImport: false });
+  const verdict2 = JSON.parse(parseStdout(runGate(["evaluate", "--task-dir", fx2.taskDir], fx2.home, fx2.env)));
+  const entry2 = verdict2.requirements.find((r) => r.id === "R1").assertions[0].evidence[0];
+  assert.equal(entry2.result, "verified", "合法 driver 不因形态扫描误伤");
+});
+
+test("非 probe 宿主证据 sourceHash 与权威不一致降 partial；权威不可得维持现状（不猜测）", async (t) => {
+  const fx = makeFixture(t);
+  const { acceptance } = legalPackage(fx);
+  approvePackage(fx, acceptance);
+  // 带 capability 绑定但非 runtimeProbe 的宿主类证据：sourceHash 指向旧权威
+  recordProbeEvidence(fx, { runtimeProbe: false, sourceHash: sha256("stale-authority") });
+  const verdict = JSON.parse(parseStdout(runGate(["evaluate", "--task-dir", fx.taskDir], fx.home, fx.env)));
+  const entry = verdict.requirements.find((r) => r.id === "R1").assertions[0].evidence[0];
+  assert.equal(entry.result, "partial", "非 probe 宿主证据的 sourceHash 核对不一致同样降 partial");
+  assert.match(entry.runtimeEvidenceGap.reason, /非 probe 宿主证据/, "缺口原因应标注证据类型（§8.1 第 4 条）");
+  // 对照：sourceHash 与当前权威一致 → verified 保持
+  const fx2 = makeFixture(t);
+  const { acceptance: acceptance2 } = legalPackage(fx2);
+  approvePackage(fx2, acceptance2);
+  recordProbeEvidence(fx2, { runtimeProbe: false, sourceHash: AUTHORITY_HASH });
+  const verdict2 = JSON.parse(parseStdout(runGate(["evaluate", "--task-dir", fx2.taskDir], fx2.home, fx2.env)));
+  const entry2 = verdict2.requirements.find((r) => r.id === "R1").assertions[0].evidence[0];
+  assert.equal(entry2.result, "verified", "sourceHash 一致的宿主类证据不降级");
+  // 边界：权威不可得（快照无该契约条目）时不猜测——证据不因权威缺口降级
+  const fx3 = makeFixture(t);
+  const { acceptance: acceptance3 } = legalPackage(fx3);
+  writeSnapshot(fx3, []); // 桩快照换成空契约清单：EC-host 当前权威不可得
+  approvePackage(fx3, acceptance3);
+  recordProbeEvidence(fx3, { runtimeProbe: false, sourceHash: sha256("stale-authority") });
+  const verdict3 = JSON.parse(parseStdout(runGate(["evaluate", "--task-dir", fx3.taskDir], fx3.home, fx3.env)));
+  const entry3 = verdict3.requirements.find((r) => r.id === "R1").assertions[0].evidence[0];
+  assert.equal(entry3.result, "verified", "权威不可得时不猜测（设计边界：无权威可对账维持现状）");
+});
+
+// ── 13. finding 域写入侧 from 态检查（kernel/rules.json domains.finding 唯一转移表）──
+
+test("finding 表外转移拒绝：已 resolved 再 resolve、open 态 reopenOf 重报、关闭仍有效时重认领；合法 reopen 放行", async (t) => {
+  const fx = makeFixture(t);
+  // 最小无契约验收包（V6 世代新任务 review 键必填，见用例 1）
+  const detectionSha256 = writeCandidates(fx, { candidates: [] });
+  writePackage(fx, {
+    schemaVersion: 1, acceptanceVersion: 1, taskId: basename(fx.taskDir), projectRoot: realpathSync(fx.projectDir),
+    objective: "普通任务", requirements: [{ id: "R1", kind: "goal", statement: "开关关闭零写入", required: true, riskAcceptable: false, evidenceKinds: ["command"] }],
+    nonGoals: [], riskLevel: "low", exploratoryReview: "not-required", reviewDimensions: [],
+    externalContractReview: { detectionSha256, dispositions: [] },
+  }, {
+    schemaVersion: 1, acceptanceVersion: 1,
+    items: [{ id: "I1", title: "增量", requirementIds: ["R1"], testCommand: { program: "true", args: [] } }],
+  });
+  mkdirSync(join(fx.taskDir, "evidence"), { recursive: true });
+  writeFileSync(join(fx.taskDir, "evidence", "finding.md"), "# 发现\n");
+  writeFileSync(join(fx.taskDir, "evidence", "resolved.md"), "# 解决\n");
+  writeFileSync(join(fx.taskDir, "evidence", "reopened.md"), "# 重开\n");
+  const raise = (findingId, extra = []) => runGate(["record-finding", "--task-dir", fx.taskDir, "--summary", "发现", "--category", "defect", "--severity", "non-blocker",
+    "--requirement-ids", JSON.stringify(["R1"]), "--artifact", "evidence/finding.md", "--finding-id", findingId, ...extra, "--credential", fx.creds.assurance], fx.home, fx.env);
+  const resolve = (findingId) => runGate(["resolve-finding", "--task-dir", fx.taskDir, "--finding-id", findingId, "--summary", "解决", "--artifact", "evidence/resolved.md", "--credential", fx.creds.assurance], fx.home, fx.env);
+  ok(raise("F-1"), "登记 F-1");
+  ok(resolve("F-1"), "首次解决 F-1（open → resolved 合法）");
+  // 表外 resolved → resolved：同一 revision 重复解决。完全相同的 resolve 事件走 eventId
+  // 幂等（执行器重放，放行正确）；这里用不同 summary/artifact 构造内容不同的重复关闭
+  writeFileSync(join(fx.taskDir, "evidence", "resolved-again.md"), "# 再解决\n");
+  denied(runGate(["resolve-finding", "--task-dir", fx.taskDir, "--finding-id", "F-1", "--summary", "再次解决", "--artifact", "evidence/resolved-again.md", "--credential", fx.creds.assurance], fx.home, fx.env),
+    /表外转移.*resolved 态.*FindingResolved/, "已关闭发现不能重复解决");
+  // 合法 reopen：resolved → open（record-finding --reopen-of 生成新条目）
+  ok(raise("F-1-RE", ["--reopen-of", "F-1"]), "reopen 已解决发现应放行");
+  // 表外 open → open：open 态条目被 reopenOf 重报（原条目照样 open，凭空多出重报条目）
+  ok(raise("F-2"), "登记 F-2");
+  denied(raise("F-2-RE", ["--reopen-of", "F-2"]), /表外转移.*open 态/, "open 态发现重报应被拒");
+  // 表外：关闭仍有效（同 revision）时重认领
+  const events = readFileSync(join(fx.taskDir, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const resolutionId = events.find((event) => event.type === "FindingResolved" && event.findingId === "F-1").eventId;
+  denied(runGate(["reaffirm-resolution", "--task-dir", fx.taskDir, "--finding-id", "F-1", "--original-resolution-event-id", resolutionId,
+    "--basis", "修复仍有效", "--summary", "重认领", "--artifact", "evidence/resolved.md", "--credential", fx.creds.assurance], fx.home, fx.env),
+    /表外转移.*不接受事件 ResolutionReaffirmed/, "关闭仍有效时重认领应被拒（重认领只用于 revision 前进使旧关闭失效的场景）");
 });

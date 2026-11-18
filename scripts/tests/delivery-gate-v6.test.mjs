@@ -128,7 +128,18 @@ function parseStdout(result) {
   return text.slice(firstBrace >= 0 ? firstBrace : 0);
 }
 
-/** 标准备收包：R1（两证据类型、不可风险接受）+ R2（可风险接受）+ 增量 I1 */
+/** 空候选快照（设计 §4.5：无外部候选的新任务也生成，使 externalContractReview.detectionSha256
+ * 有可绑定对象）。返回文件内容 sha256。 */
+function writeEmptyCandidateSnapshot(fx, acceptanceVersion) {
+  const dir = join(fx.taskDir, "evidence", `acceptance-v${acceptanceVersion}`);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "external-contract-candidates.json");
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] }, null, 2)}\n`);
+  return sha256(readFileSync(path, "utf8"));
+}
+
+/** 标准备收包：R1（两证据类型、不可风险接受）+ R2（可风险接受）+ 增量 I1。
+ * 带 externalContractReview 空处置表（V6 世代新任务键必填，§5.1 检查 2）。 */
 function writeAcceptancePackage(fx, { acceptanceVersion = 1, r1RiskAcceptable = false } = {}) {
   writeJson(join(fx.taskDir, "acceptance.json"), {
     schemaVersion: 1,
@@ -144,6 +155,7 @@ function writeAcceptancePackage(fx, { acceptanceVersion = 1, r1RiskAcceptable = 
     riskLevel: "low",
     exploratoryReview: "not-required",
     reviewDimensions: [],
+    externalContractReview: { detectionSha256: writeEmptyCandidateSnapshot(fx, acceptanceVersion), dispositions: [] },
   });
   writeJson(join(fx.taskDir, "increments.json"), {
     schemaVersion: 1,

@@ -1801,6 +1801,12 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
     implementations: [],
     evidence: [],
     findingHistory: [],
+    // finding 域态推导的跨版本事实（kernel/rules.json domains.finding 转移表的 from 态来源）：
+    // closures 收全部版本的 FindingResolved / ResolutionReaffirmed（fold.findings 只收当前
+    // 版本，跨版本 reopen 时被重开条目不在其中）；findingRiskAcceptedIds 收全部版本的
+    // finding 风险接受（fold.risks 只收当前版本，同理由）
+    findingClosures: [],
+    findingRiskAcceptedIds: new Set(),
     repairs: [],
     // 历史记录的护栏违规留档（guardrailStrict=false 的加载折算不崩溃，逐条记录在此）
     guardrailWarnings: [],
@@ -1956,6 +1962,28 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
         if (raisedFindings.get(event.findingId) === event.acceptanceVersion) {
           fail(`${lineLabel} 重复分配 findingId=${event.findingId} 且内容不同。`, "为新发现使用新的 F- 格式 id；若这是同一事件，请恢复原事件内容与 eventId 以实现幂等。");
         }
+        // reopenOf 重报的 from 态检查（finding 域转移表：reopen 的合法 from =
+        // resolved / reaffirmed / risk-accepted）。重报生成新 findingId、不改变被重开条目的
+        // 态——被重开条目仍 open（从未关闭、从未接受风险）时重报是表外转移 open→open：
+        // 凭空多出一个重报条目而原发现照样 open，收敛判定被重复计数污染。指向未登记 id 的
+        // 重报（from 态不存在）同拒
+        if (typeof event.reopenOf === "string" && event.reopenOf !== "") {
+          // 存在性口径与 FindingRaised 同源：本地登记（raisedFindings）或任务替换继承发现
+          //（TaskSuperseded prepare 视同 raise，同样进 raisedFindings）都算已登记
+          if (!raisedFindings.has(event.reopenOf)) {
+            fail(
+              `${lineLabel} 的 reopen-of 指向未登记的发现 ${event.reopenOf}。`,
+              `确认被重开的 findingId 后重试；全新发现不带 --reopen-of 直接登记。`,
+            );
+          }
+          const reopenState = findingLifecycleStateOf(fold, event.reopenOf);
+          if (reopenState === "open") {
+            fail(
+              `${lineLabel} 表外转移：被重开的发现 ${event.reopenOf} 当前处于 open 态，不接受 reopen（该态合法事件：${findingLegalEventsOf("open").join(" / ")}）。`,
+              `open 态的发现直接继续处置（${GATE_COMMAND} resolve-finding --finding-id ${event.reopenOf} 或 accept-risk）；重报只用于已关闭/已接受风险的发现在判据变化后复发。`,
+            );
+          }
+        }
         if (policyFindingCategory(world.policy, event.category) === undefined) {
           fail(`${lineLabel} 的 category=${event.category} 不在策略 finding-categories.json 词表内。`, "使用策略登记的分类；新增分类走策略升级（upgrade-policy）。");
         }
@@ -2075,6 +2103,22 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
         if (!raisedFindings.has(event.findingId)) {
           fail(`${lineLabel} 试图解决尚未出现的 finding ${event.findingId}。`, `先追加对应 FindingRaised，再追加 FindingResolved；若 id 写错，修正 ${event.findingId} 后重试。`);
         }
+        // from 态检查（finding 域转移表：FindingResolved 合法 from = open）。当前态非 open
+        // 时仅当本次事件 revision 与最后一次关闭/重认领不同（旧关闭在新 revision 失效、判定
+        // 语义回 open——openFindingsFromEvents 的 revision 口径）才合法；同 revision 重复
+        // 关闭是表外转移（resolved→resolved / reaffirmed→resolved），拒绝
+        const resolveFromState = findingLifecycleStateOf(fold, event.findingId);
+        if (resolveFromState !== "open") {
+          const lastClosure = fold.findingClosures.filter((item) => item.findingId === event.findingId).at(-1);
+          const invalidated = lastClosure !== undefined && typeof event.revision === "string" && lastClosure.revision !== event.revision;
+          if (!invalidated) {
+            fail(
+              `${lineLabel} 表外转移：发现 ${event.findingId} 当前处于 ${resolveFromState} 态，不接受事件 FindingResolved（该态合法事件：${findingLegalEventsOf(resolveFromState).join(" / ")}）。`,
+              `已关闭的发现不能重复解决：确需重开走 ${GATE_COMMAND} record-finding --reopen-of ${event.findingId} 重报后在新条目上处置；本次登记与原关闭同 revision（关闭仍有效）时直接删除重复事件。`,
+            );
+          }
+        }
+        fold.findingClosures.push(event);
         const finding = fold.findings.get(event.findingId);
         if (current && finding) finding.resolutions.push(event);
         break;
@@ -2094,8 +2138,19 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
               `以 evaluate 输出的 reaffirmableFindings[].originalResolutionEventIds 中的值重试；该 finding 从未在本版本内 resolved 时走 FindingResolved 而非重认领。`,
             );
           }
-          finding.reaffirmations.push(event);
+          // from 态检查（finding 域转移表：ResolutionReaffirmed 合法 from = open——语义是
+          // 旧关闭在新 revision 失效后重认领）。同 revision 内重复重认领（或关闭未失效就
+          // 重认领）是表外转移，拒绝
+          const lastClosure = fold.findingClosures.filter((item) => item.findingId === event.findingId).at(-1);
+          if (lastClosure !== undefined && lastClosure.revision === event.revision) {
+            fail(
+              `${lineLabel} 表外转移：发现 ${event.findingId} 的关闭（${lastClosure.type}，revision ${lastClosure.revision}）仍然有效，不接受事件 ResolutionReaffirmed（重认领只用于 revision 前进使旧关闭失效的场景）。`,
+              `以 evaluate 输出的 reaffirmableFindings 清单为准：旧关闭失效（finding 回 open）后按清单里的 originalResolutionEventId 重认领；关闭仍有效时无需重认领，误登记直接删除。`,
+            );
+          }
         }
+        fold.findingClosures.push(event);
+        if (current && finding) finding.reaffirmations.push(event);
         break;
       }
       case "RepairRoundRecorded":
@@ -2567,6 +2622,38 @@ function effectivelyEssentialContracts(acceptance, forced) {
   return essential;
 }
 
+// ── finding 域状态机（kernel/rules.json domains.finding = 唯一转移表，此处只做写入侧
+// from 态检查，不改表）：open --FindingResolved--> resolved；open --ResolutionReaffirmed-->
+// reaffirmed；open --RiskAccepted--> risk-accepted；resolved/reaffirmed/risk-accepted
+// --reopen（record-finding --reopen-of）--> open。与判定侧（kernel-judgments
+// openFindingsFromEvents 回答「当前裁决 revision 上谁 open」）互补：本函数回答「这次写入
+// 是不是表外转移」。态推导取最后一条关闭/重认领事件的类型——同一条 finding resolve 后
+// 跨 revision 重认领，态随最后事件演进为 reaffirmed。
+
+/** finding 当前态（fold 折叠过程中推导）。返回 open / resolved / reaffirmed / risk-accepted。 */
+function findingLifecycleStateOf(fold, findingId) {
+  const closures = fold.findingClosures.filter((event) => event.findingId === findingId);
+  if (closures.length > 0) {
+    return closures[closures.length - 1].type === "FindingResolved" ? "resolved" : "reaffirmed";
+  }
+  if (fold.findingRiskAcceptedIds.has(findingId)) return "risk-accepted";
+  return "open";
+}
+
+/** 该态的合法事件词表（从转移表整理，用于错误消息给出可用出路）。 */
+function findingLegalEventsOf(state) {
+  switch (state) {
+    case "open":
+      return ["FindingResolved", "ResolutionReaffirmed", "RiskAccepted"];
+    case "resolved":
+    case "reaffirmed":
+    case "risk-accepted":
+      return ["reopen（record-finding --reopen-of）"];
+    default:
+      return [];
+  }
+}
+
 /** 只读执行探测/解析脚本，返回 {ok, parsed, reason}（不写盘、无副作用）。 */
 function runExternalContractScript(scriptPath, args) {
   if (!existsSync(scriptPath)) {
@@ -2605,16 +2692,50 @@ function environmentSnapshotFilePath(taskDir, sha256) {
   return join(taskDir, ENVIRONMENT_CONTRACTS_DIRNAME, `${sha256}.json`);
 }
 
+/** 快照稳定事实映射（提取参与身份哈希的字段子集，与 resolver 的 stableContractFacts 同源：resolvedAt / resolvedPath 是
+ * 本机观测信息，不参与快照身份，设计 §4.3）。resolver 未导出该函数，此处本地镜像一份，
+ * 两侧漂移由对拍测试钉住（scripts/tests/external-contracts-v6.test.mjs 快照身份对拍用例）。
+ * 字段防御性取值：损坏快照按同一映射算出的哈希必然与文件名不一致，走下方身份复核分支拒绝。 */
+function environmentSnapshotStableFacts(contract) {
+  const source = contract === null || typeof contract !== "object" ? {} : contract;
+  const resolver = source.resolver === null || typeof source.resolver !== "object" ? {} : source.resolver;
+  return {
+    id: source.id,
+    status: source.status,
+    resolver: { kind: resolver.kind, locator: resolver.locator, resolution: resolver.resolution },
+    identity: source.identity,
+    surfaces: source.surfaces,
+    aggregateHash: source.aggregateHash,
+  };
+}
+
+/** 快照内容规范哈希（与 resolver 的 snapshotSha256 同一公式：contracts 稳定事实排序由
+ * resolver 落盘时保证，此处按文件内容原序映射）。 */
+function computeEnvironmentSnapshotSha256(document) {
+  return sha256Text(canonicalJson((Array.isArray(document.contracts) ? document.contracts : []).map(environmentSnapshotStableFacts)));
+}
+
 function readEnvironmentSnapshotFile(taskDir, sha256) {
   const filePath = environmentSnapshotFilePath(taskDir, sha256);
   if (!existsSync(filePath)) return null;
+  let parsed;
   try {
-    const parsed = JSON.parse(readFileSync(filePath, "utf8"));
-    if (parsed === null || typeof parsed !== "object" || !Array.isArray(parsed.contracts)) return null;
-    return parsed;
+    parsed = JSON.parse(readFileSync(filePath, "utf8"));
   } catch {
     return null;
   }
+  if (parsed === null || typeof parsed !== "object" || !Array.isArray(parsed.contracts)) return null;
+  // 身份复核（§4.4 规则 7）：文件名 = 快照稳定身份哈希，读取时重算内容规范哈希对账——
+  // 不复核时改写批准时的基线快照（例如把 contracts 换成宽松内容）可以借同一文件名
+  // 静默通过 environmentChain，环境漂移防线被架空
+  const recomputed = computeEnvironmentSnapshotSha256(parsed);
+  if (recomputed !== sha256) {
+    fail(
+      `环境契约快照身份不一致：${ENVIRONMENT_CONTRACTS_DIRNAME}/${sha256.slice(0, 12)}….json 的内容规范哈希为 ${recomputed.slice(0, 12)}…，与文件名哈希不匹配（快照内容被改写或损坏）。`,
+      `重跑 node ~/.agents/skills/delivery-v6/scripts/resolve-external-contracts.mjs --task-dir ${JSON.stringify(taskDir)} --project-root <projectRoot> --write 重建快照（按哈希分文件、不覆盖旧文件，重建后以新 snapshotSha256 更新引用方）；不要手工修复快照内容。`,
+    );
+  }
+  return parsed;
 }
 
 /** 解析当前外部契约权威。evaluate 侧必须走 resolver 现场重解析（不允许用 taskDir 内旧快照
@@ -2906,8 +3027,18 @@ function validateExternalContractDeclarations(acceptance, taskDir, sources, cand
   validateEssentialCapabilityBindings(acceptance, essentialContracts);
   // 检查 2：候选处置表必填、detectionSha256 与候选快照一致、全部候选已处置、
   // strong 候选只能 bound/unresolved、每个 externalContracts id 有 bound 或带 rationale 的
-  // manual 处置可回溯
+  // manual 处置可回溯。V6 世代新任务无外部契约时键同样必须在场（设计 §5.1 检查 2：
+  // 允许空处置表，不允许键缺席——键缺席 = 候选探测与处置判定无可绑定对象，任务是否
+  // 做过候选探测无从机器对账）
   const review = acceptance.externalContractReview;
+  if (!Object.hasOwn(acceptance, "externalContractReview")) {
+    fail(
+      contracts.length > 0
+        ? "acceptance.externalContractReview 缺失：声明了 externalContracts 的验收包必须携带候选处置表。"
+        : "acceptance.externalContractReview 缺失：V6 升级后新建任务即使无外部契约也必须携带该键（设计 §5.1 检查 2——设计允许空处置表，但键必须在场）。",
+      `在 acceptance.json 补 externalContractReview: { detectionSha256: <候选快照文件内容 sha256>, dispositions: [] } 后重试；候选快照缺失时先跑 detect-external-contracts（无外部候选也会生成空候选快照，§4.5），用其内容哈希填 detectionSha256。`,
+    );
+  }
   requireRecord(review, "acceptance.externalContractReview");
   requireExactKeys(review, ["detectionSha256", "dispositions"], "acceptance.externalContractReview");
   requireSha256(review.detectionSha256, "acceptance.externalContractReview.detectionSha256");
@@ -2990,21 +3121,25 @@ function validateExternalContractDeclarations(acceptance, taskDir, sources, cand
       );
     }
   }
-  // 检查 3：essential 契约必须有 resolved 权威快照（含被机器强制判为 essential 的契约）
-  const environment = resolveEnvironmentContracts(taskDir, acceptance.projectRoot, { allowPointerFallback: true });
-  for (const contractId of essentialContracts) {
-    const snapshotEntry = environment.contracts.find((entry) => entry?.id === contractId);
-    if (!environment.available || snapshotEntry === undefined) {
-      fail(
-        `essential 外部契约 ${contractId} 无权威解析结果（当前解析：${environment.reason ?? "不可用"}）。`,
-        `先运行 resolve-external-contracts --write 生成权威快照；权威确实不可得时把该契约改为非 essential 并走普通风险接受，或停回用户裁决「目标环境不可满足」。`,
-      );
-    }
-    if (snapshotEntry.status !== "resolved" || contractAggregateHashOf(snapshotEntry) === null) {
-      fail(
-        `essential 外部契约 ${contractId} 的权威状态为 ${snapshotEntry.status ?? "未知"}（无 aggregateHash）。`,
-        "declared-unavailable 不能伪造 resolved：补齐权威工件（安装包/官方二进制/用户登记的本地路径）后重跑 resolve --write，或停回用户裁决。",
-      );
+  // 检查 3：essential 契约必须有 resolved 权威快照（含被机器强制判为 essential 的契约）。
+  // 仅存在 essential 契约时执行——resolver 是外部进程调用，无契约新任务（世代判别把
+  // review-only 验收包也带进本函数）不应被引入 resolver 脚本可用性依赖
+  if (essentialContracts.size > 0) {
+    const environment = resolveEnvironmentContracts(taskDir, acceptance.projectRoot, { allowPointerFallback: true });
+    for (const contractId of essentialContracts) {
+      const snapshotEntry = environment.contracts.find((entry) => entry?.id === contractId);
+      if (!environment.available || snapshotEntry === undefined) {
+        fail(
+          `essential 外部契约 ${contractId} 无权威解析结果（当前解析：${environment.reason ?? "不可用"}）。`,
+          `先运行 resolve-external-contracts --write 生成权威快照；权威确实不可得时把该契约改为非 essential 并走普通风险接受，或停回用户裁决「目标环境不可满足」。`,
+        );
+      }
+      if (snapshotEntry.status !== "resolved" || contractAggregateHashOf(snapshotEntry) === null) {
+        fail(
+          `essential 外部契约 ${contractId} 的权威状态为 ${snapshotEntry.status ?? "未知"}（无 aggregateHash）。`,
+          "declared-unavailable 不能伪造 resolved：补齐权威工件（安装包/官方二进制/用户登记的本地路径）后重跑 resolve --write，或停回用户裁决。",
+        );
+      }
     }
   }
   // 强类集合回传：检查 8（契约冒烟增量）的 forced essential 口径与检查 3/5 同源
@@ -3070,21 +3205,48 @@ function readEvidenceArtifactDocument(world, event) {
   }
 }
 
-/** driver 哈希核对（§6.3/§8.1）：driver 非空；声明 driverHash 时必须与驱动文件全文哈希
- * 一致，文件不可解析同样按不一致处理（fail-closed——不可核验的驱动不证明任何能力）。 */
-function driverHashOkOf(world, environment) {
-  if (environment === null || environment === undefined) return false;
-  if (typeof environment.driver !== "string" || environment.driver.trim() === "") return false;
+/** driver 路径解析（taskDir / projectRoot 相对与绝对路径三候选；不存在返回 null）。 */
+function driverResolvedPathOf(world, environment) {
+  if (environment === null || environment === undefined) return null;
+  if (typeof environment.driver !== "string" || environment.driver.trim() === "") return null;
   const candidates = [];
   if (isAbsolute(environment.driver)) candidates.push(resolve(environment.driver));
   else {
     candidates.push(resolve(world.taskDir, environment.driver));
     candidates.push(resolve(world.task.projectRoot, environment.driver));
   }
-  const driverPath = candidates.find((candidate) => existsSync(candidate));
-  if (driverPath === undefined) return false;
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+/** driver 动态 import 静态扫描（设计 §6.3：driver 限定单文件、无动态 import）。逐行匹配
+ * /\bimport\s*\(/；整行注释（// / * 开头）与空行不算命中。动态 import 会运行时加载代码，
+ * 使「driverHash 覆盖全文」的核验失去静态可预期性——哈希一致也证明不了 driver 行为。
+ * 读不出全文按命中处理（fail-closed：无法证明无动态 import 的驱动不证明任何能力）。 */
+function driverHasDynamicImport(driverPath) {
+  let text;
+  try {
+    text = readFileSync(driverPath, "utf8");
+  } catch {
+    return true;
+  }
+  return text.split("\n").some((line) => {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*")) return false;
+    return /\bimport\s*\(/.test(line);
+  });
+}
+
+/** driver 哈希核对（§6.3/§8.1）：driver 非空；声明 driverHash 时必须与驱动文件全文哈希
+ * 一致，文件不可解析同样按不一致处理（fail-closed——不可核验的驱动不证明任何能力）；
+ * 哈希一致后还须无动态 import（§6.3 driver 形态约束）。 */
+function driverHashOkOf(world, environment) {
+  if (environment === null || environment === undefined) return false;
+  if (typeof environment.driver !== "string" || environment.driver.trim() === "") return false;
+  const driverPath = driverResolvedPathOf(world, environment);
+  if (driverPath === null) return false;
   if (typeof environment.driverHash !== "string" || environment.driverHash === "") return false;
-  return sha256File(driverPath, `environment.driver ${environment.driver}`) === environment.driverHash;
+  if (sha256File(driverPath, `environment.driver ${environment.driver}`) !== environment.driverHash) return false;
+  return !driverHasDynamicImport(driverPath);
 }
 
 /** 参与 runtime 判定的证据记录（当前 revision、声明了契约能力或 runtimeProbe）。 */
@@ -3095,6 +3257,7 @@ function runtimeEvidenceRecordsOf(world, revision) {
     const hasCapabilities = Array.isArray(event.contractCapabilityIds) && event.contractCapabilityIds.length > 0;
     if (event.runtimeProbe !== true && !hasCapabilities) continue;
     const document = readEvidenceArtifactDocument(world, event);
+    const driverPath = driverResolvedPathOf(world, document?.environment ?? null);
     records.push({
       eventId: event.eventId,
       actor: event.actor,
@@ -3106,19 +3269,19 @@ function runtimeEvidenceRecordsOf(world, revision) {
       cases: Array.isArray(document?.cases) ? document.cases : [],
       subject: document?.subject ?? null,
       driverHashOk: driverHashOkOf(world, document?.environment ?? null),
+      // 动态 import 命中标记：仅在 kernel 判 driver-unverifiable 时用于给出具体原因
+      //（判定单源仍在 runtimeEvidenceIntegrityGap，本字段只是呈现层归因）
+      driverDynamicImport: driverPath !== null && driverHasDynamicImport(driverPath),
     });
   }
   return records;
 }
 
-/** 证据级权威核对（§8.1 第 4-6 条，与能力无关的维度）：sourceHash 与当前权威
- * aggregateHash 一致、driver 与 driverHash 可核、probe subject.revision 与事件 revision 一致。
- * 判定走 kernel-judgments.runtimeEvidenceIntegrityGap 单源（与 deriveRuntimeObligations 的
- * 证据核对同一函数，不各写一份）；消息措辞保持 gate 侧既有形态（测试冻结）。
- * 返回 null = 无缺口；非 null = 该证据最多 partial 的原因。 */
-function runtimeEvidenceAuthorityGap(world, record, snapshot) {
-  const contracts = externalContractsOf(world.acceptance);
-  const authorityHashes = record.contractCapabilityIds
+/** 证据认领能力 → 当前权威逐契约哈希映射（contractCapabilityIds 前缀或单契约裸 id；
+ * hash = null 表示该契约当前权威不可得——快照无条目或非 resolved）。 */
+function capabilityAuthorityHashesOf(acceptance, record, snapshot) {
+  const contracts = externalContractsOf(acceptance);
+  return record.contractCapabilityIds
     .map((id) => (id.includes(":") ? id.slice(0, id.indexOf(":")) : (contracts.length === 1 ? contracts[0].id : null)))
     .filter((id) => typeof id === "string")
     .map((contractId) => {
@@ -3129,6 +3292,15 @@ function runtimeEvidenceAuthorityGap(world, record, snapshot) {
         status: entry?.status ?? "不在快照中",
       };
     });
+}
+
+/** 证据级权威核对（§8.1 第 4-6 条，与能力无关的维度）：sourceHash 与当前权威
+ * aggregateHash 一致、driver 与 driverHash 可核、probe subject.revision 与事件 revision 一致。
+ * 判定走 kernel-judgments.runtimeEvidenceIntegrityGap 单源（与 deriveRuntimeObligations 的
+ * 证据核对同一函数，不各写一份）；消息措辞保持 gate 侧既有形态（测试冻结）。
+ * 返回 null = 无缺口；非 null = 该证据最多 partial 的原因。 */
+function runtimeEvidenceAuthorityGap(world, record, snapshot) {
+  const authorityHashes = capabilityAuthorityHashesOf(world.acceptance, record, snapshot);
   const gap = runtimeEvidenceIntegrityGap({
     artifactReadable: record.artifactReadable,
     driverHashOk: record.driverHashOk,
@@ -3142,7 +3314,9 @@ function runtimeEvidenceAuthorityGap(world, record, snapshot) {
     case "artifact-unreadable":
       return "runtime probe artifact 不可读或不是 JSON 对象";
     case "driver-unverifiable":
-      return "environment.driver 缺失、文件不可解析或 driverHash 与驱动文件内容不一致";
+      return record.driverDynamicImport === true
+        ? "driver 含动态 import（违反 §6.3 driver 形态约束：driver 限定单文件、无动态 import——动态加载使 driverHash 核验失去静态可预期性）"
+        : "environment.driver 缺失、文件不可解析或 driverHash 与驱动文件内容不一致";
     case "environment-missing":
       return "artifact 无 environment 元数据";
     case "sourceHash-missing":
@@ -3314,10 +3488,13 @@ function rescanStrongClasses(world) {
 
 /** evaluate 前置（§8.1）：候选复扫（判定单源 = contract-rescan 库，D0/D3 同一实现）+
  * EnvironmentBaselineConfirmed 预算规则。复扫命中未登记 strong 信号、未处置 strong 候选或
- * 未解外部访问 → 直接拒绝 evaluate（不是判个 candidate 了事）。 */
+ * 未解外部访问 → 直接拒绝 evaluate（不是判个 candidate 了事）。触发条件与 D0 对齐
+ *（contract-rescan 库同款：externalContracts / externalContractReview 任一在场即跑，两键
+ * 全无 = 升级前旧任务豁免路径）——只看 contracts 会在 review-only 验收包上留下 D0 有复扫、
+ * evaluate 没有的缺口（同一验收包两侧判定不一致）。 */
 function externalContractPreflight(world) {
   const acceptance = world.acceptance;
-  if (externalContractsOf(acceptance).length === 0) return;
+  if (!Object.hasOwn(acceptance, "externalContracts") && !Object.hasOwn(acceptance, "externalContractReview")) return;
   // 预算规则（§4.3/§10）：同一 acceptanceVersion 内最多一次 EnvironmentBaselineConfirmed，
   // 再次环境漂移必须 open-revision 或停回——不允许用环境重试掩盖实现缺陷
   const baselines = world.fold.environmentBaselines.filter((event) => event.acceptanceVersion === acceptance.acceptanceVersion);
@@ -3410,9 +3587,32 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   const runtimeAuthorityGaps = new Map();
   if (runtime.snapshot !== null) {
     for (const record of runtimeEvidenceRecordsOf(world, revision)) {
-      if (!record.runtimeProbe) continue;
-      const gap = runtimeEvidenceAuthorityGap(world, record, runtime.snapshot);
-      if (gap !== null) runtimeAuthorityGaps.set(record.eventId, gap);
+      if (record.runtimeProbe) {
+        const gap = runtimeEvidenceAuthorityGap(world, record, runtime.snapshot);
+        if (gap !== null) runtimeAuthorityGaps.set(record.eventId, gap);
+        continue;
+      }
+      // 非 probe 宿主证据（带 capability 绑定，§8.1 第 4 条不区分证据类型）：sourceHash 在场
+      // 且对应契约权威 aggregateHash 可得时不一致即降 partial——环境身份造假不因证据不是
+      // probe 就放行。driver / subject.revision 是 probe 专属核对项（非 probe 证据没有这些
+      // 字段），不在本核对范围；sourceHash 缺失同样不拦（只核在场值的真实性）。
+      // 设计边界（登记）：权威不可得（快照无该契约条目或非 resolved）时不猜测——该证据不因
+      // 权威缺口降级，权威侧缺口由 readiness 与 runtime 义务判定披露
+      if (record.contractCapabilityIds.length === 0) continue;
+      const evidenceHash = typeof record.environment?.sourceHash === "string" && record.environment.sourceHash !== ""
+        ? record.environment.sourceHash
+        : null;
+      if (evidenceHash === null) continue;
+      for (const entry of capabilityAuthorityHashesOf(world.acceptance, record, runtime.snapshot)) {
+        if (typeof entry.hash !== "string" || entry.hash === "") continue;
+        if (entry.hash !== evidenceHash) {
+          runtimeAuthorityGaps.set(
+            record.eventId,
+            `environment.sourceHash 与契约 ${entry.contractId} 当前权威 aggregateHash 不一致（证据 ${evidenceHash.slice(0, 12)}…，权威 ${entry.hash.slice(0, 12)}…）——非 probe 宿主证据同样受 sourceHash 核对约束（§8.1 第 4 条）`,
+          );
+          break;
+        }
+      }
     }
   }
 
@@ -5146,9 +5346,14 @@ function commandValidateAcceptance(args) {
   // 验收包首次成型时执行血统包对账（intent 对账已在 init 完成）
   requireNoPackageLineageConflict(world);
   // 外部契约声明层静态检查（设计 §5.1 检查 2/3/5/8）：候选处置表 + resolved 权威快照。
-  // 放在结构层之后：结构先合法才有对账对象。返回声明层算出的强类集合（检查 8 透传）
+  // 放在结构层之后：结构先合法才有对账对象。返回声明层算出的强类集合（检查 8 透传）。
+  // 触发条件（§5.1 检查 2 的世代口径）：externalContracts 键存在，或任务属 V6 升级后
+  // 新建（task.json 带 deliveryProfile——validateTaskRecord 注释明示该字段是「升级后新建
+  // 任务」的世代判别锚，init 统一写入）。新任务即使无外部契约也必须有 externalContractReview
+  // 键（允许空处置表）；升级前旧任务（无 deliveryProfile）无法判世代，退化为「externalContracts
+  // 在场则 review 必填」——残余缺口：旧任务「两键全无」场景不受检查（升级兼容的代价）
   let externalContractStrongClasses = new Set();
-  if (Object.hasOwn(world.acceptance, "externalContracts")) {
+  if (Object.hasOwn(world.acceptance, "externalContracts") || Object.hasOwn(world.task, "deliveryProfile")) {
     // profile=a 机器降档与验收探索维度的对账（设计 §13）：IA 侧把探索维度降为
     // 「外部契约 / 故障形态」两类，gate 的 ExplorationCompleted 维度覆盖检查要求完整覆盖
     // acceptance.reviewDimensions——两侧词表不一致时 full 模式必败且循环无法收敛，

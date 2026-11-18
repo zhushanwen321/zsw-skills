@@ -87,6 +87,16 @@ function environmentDocument({ kind, name = "pi-coding-agent", version = "1.0.0"
   };
 }
 
+/** 空候选快照（设计 §4.5：无外部候选的新任务也生成）+ 对应 externalContractReview 空处置表。
+ * V6 世代新任务（task.json 带 deliveryProfile）该键必填（§5.1 检查 2），缺键被 validate-acceptance 拒。 */
+function writeEmptyCandidateSnapshot(fx, acceptanceVersion) {
+  const dir = join(fx.taskDir, "evidence", `acceptance-v${acceptanceVersion}`);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "external-contract-candidates.json");
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 1, inputHashes: {}, candidates: [], unresolved: [] }, null, 2)}\n`);
+  return sha256(readFileSync(path, "utf8"));
+}
+
 /** 推进到「已批准 + 方案确认 + 实现 + 探索」，断言 A1 带调用方给定的 requiredEnvironment
  *（null = 不带该字段）。实现提交与探索绑定当前 revision（gate 前置）。 */
 function driveToCandidate(t, { required } = {}) {
@@ -116,6 +126,7 @@ function driveToCandidate(t, { required } = {}) {
     riskLevel: "high",
     exploratoryReview: "required",
     reviewDimensions: ["smoke"],
+    externalContractReview: { detectionSha256: writeEmptyCandidateSnapshot(fx, 1), dispositions: [] },
   }, null, 2)}\n`);
   writeFileSync(join(fx.taskDir, "increments.json"), `${JSON.stringify({
     schemaVersion: 1,
@@ -187,6 +198,9 @@ test("requiredEnvironment 校验：kind 限 official-runner|real-host，fake-hos
     adversarialForms: [{ id: "AF1", assertionId: "A1", qualifier: "q", entryPoint: "auto", initialState: "s", operation: "o", timing: "t", expected: "e", testAssetRefs: ["t"], rationale: "r" }],
   });
   const tryValidate = (acceptance) => {
+    // V6 世代新任务 externalContractReview 键必填（§5.1 检查 2）——本用例专测 requiredEnvironment
+    // 字段校验，统一补空处置表使目标断言可达（不补的对照见 external-contracts-v6.test.mjs）
+    acceptance.externalContractReview = { detectionSha256: writeEmptyCandidateSnapshot(fx, 1), dispositions: [] };
     writeFileSync(join(fx.taskDir, "acceptance.json"), `${JSON.stringify(acceptance, null, 2)}\n`);
     writeFileSync(join(fx.taskDir, "increments.json"), `${JSON.stringify({
       schemaVersion: 1, acceptanceVersion: 1,
