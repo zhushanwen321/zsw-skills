@@ -145,6 +145,27 @@ test("非 git 仓：退化全量扫描并 stderr 告警（不静默）", () => {
   }
 });
 
+test("动态 require 一层归因：__dirname 锚定且目标在仓内 → 不进 unresolved；目标缺失或参数非字面量 → 仍进 unresolved", () => {
+  const { root, git } = makeFixtureRepo();
+  try {
+    mkdirSync(join(root, "tests"), { recursive: true });
+    mkdirSync(join(root, "lib"), { recursive: true });
+    writeFileSync(join(root, "lib", "helpers.cjs"), "module.exports = {};\n");
+    writeFileSync(join(root, "tests", "a.test.mjs"), 'import path from "node:path";\nconst H = require(path.resolve(__dirname, "../lib/helpers.cjs"));\n');
+    writeFileSync(join(root, "tests", "b.test.mjs"), 'const M = require(join(__dirname, "../missing.cjs"));\n');
+    writeFileSync(join(root, "tests", "c.test.mjs"), 'const X = require(buildPath(name));\n');
+    writeFileSync(join(root, "intent.md"), "交付任务：修复脚本。\n");
+    git(["add", "-A"]);
+    const { snapshot } = runDetector(root, join(root, "intent.md"));
+    const signals = (snapshot.unresolved || []).map((item) => item.signal);
+    assert.ok(!signals.some((signal) => signal.includes("a.test.mjs")), `仓内存在目标的一层归因不应进 unresolved：${JSON.stringify(snapshot.unresolved)}`);
+    assert.ok(signals.some((signal) => signal.includes("b.test.mjs")), "目标不存在的动态 require 应保留 unresolved");
+    assert.ok(signals.some((signal) => signal.includes("c.test.mjs")), "参数非字面量的动态 require 应保留 unresolved");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("确定性：同输入两次运行 stdout 逐字节一致", () => {
   const { root, git } = makeFixtureRepo();
   try {

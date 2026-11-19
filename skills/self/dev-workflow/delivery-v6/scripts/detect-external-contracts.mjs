@@ -336,6 +336,10 @@ const EXPORT_FROM_RE = /export\s+(?:\*|\{[^}]*\})\s*(?:as\s+[A-Za-z_$][\w$]*\s*)
 // 动态 import / require：调用参数不是字符串字面量即无法静态归因（§4.2 unresolved 规则）
 const DYNAMIC_IMPORT_RE = /(?:^|[^.\w$])import\s*\(\s*(?!["'])/g;
 const DYNAMIC_REQUIRE_RE = /(?:^|[^.\w$])require\s*\(\s*(?!["'])/g;
+// __dirname 锚定的计算式调用一层归因：参数是 (path.)resolve/join(__dirname, "字面量"…)
+// 且解析目标在仓内存在时视为本地模块 require（与 re-export 穿透一层归因同款语义）；
+// 目标仓外、不存在或参数含非字面量 → 维持 unresolved，不做字面白名单放行
+const DIR_ANCHORED_CALL_RE = /^\s*(?:path\s*\.\s*)?(?:resolve|join)\s*\(\s*__dirname\s*((?:,\s*["'][^"']*["']\s*)*)\)/;
 const RUNTIME_GEN_RES = [
   { re: /\beval\s*\(/g, label: "eval 调用" },
   { re: /new\s+Function\s*\(/g, label: "new Function 构造" },
@@ -397,9 +401,20 @@ function scanCodeFile(absPath, relPath, text, policyClasses) {
     result.reexports.push({ spec: match[1] });
   }
   const dynamicImport = text.match(DYNAMIC_IMPORT_RE);
-  if (dynamicImport) result.dynamicImports += dynamicImport.length;
   const dynamicRequire = text.match(DYNAMIC_REQUIRE_RE);
-  if (dynamicRequire) result.dynamicImports += dynamicRequire.length;
+  const dynamicCallCount = (dynamicImport ? dynamicImport.length : 0) + (dynamicRequire ? dynamicRequire.length : 0);
+  if (dynamicCallCount > 0) {
+    // 逐调用一层归因：__dirname 锚定且目标为仓内存在文件的动态调用不是外部访问
+    let attributed = 0;
+    for (const re of [DYNAMIC_IMPORT_RE, DYNAMIC_REQUIRE_RE]) {
+      for (const match of text.matchAll(new RegExp(re.source, "g"))) {
+        const argStart = match.index + match[0].length;
+        const argWindow = text.slice(argStart, argStart + 300);
+        if (dirAnchoredLocalTarget(absPath, argWindow) !== null) attributed += 1;
+      }
+    }
+    result.dynamicImports += dynamicCallCount - attributed;
+  }
   for (const { re, label } of RUNTIME_GEN_RES) {
     if (re.test(text)) result.runtimeGen.push(label);
   }
@@ -422,8 +437,23 @@ function scanCodeFile(absPath, relPath, text, policyClasses) {
   return result;
 }
 
-// SELF_NAME 在 main 内赋值（manifest 读取后）；扫描函数经闭包外的模块级变量读取
+// SELF_NAME / PROJECT_ROOT 在 main 内赋值（manifest 读取后）；扫描函数经闭包外的模块级变量读取
 let SELF_NAME = null;
+let PROJECT_ROOT = null;
+
+/** __dirname 锚定计算式调用的本地目标：参数全字面量、解析目标在仓内且存在 → 绝对路径；否则 null。 */
+function dirAnchoredLocalTarget(fromFile, argWindow) {
+  const match = argWindow.match(DIR_ANCHORED_CALL_RE);
+  if (!match) return null;
+  const literals = [...match[1].matchAll(/["']([^"']*)["']/g)].map((literal) => literal[1]);
+  if (literals.length === 0) return null;
+  const resolved = resolve(dirname(fromFile), ...literals);
+  if (PROJECT_ROOT !== null) {
+    const rel = relative(PROJECT_ROOT, resolved);
+    if (rel.startsWith("..") || isAbsolute(rel)) return null; // 仓外目标不归因（可能是外部访问）
+  }
+  return existsSync(resolved) ? resolved : null;
+}
 
 // ---------------------------------------------------------------------------
 // 候选聚合
@@ -455,6 +485,7 @@ function main() {
   const intent = readIntent(opts.intentFile);
   const { manifest, sha256: manifestSha } = readManifest(opts.projectRoot);
   SELF_NAME = typeof manifest?.name === "string" ? manifest.name : null;
+  PROJECT_ROOT = opts.projectRoot;
 
   console.error(`OK: 输入就绪（intent=${opts.intentFile}，packageManifest=${manifestSha === "absent" ? "absent" : manifestSha.slice(0, 12) + "…"}）`);
 
@@ -737,4 +768,4 @@ function isDocSignalPath(rel) {
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) main();
 
-export { compileScopeMatchers, globToRegExp, loadPolicyClasses, parseDetectionScope, scanCodeFile, slugify };
+export { compileScopeMatchers, dirAnchoredLocalTarget, globToRegExp, loadPolicyClasses, parseDetectionScope, scanCodeFile, slugify };
