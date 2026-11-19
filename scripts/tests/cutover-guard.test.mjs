@@ -8,8 +8,6 @@
 //      dev-flow 段 docName 可含 .rendered 后缀，tech-design 段 <name> 同源）
 //   4. 探针失败 fail-open 放行（命中判定 = 标记在场；探针故障不是在场信号——
 //      实现注释登记的取舍，测试固化防回摆）
-//   5. 手工入口同检查：flow/sync.md 携带 cutover 拒启指引（文档契约静态断言——手工路径
-//      无引擎代码可驱动，靠流程文档第一步义务 + 本断言防文档漂移）
 //
 // 形态 = 零转抄探针：从单源提取真实函数源码与探针常量，transpile 后在 vm 中执行；
 // world.run stub 真实执行 node -e 探针（夹具 = 临时目录内的标记文件有/无两态）。
@@ -28,7 +26,6 @@ const require = createRequire(import.meta.url);
 const ts = require("typescript");
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SRC = join(REPO, "skills", "self", "dev-workflow", "workflows", "src", "design-code-sync-loop.shared.ts");
-const SYNC_FLOW = join(REPO, "skills", "self", "dev-workflow", "dev-flow-v5", "flow", "sync.md");
 
 /** 从单源提取 cutoverGuardBlock 真实源码 + 探针常量，transpile 后在 vm 里取可调用引用 */
 function loadGuard() {
@@ -133,9 +130,3 @@ test("workspace 形态寻址：标记在 tech-design/<ws-slug>/（无 worktree �
   }
 });
 
-test("手工入口同检查：flow/sync.md 携带 cutover 拒启指引（文档契约静态断言）", () => {
-  const flow = readFileSync(SYNC_FLOW, "utf-8");
-  assert.ok(flow.includes("cutover.json"), "flow/sync.md 手工路径必须登记 cutover 标记检查");
-  assert.ok(/design-code-sync-v2/.test(flow), "手工路径拒启指引必须指向 v2");
-  assert.ok(/第一步|拒启/.test(flow), "检查必须是手工入口第一步拒启义务");
-});

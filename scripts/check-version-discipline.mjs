@@ -106,73 +106,23 @@ if (repoCheck.status !== 0 || repoCheck.stdout.toString("utf8").trim() !== "true
 }
 
 // ── 技能 ↔ 自有文件目录 / 产物 ↔ 技能 映射 ──
-// 登记范围 = 现行代技能（V4 冻结 / V5 内核线 / V6 结构化线）。V1-V3 代技能已归档（仓库根
-// .archived/<技能名>/，不入版本库），不参与版本纪律；design-code-sync 两引擎跨代共用，产物归属
-// dev-flow-v5（见 PRODUCT_SKILL）。归档代复活时在此重新登记
+// 登记范围 = 现行技能。V1-V3 与 V4-V6 代三技能谱系（tech-design / dev-flow / delivery）已归档
+// （仓库根 .archived/<技能名>/，不入版本库），不参与版本纪律；design-code-sync 两引擎
+// 归属 design-code-sync（见 PRODUCT_SKILL）。归档代复活时在此重新登记
 const SKILLS = [
-  { name: "tech-design-v4", dir: "skills/self/dev-workflow/tech-design-v4" },
-  { name: "dev-flow-v4", dir: "skills/self/dev-workflow/dev-flow-v4" },
-  { name: "delivery-v4", dir: "skills/self/dev-workflow/delivery-v4" },
-  { name: "tech-design-v5", dir: "skills/self/dev-workflow/tech-design-v5" },
-  { name: "dev-flow-v5", dir: "skills/self/dev-workflow/dev-flow-v5" },
-  { name: "delivery-v5", dir: "skills/self/dev-workflow/delivery-v5" },
-  { name: "tech-design-v6", dir: "skills/self/dev-workflow/tech-design-v6" },
-  { name: "dev-flow-v6", dir: "skills/self/dev-workflow/dev-flow-v6" },
-  { name: "delivery-v6", dir: "skills/self/dev-workflow/delivery-v6" },
+  { name: "design-code-sync", dir: "skills/self/dev-workflow/design-code-sync" },
+  { name: "tree-plant", dir: "skills/self/dev-workflow/tree-plant" },
 ];
 const WORKFLOWS = "skills/self/dev-workflow/workflows";
 const SHARED_SRC_PREFIX = `${WORKFLOWS}/src/`;
 // 产物 → 所属技能。权威映射见 scripts/build-workflows.mjs 的 SKILL_VERSION_SOURCES；
 // 新增 workflow 产物时两处同步登记，否则规则 3 无版本戳可对账
 const PRODUCT_SKILL = {
-  // design-code-sync 两引擎跨代共用（V4/V5/V6 在用），归属 dev-flow-v6
-  // （原登记 dev-flow-v1，随 V1 代归档改归现行执行线）
-  "design-code-sync-loop.dwf.ts": "dev-flow-v6",
-  "pi/design-code-sync-loop.js": "dev-flow-v6",
-  "design-code-sync-v2.dwf.ts": "dev-flow-v6",
-  "pi/design-code-sync-v2.js": "dev-flow-v6",
-  "tech-review-loop-v4.dwf.ts": "tech-design-v4",
-  "pi/tech-review-loop-v4.js": "tech-design-v4",
-  "wave-executor-v4.dwf.ts": "dev-flow-v4",
-  "pi/wave-executor-v4.js": "dev-flow-v4",
-  "dev-consistency-loop-v4.dwf.ts": "dev-flow-v4",
-  "pi/dev-consistency-loop-v4.js": "dev-flow-v4",
-  "acceptance-design-v4.dwf.ts": "delivery-v4",
-  "pi/acceptance-design-v4.js": "delivery-v4",
-  "candidate-build-v4.dwf.ts": "delivery-v4",
-  "pi/candidate-build-v4.js": "delivery-v4",
-  "independent-assurance-v4.dwf.ts": "delivery-v4",
-  "pi/independent-assurance-v4.js": "delivery-v4",
-  "assurance-repair-loop-v4.dwf.ts": "delivery-v4",
-  "pi/assurance-repair-loop-v4.js": "delivery-v4",
-  "tech-review-loop-v5.dwf.ts": "tech-design-v5",
-  "pi/tech-review-loop-v5.js": "tech-design-v5",
-  "wave-executor-v5.dwf.ts": "dev-flow-v5",
-  "pi/wave-executor-v5.js": "dev-flow-v5",
-  "dev-consistency-loop-v5.dwf.ts": "dev-flow-v5",
-  "pi/dev-consistency-loop-v5.js": "dev-flow-v5",
-  "acceptance-design-v5.dwf.ts": "delivery-v5",
-  "pi/acceptance-design-v5.js": "delivery-v5",
-  "candidate-build-v5.dwf.ts": "delivery-v5",
-  "pi/candidate-build-v5.js": "delivery-v5",
-  "independent-assurance-v5.dwf.ts": "delivery-v5",
-  "pi/independent-assurance-v5.js": "delivery-v5",
-  "assurance-repair-loop-v5.dwf.ts": "delivery-v5",
-  "pi/assurance-repair-loop-v5.js": "delivery-v5",
-  "tech-review-loop-v6.dwf.ts": "tech-design-v6",
-  "pi/tech-review-loop-v6.js": "tech-design-v6",
-  "wave-executor-v6.dwf.ts": "dev-flow-v6",
-  "pi/wave-executor-v6.js": "dev-flow-v6",
-  "dev-consistency-loop-v6.dwf.ts": "dev-flow-v6",
-  "pi/dev-consistency-loop-v6.js": "dev-flow-v6",
-  "acceptance-design-v6.dwf.ts": "delivery-v6",
-  "pi/acceptance-design-v6.js": "delivery-v6",
-  "candidate-build-v6.dwf.ts": "delivery-v6",
-  "pi/candidate-build-v6.js": "delivery-v6",
-  "independent-assurance-v6.dwf.ts": "delivery-v6",
-  "pi/independent-assurance-v6.js": "delivery-v6",
-  "assurance-repair-loop-v6.dwf.ts": "delivery-v6",
-  "pi/assurance-repair-loop-v6.js": "delivery-v6",
+  // design-code-sync 两引擎：独立技能 design-code-sync 的执行引擎
+  "design-code-sync-loop.dwf.ts": "design-code-sync",
+  "pi/design-code-sync-loop.js": "design-code-sync",
+  "design-code-sync-v2.dwf.ts": "design-code-sync",
+  "pi/design-code-sync-v2.js": "design-code-sync",
 };
 const STAMP_RE = /const SKILL_VERSION = "([^"]*)";/;
 const VERSION_RE = /^version:\s*(\d+\.\d+\.\d+)\s*$/m;

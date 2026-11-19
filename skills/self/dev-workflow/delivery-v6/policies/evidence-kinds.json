@@ -1,4 +1,0 @@
-{
-  "evidenceKinds": ["command", "scenario", "inspection"],
-  "environmentKinds": ["fake-host", "official-runner", "real-host"]
-}

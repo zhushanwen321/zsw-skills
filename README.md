@@ -19,33 +19,24 @@ agents/
   self/            自用 agent（symlink 登记）
   external/        预留
 scripts/           workflow 双平台构建与校验脚本
-.archived/         已退役技能与产物归档（V1-V3 代，不入版本库，仅本机）
+.archived/         已退役技能与产物归档（三技能谱系 V1-V6 全代，不入版本库，仅本机）
 ```
 
 ## Skills
 
 ### dev-workflow/ — 常规开发流程
 
-v6 三技能（tech-design-v6 / dev-flow-v6 / delivery-v6）为现行开发代，v5 为冻结参照。
+三技能谱系（tech-design / dev-flow / delivery，V1-V6 全部代）已归档至 `.archived/`；现行交付技能为 tree-plant，一致性校准为 design-code-sync。
 
 | Skill | 说明 |
 |-------|------|
-| tech-design-v4 | 在 V3 基线（归档代）上增加质量传递：验收断言与方案机制对账、反例场景测试绑定、T2 冲突清零与 T3 引用完备检查 |
-| dev-flow-v4 | 在 V3 基线（归档代）上增加三方一致性审查、D3 后候选反例审查、D4 当前版本探索与 must-fix 清零门，以及受控修复路径 |
-| delivery-v4 | 在 V3 基线（归档代）上增加 schema 2 验收断言与反例场景、断言级裁决、full/recheck 双模式、统一修复循环，以及第 4 轮修复或第 11 条不同 must-fix 的 process-failed |
-| tech-design-v5 | 在 V4 基线上接入 delivery-core 内核：T2 方向审重写回边至多 2 次（超限停回用户），验收复审轮预算 ≤6 |
-| dev-flow-v5 | 在 V4 基线上接入 delivery-core 内核：W2 节点状态六写入点收敛为单一转移入口（attempts 修复——派发即计数、重派不清零）、D2 条目回流上限 ≤2、人工处置显式转移（node-transition manual-disposition） |
-| delivery-v5 | 在 V4 基线上落地交付事务内核 delivery-core：五域转移表与静态校验（进 CI）、判定单源库（open 集/探索集/due/修复轮预算唯一实现）、事件意图提交（信封内核构造 + 写入矩阵「角色×阶段×目标域」+ domain 章，append 退役）、验收包写入防护（冻结 + open-revision + 篡改检测）、status.json 派生视图（node-project）、过程记录读侧合流（events）、定级护栏（发现域三护栏 + T2/D2 聚合改判熔断）、循环预算三档、pending-actions 待办实体、golden 任务端到端与历史回放（replay） |
-| tech-design-v6 | 在 V5 基线上实施结构化交付优化（设计二至五步）：计划单源渲染承接 + 项目静态能力快照（只读探测）+ D0 编译器接管生成（dev/acceptance 分阶段）+ 逐断言引用索引与证据内容索引 + reviewer 候选定位；外部契约任务的契约 spike 单元规划 |
-| dev-flow-v6 | 在 V5 基线上实施结构化交付优化：D0 编译器分阶段接管（exec-plan/promptFile/status 生成）、D2 审查索引定位入口、D3 证据内容索引、执行期写入方全走 JSON 单源 + 重渲染；外部契约编译门与复扫门、runtime probe wrapper |
-| delivery-v6 | 在 V5 基线上实施结构化交付优化：验收起草前置项目能力快照（命令/资产一次探测、unknown 显式）、验收审查断言×证据×资产表自动生成、独立保证按统一证据内容索引定位原始记录；外部契约守门（externalContracts 登记、权威工件解析、runtime 义务、真实环境 probe） |
 | tree-plant | 树形交付技能（从零新线，不背 delivery 谱系）：扎根（背景拆解→方案草稿→论据事实核查三分类）与生长（主干 TDD 实机跑通→长枝→长叶补异常与单测→修剪对抗一轮→收获机器裁决）；事实核查 + 一轮定向对抗审查 + 机器终态裁决三件事之外全部还给模型，配六道确定性 gate（tree-plant.mjs）与九张历史捕获判据卡 |
-| symbol-watchlist | 符号词表生成与自验工具（extract-backticks.mjs）：tech-design-v5 T3 产词表、dev-flow-v5 D5 发起前自验的共享契约载体 |
+| symbol-watchlist | 符号词表生成与自验工具（extract-backticks.mjs）：从设计文档提取反引号符号生成词表并自验 |
 | design-code-sync | 校准代码实现与设计文档的一致性 |
 | architecture-clean-domain-design | 以 DDD 与六边形架构为分析视角的领域建模与架构分析：统一语言、限界上下文、聚合不变量、圈层性质判定；只做映射与登记，不输出结构改造设计 |
 | workflow-authoring | 双平台 workflow 撰写与观测接入规范：单源构建结构、GUI 泳道约束、观测接入五步、检查门禁与数据落盘 |
 
-内部模块 `dev-workflow/conformance-plane/` — 设计义务一致性控制平面（D5 v2 对账引擎的领域核；模块地图与命令见 `skills/self/dev-workflow/conformance-plane/README.md`）：
+内部模块 `dev-workflow/conformance-plane/` — 设计义务一致性控制平面（design-code-sync-v2 引擎的领域核；模块地图与命令见 `skills/self/dev-workflow/conformance-plane/README.md`）：
 
 | 子目录 | 说明 |
 |--------|------|
@@ -118,7 +109,6 @@ dev-workflow 系 skill 的 workflow 脚本同时维护 zcode 与 pi 两个平台
 | build-workflows.mjs | 从 `workflows/src/` 构建双平台产物 |
 | check-workflow-parity.mjs | zcode/pi 双平台产物对账校验 |
 | check-workflow-types.mjs | 用平台 facade 声明（`wf-facade.d.ts`）对 zcode 产物跑 tsc strict |
-| check-commit-contract.mjs | 提交说明结构契约校验：渲染侧与反查侧同源往返（仅 wave-executor 相关变更时触发） |
 
 ## Agents
 

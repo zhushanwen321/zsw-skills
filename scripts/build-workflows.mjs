@@ -42,39 +42,15 @@ const SAVED_DIR = join(homedir(), ".zcode", "workflows");
 // 校验入口（zcode 发起即比对 saved 副本与仓内产物，漂移即抛错——机制与刻意不比 src/
 // 源的理由见层文件头注）
 const PROV_LAYER_PATH = join(SRC, "provenance.shared.ts");
-// 构建名单 = 现行代（V4 / V5 / V6）与跨代共用引擎。V1-V3 代的 workflow 产物
-// 连同所属技能已归档（仓库根 .archived/：技能在 .archived/<技能名>/，产物在
-// .archived/workflows-v{1,2,3}/；该目录不入版本库，仅本机保留）——不再构建、不参与对账；复活某一代时从归档树恢复，
-// 并重新登记本名单与下方 SKILL_VERSION_SOURCES
+// 构建名单 = 现行 workflow（design-code-sync 双引擎）。V1-V3 与 V4-V6 代三技能谱系
+//（tech-design / dev-flow / delivery）的 workflow 产物连同所属技能已归档（仓库根
+// .archived/：技能在 .archived/<技能名>/，产物在 .archived/workflows-v{1,2,3}/ 与
+// .archived/workflows-v4-v6/；该目录不入版本库，仅本机保留）——不再构建、不参与对账；
+// 复活某一代时从归档树恢复，并重新登记本名单与下方 SKILL_VERSION_SOURCES
 const NAMES = [
-  // design-code-sync 两引擎跨代共用（V4/V5 与 dev 线的 D5 仍在用，不随 V1 代归档），
-  // 版本权威归属 dev-flow-v6（现行执行线）
+  // design-code-sync 两引擎：独立技能 design-code-sync 的执行引擎，跨代沿用
   "design-code-sync-loop",
   "design-code-sync-v2",
-  // V4 质量传递线与 V5 内核线
-  "tech-review-loop-v4",
-  "wave-executor-v4",
-  "dev-consistency-loop-v4",
-  "acceptance-design-v4",
-  "candidate-build-v4",
-  "independent-assurance-v4",
-  "assurance-repair-loop-v4",
-  // V5 内核线（delivery-core 状态机收编）
-  "tech-review-loop-v5",
-  "wave-executor-v5",
-  "dev-consistency-loop-v5",
-  "acceptance-design-v5",
-  "candidate-build-v5",
-  "independent-assurance-v5",
-  "assurance-repair-loop-v5",
-  // V6 结构化线（产物单源 + 能力快照 + 索引 + 编译器接管）
-  "tech-review-loop-v6",
-  "wave-executor-v6",
-  "dev-consistency-loop-v6",
-  "acceptance-design-v6",
-  "candidate-build-v6",
-  "independent-assurance-v6",
-  "assurance-repair-loop-v6",
 ];
 // 观测门禁豁免名单：shared 源无 initObservation 调用点且登记在此的 workflow 跳过观测
 // 契约检查（跳过时打一行说明，不静默）。豁免是显式决定不是默认沉默——登记格式 = 双引号
@@ -97,18 +73,8 @@ const SKILL_DATA_LAYER_PATH = join(SRC, "skill-data.shared.ts");
 // 运行时 ReferenceError）；登记内业务源零消费韧性符号 = 构建失败（防死登记静默白拼）
 const RESILIENCE_LAYER_PATH = join(SRC, "resilience.shared.ts");
 const RESILIENCE_WORKFLOWS = new Set([
-  "acceptance-design-v4",
-  "candidate-build-v4",
-  "independent-assurance-v4",
-  "assurance-repair-loop-v4",
-  "acceptance-design-v5",
-  "candidate-build-v5",
-  "independent-assurance-v5",
-  "assurance-repair-loop-v5",
-  "acceptance-design-v6",
-  "candidate-build-v6",
-  "independent-assurance-v6",
-  "assurance-repair-loop-v6",
+  // 现无登记成员：原登记的 V4-V6 谱系 workflow 已归档；韧性层保留为通用构建层，
+  // 新 workflow 需要韧性符号时在此登记（双向互证规则见上方注释）
 ]);
 // 业务源合法消费的韧性层符号词表——两个方向的对账断言共用同一份正则，防双份漂移
 const RESILIENCE_SYMBOL_RE = /\b(askGuarded|recordRepair|retryOnSpawnFailure|repairSummary|initResilience)\b/;
@@ -118,34 +84,9 @@ const RESILIENCE_SYMBOL_RE = /\b(askGuarded|recordRepair|retryOnSpawnFailure|rep
 // 业务源直接引用 SKILL_VERSION 盖产物载体（run.json / status.json / final.json / ledger）。
 // 版本戳比对（--check）：产物内嵌值 ≠ frontmatter 当前值 → 红灯（拦 bump 后忘重建）
 const SKILL_VERSION_SOURCES = {
-  // design-code-sync 两引擎：跨代共用（V4/V5 与 dev 线的 D5 仍在用，不随 V1 代归档），
-  // 版本权威归属 dev-flow-v6（现行执行线）
-  "design-code-sync-loop": join(ROOT, "skills/self/dev-workflow/dev-flow-v6/SKILL.md"),
-  "design-code-sync-v2": join(ROOT, "skills/self/dev-workflow/dev-flow-v6/SKILL.md"),
-  // V4 质量传递线
-  "tech-review-loop-v4": join(ROOT, "skills/self/dev-workflow/tech-design-v4/SKILL.md"),
-  "wave-executor-v4": join(ROOT, "skills/self/dev-workflow/dev-flow-v4/SKILL.md"),
-  "dev-consistency-loop-v4": join(ROOT, "skills/self/dev-workflow/dev-flow-v4/SKILL.md"),
-  "acceptance-design-v4": join(ROOT, "skills/self/dev-workflow/delivery-v4/SKILL.md"),
-  "candidate-build-v4": join(ROOT, "skills/self/dev-workflow/delivery-v4/SKILL.md"),
-  "independent-assurance-v4": join(ROOT, "skills/self/dev-workflow/delivery-v4/SKILL.md"),
-  "assurance-repair-loop-v4": join(ROOT, "skills/self/dev-workflow/delivery-v4/SKILL.md"),
-  // V5 内核线
-  "tech-review-loop-v5": join(ROOT, "skills/self/dev-workflow/tech-design-v5/SKILL.md"),
-  "wave-executor-v5": join(ROOT, "skills/self/dev-workflow/dev-flow-v5/SKILL.md"),
-  "dev-consistency-loop-v5": join(ROOT, "skills/self/dev-workflow/dev-flow-v5/SKILL.md"),
-  "acceptance-design-v5": join(ROOT, "skills/self/dev-workflow/delivery-v5/SKILL.md"),
-  "candidate-build-v5": join(ROOT, "skills/self/dev-workflow/delivery-v5/SKILL.md"),
-  "independent-assurance-v5": join(ROOT, "skills/self/dev-workflow/delivery-v5/SKILL.md"),
-  "assurance-repair-loop-v5": join(ROOT, "skills/self/dev-workflow/delivery-v5/SKILL.md"),
-  // V6 结构化线
-  "tech-review-loop-v6": join(ROOT, "skills/self/dev-workflow/tech-design-v6/SKILL.md"),
-  "wave-executor-v6": join(ROOT, "skills/self/dev-workflow/dev-flow-v6/SKILL.md"),
-  "dev-consistency-loop-v6": join(ROOT, "skills/self/dev-workflow/dev-flow-v6/SKILL.md"),
-  "acceptance-design-v6": join(ROOT, "skills/self/dev-workflow/delivery-v6/SKILL.md"),
-  "candidate-build-v6": join(ROOT, "skills/self/dev-workflow/delivery-v6/SKILL.md"),
-  "independent-assurance-v6": join(ROOT, "skills/self/dev-workflow/delivery-v6/SKILL.md"),
-  "assurance-repair-loop-v6": join(ROOT, "skills/self/dev-workflow/delivery-v6/SKILL.md"),
+  // design-code-sync 两引擎：独立技能 design-code-sync 的执行引擎，版本权威归属该技能
+  "design-code-sync-loop": join(ROOT, "skills/self/dev-workflow/design-code-sync/SKILL.md"),
+  "design-code-sync-v2": join(ROOT, "skills/self/dev-workflow/design-code-sync/SKILL.md"),
 };
 
 function readSkillVersion(skillMdPath, wfName) {
@@ -186,10 +127,10 @@ const OBS_STEPS = new Set(["execution", "setup", "review", "aggregate", "fix", "
 // 的观测事件按发起方代际归缺省发射它们而保留（引擎注释见其 shared 源）；其余归档代
 // 技能名已随归档移除——其产物不再构建，无发射点
 const OBS_SKILLS = new Set([
+  "design-code-sync",
+  // dev-flow-v1/v2：归档代技能名，因跨代共用引擎 design-code-sync-v2/loop
+  // 的观测事件按发起方代际归缺省发射它们而保留（引擎注释见其 shared 源）
   "dev-flow-v1", "dev-flow-v2",
-  "tech-design-v4", "dev-flow-v4", "delivery-v4",
-  "tech-design-v5", "dev-flow-v5", "delivery-v5",
-  "tech-design-v6", "dev-flow-v6", "delivery-v6",
 ]);
 
 /** 观测契约核对：shared 已接入观测（initObservation 在场）时校验——stage/step 词表、

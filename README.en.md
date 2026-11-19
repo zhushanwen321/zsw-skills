@@ -19,33 +19,24 @@ agents/
   self/            Personal agents (registered via symlinks)
   external/        Reserved
 scripts/           Dual-platform workflow build and validation scripts
-.archived/         Retired skills and artifacts archive (V1-V3 lines, not tracked by git, local only)
+.archived/         Retired skills and artifacts archive (three-skill lineage V1-V6, not tracked by git, local only)
 ```
 
 ## Skills
 
 ### dev-workflow/ — Routine Development Workflow
 
-The v6 trio (tech-design-v6 / dev-flow-v6 / delivery-v6) is the current development generation; v5 is the frozen reference.
+The three-skill lineage (tech-design / dev-flow / delivery, all generations V1-V6) is archived under `.archived/`; tree-plant is the current delivery skill and design-code-sync the calibration skill.
 
 | Skill | Description |
 |-------|-------------|
-| tech-design-v4 | Adds quality transfer to the V3 baseline (archived generation): assertion-to-mechanism reconciliation, adversarial-form test bindings, zero-conflict T2 completion, and complete T3 reference checks |
-| dev-flow-v4 | Adds three-way consistency review, candidate adversarial review after D3, current-revision exploration and zero-must-fix gates before D4, and controlled repair paths |
-| delivery-v4 | Adds schema-2 acceptance assertions and adversarial forms, assertion-level verdicts, full/recheck modes, a unified repair loop, and process-failed on repair round 4 or unique must-fix 11 |
-| tech-design-v5 | Onboards the delivery-core kernel to the V4 baseline: T2 direction-review rewrite back-edge capped at 2 (then halts back to the user); acceptance re-review round budget of 6 |
-| dev-flow-v5 | Onboards the delivery-core kernel to the V4 baseline: W2 node-status writes converge into a single transition entry (attempts fixed — counted at dispatch, preserved across re-dispatch), D2 item reflow cap of 2, and explicit manual-disposition transitions |
-| delivery-v5 | Lands the delivery-core transaction kernel on the V4 baseline: five-domain transition tables with static validation (in CI), single-source judgment library (open findings / explorations / due / repair budgets each have exactly one implementation), intent-based event submission (kernel-built envelopes + actor-x-phase-x-domain write matrix + domain stamps; raw append retired), acceptance-package write protection (freeze + open-revision + tamper detection), status.json as a derived view (node-project), read-side event-stream merge (events), grading guardrails (three finding-domain guardrails + T2/D2 aggregate regrade halt), three-tier loop budgets, pending-actions entity, plus golden-task end-to-end tests and historical replay |
-| tech-design-v6 | Structured-delivery optimization (design steps 2-5) on the V5 baseline: single-source plan rendering carried over, read-only project capability snapshot, D0 compiler takeover in stages (dev/acceptance), per-assertion verification index + evidence content index, reviewer candidate locating; contract spike unit planning for external-contract tasks |
-| dev-flow-v6 | Structured-delivery optimization on the V5 baseline: staged D0 compiler takeover (exec-plan / promptFile / status generation), D2 review index entry points, D3 evidence content index, runtime write paths all through the JSON single source + re-render; external-contract compile gate and rescan gate, runtime probe wrapper |
-| delivery-v6 | Structured-delivery optimization on the V5 baseline: capability snapshot before acceptance drafting (commands/assets probed once, unknowns explicit), auto-generated assertion-x-evidence-x-asset table for acceptance review, independent assurance locates raw records via the unified evidence content index; external contract guard (externalContracts registration, authority artifact resolution, runtime obligations, real-environment probe) |
 | tree-plant | Tree-shaped delivery skill (fresh line, no delivery lineage): rooting (goal breakdown → draft with options → premise fact-check in three classes fact/inference/fabrication) then growth (trunk via TDD verified on the real host → branches → leaves for exceptions/fallbacks/boundaries plus unit tests → one adversarial prune round → machine harvest); only three things are kept — fact-check, one targeted adversarial round, machine final adjudication — everything else returns to the model; ships six deterministic gates (tree-plant.mjs) and nine judgment cards distilled from historical captures |
-| symbol-watchlist | Symbol watchlist generation and self-check tool (extract-backticks.mjs): shared contract carrier for tech-design-v5 T3 watchlist production and dev-flow-v5 D5 pre-launch self-check |
+| symbol-watchlist | Symbol watchlist generation and self-check tool (extract-backticks.mjs): extracts backticked symbols from design docs into a watchlist with self-check |
 | design-code-sync | Keep code implementation and design documents in sync |
 | architecture-clean-domain-design | Domain modeling and architecture analysis with DDD and hexagonal architecture as analysis lenses: ubiquitous language, bounded contexts, aggregate invariants, ring-nature mapping; records and maps only — never outputs structural transformation designs |
 | workflow-authoring | Authoring and observability onboarding guide for dual-platform workflow scripts: single-source build layout, GUI lane constraints, five-step observability onboarding, check gates, and data layout |
 
-Internal module `dev-workflow/conformance-plane/` — conformance control plane for design obligations (domain core of the D5 v2 reconciliation engine; module map and commands in `skills/self/dev-workflow/conformance-plane/README.md`):
+Internal module `dev-workflow/conformance-plane/` — conformance control plane for design obligations (domain core of the design-code-sync-v2 engine; module map and commands in `skills/self/dev-workflow/conformance-plane/README.md`):
 
 | Subdirectory | Description |
 |--------|------|
@@ -118,7 +109,6 @@ Validation scripts under `scripts/` run in pre-commit (with `core.hooksPath` poi
 | build-workflows.mjs | Build dual-platform artifacts from `workflows/src/` |
 | check-workflow-parity.mjs | Reconciliation check between zcode/pi artifacts |
 | check-workflow-types.mjs | Run tsc strict over zcode artifacts against the platform facade declaration (`wf-facade.d.ts`) |
-| check-commit-contract.mjs | Commit-message structure contract check: renderer and reverse-lookup pinned to one real round trip (only when wave-executor files are staged) |
 
 ## Agents
 

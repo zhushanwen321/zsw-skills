@@ -2,9 +2,7 @@
   "name": "zsw-skills",
   "private": true,
   "scripts": {
-    "test": "node --test scripts/tests/*.test.mjs",
-    "test:generations": "node --test scripts/tests/generations/*.test.mjs",
-    "test:full": "node --test scripts/tests/*.test.mjs scripts/tests/generations/*.test.mjs"
+    "test": "node --test scripts/tests/*.test.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.3"

@@ -7,8 +7,7 @@
 //     3. 跨章节条目地址分离；bindingId 包内撞名被拒
 //     4. 重复报告同地址：golden corpus 论点契约两个真实 F2-1 分离为两个地址；同一地址的
 //        重复报告得到同一地址键（V2 夹具回归）
-//     5. 词表与版本纪律：violationKind 词表三处一致（kernel facts 唯一权威 / 提取器重导出 /
-//        check-design-doc.mjs 副本），conformance schemaVersion 两处一致
+//     5. 词表与版本纪律：violationKind 词表两处一致（kernel facts 唯一权威 / 提取器重导出）
 //     6. AX8：无绑定叙述不进义务表，只列未绑定清单
 //
 // 运行：node --test scripts/tests/obligation-identity.test.mjs
@@ -23,7 +22,6 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CP = join(ROOT, "skills", "self", "dev-workflow", "conformance-plane");
-const CHECK_SCRIPT = join(ROOT, "skills", "self", "dev-workflow", "tech-design-v5", "scripts", "check-design-doc.mjs");
 
 const facts = await import(join(CP, "kernel", "facts.mjs"));
 const { fold, addressKey } = await import(join(CP, "kernel", "state-fold.mjs"));
@@ -256,15 +254,9 @@ test("golden corpus 论点契约两个真实 F2-1 分离为两个地址，摘要
 // 4. 词表与版本纪律（kernel facts 唯一权威 ↔ 提取器重导出 ↔ 校验器副本）
 // ---------------------------------------------------------------------------
 
-test("violationKind 词表三处一致；conformance schemaVersion 两处一致（扩词表必须升版本）", () => {
+test("violationKind 词表两处一致；conformance schemaVersion 登记（扩词表必须升版本）", () => {
   // 提取器重导出 == kernel 权威
   assert.deepEqual([...obligations.VIOLATION_KINDS], [...facts.VIOLATION_KINDS], "提取器词表必须与 kernel facts 一致（唯一权威）");
-  // 校验器副本 == kernel 权威（正则提取脚本内的数组字面量——逐行单值形态，格式漂移即测试红）
-  const src = readFileSync(CHECK_SCRIPT, "utf8");
-  const m = src.match(/const CONFORMANCE_VIOLATION_KINDS = \[([\s\S]*?)\];/);
-  assert.ok(m, "check-design-doc.mjs 必须声明 CONFORMANCE_VIOLATION_KINDS 数组");
-  const validatorKinds = [...m[1].matchAll(/"([a-z-]+)"/g)].map((x) => x[1]);
-  assert.deepEqual(validatorKinds, [...facts.VIOLATION_KINDS], "校验器词表副本必须与 kernel facts 同步（改词表两处同步 + 升版本）");
   // 初始词表六值（设计 targetForm 段一）
   assert.deepEqual([...facts.VIOLATION_KINDS], [
     "missing-implementation",
@@ -274,10 +266,6 @@ test("violationKind 词表三处一致；conformance schemaVersion 两处一致�
     "test-evidence-missing",
     "overimplementation",
   ]);
-  // schemaVersion 一致
-  const vm = src.match(/const CONFORMANCE_SCHEMA_VERSION = (\d+);/);
-  assert.ok(vm, "check-design-doc.mjs 必须声明 CONFORMANCE_SCHEMA_VERSION");
-  assert.equal(Number(vm[1]), obligations.CONFORMANCE_SCHEMA_VERSION, "校验器与提取器的 conformance schemaVersion 必须一致");
   assert.equal(obligations.CONFORMANCE_SCHEMA_VERSION, 2, "当前 conformance schemaVersion = 2（design-doc-schema.md §9b 登记）");
 });
 
@@ -305,33 +293,4 @@ test("词表外 violationKind / severity 与非法绑定形态在提取器 fail-
   const unboundIds = r.unbound.map((u) => u.id);
   assert.ok(unboundIds.includes("GL1") && unboundIds.includes("D1"), "无绑定条目列入未绑定清单");
   assert.ok(!r.obligations.some((o) => o.bindingId === "GL1"), "未绑定条目不产生义务行");
-});
-
-// ---------------------------------------------------------------------------
-// 5. 提取器 ↔ 校验器同规（对同一绑定集判定一致：校验器红 ⇔ 提取器抛错）
-// ---------------------------------------------------------------------------
-
-test("非法绑定的设计包：校验器 exit 1 与提取器抛错对同一案例一致（双端同规）", async () => {
-  const { spawnSync } = await import("node:child_process");
-  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
-  const { basename } = await import("node:path");
-  const caseMutate = (docs) => {
-    docs["s2-status.json"].artifactTables.stateCopies[0].conformance[0].violationKind = "not-a-kind";
-  };
-  const dir = mkdtempSync(join(tmpdir(), "conf-identity-"));
-  try {
-    const docs = legalDocs();
-    caseMutate(docs);
-    for (const [file, value] of Object.entries(docs)) {
-      writeFileSync(join(dir, file), JSON.stringify(value, null, 2) + "\n");
-    }
-    writeFileSync(join(dir, `${basename(dir)}.rendered.md`), "# rendered\n");
-    const r = spawnSync(process.execPath, [CHECK_SCRIPT, dir], { encoding: "utf8" });
-    assert.equal(r.status, 1, "校验器对词表外 violationKind 应 exit 1");
-    assert.match(r.stdout, /violationKind 值「not-a-kind」不在词表/);
-    assert.throws(() => obligations.extractObligations(docs), (e) => e.code === "invalid-violation-kind", "提取器对同一案例抛同码错误");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 });
