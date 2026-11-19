@@ -39,7 +39,7 @@ v6 三技能（tech-design-v6 / dev-flow-v6 / delivery-v6）为现行开发代�
 | tech-design-v6 | 在 V5 基线上实施结构化交付优化（设计二至五步）：计划单源渲染承接 + 项目静态能力快照（只读探测）+ D0 编译器接管生成（dev/acceptance 分阶段）+ 逐断言引用索引与证据内容索引 + reviewer 候选定位；外部契约任务的契约 spike 单元规划 |
 | dev-flow-v6 | 在 V5 基线上实施结构化交付优化：D0 编译器分阶段接管（exec-plan/promptFile/status 生成）、D2 审查索引定位入口、D3 证据内容索引、执行期写入方全走 JSON 单源 + 重渲染；外部契约编译门与复扫门、runtime probe wrapper |
 | delivery-v6 | 在 V5 基线上实施结构化交付优化：验收起草前置项目能力快照（命令/资产一次探测、unknown 显式）、验收审查断言×证据×资产表自动生成、独立保证按统一证据内容索引定位原始记录；外部契约守门（externalContracts 登记、权威工件解析、runtime 义务、真实环境 probe） |
-| tree-plant | 树形交付技能（从零新线，不背 delivery 谱系）：扎根（背景拆解→方案草稿→论据事实核查三分类）与生长（主干 TDD 实机跑通→长枝→长叶补异常与单测→修剪对抗一轮→收获机器裁决）；事实核查 + 一轮定向对抗审查 + 机器终态裁决三件事之外全部还给模型，配六道确定性 gate（tree-plant.mjs）与七张历史捕获判据卡 |
+| tree-plant | 树形交付技能（从零新线，不背 delivery 谱系）：扎根（背景拆解→方案草稿→论据事实核查三分类）与生长（主干 TDD 实机跑通→长枝→长叶补异常与单测→修剪对抗一轮→收获机器裁决）；事实核查 + 一轮定向对抗审查 + 机器终态裁决三件事之外全部还给模型，配六道确定性 gate（tree-plant.mjs）与九张历史捕获判据卡 |
 | symbol-watchlist | 符号词表生成与自验工具（extract-backticks.mjs）：tech-design-v5 T3 产词表、dev-flow-v5 D5 发起前自验的共享契约载体 |
 | design-code-sync | 校准代码实现与设计文档的一致性 |
 | architecture-clean-domain-design | 以 DDD 与六边形架构为分析视角的领域建模与架构分析：统一语言、限界上下文、聚合不变量、圈层性质判定；只做映射与登记，不输出结构改造设计 |

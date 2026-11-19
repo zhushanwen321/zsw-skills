@@ -326,7 +326,7 @@ function testCommand() {
       const j = JSON.parse(fs.readFileSync(cfg, "utf8"));
       if (j.testCommand) return j.testCommand;
     } catch (e) {
-      fail(".tree-plant.json 解析失败", `${e.message}（支持字段：testCommand）`);
+      fail(".tree-plant.json 解析失败", `${e.message}（支持字段：testCommand、typecheckCommand）`);
     }
   }
   try {
@@ -342,6 +342,61 @@ function runTestSuite(label) {
   if (!cmd) fail(`${label}：找不到单测入口`, `package.json 配 scripts.test，或建 .tree-plant.json {"testCommand":"..."}（非 Node 项目）`);
   const res = spawnSync("sh", ["-c", cmd], { encoding: "utf8", timeout: CASE_TIMEOUT_MS, cwd: process.cwd() });
   return { cmd, pass: res.status === 0, exit: res.status, tail: `${res.stdout || ""}${res.stderr || ""}`.slice(-400) };
+}
+
+// ---------- 类型检查（交付面含 TypeScript 时生效；typecheckCommand 显式配置则恒生效） ----------
+
+const TYPECHECK_DEFAULT = "npx --no-install tsc --noEmit";
+
+/** 交付面是否含 .ts/.tsx（跳过依赖、产物与工具目录） */
+function hasTypeScript(dir = process.cwd()) {
+  const skip = new Set(["node_modules", ".git", ".run", ".sdk", "dist", "build", "coverage", ".zcode"]);
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (skip.has(e.name)) continue;
+      if (e.isDirectory()) {
+        if (walk(path.join(d, e.name))) return true;
+      } else if (/\.tsx?$/.test(e.name)) return true;
+    }
+    return false;
+  };
+  try {
+    return walk(dir);
+  } catch {
+    return false;
+  }
+}
+
+function typecheckCommand() {
+  const cfg = path.resolve(process.cwd(), ".tree-plant.json");
+  if (fs.existsSync(cfg)) {
+    try {
+      const j = JSON.parse(fs.readFileSync(cfg, "utf8"));
+      if (j.typecheckCommand) return j.typecheckCommand;
+    } catch {
+      // 解析失败已在 testCommand() 路径报过错；此处不重复拦截
+    }
+  }
+  return hasTypeScript() ? TYPECHECK_DEFAULT : null;
+}
+
+function runTypecheck() {
+  const cmd = typecheckCommand();
+  if (!cmd) return { cmd: null, pass: true, skipped: true };
+  const res = spawnSync("sh", ["-c", cmd], { encoding: "utf8", timeout: CASE_TIMEOUT_MS, cwd: process.cwd() });
+  return { cmd, pass: res.status === 0, exit: res.status, tail: `${res.stdout || ""}${res.stderr || ""}`.slice(-300) };
+}
+
+function typecheckCheck(types) {
+  return {
+    name: "类型检查绿",
+    pass: types.pass,
+    detail: types.skipped
+      ? "交付面无 .ts，跳过"
+      : types.pass
+        ? types.cmd
+        : `${types.cmd}（exit ${types.exit}）${types.tail ? " — " + types.tail : ""}；修复：建 tsconfig.json、安装 typescript，或在 .tree-plant.json 配 typecheckCommand`,
+  };
 }
 
 // ---------- 六道 gate ----------
@@ -361,13 +416,16 @@ function gateTrunk() {
   if (cases.length === 0) fail("没有标记 trunk 的 case", "主干 = 第一条端到端路径，acceptance.md 至少一条 trunk case");
   const { results, ok } = runCases(cases);
   const suite = runTestSuite("trunk");
+  const types = runTypecheck();
   console.log(`— 测试套件：${suite.cmd}（exit ${suite.exit}）`);
+  if (types.cmd) console.log(`— 类型检查：${types.cmd}（exit ${types.exit}）`);
   const allow = parseTrunkAllowlist();
   if (allow.length === 0) fail("设计文档缺主干文件清单", "树形拆分节补「主干文件清单：」列表");
   const out = pathsWithin(changedPaths(root.commit), allow);
   const checks = [
     { name: "trunk case 全绿", pass: ok },
     { name: "TDD 测试套件绿", pass: suite.pass, detail: suite.cmd },
+    typecheckCheck(types),
     { name: "改动 ⊆ 主干文件清单", pass: out.length === 0, detail: out.join(", ") },
   ];
   const pass = checks.every((c) => c.pass);
@@ -400,10 +458,12 @@ function gateBranch(name) {
 function gateLeaf() {
   loadRun("trunk");
   const suite = runTestSuite("leaf");
+  const types = runTypecheck();
   console.log(`— 测试套件：${suite.cmd}（exit ${suite.exit}）`);
+  if (types.cmd) console.log(`— 类型检查：${types.cmd}（exit ${types.exit}）`);
   const { results, ok } = runCases(parseAcceptance());
-  const pass = suite.pass && ok;
-  writeRun("leaf", { pass, suite, results });
+  const pass = suite.pass && types.pass && ok;
+  writeRun("leaf", { pass, suite, types: types.skipped ? null : types, results });
   console.log(pass ? "✓ leaf 通过" : "✗ leaf 未通过");
   if (!pass) process.exitCode = 1;
 }

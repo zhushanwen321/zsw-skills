@@ -50,7 +50,7 @@ const FACT_CHECK = [
   "",
 ].join("\n");
 
-function makeFixture({ factCheck, acceptance, noTestEntry = false } = {}) {
+function makeFixture({ factCheck, acceptance, noTestEntry = false, tsFile = false, typecheckCmd = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tree-plant-"));
   sh("git", ["init", "-q"], dir);
   sh("git", ["config", "user.email", "t@t"], dir);
@@ -59,6 +59,13 @@ function makeFixture({ factCheck, acceptance, noTestEntry = false } = {}) {
   fs.mkdirSync(path.join(dir, "docs"), { recursive: true });
   fs.mkdirSync(path.join(dir, "test"), { recursive: true });
   fs.writeFileSync(path.join(dir, "test/all.test.mjs"), 'console.log("suite-ok");\n');
+  if (tsFile) {
+    fs.mkdirSync(path.join(dir, "src/core"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "src/core/x.ts"), "export const x: number = 1;\n");
+  }
+  if (typecheckCmd) {
+    fs.writeFileSync(path.join(dir, ".tree-plant.json"), JSON.stringify({ typecheckCommand: typecheckCmd }, null, 2));
+  }
   if (!noTestEntry) {
     fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "fixture", scripts: { test: "node test/all.test.mjs" } }, null, 2));
   }
@@ -200,6 +207,30 @@ test("trunk 红：无单测入口（TDD 测试绿为必须）", () => {
     const r = runCli(dir, ["trunk"]);
     assert.equal(r.status, 1);
     assert.match(r.stdout + r.stderr, /找不到单测入口/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("trunk 红：交付面含 TypeScript 且未配置 typecheckCommand——默认类型门生效", () => {
+  const dir = makeFixture({ tsFile: true });
+  try {
+    assert.equal(runCli(dir, ["root"]).status, 0);
+    const r = runCli(dir, ["trunk"]);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout + r.stderr, /类型检查/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("trunk 红：typecheckCommand 显式配置但命令失败", () => {
+  const dir = makeFixture({ typecheckCmd: 'node -e "process.exit(1)"' });
+  try {
+    assert.equal(runCli(dir, ["root"]).status, 0);
+    const r = runCli(dir, ["trunk"]);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout + r.stderr, /类型检查绿/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
