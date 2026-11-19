@@ -1,6 +1,6 @@
 ---
 name: tree-plant
-version: 1.2.0
+version: 1.3.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」且任务有可实机验证的交付物。树形交付协议：
   扎根（背景拆解 → 方案草稿 → 论据事实核查）与生长（主干 TDD 实机跑通 → 长枝 → 长叶补异常与单测 →
@@ -76,6 +76,10 @@ docs/fact-check.md    事实核查文档（论据三分类 + 接口核实表 + �
 ```
 node ~/.agents/skills/tree-plant/tree-plant.mjs <root|trunk|branch|leaf|prune|harvest> [--name 枝名]
 ```
+
+`.tree-plant.json` 支持字段：`testCommand` / `typecheckCommand` / `ignoreChangedPaths`（多任务共享仓
+环境适配——显式登记非本任务在途文件，gitignore 风格模式，范围核对与收获清洁度检查过滤之；清单
+入库可审计，不配则行为不变）。
 
 - 每个命令：跑该阶段检查 → 写 `.run/<阶段>.json`（内嵌内容哈希，手改即被后续阶段拒绝）→ 失败时给出可操作的修复提示，退出码 1。
 - acceptance case 行格式：`| 编号 | 场景 | 命令 | 预期 | 关联 |`；预期用分号分隔：`exit:0`（缺省）、`contains:子串`、`not-contains:子串`；命令必须直跑真实宿主探针/真实二进制（单测 runner 与 `npm run` 形态被拒——单测属 testCommand）。

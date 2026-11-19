@@ -137,7 +137,42 @@ function changedPaths(baseCommit) {
       if (p) paths.add(p.replace(/^"|"$/g, ""));
     }
   }
-  return [...paths];
+  return filterIgnored([...paths]);
+}
+
+// 多任务共享仓适配：.tree-plant.json 的 ignoreChangedPaths 显式登记非本任务在途文件，
+// 范围核对与收获清洁度检查过滤之（清单入库可审计；不配则行为与原先逐字节一致）。
+function treePlantConfig() {
+  const cfg = path.resolve(process.cwd(), ".tree-plant.json");
+  if (!fs.existsSync(cfg)) return {};
+  try { return JSON.parse(fs.readFileSync(cfg, "utf8")); } catch { return {}; }
+}
+
+/** gitignore 风格最小匹配：尾 / 目录前缀；** 跨层；* 单段内通配；否则精确路径 */
+function pathMatchesPattern(p, pat) {
+  if (pat.endsWith("/")) return p.startsWith(pat);
+  const segs = p.split("/");
+  const pats = pat.split("/");
+  const match = (i, j) => {
+    if (i === segs.length && j === pats.length) return true;
+    if (j === pats.length) return false;
+    if (pats[j] === "**") {
+      for (let k = i; k <= segs.length; k++) if (match(k, j + 1)) return true;
+      return false;
+    }
+    if (i === segs.length) return false;
+    const rx = new RegExp("^" + pats[j].replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*") + "$");
+    return rx.test(segs[i]) && match(i + 1, j + 1);
+  };
+  return match(0, 0);
+}
+
+function filterIgnored(paths) {
+  const pats = treePlantConfig().ignoreChangedPaths;
+  // 四文档与树规划文档的修订走「重跑 root」基线通道（docsHash 单独钉住），枝范围
+  // 核对不重复管辖——排除之，否则合法文档修订会把每个后续枝 gate 打红。
+  const docPaths = new Set([...Object.values(DOCS), 'docs/dual-track/']);
+  return paths.filter((p) => !docPaths.has(p) && !(Array.isArray(pats) && pats.some((pat) => pathMatchesPattern(p, String(pat)))));
 }
 
 /** allowed 项以 / 结尾按目录前缀匹配，否则精确匹配 */
@@ -435,21 +470,56 @@ function gateTrunk() {
   if (!pass) process.exitCode = 1;
 }
 
+/** 最近一次通过枝的基线 commit（多枝递进：每枝 gate 只核本枝新增改动；无则回退 trunk 基线）。 */
+function latestBranchCommit() {
+  const dir = path.resolve(process.cwd(), RUN_DIR);
+  if (!fs.existsSync(dir)) return null;
+  let best = null;
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.startsWith("branch-") || !f.endsWith(".json")) continue;
+    try {
+      const body = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+      if (body.pass && body.commit && (!best || String(body.generatedAt) > String(best.generatedAt))) {
+        best = body;
+      }
+    } catch { /* 损坏记录跳过 */ }
+  }
+  return best ? best.commit : null;
+}
+
+/** 已通过枝的声明文件并集（既往枝改动已被其自身 gate 核过；无 commit 记录的旧记录由此兜底）。 */
+function passedBranchAllowlists() {
+  const dir = path.resolve(process.cwd(), RUN_DIR);
+  const out = new Set();
+  if (!fs.existsSync(dir)) return out;
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.startsWith("branch-") || !f.endsWith(".json")) continue;
+    try {
+      const body = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+      if (body.pass && body.branch) {
+        for (const a of parseBranchAllowlist(body.branch) || []) out.add(a);
+      }
+    } catch { /* 损坏记录跳过 */ }
+  }
+  return out;
+}
+
 function gateBranch(name) {
   const trunk = loadRun("trunk");
   if (!name) fail("branch 需要 --name 枝名", "tree-plant.mjs branch --name <枝名>");
   const cases = parseAcceptance().filter((c) => c.tag === name.toLowerCase());
-  if (cases.length === 0) fail(`枝「${name}」没有关联 case`, "每枝至少一条实机 case（acceptance.md 关联列 = 枝名）");
+  if (cases.length === 0) fail(`枝「${name}」没有关联 case`, "acceptance.md 至少一条实机 case（关联列 = 枝名）");
   const allow = parseBranchAllowlist(name);
   if (!allow) fail(`设计文档枝表找不到枝「${name}」的文件声明`, "树形拆分枝表补该枝行（枝名/目标/依赖/风险级/文件/case）");
-  const out = pathsWithin(changedPaths(trunk.commit), allow);
+  const allowAll = [...new Set([...allow, ...passedBranchAllowlists()])];
+  const out = pathsWithin(changedPaths(latestBranchCommit() ?? trunk.commit), allowAll);
   const { results, ok } = runCases(cases);
   const checks = [
     { name: "枝 case 绿", pass: ok },
     { name: "改动 ⊆ 枝声明文件", pass: out.length === 0, detail: out.join(", ") },
   ];
   const pass = checks.every((c) => c.pass);
-  writeRun(`branch-${name}`, { pass, branch: name, results, checks });
+  writeRun(`branch-${name}`, { pass, branch: name, results, checks, commit: gitHead() });
   for (const c of checks) if (!c.pass) console.error(`  ✗ ${c.name}${c.detail ? " — " + c.detail : ""}`);
   console.log(pass ? `✓ branch ${name} 通过` : "✗ branch 未通过");
   if (!pass) process.exitCode = 1;
@@ -519,7 +589,18 @@ function gateHarvest() {
   const { results, ok } = runCases(parseAcceptance());
   const gitStatus = git(["status", "--porcelain"]);
   if (gitStatus.status !== 0) fail("任务仓不是 git 仓库（git status 失败）", "tree-plant 收获要求交付物入库（git init 并提交）");
-  const clean = gitStatus.stdout.trim() === "";
+  // 修复：不能对整体输出 trim()——porcelain 首行 X 列为空格（" M path"）时会被吞掉，
+  // 导致 slice(3) 解析错位（".gitignore" 变 "gitignore" 触发漏网误报）。
+  const statusPaths = gitStatus.stdout.length > 0
+    ? gitStatus.stdout.split(/\r?\n/).filter((l) => l.length > 0).map((l) => {
+        const body = l.slice(3).trim();
+        const arrow = body.indexOf(" -> ");
+        return (arrow >= 0 ? body.slice(arrow + 4) : body).replace(/^"|"$/g, "");
+      }).filter(Boolean)
+    : [];
+  const leftover = filterIgnored(statusPaths);
+  const clean = leftover.length === 0;
+  if (!clean) console.error('  未提交/未忽略的文件：' + leftover.join(', '));
   const log = git(["log", "--oneline", "-15"]);
   const ls = git(["ls-files"]);
   const pass = ok && clean;
