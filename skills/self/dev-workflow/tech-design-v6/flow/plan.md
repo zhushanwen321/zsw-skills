@@ -47,7 +47,7 @@
 
 - **action=co-change**：trigger 与 related 必须落在同一 dev 单元 territory 内——拆单元时把契约两侧归并进同一单元；分属不同单元 = 另一侧漏改在过程中不可见（D0 编译门 `FAIL: assoc` 打回）。确需分单元的，改 action=exempt 写理由并由影响面审确认兜底审查通道
 - **action=exempt**：rationale 必填非空；空理由 = 没登记豁免
-- 调用 / import 关系**不手工登记**（过程层反向对账用 `check-associations.mjs recheck`——手工调用的 CLI（子命令 + `--plan`），不是 review 节点脚本、也不由引擎自动接线，使用形态与三态处置见 dev-flow-v6 `flow/consistency-review.md`「过程层关联对账」节）；断言与测试的关联复用现有 criterionMechanisms / verificationBindings / fileMap 字段，不在本表重复登记
+- 调用 / import 关系**不手工登记**（过程层反向对账用 `check-associations.mjs recheck`——手工调用的 CLI（子命令 + `--plan`），不是 review 节点脚本、也不由引擎自动接线，使用形态与四态处置见 dev-flow-v6 `flow/consistency-review.md`「过程层关联对账」节）；断言与测试的关联复用现有 criterionMechanisms / verificationBindings / fileMap 字段，不在本表重复登记
 - 跨文件契约、共享状态写入、异步时序的高风险单元，在 D0 编译时同步登记 review 节点（dev-flow-v6 `flow/compile.md` kind=review）：机器检查（check / recheck）+ 必要时的过程 reviewer 任务书
 
 ## 终态型设计：波次单元与跨版本交付
@@ -95,11 +95,11 @@
 - **组**：核心（主链路，走不通则其余验收无意义）/ 非核心
 - **依赖**：默认 = 对应开发单元已提交（唯一无需说明的真实前提）；填其他依赖（另一验收项 id）必须附一句理由——功能先后或共享不可重置状态；编号顺序/顺手连跑不构成依赖
 - **优化判定**：可降级（L4→L3）/ 可合并 / 可脚本化 / L0 可消化；L4 行必须声明「机器判不了的部分是什么」，声明不出 = 拆行或降级
-- **e2e 影响面圈定 [MANDATORY]**：先按标题逐字检索渲染视图 `<name>.rendered.md` 的「e2e 影响面评估」子节（标题由渲染脚本固定输出，章节 JSON 对应字段 = s4-accept.json e2eImpact）——**子节不存在 → 停下来交回补文档（按 write.md Step 4 补写后重进本步），禁止按空集继承**（空集会让下游静默生成零个验证节点，全链无报错）；子节存在但清单为空且无「无受影响项（依据）」显式声明 → 同样交回。继承落清单后逐项「跑（执行时点 = 单元 committed 后 / 阶段 5，空载串行；该项由 dev-flow-v6 D0 编译为 verify 节点（deps=所属 dev 单元）在 D1 内执行）/ 不跑（理由）」，圈定结论（含逐项跑/不跑）落 impl-plan.json `e2eImpactScreening` 字段（渲染视图 §4.4）；有 `docs/testing/e2e-map.json` 登记表的项目与 `node scripts/select-affected-e2e.mjs --base <基线>` 输出双向对账（差异逐条披露；脚本看不见设计语义，最终清单以人工裁决为准）
+- **e2e 影响面圈定 [MANDATORY]**：先按标题逐字检索渲染视图 `<name>.rendered.md` 的「e2e 影响面评估」子节（标题由渲染脚本固定输出，章节 JSON 对应字段 = s4-accept.json e2eImpact）——**子节不存在 → 停下来交回补文档（按 write.md Step 4 补写后重进本步），禁止按空集继承**（空集会让下游静默生成零个验证节点，全链无报错）；子节存在但清单为空且无「无受影响项（依据）」显式声明 → 同样交回。继承落清单后逐项「跑 / 不跑（理由）」，圈定结论（含逐项跑/不跑）落 impl-plan.json `e2eImpactScreening` 字段（渲染视图 §4.4）——**该字段是筛选登记，没有机器消费者**：D0 编译器不读它、不因此生成任何节点；判定「跑」的开发期 e2e 必须另写验收计划表 L3 行（或登记进所属单元 incrementalCommands 随单元执行），才会被编译为 verify 节点在 D1/D3 执行（执行时点 = 单元 committed 后，空载串行——见 dev-flow-v6 `flow/compile.md`「验收分组规则」的「开发期 e2e」条）；只写 `e2eImpactScreening` 不写 L3 行 = 零 e2e 执行且无门报红（与本条开头的空集警告同一失效形态）；有 `docs/testing/e2e-map.json` 登记表的项目与 `node scripts/select-affected-e2e.mjs --base <基线>` 输出双向对账（差异逐条披露；脚本看不见设计语义，最终清单以人工裁决为准）
 - **静态能力快照（与验收 / D0 同源，只读对照）**：测试命令与验证资产判定先读项目静态能力快照（探测命令 `node ~/.agents/skills/delivery-v6/scripts/detect-project-capabilities.mjs --project-root <projectRoot>`，缺省落 dev-flow 寻址段 `<slug>/[<worktreeName>/]project-capabilities.json`；探测源 = package.json scripts / 测试配置存在性 / AGENTS.md 声明的场景清单；定位不到的能力进快照 unknown，由设计者补建 / 降级验证 / 报用户裁决）：`verifyAsset=reuse:<场景id>` 必须解析到快照 verificationAssets 中的真实资产，unknown 条目不得当可用能力引用（此时仍按下方声明制现行路径核对清单）；`new` 照旧登记实现责任；快照为派生缓存禁止手改，`--check` 报输入已变化或不一致时重跑探测重建
 - **验证资产来源判定（仅 L3 行；项目无 verification skill 时本列统一填「-」，流程零变化）**：项目 verification skill 以**项目 AGENTS.md 的显式声明为唯一来源**（SSOT 清单——项目 AGENTS.md 写明哪些技能属 verification skill）；AGENTS.md 未声明 = 该项目没有，本列填「-」并在计划备注提示项目补一行声明（**禁止**按技能目录前缀或 SKILL.md 内容特征现场探测——前缀与驱动节措辞跨项目常见，误认率最高，2026-11-04 起废除特征探测改声明制）。命中后读其覆盖矩阵（能力/场景对账表，入口见其 SKILL.md），逐 L3 行标三态：
   - `reuse: <场景 id>` —— 矩阵该功能行已是可执行剧本态，验收项语义被现成剧本覆盖；场景 id 必须真实存在于其场景清单（编造的 id 在自检第 4 条被拦）
-  - `new: <一句功能定位>` —— 矩阵该行为能力条目态或无覆盖：D0 按其能力原语组装新剧本（写好跑通后入其场景库，下次交付即可 reuse）
+  - `new` —— 矩阵该行为能力条目态或无覆盖：新剧本由验收行自己的实装单元承担实装与实跑（写好跑通后入其场景库，下次交付即可 reuse）——D0 编译器不组装剧本，「new」行的剧本本体与 runner/scenario 契约须照实登记（见「JSON 单源产出」acceptancePlan 字段与 dev-flow-v6 `flow/compile.md`「剧本实装硬门槛」）。JSON 值必须精确为 `new`（编译器只认精确匹配；md 表格里的「new: <定位语>」落 JSON 时定位语移出，写进该行 optimization 列或行内备注，不并进 verifyAsset 值）
   - `inspect-only` —— 机器判不了、写不出确定性剧本：该行改判 L4（与「方式」列联动改）
   - L4 行本列恒填「-」（inspect 语义自带）；L3 行在矩阵中查不到对应功能行 → 按 `new` 处理
 
@@ -113,7 +113,7 @@
 {
   "name": "<name>",
   "designDoc": "~/.agents/skill-data/tech-design/<project-slug>/<name>",
-  "baseline": "<git rev-parse HEAD>",
+  "baseline": "<git rev-parse HEAD>",            // 计划落盘时点的 HEAD（渲染展示）；exec-plan.baseline 由 D0 编译时点重算——两侧时点不同属正常，不构成计划漂移信号（对照口径见 dev-flow-v6 flow/compile.md「历史重放与防手改核对」节）
   "date": "<YYYY-MM-DD>",                       // additive 可选：渲染视图头部「日期」
   "headerNote": [],                             // additive 可选：头部说明引文的计划特有行（修订指针等）
   "skillVersion": "<tech-design-v6 SKILL.md frontmatter version>",
@@ -157,6 +157,7 @@
     { "id": "assoc-1", "kind": "contract", "trigger": "<生产方文件>", "related": ["<消费方文件>"], "action": "co-change" }
     // 可选：三类关联声明（见「三类关联声明」节；无跨文件契约/登记处/构建产物时整个字段省略；JSON-only，不进渲染视图）
   ],
+  "formNotApplicable": [],                       // additive 可选：反例场景不适用豁免登记 [{adversarialFormId, rationale}]——每个 adversarialForm 必须被 acceptancePlan[].adversarialFormRefs 认领，或在本字段登记带理由的不适用声明（rationale 须说明为什么构造不出，不是偷懒不建）；JSON-only 不进渲染视图，D0 逐字转抄进 exec-plan，delivery-v6 check-quality-contract 以它作豁免判定（V5 质量契约门）
   "acceptancePlan": [
     { "id": "A1", "item": "…", "level": "L3", "group": "core", "deps": [], "optimization": "…", "verifyAsset": "reuse:p0-counter-render", "adversarialFormRefs": ["AF-..."] }
     // verifyAsset 与「验证资产」列同源：reuse:<场景id> / new / inspect-only（落 json 时冒号后去空格，如「reuse: p0-x」→「reuse:p0-x」）；项目无 verification skill 时缺省 "-"（可省略字段）
@@ -202,7 +203,7 @@ node ~/.agents/skills/tech-design-v6/scripts/render-impl-plan.mjs ~/.agents/skil
 
 对着 DAG 与单元表自检，通过即落盘，不停等用户：
 
-1. 切分粒度：无跨范围声明耦合、无空转单元、依赖方向与 DAG 一致；依赖只写「编译依赖 / 运行时读对方产物」，其他理由（测试可跑、想先验一把）删掉或写真实理由；**路径基准一致**：territory 条目相对该单元 cwd 所在仓库根、worktree 单元 cwd 为检出根绝对路径、plain 单元不填 cwd；headerNote 若有 cwd 统一根声明，须与各单元 cwd 实际值一致（渲染器弱校验会拦矛盾形态）
+1. 切分粒度：无跨范围声明耦合、无空转单元、依赖方向与 DAG 一致；依赖只写「编译依赖 / 运行时读对方产物」，其他理由（测试可跑、想先验一把）删掉或写真实理由；**路径基准一致**：territory 条目相对该单元 cwd 所在仓库根、worktree 单元 cwd 为检出根绝对路径、plain 单元不填 cwd；headerNote 若有 cwd 统一根声明，须与各单元 cwd 实际值一致（渲染器弱校验仅拦点名绝对路径根的矛盾形态——未点名路径的自然语言注记机器不解读，靠本自检人工核对）
 2. worktree 标记符合判据（见 dev-flow-v6 `references/dag-authoring.md` 隔离决策表）
 3. 验收条款无遗漏：每单元至少一条可机械核验条款；设计验收场景表每行落到某单元验收条款**且出现在验收计划表**；每个 adversarialForm 必须被至少一个 acceptancePlan[].adversarialFormRefs 认领，D3 节点也须携带同一引用
 4. 验收计划表自洽：核心组覆盖主链路；依赖列无环，非默认依赖带理由；verifyAsset = `reuse:` 的场景 id 在项目 verification skill 的场景清单中实际存在（读清单核对，防编造 id 把雷埋到 D3 启动）

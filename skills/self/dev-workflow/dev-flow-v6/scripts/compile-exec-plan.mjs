@@ -703,8 +703,18 @@ function buildAcceptanceNodes(ctx) {
     const rowFormRefs = isStrArr(row.adversarialFormRefs) ? [...row.adversarialFormRefs] : null;
     // runtime-probe 行（设计 §7.3 D3 additive 行类型）：编译为 verify 节点，script = 生成的
     // probe wrapper；行字段形态与能力 id 对账由 check-exec-plan 同源函数承担（与写盘后校验器
-    // 零漂移）。无 type 字段的行走下方既有 level 规则（向后兼容）
-    if (isStr(row.type) && row.type === "runtime-probe") {
+    // 零漂移）。无 type 字段的行走下方既有 level 规则（向后兼容）；type 存在但不是登记值时
+    // 报缺口不静默放过（与 units[].kind 同纪律——拼错的值按 level 规则静默编译会让探针行
+    // 降级成普通行，缺口延后到执行期才暴露）
+    if (row.type !== undefined && row.type !== null) {
+      if (!isStr(row.type) || row.type !== "runtime-probe") {
+        gap(
+          `验收行 ${row.id} 的 type 值「${showVal(row.type)}」不在登记词表（现只登记 runtime-probe）`,
+          `验收行类型权威 = ${planPath} acceptancePlan[].type（唯一登记值 runtime-probe；扩充词表是显式动作，须同步编译消费方）`,
+          "回 tech-design-v6 T3 核对拼写（如 runtime_probe 下划线形态不合法）或删除无类型行的 type 字段后重新渲染、重新编译",
+        );
+        continue;
+      }
       compiledIds.add(row.id);
       const probeNode = buildRuntimeProbeNode(row, ctx);
       if (probeNode === null) continue; // 缺口已收集——该行不编译（编译整体中止）
@@ -950,7 +960,7 @@ function buildRuntimeProbeNode(row, ctx) {
   if (artifact === null) {
     gap(
       `${label} 的 artifact 缺失或越出交付任务目录（实际：${showVal(row.artifact)}）`,
-      `runtime-probe 行 artifact 权威 = ${ctx.planPath} acceptancePlan[].artifact（相对交付任务目录的 evidence 路径，禁绝对路径与 .. 逃逸）`,
+      `runtime-probe 行 artifact 权威 = ${ctx.planPath} acceptancePlan[].artifact（落点须位于交付任务目录内，推荐任务目录相对路径——taskDir 内绝对路径也接受；越出任务目录与 .. 逃逸一律拒绝）`,
       "回 tech-design-v6 T3 把 artifact 改为任务目录内的 evidence 相对路径后重新渲染、重新编译",
     );
     return null;
@@ -1735,7 +1745,25 @@ function main() {
     statusPath: join(productRoot, `${name}.status.json`),
     testPlan: {
       ...(fullSuite ? { fullSuite } : {}),
-      ...(isStr(plan.testPlan?.incremental) ? { incremental: plan.testPlan.incremental } : {}),
+      // testPlan.incremental 两形态：{program,args} 对象 = W3 增量测试门的消费形态，经
+      // normalizeCommand 归一后转抄（形态不齐报缺口，不静默丢弃——旧行为把对象整字段丢弃，
+      // W3 恒拿不到增量命令）；string = 阅读视图文字段，原样转抄（W3 NODE_PREP 只按对象
+      // 形态消费，字符串仅展示，两侧行为与历史一致）
+      ...(() => {
+        const rawIncremental = plan.testPlan?.incremental;
+        if (rawIncremental === undefined || rawIncremental === null) return {};
+        if (!isRec(rawIncremental)) return { incremental: rawIncremental };
+        const incNorm = normalizeCommand(rawIncremental, TEST_PLAN_WHITELIST);
+        if (incNorm === null) {
+          gap(
+            `testPlan.incremental 对象形态非法（实际：${showVal(rawIncremental)}）`,
+            `增量命令权威 = ${planPath} testPlan.incremental（{program, args}——string 形态是阅读视图文字段，无机器消费方）`,
+            "回 tech-design-v6 T3 把该字段改写为 {program, args} 对象形态（或改 string 文字段并接受增量测试门不执行）后重新渲染、重新编译",
+          );
+          return {};
+        }
+        return { incremental: incNorm };
+      })(),
       ...(Array.isArray(plan.testPlan?.fullSuiteChecks) ? { fullSuiteChecks: plan.testPlan.fullSuiteChecks } : {}), // 视图归因参考，原样转抄
       ...(Array.isArray(plan.testPlan?.artifacts) ? { artifacts: plan.testPlan.artifacts.map((a) => ({ id: a?.id, command: normalizeCommand(a?.command, TEST_PLAN_WHITELIST) ?? a?.command })) } : {}),
     },

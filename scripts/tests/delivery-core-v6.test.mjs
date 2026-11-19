@@ -227,13 +227,20 @@ test("criterionChangedSinceResolution：解决时验收版本 ≠ 当前 → tru
     false,
     "同版本同 revision → false（无变化重开）",
   );
-  // RiskAccepted 也是关闭锚（风险接受的发现重开走同一谓词）
+  // RiskAccepted 也是关闭锚（风险接受的发现重开走同一谓词）。事件形态与 gate 写入侧
+  // 一致：finding 目标的字段是 targetType="finding" + targetId（R1-06 前实现按 findingId
+  // 过滤，真实事件永不命中——重开通道死路，测试夹具当时固化的是缺陷形态）
   const riskRecords = [
     { type: "FindingRaised", acceptanceVersion: 1, seq: 1, findingId: "F-9" },
-    { type: "RiskAccepted", acceptanceVersion: 1, seq: 2, findingId: "F-9", revision: "r1" },
+    { type: "RiskAccepted", acceptanceVersion: 1, seq: 2, targetType: "finding", targetId: "F-9", revision: "r1" },
   ];
   assert.equal(KERNEL.criterionChangedSinceResolution(riskRecords, { findingId: "F-9", currentAcceptanceVersion: 1, currentRevision: "r1" }), false, "风险接受为关闭锚：同版本同 revision → false");
   assert.equal(KERNEL.criterionChangedSinceResolution(riskRecords, { findingId: "F-9", currentAcceptanceVersion: 1, currentRevision: "r2" }), true, "风险接受后 revision 变化 → true（风险接受发现的重开通道）");
+  const nonFindingRisk = [
+    { type: "FindingRaised", acceptanceVersion: 1, seq: 1, findingId: "F-8" },
+    { type: "RiskAccepted", acceptanceVersion: 1, seq: 2, targetType: "requirement", targetId: "R-1", revision: "r1" },
+  ];
+  assert.equal(KERNEL.criterionChangedSinceResolution(nonFindingRisk, { findingId: "F-8", currentAcceptanceVersion: 1, currentRevision: "r2" }), false, "requirement 目标的 RiskAccepted 不是该 finding 的关闭锚 → false（无解决侧事件）");
 });
 
 // ── 真实任务夹具：next 样例 + CLI 判定 + pending 实体 ──

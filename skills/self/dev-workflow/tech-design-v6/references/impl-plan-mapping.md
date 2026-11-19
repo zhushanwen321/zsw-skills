@@ -20,7 +20,7 @@
 | `units[].incrementId` | string | 可省略（独立设计任务省略） | §2「增量归属」列；缺省渲染「—（不归属增量）」 |
 | `testPlan` | object | 必填（对象本身） | §4 |
 | `testPlan.fullSuite` | string\|{program,args} | 必填 | §4.2 全量命令 |
-| `testPlan.incremental` | string | 可省略 | §4.1 文字段（无 incrementalCommands 表时是该节唯一内容） |
+| `testPlan.incremental` | string（文字段）或 {program,args}（增量命令对象） | 可省略 | §4.1 文字段（无 incrementalCommands 表时是该节唯一内容）。两形态机器口径不同：对象形态被 D0 编译归一转抄进 exec-plan，由 W3 引擎 NODE_PREP 增量测试门消费；string 文字段仅展示，无机器消费方（W3 只按对象形态执行增量测试） |
 | `testPlan.artifacts[]` | array（`{id, command}`，command 形态同 fullSuite） | 可省略（字段存在时逐条 `id` / `command` 必填） | §4.2 产物类条目列表（`fullSuiteChecks[]` 缺场时的兜底渲染；Gate A / exec-plan 消费的产物类子集，其消费方与消费内容不变） |
 | `testPlan.artifacts[].id` / `.command` | — | 逐条目必填（字段存在时） | 同上 |
 | `acceptancePlan[]` | array | 必填（数组本身） | §4.3 验收计划表 |
@@ -28,6 +28,7 @@
 | `acceptancePlan[].verifyAsset` | string（`reuse:<id>` / `new` / `inspect-only` / `-`） | 可省略（缺省 `-`） | §4.3「验证资产」列 |
 | `acceptancePlan[].adversarialFormRefs[]` | string[]（adversarialForm id） | 可省略 | **JSON-only，不进渲染视图**（V5 反例场景认领：D3 节点携带同一引用、delivery-v6 check-quality-contract 判定认领完整性；视图侧对账陈述走 §1.2 `adversarialClaim`） |
 | `associations[]` | array | 可省略 | **JSON-only，不进渲染视图**（D0 编译逐字转抄进 exec-plan） |
+| `formNotApplicable[]` | array（`{adversarialFormId, rationale}`） | 可省略 | **JSON-only，不进渲染视图**（D0 逐字转抄进 exec-plan，delivery-v6 check-quality-contract 质量契约门以它作豁免判定：每个 adversarialForm 必须被 acceptancePlan[].adversarialFormRefs 认领，或在本字段登记带理由的不适用声明——rationale 须说明为什么构造不出；撰写判据见 `flow/plan.md`「计划自检」第 3 条与 delivery-v6 `references/acceptance.md`） |
 | `notes[]` | string | 可省略 | **JSON-only，不进渲染视图**（历轮裁决处置记录，sync-reviewer / D5 消费） |
 
 ### 1.2 additive 可选字段（Markdown 独有内容的 JSON 权威落点）
@@ -44,12 +45,12 @@
 | `units[].kind` | string（唯一登记值 `contract-spike`） | §2 单元表「Unit」列后缀标注：`<id>（契约 spike）`；缺省无标注。契约 spike 单元 = 外部契约任务（验收含 externalContracts）必有、DAG 唯一根、全部业务单元经 deps 依赖它——撰写要求与 DAG 判据见 `flow/plan.md`「外部契约任务」节；D0 编译侧对该字段的拓扑复算归 dev-flow-v6 `flow/compile.md`（本表只登记 impl-plan 侧字段与渲染落点，不复列编译侧语义） |
 | `units[].cwd` | string（绝对路径，仅 `isolation=worktree` 单元） | **不进渲染视图的列**（§2 八列不含 cwd），登记为渲染期弱校验输入：headerNote 点名绝对路径根的 cwd 声明须与各单元 cwd 的包含关系一致（不一致 = 渲染器语义缺口）。**路径基准判据**：cwd = 该单元执行所在 git 检出根的绝对路径；`territory` 条目相对**该 cwd 所在仓库根**（不是固定相对 projectRoot）；跨仓 worktree 的 cwd 指向另一仓库根是合法值（引擎启动断言只要求 cwd 是该检出的仓库根）。plain 单元不接受 cwd（固定在工作仓库根运行；D0 编译器对 plain 携带非 projectRoot cwd 报缺口），确需跨仓/隔离执行时把 isolation 改为 worktree 并保留 cwd |
 | `dagNote` | object `{nodeLabels{<unitId>:<label>}, criticalPath, parallelWindows[], edgeReasons[{edge, reason}]}` | §3：mermaid 本体从 `units`（节点）+ `deps`（边）确定性推导，`nodeLabels` 覆盖默认节点标注；`criticalPath` 渲染为一段；`parallelWindows` 渲染为列表；`edgeReasons` 渲染为边因表 |
-| `testPlan.incrementalCommands[]` | array（`{incrementId, unitIds[], command, timeoutMs?}`） | §4.1 增量测试命令表 |
+| `testPlan.incrementalCommands[]` | array（`{incrementId, unitIds[], command, timeoutMs?}`） | §4.1 增量测试命令表。`command` 的机器口径：含 shell 元字符（引号 / `&&` / `;`）的命令必须写成 `{program, args}` 对象形态——字符串会被归一化包装（bash -c），包装结果与 increments.json 的 testCommand 对象逐字比对不一致，D0 编译门据此打回（dev 节点 testCommand 从本表提取，增量契约逐字一致性由该门核对）。`timeoutMs` 是登记性字段：dev 节点执行（W2）与增量门固定超时，不读本字段——增量超时实际生效载体是 increments.json 的 `testCommand.timeoutMs`（ARL 消费），本字段仅供计划阅读 |
 | `testPlan.fullSuiteChecks[]` | array（`{id, command, kind, note?}`，kind = 产物类\|验证类） | §4.2 逐条检查清单（渲染权威）：在场时该节按它逐条渲染（`- [<kind>] <id>：<command>（<note>）`），恢复 md 逐条标注产物类/验证类形态；与 `testPlan.artifacts[]` 的关系——artifacts 是 Gate A / exec-plan 消费的产物类子集（结构化承载，其消费方与消费内容不变），fullSuiteChecks 是 §4.2 视图权威；fullSuiteChecks 在场时 artifacts 不重复渲染，缺场时 artifacts 兜底渲染产物类条目 |
 | `testPlan.fullSuiteNote[]` | string[] | §4.2 全量段范围说明列表 |
 | `acceptancePlanIntro` | string | §4.3 表前说明段（验证资产来源判定结论等） |
 | `adversarialClaim` | string | §4.3 表后 adversarialForm 认领对账陈述 |
-| `e2eImpactScreening[]` | string[] | §4.4 e2e 影响面圈定结论 |
+| `e2eImpactScreening[]` | string[] | §4.4 e2e 影响面圈定结论（逐项跑/不跑的筛选登记——**无机器消费方**：D0 编译器不读本字段、不因此生成节点；判定「跑」的开发期 e2e 必须另写 acceptancePlan L3 行或登记进所属单元 incrementalCommands 才会被编译执行，见 `flow/plan.md`「e2e 影响面圈定」条） |
 | `speedupNote[]` | string[] | §4.5 提速结论（内容完备性是 T3 [MANDATORY] 自检判据，渲染器不拦——见 §3 语义缺口判据） |
 | `reasonableDeviations[]` | array（`{id, title, content, impact, disposition}`） | §5 合理偏差登记表（四列 = id+标题 / 内容与理由 / 影响面 / 处置） |
 | `residualRisks[]` | array（`{id, title, trigger, impact, disposition, reexamine}`） | §6 残留风险表（五列 = id+标题 / 触发条件 / 影响 / 处置 / 重审触发条件） |
@@ -90,7 +91,7 @@ mermaid 本体确定性推导：节点 = `units[].id`（默认标注 = id；`inc
 | 4.1 增量测试命令 | `testPlan.incrementalCommands[]` + `testPlan.incremental` | 有 `incrementalCommands` 渲染四列表（增量 / 归属单元 / testCommand 逐字 / 超时）；否则 `incremental` 渲染为文字段；两者皆缺渲染「—」 |
 | 4.2 全量套件 | `testPlan.fullSuite` + `testPlan.fullSuiteChecks[]`（缺场兜底 `testPlan.artifacts[]`）+ `testPlan.fullSuiteNote[]` | 命令渲染为展示串（`{program,args}` 展平；转抄仍以 JSON 字段为准，展示串不是转抄源）；`fullSuiteChecks` 在场逐条渲染（产物类/验证类标注 + note），缺场时 `artifacts` 兜底渲染产物类条目；说明列表逐条渲染 |
 | 4.3 验收计划表 | `acceptancePlanIntro` + `acceptancePlan[]` + `adversarialClaim` | 七列固定：# / 验收项（场景表行）/ 方式 / 组 / 依赖 / 优化判定 / 验证资产；`verifyAsset` 缺省「-」；表前后说明段可省略 |
-| 4.4 e2e 影响面圈定 | `e2eImpactScreening[]` | 逐条列表；缺省「—」 |
+| 4.4 e2e 影响面圈定 | `e2eImpactScreening[]` | 逐条列表；缺省「—」。筛选登记字段，机器不消费——「跑」的执行落点见 §1.2 本字段行 |
 | 4.5 提速结论 | `speedupNote[]` | 逐条列表；缺省「—」。内容完备性归 T3 计划自检（[MANDATORY]），渲染器不拦 |
 
 ### 5 合理偏差登记表 → `reasonableDeviations[]`
@@ -111,7 +112,7 @@ mermaid 本体确定性推导：节点 = `units[].id`（默认标注 = id；`inc
 4. **渲染视图缺失**（`--check`）：`.impl-plan.md` 不存在；恢复动作同上。
 5. **cwd 声明弱一致性**：`headerNote[]` 中含 cwd / 工作树 / 检出根字样且点名绝对路径根的注记，与 `units[].cwd` 的包含关系矛盾（或声明了路径根但无任何单元声明 cwd）——错误消息列出冲突单元与路径根；恢复 = 以权威事实改 JSON 一侧后重渲染。只覆盖点名路径的声明，未点名路径的注记不解读自然语言语义（弱校验，不是完整 cwd 语义门）。
 
-渲染器不拦（语义判据归专门门，避免一台机器两套判据）：提速结论与验收计划表的内容完备性（T3 计划自检）、验收条款 / adversarialForm 认领完整性（T3 自检 + delivery-v6 check-quality-contract）、territory 互斥 / 增量契约 / DAG 环（dev-flow-v6 D0 `check-exec-plan.mjs` 门）、单元 id 与设计包对应关系（D0 章节映射核对：sectionMap 指向的设计文档节实际存在）。
+渲染器不拦（语义判据归专门门，避免一台机器两套判据）：提速结论与验收计划表的内容完备性（T3 计划自检）、验收条款 / adversarialForm 认领完整性（T3 自检 + delivery-v6 check-quality-contract）、territory 互斥 / 增量契约 / DAG 环（dev-flow-v6 D0 `check-exec-plan.mjs` 门）、单元 id 与设计包对应关系（**主 agent 手工步骤，非机器门**——D0 编译器不读 sectionMap、不做章节映射核对；「sectionMap 指向的设计文档节实际存在」由 dev-flow-v6 `flow/compile.md`「L0 前置 + 环境准备」节的「章节映射锚点核对」逐条 read 设计文档核对）。
 
 ## 4. 写入纪律
 
@@ -126,4 +127,4 @@ mermaid 本体确定性推导：节点 = `units[].id`（默认标注 = id；`inc
 
 ## 编译消费的 additive 字段（指针）
 
-impl-plan 被 D0 编译器消费的 additive 可选字段（testPlan.incrementalCommands / units[].designRef / units[].cwd / processReviews[] / acceptancePlan[].script·runner·scenario·unit·artifactsDir 等，含缺失后果）唯一权威登记处 = dev-flow-v6 `flow/compile.md`「impl-plan 编译消费字段」表与 compile-exec-plan.mjs 头注——本表不复列（防双源漂移）。
+impl-plan 被 D0 编译器消费的 additive 可选字段（testPlan.incrementalCommands / units[].designRef / units[].cwd / processReviews[] / formNotApplicable[] / acceptancePlan[].type·script·runner·scenario·unit·artifactsDir·command·artifact·capabilityIds 等，含缺失后果）唯一权威登记处 = dev-flow-v6 `flow/compile.md`「impl-plan 编译消费字段」表与 compile-exec-plan.mjs 头注——本表不复列（防双源漂移）。

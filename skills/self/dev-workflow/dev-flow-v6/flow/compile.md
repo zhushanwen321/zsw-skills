@@ -48,7 +48,15 @@ node ~/.agents/skills/dev-flow-v6/scripts/compile-exec-plan.mjs --impl-plan <tec
 node ~/.agents/skills/dev-flow-v6/scripts/check-exec-plan.mjs <exec-plan 绝对路径> [--task-dir <交付任务目录>]
 ```
 
-stdout `PASS` 才继续（交付体系任务须带 `--task-dir`，缺传即跳过增量契约、验收绑定与质量契约三段核对）。校验集与 W2 引擎 validatePlan 及 W3 启动契约同源，漂移由差分测试机器对账拦截（`node --test scripts/tests/check-exec-plan-parity.test.mjs`，zsw-skills 检出内执行）。FAIL 逐行 `FAIL: <分类>: <明细>`，按上表路由；值转抄自 impl-plan 的字段（testCommand / deps / 单元 id / territory）一律同步修上游，否则重编译复现。
+stdout `PASS` 才继续（交付体系任务须带 `--task-dir`，缺传即跳过增量契约、验收绑定与质量契约三段核对——缺传重跑时校验器 stdout 带 `[warn]` 行标记三段未核对，「没核对」与「通过」可机器区分）。校验集与 W2 引擎 validatePlan 及 W3 启动契约同源，漂移由差分测试机器对账拦截（`node --test scripts/tests/check-exec-plan-parity.test.mjs`，zsw-skills 检出内执行）。FAIL 逐行 `FAIL: <分类>: <明细>`，按上表路由；值转抄自 impl-plan 的字段（testCommand / deps / 单元 id / territory）一律同步修上游，否则重编译复现。
+
+**三层校验分工**（同一 exec-plan 在三个时点被校验，差集如下，同源声明与逐条判据见 check-exec-plan.mjs 头注）：
+
+| 时点 | 校验方 | 范围 |
+|---|---|---|
+| D0 编译门（本文件步骤 1-3） | compile-exec-plan 内联预检 + check-exec-plan 全量复跑 | 最全：schema 主段全部错误类别 + W3 启动契约 + 附加静态项 +（带 `--task-dir`）增量契约 / 验收绑定 / runtime-probe 能力对账 / 质量契约四段 |
+| W2 引擎发起（D1/D3 实例化） | validatePlan（节点派发前） | schema 主段同口径子集（无 `--task-dir` 三段）——漂移由差分测试拦截；另在 setup 派发前 fail-fast 运行时项（promptFile / verify script 盘上存在、cwd == 检出根） |
+| W3 引擎 NODE_PREP（D2 发起） | 启动契约段 | baseline/planPath/designDocPath 必填与形态、testPlan 白名单与恒绿检测、incremental 对象形态提取（不建增量门即跳过增量测试） |
 
 ### 4. L0 前置 + 环境准备（D3 前置项此时一并核；编译器不替代的执行期操作）
 
@@ -80,7 +88,7 @@ node ~/.agents/skills/dev-flow-v6/scripts/compile-exec-plan.mjs --impl-plan <tec
 | `units[].designRef` | 设计章节锚（任务书「单元目标」段；缺省空串，编译摘要警告） |
 | `units[].cwd` | 仅 `isolation=worktree` 单元的 worktree 检出根绝对路径（plain 单元不接受非 projectRoot 的 cwd——声明即缺口；等于 projectRoot 的冗余声明放行）。territory 条目相对该 cwd 所在仓库根；跨仓 worktree 的 cwd 指向另一仓库根合法。静态门只查绝对路径形态，**cwd 是否等于该检出根的运行时断言在 W2 引擎 setup 派发前 fail-fast**（不进 D0 静态门） |
 | `units[].kind` | 单元角色 additive 标记；现只登记 `contract-spike`（契约冒烟 spike 单元，外部契约任务的 DAG 首个可执行节点）。声明其他值 = 上游契约含糊，报缺口不静默放过（映射表登记归 tech-design-v6，D0 只消费） |
-| `processReviews[]` | 过程审查声明 `[{unitId, script?, promptFile?, mechanism?}]`——review 节点唯一来源，无声明不生成。`script` 扩展名限 `.sh` / `.mjs` / `.js` / `.cjs`（.sh→bash、其余→node）；`script` / `promptFile` 的**盘上存在性编译期不核**（静态门查存在性会在正确计划上恒红），在 D1 W2 引擎 setup 派发前 fail-fast |
+| `processReviews[]` | 过程审查声明 `[{unitId, script?, promptFile?, mechanism?}]`——review 节点唯一来源，无声明不生成。`script` 扩展名限 `.sh` / `.mjs` / `.js` / `.cjs`（.sh→bash、其余→node）；`script` / `promptFile` 的**盘上存在性编译期不核**（静态门查存在性会在正确计划上恒红）。存在性校验的时点两侧不同：**verify 节点 script 与全部 promptFile 在 W2 引擎 setup 派发前 fail-fast**；**review 节点 script 在该节点执行时才校验**（setup 不查）——声明的 review script 路径写错时，缺口暴露时点 = 该节点被调度执行，不是 run 启动 |
 | `commitTemplate` | 缺省 `<type>(<scope>): {unitId} — {summary}`（占位符 {unitId}/{summary} 必含） |
 | `formNotApplicable[]` | 反例场景不适用豁免登记 `[{adversarialFormId, rationale}]` 逐字转抄（理由须说明为什么构造不出，不是偷懒不建） |
 | `acceptancePlan[].script` | verifyAsset="-" 行的剧本本体绝对路径（此时必填，引擎按扩展名分派：`.sh`→bash、`.mjs`/`.js`/`.cjs`→node；扩展名白名单与 verify/review 节点同一判据） |
@@ -89,9 +97,9 @@ node ~/.agents/skills/dev-flow-v6/scripts/compile-exec-plan.mjs --impl-plan <tec
 | `acceptancePlan[].unit` | verifyAsset="new" 行的实装单元 id（此时必填；status.json 该单元 done 判资产就绪） |
 | `acceptancePlan[].type` | 验收行 additive 类型标记；现只登记 `runtime-probe`（runtime 探针行：level 必须 L3，`command` / `artifact` / `capabilityIds` 必填，编译为 verify 节点且 script = probe wrapper）。**只适用于交付体系任务**（wrapper 与 artifact 落交付任务目录 evidence、能力 id 对账验收包 externalContracts）——独立设计任务（未传 `--task-dir`）声明该行即拒绝编译。无 type 字段的行按既有 level 规则编译（向后兼容） |
 | `acceptancePlan[].command` | type="runtime-probe" 行的 driver 启动命令 `{program, args}`（program 受测试命令白名单约束，禁恒绿形态；driver 文件须已在盘——占位引用拒收） |
-| `acceptancePlan[].artifact` | type="runtime-probe" 行的 probe artifact 落点（相对交付任务目录的 evidence 路径，禁绝对路径与 `..` 逃逸） |
+| `acceptancePlan[].artifact` | type="runtime-probe" 行的 probe artifact 落点（须位于交付任务目录内，推荐任务目录相对路径——taskDir 内绝对路径也接受；越出任务目录与 `..` 逃逸一律拒绝） |
 | `acceptancePlan[].capabilityIds` | type="runtime-probe" 行观察的契约能力 id（裸能力 id 或 `<contractId>:<capabilityId>`；必须存在于验收包 externalContracts 的 capabilities） |
-| `testPlan.incrementalCommands[]` | dev 节点 testCommand 唯一提取权威（`{incrementId, unitIds[], command}`）；`testPlan.incremental` 文字段是阅读视图不作提取源。**程序白名单**：dev 节点 testCommand / runtime-probe driver = `pnpm` / `npm` / `node` / `git` / `bash`；`testPlan.fullSuite` / `testPlan.artifacts[].command` / `testPlan.incremental` = `pnpm` / `npm` / `node` / `bash`（**无 git**——全量门无 git 用例）。所有命令禁恒绿形态（见「验收分组规则」后的恒绿禁令） |
+| `testPlan.incrementalCommands[]` | dev 节点 testCommand 唯一提取权威（`{incrementId, unitIds[], command}`）；`testPlan.incremental` 是两形态字段——string 文字段仅阅读视图不作提取源，`{program, args}` 对象被 D0 归一转抄进 exec-plan 并由 W3 增量测试门消费（对象形态非法编译报缺口，不再静默丢弃）。**command 形态纪律**：含 shell 元字符（引号 / `&&` / `;`）的命令必须写成 `{program, args}` 对象形态——字符串会被归一化包装（bash -c），包装结果与 increments.json 的 testCommand 逐字比对不一致，增量契约门据此打回。**程序白名单**：dev 节点 testCommand / runtime-probe driver = `pnpm` / `npm` / `node` / `git` / `bash`；`testPlan.fullSuite` / `testPlan.artifacts[].command` / `testPlan.incremental` = `pnpm` / `npm` / `node` / `bash`（**无 git**——全量门无 git 用例）。所有命令禁恒绿形态（见「验收分组规则」后的恒绿禁令） |
 
 ### 外部契约守门（D0；`--task-dir` 且验收包契约感知时）
 
@@ -124,7 +132,7 @@ node ~/.agents/skills/dev-flow-v6/scripts/compile-exec-plan.mjs --impl-plan <tec
 
 **机器不可判定子条**（声明了架构机检 / lint / 格式检查脚本，但无法机器判定是否绑定到某增量命令或 D2 Gate A）：编译器只登记披露义务（编译摘要可见），逐项核对归 D2 审查——只存在脚本文件但无执行入口的，按验证资产义务 open 处置。
 
-**deliveryProfile 登记**：`<taskDir>/task.json` 的 `deliveryProfile`（a/b/c，gate init / set-delivery-profile 写入）登记进 exec-plan 顶层——a 级 D2 一致性审查分区降档的消费输入（降档实现见 `flow/consistency-review.md` 与 W3 引擎）。读不到字段缺省 b；值非法 / task.json 损坏报缺口（静默缺省会改变 D2 审查深度）。变更后需重编译生效（已有执行进度时手修 exec-plan `deliveryProfile` + ledger 登记，同其它 exec-plan 字段纪律）。
+**deliveryProfile 登记**：`<taskDir>/task.json` 的 `deliveryProfile`（a/b/c，gate init / set-delivery-profile 写入）登记进 exec-plan 顶层——a 级 D2 一致性审查分区降档的消费输入（降档实现见 `flow/consistency-review.md` 与 W3 引擎）。读不到字段缺省 b；值非法 / task.json 损坏报缺口（静默缺省会改变 D2 审查深度）。**双源注意**：该值有两处运行态副本——exec-plan 顶层快照（W3 消费）与 task.json 原件（独立保证 IA 与 TRL workflow 读 task.json）——`set-delivery-profile` 改值后 exec-plan 不会自动跟随，须重编译对齐两侧（已有执行进度时手修 exec-plan `deliveryProfile` + ledger 登记，同其它 exec-plan 字段纪律），否则 W3 与 IA/TRL 按不同档位执行。
 
 
 
@@ -138,12 +146,12 @@ node ~/.agents/skills/dev-flow-v6/scripts/compile-exec-plan.mjs --impl-plan <tec
 
 ### 增量契约（交付体系任务）
 
-dev 节点 `incrementId` 从 units 逐字转抄；归属全覆盖、引用存在、testCommand 逐字一致三判据由校验器 `--task-dir` 门核对（判据同 tech-design-v6 flow/plan.md「增量契约对齐」节）。增量归属与命令转抄问题回 T3 修；增量的增删改属技能①职权，回 delivery-v6 递增验收版本重批。
+dev 节点 `incrementId` 从 units 逐字转抄；归属全覆盖、引用存在、testCommand 逐字一致三判据由校验器 `--task-dir` 门核对（判据同 tech-design-v6 flow/plan.md「增量契约对齐」节）——**归属核对只在编译期这一道**：W2/W3 引擎运行时不读 `incrementId` 字段（节点任务书的增量归属断言在编译器生成任务书时已内联），引擎不重复核对。增量归属与命令转抄问题回 T3 修；增量的增删改属技能①职权，回 delivery-v6 递增验收版本重批。
 
 ### 验收分组规则
 
 - 验收计划表逐行：**L3 → verify 节点**（script = 剧本或 wrapper + artifactsDir）；**L4 / inspect-only → inspect 节点**（任务书 + artifactsRefs + deps；项目有 verification skill 时真机驱动一律经其进行，禁绕过技能裸驱动）；**L0/L1/L2 不编译成节点**——已由 D1 单元测试与 D2 Gate A 覆盖，D3 入口门引用 Gate A 证据（HEAD 未前进则免重跑）。混合行拆行（确定性部分降 L3 先行，判断行依赖它）在上游 T3 拆好，编译器按行 level 直接编译
-- **验收行 id 形态**：`^[A-Za-z0-9][A-Za-z0-9._-]*$`（字母/数字开头，只含字母、数字、点、下划线、连字符；含路径分隔符一律拒——id 会成为 exec-plan 节点 id 与 wrapper 文件名，防路径穿越与注入）。**保留 id `summarize` 不得被验收行占用**：全部 verify 节点后编译器自动追加汇总 inspect 节点 `summarize`，占用即编译拒绝
+- **验收行 id 形态**：`^[A-Za-z0-9][A-Za-z0-9._-]*$`（字母/数字开头，只含字母、数字、点、下划线、连字符；含路径分隔符一律拒——id 会成为 exec-plan 节点 id 与 wrapper 文件名，防路径穿越与注入）。**保留 id `summarize` 不得被验收行占用**：全部 verify 节点后编译器自动追加汇总 inspect 节点 `summarize`，占用即编译拒绝。**与 dev 节点 id 共享命名空间**：验收行 id 与 units[].id 同处 exec-plan 的节点 id 一域（status.json 的 nodes 键同一套），同名会相互覆盖状态记录——T3 拆分时验收行 id 用独立前缀（如 A1/V1）与单元 id（u- 前缀建议）错开，编译器对同名碰撞暂无专门缺口登记（待补），靠命名前缀纪律规避
 - **空验收节点前置判据**：acceptancePlan 全是 L0/L1/L2（或数组为空）时编译产出空 `acceptance.nodes`，而 exec-plan 校验要求非空——**D3 至少需要一行 L3 / L4 / inspect-only**；确无可独立验收场景须回设计层补验收场景，不是跳过 D3
 - **mode=dev 禁 inspect 节点**：`mode=dev` 仅允许 dev 节点与开发期 e2e 的 verify 节点；inspect 节点属验收语义，dev 模式声明即校验拒绝（与 mode=acceptance 禁 dev / review 节点对称）。手工降级拼 dev exec-plan 时节点 kind 清单不含 inspect
 - 分组按「组」列呈现；熔断判据 = 依赖可达性（设计 §8.7；核心短路 haltOnCoreFail 已退役被引擎忽略，`groups` 字段保留仅为旧 exec-plan 兼容）

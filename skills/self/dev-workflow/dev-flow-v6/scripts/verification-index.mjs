@@ -85,6 +85,7 @@ const DESIGN_PACKAGE_FILES = [
 const ROW_REF_FIELDS = ["decisionIds", "unitIds", "adversarialFormIds", "verificationAssetIds", "acceptanceNodeIds"];
 const USAGE =
   "用法：node verification-index.mjs build --exec-plan <exec-plan.json> [--out <path>]\n" +
+  "      node verification-index.mjs check --exec-plan <exec-plan.json> [--index <path>]\n" +
   "      node verification-index.mjs query --index <index.json> (--assertion <id> | --unit <id> | --asset <id> | --empty-refs | --reviewer-seeds [--files <f1,f2>])";
 
 // ── 纯工具 ──

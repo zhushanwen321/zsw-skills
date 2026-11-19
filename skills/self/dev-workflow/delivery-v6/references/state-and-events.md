@@ -15,12 +15,12 @@
 | FindingRaised | builder/assurance | 登记发现；category=defect/boundary、severity、关联需求（可空）；非 blocker 附 consequenceRefutation；schema 2 空关联 boundary 附 emptyScopeRefutation；重开附 reopenOf（目标须已关闭且判据环境已变化）；结构命中外部契约时附 authorityBacked/authorityHash/authorityObservationRef 三段；可附来源阶段与回归测试 |
 | FindingResolved | assurance | 发现解决（当前指纹有效）；boundary 的确认也走此事件，附对照论证 |
 | ResolutionReaffirmed | assurance | 原解决事件在当前 revision 的逐项重认领；必须有原解决事件与复核依据，不允许只凭全量测试绿 |
-| ExplorationCompleted | assurance | 探索审查完成；绑覆盖维度 + coverageManifestSha256（该值是探索报告文件的内容哈希声明值，机器只校验格式与与报告文件的同源计算，不做额外清单对账） |
+| ExplorationCompleted | assurance | 探索审查完成；绑覆盖维度 + coverageManifestSha256（探索报告文件的内容哈希声明值：机器只校验 64 位十六进制格式，不做同源对账——登记后改动报告文件不使本事件失效）+ artifactSha256（同一文件的内容哈希，登记后改动即触发失效对账，见下方「artifact 登记后冻结」节） |
 | AssuranceCompleted | assurance | 独立保证完成；mode=full/recheck；绑本轮证据事件 id 集 + 探索事件 id + 逐增量测试回执 + 干净构建记录（按策略） |
 | AssuranceRevisionDrift | assurance | 保证期间指纹漂移；setup/finalize 指纹与序号，按链计数 |
 | RepairRoundRecorded | builder | 一次实现性修复开始；绑轮次、触发 finding、受影响断言与修复报告；第 4 轮触发 process-failed |
 | RiskAccepted | user | 接受具体缺口；绑 gapId（missing 派生 / 证据事件 id / findingId）与当时证据状态 |
-| RiskPreauthorized | user | 预授权指定类别 non-blocker finding 的风险接受范围与名额；blocker 与 requirement 目标不可预授权；名额按验收版本独立配额、按事件流顺序消耗；同分类范围的重复登记不合并、不叠加去重（每次登记是独立名额池） |
+| RiskPreauthorized | user | 预授权指定类别 non-blocker finding 的风险接受范围与名额；blocker 与 requirement 目标不可预授权；名额按验收版本独立配额、按事件流顺序消耗；同分类范围的重复登记不合并、不叠加去重（每次登记是独立名额池），且默认拒绝重复登记——确属有意追加的独立授权须 `--allow-duplicate true` 显式放行 |
 | PolicyUpgraded | user | 策略升级；绑旧/新快照哈希与逐事件失效范围声明 |
 | RevisionBaselineConfirmed | user | 人工确认新基线（`confirm-baseline`）：漂移计数此后归零重计；或携带 explainedUnknownIntervals（`confirm-history`）：用户署名逐段解释 revision 来源对账中的历史 unknown 区间（每段绑 from/to 与区间哈希），不推进链条、不构成新基线——只把精确匹配的区间归为 user-confirmed |
 | IndependentTaskDeclared | user | 独立任务声明；绑 intent 哈希与当时全部未替换任务清单 |
@@ -56,8 +56,8 @@ EvidenceRecorded / ImplementationRecorded / ExplorationCompleted / AssuranceComp
 
 ## 判定式（两个终态）
 
-- **accepted** = 批准有效（四元组一致 + 审查未被 reject 击穿）＋ 全部增量实现 ＋ 每条必需断言的**每类证据** verified（schema 1 仍为每条必需需求）＋ 当前指纹的保证完成（回执覆盖全部增量、退出码 0、绑定事件可追溯、按策略附干净构建）＋ 探索完成（如要求）＋ 无未决 defect ＋ 无未确认 boundary ＋ 候选形成后全部 revision 变化有合法来源（`revision-provenance` 无 unknown 代际；用户经 `confirm-history` 署名确认的历史区间归 user-confirmed 来源）＋ 必需交付义务无 open（`obligations` 派生；`explicitly-waived` 须绑用户裁决）＋ 循环尝试未超预算（`loop-budget` 按 started 计数）＋ runtime readiness 为 established / not-applicable 且每个外部契约的环境历史链完好（当前权威哈希等于批准时哈希，或有覆盖该契约的 `EnvironmentBaselineConfirmed` 接链）＋ 未进入 process-failed。
-- **accepted_with_risk** = 上述条件中，逐缺口豁免：每个未 verified 的「需求×证据类型」都有绑定该缺口 gapId 的有效接受（且需求 riskAcceptable=true），每个未决 defect 有有效接受；boundary 不可接受风险；至少存在一项具体接受。两类证据缺口各自需独立接受。来源不明的 revision 与无豁免通道的 open 义务不在可接受范围内——豁免只作用于现有规则允许接受风险的事项。
+- **accepted** = 批准有效（四元组一致 + 审查未被 reject 击穿）＋ 全部增量实现 ＋ 每条必需断言的**每类证据** verified（schema 1 仍为每条必需需求）＋ 当前指纹的保证完成（回执覆盖全部增量、退出码 0、绑定事件可追溯、按策略附干净构建）＋ 探索完成（如要求）＋ 无未决 blocker defect（三档分级裁决落地：must-fix 映射 blocker+defect 阻断终态；suggestion/info 映射 non-blocker defect，披露即可不阻——open 清单照常在 verdict.openFindings 披露）＋ 无未确认 boundary ＋ 候选形成后全部 revision 变化有合法来源（`revision-provenance` 无 unknown 代际；用户经 `confirm-history` 署名确认的历史区间归 user-confirmed 来源）＋ 必需交付义务无 open（`obligations` 派生；`explicitly-waived` 须绑用户裁决）＋ 循环尝试未超预算（`loop-budget` 按 started 计数）＋ runtime readiness 为 established / not-applicable 且每个外部契约的环境历史链完好（当前权威哈希等于批准时哈希，或有覆盖该契约的 `EnvironmentBaselineConfirmed` 接链）＋ 未进入 process-failed。
+- **accepted_with_risk** = 上述条件中，逐缺口豁免：每个未 verified 的「需求×证据类型」都有绑定该缺口 gapId 的有效接受（且需求 riskAcceptable=true），每个未决 blocker defect 有有效接受；boundary 不可接受风险；至少存在一项具体接受。两类证据缺口各自需独立接受。来源不明的 revision 与无豁免通道的 open 义务不在可接受范围内——豁免只作用于现有规则允许接受风险的事项。
 
 缺口 gapId：完全缺失 = (acceptanceVersion, requirementId, evidenceKind, revision, "missing") 确定性派生；partial/failed = 对应证据事件 id；finding = findingId。
 
@@ -73,15 +73,14 @@ EvidenceRecorded / ImplementationRecorded / ExplorationCompleted / AssuranceComp
 | 4 | 漂移链超上限 | revision-unstable |
 | 4.5 | 需要第 4 轮实现性修复，或累计不同 must-fix 达到第 11 条，或验收复审 started 计数超 acceptanceReReviewRoundCap（6） | process-failed（停止正常修复，不得交付） |
 | 5 | 必需需求存在未接受 failed 证据 | implementing |
-| 6 | 存在未接受 blocker defect（无关联需求者触发全量增量修复） | implementing |
+| 6 | 存在未接受 blocker defect（无关联需求者触发全量增量修复；未接受 non-blocker defect 不单独路由——披露即可不阻状态，清单见 verdict.openFindings） | implementing |
 | 7 | 已批准且零实现 | acceptance-approved |
 | 8 | 增量未齐 | implementing |
-| 9 | 未接受 non-blocker defect | candidate |
-| 10 | 未确认 boundary | candidate |
-| 11 | partial/missing 缺口未全部接受 | candidate |
-| 12 | 缺保证或探索 | candidate |
-| 13 | accepted 完整公式满足 | accepted |
-| 14 | accepted_with_risk 公式满足 | accepted_with_risk |
+| 9 | 未确认 boundary | candidate |
+| 10 | partial/missing 缺口未全部接受 | candidate |
+| 11 | 缺保证或探索 | candidate |
+| 12 | accepted 完整公式满足 | accepted |
+| 13 | accepted_with_risk 公式满足 | accepted_with_risk |
 
 非必需需求出现 failed 不阻终态，但 verdict.nonRequiredFailures 必须披露。
 

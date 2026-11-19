@@ -33,7 +33,7 @@ const META_PREFIX = "<!-- 生成视图：";
 
 function failUsage(msg) {
   process.stderr.write(
-    `用法错误：${msg}\n用法：node render-impl-plan.mjs <路径>/<name>.impl-plan.json> [--check]\n`,
+    `用法错误：${msg}\n用法：node render-impl-plan.mjs <路径>/<name>.impl-plan.json [--check]\n`,
   );
   process.exit(2);
 }

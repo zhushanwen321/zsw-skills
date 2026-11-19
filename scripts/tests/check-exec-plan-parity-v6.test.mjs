@@ -392,10 +392,15 @@ function runCli(planText) {
   }
 }
 
-test("CLI：合法计划 stdout PASS exit 0", () => {
+test("CLI：合法计划 stdout PASS exit 0（无 --task-dir 时带三段未核对 warn 行——「没核对」与「通过」可区分）", () => {
   const r = runCli(JSON.stringify(legalDevPlan(), null, 2));
   assert.equal(r.status, 0, `exit=${r.status} stderr=${r.stderr}`);
-  assert.equal(r.stdout.trim(), "PASS");
+  const lines = r.stdout.trim().split("\n");
+  assert.equal(lines[lines.length - 1], "PASS");
+  assert.ok(
+    lines.some((l) => l.startsWith("[warn] 未传 --task-dir")),
+    `缺 --task-dir 的 PASS 应带 warn 标记行，实际 stdout：${r.stdout}`,
+  );
 });
 
 test("CLI：非法计划逐行 FAIL: <分类>: <明细> exit 1（报完再退出）", () => {

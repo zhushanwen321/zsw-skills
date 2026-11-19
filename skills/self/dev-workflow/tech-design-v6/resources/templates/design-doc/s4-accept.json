@@ -23,6 +23,8 @@
         "action": "<需跑子集与命令>"
       }
     ],
-    "noneReason": "<无受影响项时的依据（items 非空时填「—」；禁止两者皆空）>"
-  }
+    "noneReason": "—"
+  },
+  "criterionMechanisms": [],
+  "verificationBindings": []
 }

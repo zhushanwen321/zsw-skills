@@ -138,7 +138,7 @@ function main() {
     }
     for (const id of formIds) {
       if (!covered.has(id) && !formNotApplicable.has(id)) {
-        errors.push(`反例场景 ${id} 未进入 impl-plan.acceptancePlan（未进节点的场景须在 exec-plan.formNotApplicable 登记带理由的不适用声明）`);
+        errors.push(`反例场景 ${id} 未进入 impl-plan.acceptancePlan（未进节点的场景须在 impl-plan 顶层 formNotApplicable 登记带理由的不适用声明，然后重新编译——exec-plan.formNotApplicable 是编译转抄的生成物，禁手改）`);
       }
     }
     if (execPlan.mode === "acceptance") {
@@ -148,7 +148,7 @@ function main() {
       }
       for (const id of formIds) {
         if (!nodeCoverage.has(id) && !formNotApplicable.has(id)) {
-          errors.push(`反例场景 ${id} 未进入 D3 acceptance.nodes（未进节点的场景须在 exec-plan.formNotApplicable 登记带理由的不适用声明）`);
+          errors.push(`反例场景 ${id} 未进入 D3 acceptance.nodes（未进节点的场景须在 impl-plan 顶层 formNotApplicable 登记带理由的不适用声明，然后重新编译——exec-plan.formNotApplicable 是编译转抄的生成物，禁手改）`);
         }
       }
     }

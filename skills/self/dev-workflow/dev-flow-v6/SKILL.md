@@ -3,7 +3,7 @@ name: dev-flow-v6
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 6.6.0
+version: 6.7.0
 description: >-
   Use when 一份完整设计包（tech-design-v6 产出：设计文档 + impl-plan.json 单源与渲染视图 + 审查终态）
   需要落地为已验收代码。纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 →
@@ -52,7 +52,7 @@ description: >-
 |----|------|------|--------|
 | D0 编译 | 编译器 `scripts/compile-exec-plan.mjs --impl-plan <plan.json>` 生成 exec-plan.json（生成即校验 PASS，含三类关联声明 associations 对账）+ 逐节点 promptFile + 初始 status.json（语义缺口回上游修后重新编译，禁手修生成物；验收资产就绪后再跑 `--mode acceptance`；手工降级路径见 flow 文件）+ L0 前置 + 环境 smoke；交付体系契约感知任务加跑外部契约门（权威快照 / essential 契约的契约冒烟增量与 spike DAG / D0 复扫 / runtime-probe 行，拒绝条件全部在写盘前，判据见 `flow/compile.md`）；机制八验证资产门（类型层 / 空跑放行 / 全量绑定无测试配置三判据 + 两个裁决旗 `--allow-missing-typescript` 与 `--allow-zero-test-passthrough`，数据源 = 产物根 `project-capabilities.json`，判据见 `flow/compile.md`「机制八验证资产门」节） | 主 agent | `flow/compile.md` |
 | D1 开发循环 | 单元 DAG 流式并行（写码→核验→commit→解锁；开发期 e2e verify 失败与 commit 门禁被拒同入统一失败处理中心轮内修；过程审查 kind=review 节点 = 渐进式 review——机器检查三态 + reviewer 按需触发 + 修复波及机器重验，过程记录 process-review.jsonl 带 process 域章，与交付事件流经 `delivery-core events` 读侧合流（分储单口），判据见 `flow/compile.md`） | W2 wave-executor-v6（手工路径 `flow/execute.md`） | 全节点 done 或 blocked |
-| D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组流式槽位池并行（在途 ≤5；文档修复组按文件门控进同一派发池——不相交同池并行、相交回退串行段）+ Gate A 全量测试（红后归因分诊独立 phase：本批回归条目回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态，≤2 轮）；外部契约任务加契约快照对照（实现接口与权威 surface 漂移核对），deliveryProfile=a 时分区降档为契约与改动对照（判据见 `flow/consistency-review.md`）；过程层关联对账 CLI `check-associations.mjs`（check / recheck，手工调用、非 review 节点脚本——三态退出码与 worktree unknown 处置见 `flow/consistency-review.md`「过程层关联对账」节） | W3 dev-consistency-loop-v6（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
+| D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组流式槽位池并行（在途 ≤5；文档修复组按文件门控进同一派发池——不相交同池并行、相交回退串行段）+ Gate A 全量测试（红后归因分诊独立 phase：本批回归条目回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态，≤2 轮）；外部契约任务加契约快照对照（实现接口与权威 surface 漂移核对），deliveryProfile=a 时分区降档为契约与改动对照（判据见 `flow/consistency-review.md`）；过程层关联对账 CLI `check-associations.mjs`（check / recheck，手工调用、非 review 节点脚本——四态退出码与 worktree unknown 处置见 `flow/consistency-review.md`「过程层关联对账」节） | W3 dev-consistency-loop-v6（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
 | D3 端到端验收 | 验收计划表 L3/L4 编译成 verify/inspect 节点（核心先行 + 短路）+ 验收失败修复循环（failed 入失败池 → 聚合裁决独立 phase（跨节点同根因合并/disputed 反证/文件不相交分组）→ 修复组独立 phase（fixer 修产品代码与验收资产，引擎按组 commit）→ 节点重置机器重验回调度循环，≤3 轮不收敛才熔断）；外部契约任务的 runtime-probe 节点随验收编译（D0 生成 wrapper 进 taskDir evidence），D3 全绿后、D4 候选完成前跑外部契约复扫门（未登记 strong 信号 / probe 未跑不得进入候选完成，命令与判据见 `flow/acceptance.md`） | W2 第二实例化（手工路径 `flow/acceptance.md`） | 验收全绿 + 复扫门通过 |
 | D4 收尾（候选完成） | 交付汇总 + 增量实现登记（交付体系任务：逐增量以 builder 凭据 `delivery-gate record-implementation` 登记 ImplementationRecorded，与 candidate-build-v6 同一事件流与回执口径——`flow/acceptance.md` 收尾节）+ 功能分级登记 + 文档资产同步 + ADR 复审 + 最终 commit——收尾产出的是**候选实现**，不是交付结论 | 主 agent | `flow/acceptance.md` 收尾节 |
 | D5 终态同步 | 代码与设计差距收敛为固定义务覆盖率的一致性对账（义务表 → checker 派发（机械优先/语义缓存）→ 差距地址聚合 → 隔离变更集 → 集成器唯一写入门径 → 四层结论；状态唯一权威 = conformance-state 事件流，agent 无状态；未绑定 legacy 包由旧引擎只读期收尾，带 cutover 标记的包旧引擎入口拒启） | W4 v2 design-code-sync-v2（绑定包；手工路径 `flow/sync.md`）/ W4 legacy design-code-sync-loop（未绑定包收尾） | 引擎 completed + 覆盖率分母全 verified/waived |
@@ -92,7 +92,7 @@ process.exitCode = run.status === 0 ? 0 : 1;
 5. **git 单点**：subagent 禁止一切 git 写；workflow 形态下 commit 由引擎 world.run 执行（精确路径 add，禁 -A），手工形态下由主 agent 执行；commit 前跑仓外路径检查（`check-commit-scope.mjs`，命令与恢复动作见 `flow/acceptance.md` 收尾节；限 D4 最终 commit 与 ARL 修复 commit 前必跑——wave-executor 引擎内置 commit 点未接，属已知缺口）——暂存区存在仓库外路径时禁止 commit；文档类同步改动禁止单独成笔——随触发它的单元同笔提交（files_changed 含文档路径即同笔）；确因验收结论后置的攒批成一笔，禁止一文档一笔
 6. **基线先行**：exec-plan.json 落盘即基线（产物在 `~/.agents/skill-data/`，HOME 下天然不入 git）；执行态事实源 = `<name>.status.json`
 7. **单波次交付**：一个设计包 = 一次实施流程，实际执行只有一个波次；未经用户明确指示，禁止按「波次/批次」把一个 impl-plan 拆成多次独立实施（每波各自走 D1-D6 完整流程）。允许的拆分 = impl-plan 内部的单元分组与 DAG 并行（多 subagent / 多组执行，W2 一次承接全部单元）；分期交付仅随用户明确指示出现
-8. **独立保证与有限修复（V6 代）**：候选反例审查在 D3 后、D4 前完成（全部 schema 2 任务，与风险字段无关）。最终保证分 full 与 recheck：full = 覆盖核对 + 全量断言取证 + 开放探索（开放探索按「缺少候选探索证据、验收或关键设计变化」触发，已有合格候选探索时引用既有探索）；recheck = 旧发现与修复 diff 复核 + 受影响断言 + 全量确定性测试 + 历史探索引用，不默认重新开放探索。实现性修复统一走 `assurance-repair-loop-v6`（builder 凭据 + 受影响一致性复核 + 显式 allowCommit 授权），第 4 轮修复或第 11 条不同 must-fix 进入 process-failed；同一问题 reopenOf 不重复计数，环境与证据采集重试不计轮（登记 RepairRoundRecorded 带 nature=environment|evidence，缺省 nature=behavior 计轮），保证后的方案修订与验收版本递增各按一轮并入计轮。最后一批建议级修复后以 recheck 完成当前版本取证，不为攒批项重新开放探索。
+8. **独立保证与有限修复（V6 代）**：候选反例审查在 D3 后、D4 前完成（全部 schema 2 任务，与风险字段无关）。最终保证分 full 与 recheck：full = 覆盖核对 + 全量断言取证 + 开放探索（开放探索按「缺少候选探索证据、验收或关键设计变化」触发，已有合格候选探索时引用既有探索）；recheck = 旧发现与修复 diff 复核 + 受影响断言 + 全量确定性测试 + 历史探索引用，不默认重新开放探索。实现性修复统一走 `assurance-repair-loop-v6`（builder 凭据 + 受影响一致性复核 + 显式 allowCommit 授权），第 4 轮修复或第 11 条不同 must-fix 进入 process-failed；同一问题 reopenOf 不重复计数。**环境与证据采集重试同样占修复轮**：RepairRoundRecorded 虽有 nature=environment|evidence 的免计轮通道，但 assurance-repair-loop-v6 通道当前登记修复轮不发送 --nature（全部按缺省 behavior 计轮）——按「重试不计轮」预期做预算会低估消耗，重试密集的归因先在 run 内消化再派修复。保证后的方案修订与验收版本递增各按一轮并入计轮。最后一批建议级修复后以 recheck 完成当前版本取证，不为攒批项重新开放探索。
 
 ## 运行记录（防丢失）[MANDATORY]
 
@@ -191,7 +191,7 @@ node <zsw-skills 检出根>/scripts/skill-usage-stats.mjs --pi-agent-dir ~/.taij
 - [MANDATORY] e2e 只在开发阶段按改动范围跑（清单继承 T3 验收计划表），空载串行；PR/merge/CI 门禁只跑单测（SSOT = 项目 AGENTS.md 测试节）；自动化回归的长期方向 = e2e 逐步单测化——能以 mock/fixture 重放等价覆盖的圈定项，随所属单元转化为 L1/L2 单测
 - [MANDATORY] 偏差三分类：合理 → 登记表固化；不合理 → 打回修；doc_errors → 引擎文档修复组在审出它的轮次当场修（方向 = 改文档对齐实现；fixer 核实方向两可或实现侧错误的条目回流主 agent 裁决）——哪个阶段审出来就在哪个阶段修，禁止把方向已明确的发现转手下一阶段（2026-10-06 裁决）
 - [MANDATORY] D3 全绿 + D4 最终 commit 后自动进 D5（仅用户明示跳过可免，跳过须记录）；交付体系任务在 D4 收尾完成**增量实现登记**（逐增量以 builder 凭据 `delivery-gate record-implementation` 登记 ImplementationRecorded 含合并回执——独立保证与裁决器消费该事件，缺它主流程 5→6 步走不通，步骤见 `flow/acceptance.md` 收尾节）；**D5 收敛或用户显式豁免（明示跳过并记录）是 accepted 前置（语义前置；机器前置待权威载体建立，已登记），未收敛且未豁免不得声明交付完成**；D5 收敛后回 delivery-v6 发起 independent-assurance-v6 独立取证并 `evaluate`——**本技能任何阶段都不宣告交付**，accepted/accepted_with_risk 只由裁决器给出
-- [MANDATORY] 发现桥接：D2/D3 的终态未决项（不合理遗留、escalated 顽固条目）由主会话经 `delivery-gate record-finding`（builder 凭据）登记 FindingRaised（category=defect；实现有意的边界申报用 boundary 并附对照论证）后随候选交付——裁决器据此判定，不在本技能内部静默吞掉；D5 的 conformance 未覆盖项按其状态分流登记
+- [MANDATORY] 发现桥接：D2/D3 的终态未决项（不合理遗留、escalated 顽固条目）由主会话经 `delivery-gate record-finding`（builder 凭据）登记 FindingRaised（category=defect；实现有意的边界申报用 boundary 并附对照论证）后随候选交付——裁决器据此判定，不在本技能内部静默吞掉；D5 的 conformance 未覆盖项按其状态分流登记。schema 2 任务 severity=non-blocker 的登记必附 `--consequence-refutation` 与 `--consequence-refutation-type`（不论 category，缺任一 gate 拒——命令与判据见 `flow/acceptance.md` 收尾节「发现桥接」条）
 - [OPTIONAL] 高风险大单元可开 worktree 隔离（判据见 references/dag-authoring.md；exec-plan 节点 cwd 字段承载）
 
 ## 状态恢复

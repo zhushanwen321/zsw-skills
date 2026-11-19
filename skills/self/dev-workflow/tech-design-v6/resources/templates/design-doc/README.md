@@ -29,3 +29,5 @@ meta.json 的 `relatedDocs` 是关联登记清单：本设计触及、修改、�
 写入义务见 `flow/write.md` Step 0 外部契约现状装载（任务目录存在 `environment-contracts.current.json` 时写入）；子字段规格见 schema §3。
 
 决策含守护 / 命令 / 正则类可执行内容时，登记在该决策的 `guards` 字段（id / text / note，单一登记），其他章节的文本字段内联完整标记 `{{G1}}` 引用——渲染自动展开为登记全文（字段规格见 schema §6.3，引用语法见 §9）。
+
+s4-accept.json 的 `criterionMechanisms` 与 `verificationBindings` 是 **V5 交付任务必填**字段（模板以空数组起步）：`criterionMechanisms` 逐验收断言登记判据与机制对账（`{ assertionId, decisionIds, mechanismRefs, consistency, counterexample, resolution }`），`verificationBindings` 逐反例场景登记测试绑定（`{ adversarialFormId, testRef, preconditions, actions, assertions }`）——字段规格见 schema §7。独立设计任务（无 `acceptanceBinding`）不触发质量契约门，两个空数组保持原样即可；交付体系任务在 T2 逐条填实（空数组或漏行会被 delivery-v6 check-quality-contract 拦下，T3 编译与 D0 质量段核对同样消费）。

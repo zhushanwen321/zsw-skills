@@ -635,7 +635,7 @@ test("record-evidence：contractCapabilityIds 必须存在于当前验收包；r
     "--result", "verified", "--summary", "取证", "--artifact", "evidence/ev.md",
     "--assertion-ids", JSON.stringify(["A1"]),
     "--contract-capability-ids", JSON.stringify(["EC-host:no-such-capability"]), "--credential", fx.creds.assurance], fx.home, fx.env),
-    /含当前验收包未声明的能力/, "自造能力名被拒");
+    /含无法解析的能力/, "自造能力名被拒（R1-27 后拒绝口径按解析失败表述：qualified 精确命中或裸尾唯一命中之外的 id 一律拒）");
   const appended = runGate(["record-evidence", "--task-dir", fx.taskDir, "--requirement-id", "R1", "--kind", "command",
     "--result", "verified", "--summary", "契约冒烟取证", "--artifact", "evidence/ev.md",
     "--assertion-ids", JSON.stringify(["A1"]), "--adversarial-form-ids", JSON.stringify(["AF1"]),

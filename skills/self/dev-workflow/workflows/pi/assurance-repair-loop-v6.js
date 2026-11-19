@@ -95,7 +95,7 @@ const SCHEMA_FindingDraft = {
     consequenceRefutation: { type: "string", description: "非 must-fix 必填：否定其用户可观察后果的依据；禁止只按字面合规降级" },
     consequenceRefutationType: { type: "string", enum: ["will-not-occur", "not-observable", "accepted-by-acceptance"], description: "非 must-fix 必填：论证类型三择一（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许），先标类型再给依据" },
     emptyScopeRefutation: { type: "string", description: "空关联 boundary 的不影响任何需求论证（空关联不得绕过定级护栏）" },
-    contractCapabilityIds: { type: "array", items: { type: "string" }, description: "认领的外部契约能力 id（裸 id 或「契约id:能力id」）；结构命中外部契约时 authority 组必填（外部行为反驳必须引用权威工件）" },
+    contractCapabilityIds: { type: "array", items: { type: "string" }, description: "认领的外部契约能力 id（「契约id:能力id」限定形式；裸 id 仅在当前任务能力全表中唯一命中时可用，多契约包或裸 id 歧义必须用限定形式）；结构命中外部契约时 authority 组必填（外部行为反驳必须引用权威工件）" },
     authorityBacked: { type: "boolean", description: "外部行为反驳已引用权威工件（须同时给 authorityHash 与 authorityObservationRef）" },
     authorityHash: { type: "string", description: "权威工件内容哈希（authorityBacked=true 时必填）" },
     authorityObservationRef: { type: "string", description: "权威工件观察记录引用（权威来源文件路径或记录 id；authorityBacked=true 时必填）" },
@@ -125,6 +125,8 @@ const SCHEMA_CoverageOutcome = {
           result: { type: "string", enum: ["verified", "partial", "failed"], description: "独立核对结论——builder 的测试输出未经独立核对不得记 verified" },
           assertionIds: { type: "array", items: { type: "string" }, description: "schema 2 证据明确覆盖的断言 id" },
           adversarialFormIds: { type: "array", items: { type: "string" }, description: "证据实际构造的反例场景 id" },
+          contractCapabilityIds: { type: "array", items: { type: "string" }, description: "该证据覆盖的外部契约能力 id（「契约id:能力id」限定形式；裸 id 仅在当前任务能力全表中唯一命中时可用）——runtime 义务的认领通道，漏标会让对应义务保持 open" },
+          runtimeProbe: { type: "boolean", description: "真实 runner/宿主驱动的 IA 亲自执行 probe 证据（runtime 义务唯一可满足形态）；builder 自报回执不标" },
           artifact: { type: "string", description: "任务目录 evidence/ 内已存在的原始证据文件绝对路径" },
         },
         required: ["requirementId", "kind", "result", "artifact"],
@@ -551,7 +553,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "7.8.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "7.9.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -1113,10 +1115,30 @@ let findingSequence = 0;
 function isEvidenceArtifact(value) {
     return typeof value === "string" && value.startsWith(evidenceRoot) && value.length > evidenceRoot.length && !value.split("/").includes("..");
 }
+// 可选字段 null 归一（R1-26，全链统一）：prompt 声明已改为「缺省时省略该键，不要写
+// null」，本函数是同一语义的校验侧兜底——agent 仍可能写 null（随机输出），null 就地删键
+// 视同未提供。没有本步，null 会经 intentArgsFor 的 String() 变成字符串 "null" 流进 gate
+// 参数（requireSha256/数组校验必败，run 终止）；pi 壳 JSON schema 类型收窄不产 null，
+// 两平台各自自洽
+function stripNullOptionals(value, keys) {
+    for (const key of keys) {
+        const record = value;
+        if (record[key] === null)
+            delete record[key];
+    }
+    return value;
+}
+const FINDING_NULL_OPTIONAL_KEYS = [
+    "category", "consequenceRefutation", "consequenceRefutationType", "emptyScopeRefutation",
+    "contractCapabilityIds", "authorityBacked", "authorityHash", "authorityObservationRef",
+    "reopenOf", "origin", "firstDetectedStage", "expectedStage", "regressionTestRef",
+];
+const EVIDENCE_NULL_OPTIONAL_KEYS = ["contractCapabilityIds", "runtimeProbe"];
 function validateFindings(findings) {
     if (!Array.isArray(findings))
         return "findings 须为数组";
     for (const finding of findings) {
+        stripNullOptionals(finding, FINDING_NULL_OPTIONAL_KEYS);
         if (typeof finding.summary !== "string" || finding.summary.trim() === "")
             return "finding.summary 须为非空字符串";
         if (finding.tier !== "must-fix" && finding.tier !== "suggestion" && finding.tier !== "info") {
@@ -1153,9 +1175,11 @@ function validateFindings(findings) {
         if (asserted && finding.category === "boundary") {
             return `发现「${finding.summary}」申报 boundary，但关联需求已有断言级判据明文覆盖——有断言覆盖的行为一律按 defect 申报（category 省略或显式 defect），或从 requirementIds 移除已有断言覆盖的需求并附对照论证`;
         }
-        // ③ 空关联 boundary 必须附 emptyScopeRefutation（gate 护栏②）
-        if (finding.category === "boundary" && finding.requirementIds.length === 0 && typeof finding.emptyScopeRefutation !== "string") {
-            return `发现「${finding.summary}」是空关联 boundary，必须附 emptyScopeRefutation（该发现不影响任何需求的论证）——否则登记被 gate 拒`;
+        // ③ 空关联 boundary 必须附 emptyScopeRefutation（gate 护栏②）——trim 后非空串：
+        // 空串过本地校验后仍会被 gate requireNonEmptyString 拒
+        if (finding.category === "boundary" && finding.requirementIds.length === 0 &&
+            (typeof finding.emptyScopeRefutation !== "string" || finding.emptyScopeRefutation.trim() === "")) {
+            return `发现「${finding.summary}」是空关联 boundary，必须附 emptyScopeRefutation（该发现不影响任何需求的论证，非空串）——否则登记被 gate 拒`;
         }
         // ③ 结构命中外部契约时必须给 authority 反驳组（gate 护栏④）
         const structuralContractHit = (Array.isArray(finding.contractCapabilityIds) && finding.contractCapabilityIds.length > 0) ||
@@ -1281,6 +1305,8 @@ function validateCoverage(value) {
         }
         if (item.result !== "verified" && item.result !== "partial" && item.result !== "failed")
             return "evidence.result 非法";
+        // prompt 声明 `|null` 的 runtime 绑定字段先做 null 归一（缺省=省略键）
+        stripNullOptionals(item, EVIDENCE_NULL_OPTIONAL_KEYS);
         if (item.contractCapabilityIds !== undefined && (!Array.isArray(item.contractCapabilityIds) || item.contractCapabilityIds.some((id) => typeof id !== "string" || id.trim() === ""))) {
             return "evidence.contractCapabilityIds 须为非空字符串数组";
         }
@@ -1673,7 +1699,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
             `本轮触发发现（severity 分级决定 defectFamily 硬校验档位）：${JSON.stringify(actionable)}`,
             `修复报告写入路径：${repairReportPath}`,
             "只修改修复所需代码与测试；每个 must-fix 新增或修正能证明缺陷版本失败的回归测试。运行相关测试，禁止 Git 写，禁止改验收。",
-            "高风险修复（本轮触发发现含 defect 类）必须在修复报告与返回 JSON 同时给 defectFamily 最小同族组合分析：rootCause=根因一句话；dimensions=按根因列出会变化的关键维度（输入数量/故障位置/时序/路径形态等）及取值；selectedCases=只选能区分实现正误的最小组合（不做笛卡尔积全展开），对应测试必须真实存在；redBeforeFix=缺陷版本失败证据文件路径（复现原始缺陷的测试在修复前的失败记录留档）；greenAfterFix=修复版本通过证据（条目=测试文件路径#用例名，测试须真实存在）；mutationRefs=撤销修复再失败证据文件路径（在临时副本上把修复改动改回缺陷版本、跑测试见红、再恢复副本——文件级副本操作，禁止 Git 写；引擎在 builder 返回后才提交，「revert 修复 commit」在本轮时序上不可实现）；三组证据引用引擎核对在盘存在性（相对路径挂 taskDir 解析），引用不存在=结构非法；blocker 级修复 mutationRefs 不得为空（无豁免形态）。",
+            "高风险修复（本轮触发发现含 defect 类）必须在修复报告与返回 JSON 同时给 defectFamily 最小同族组合分析：rootCause=根因一句话；dimensions=按根因列出会变化的关键维度（输入数量/故障位置/时序/路径形态等）及取值；selectedCases=只选能区分实现正误的最小组合（不做笛卡尔积全展开），对应测试必须真实存在；redBeforeFix=缺陷版本失败证据文件路径（复现原始缺陷的测试在修复前的失败记录留档）；greenAfterFix=修复版本通过证据（条目=测试文件路径#用例名，测试须真实存在）；mutationRefs=撤销修复再失败证据文件路径（在临时副本上把修复改动改回缺陷版本、跑测试见红、再恢复副本——文件级副本操作，禁止 Git 写；引擎在 builder 返回后才提交，「revert 修复 commit」在本轮时序上不可实现；临时副本必须落在 taskDir/evidence/ 下，验证完成后当场删除或移入 evidence/ 留档——项目内遗留副本会改变 revision，使本轮证据失效）；三组证据引用引擎核对在盘存在性（相对路径挂 taskDir 解析），引用不存在=结构非法；blocker 级修复 mutationRefs 不得为空（无豁免形态）。",
             `affectedAssertionIds 的含义与取值：本修复轮实际触及的验收断言 id 清单（从 ${acceptancePath} 的 requirements[].assertions[].id 中取，不得自造 id；引擎已知集合外的 id 会被 gate 拒于 record-repair-round）。未命中任何断言的纯环境/证据调整给空数组。`,
             '返回结构（严格 JSON）：{ "summary": string, "filesChanged": string[], "testEvidence": string, "affectedAssertionIds": string[], "defectFamily": { "rootCause": string, "dimensions": [{ "name": string, "values": string[] }], "selectedCases": string[], "redBeforeFix": string[], "greenAfterFix": string[], "mutationRefs": string[] } | null }',
             ...(corrective === null ? [] : [corrective]),
@@ -1872,7 +1898,7 @@ for (let repairRound = repairRoundStart; actionableFindings().length > 0; repair
             "独立复核修复 diff，亲自运行相关与全量增量测试；逐项给 resolvedFindingIds/unresolvedFindingIds，漏报的旧 blocker 视为未解决。复核以验收包为判据锚点：逐条对照受影响断言的限定条件与预期结果，反例场景（adversarialForms）按其入口/初始状态/操作/时序逐项重演——修复不得只让触发路径沉默，须证明判据行为成立。发现新问题按 FindingDraft 返回。",
             "suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据；不得修改产品代码、验收或 Git。",
             "reopenOf 两条硬判据：目标须已关闭（上面未决清单中仍 open 的发现不能作为 reopen 目标——仍在 open 的直接放入 unresolvedFindingIds 或按新发现申报），且其关闭后判据环境已变化（验收版本递增或代码 revision 变化）；不满足时不要附 reopenOf。同题判定责任在复核者，沿用旧 id 使计数不重复；不确定 id 时不填（宁可多计不可漏计）。",
-            '返回结构（严格 JSON）：{ "summary": string, "testEvidence": string, "resolvedFindingIds": string[], "unresolvedFindingIds": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "emptyScopeRefutation": string|null, "contractCapabilityIds": string[]|null, "authorityBacked": boolean|null, "authorityHash": string|null, "authorityObservationRef": string|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
+            '返回结构（严格 JSON）：{ "summary": string, "testEvidence": string, "resolvedFindingIds": string[], "unresolvedFindingIds": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "category"?: "defect"|"boundary", "consequenceRefutation": string, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance", "emptyScopeRefutation": string, "contractCapabilityIds": string[], "authorityBacked": boolean, "authorityHash": string, "authorityObservationRef": string, "reopenOf": string, "firstDetectedStage": string, "origin": string, "expectedStage": string, "regressionTestRef": string }] }——findings 可缺省字段缺省时省略该键（不要写 null，null 亦按缺省处理）；must-fix 建议给 firstDetectedStage/origin/expectedStage/regressionTestRef。',
             ...(corrective === null ? [] : [corrective]),
         ].join("\n"));
         return outcome;
@@ -2010,7 +2036,7 @@ const coverageGuard = await askGuarded(async (corrective) => {
         "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=信息登记（披露即可，不修；事件侧映射 non-blocker defect，不落 boundary）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据，不得只按字面合规降级。category 判据：关联需求已有断言级判据明文覆盖的行为一律 defect；boundary 只用于无断言覆盖的真实边界申报（需显式申报 category=boundary，仅 non-must-fix 档可设；缺省与 info 档一律 defect），空关联 boundary 必须给 emptyScopeRefutation。发现结构命中外部契约（认领契约能力或关联需求断言带 requiredEnvironment.capability）时必须同时给 authorityBacked=true / authorityHash / authorityObservationRef。同一 reopenOf 根的定级组合超过 2 种会触发定级熔断（停回用户裁决）。",
         "不得修改产品代码、验收、事件或 verdict；builder 的测试输出不能未经独立核对直接记为 verified。",
         ...contractPromptLines,
-        '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "assertionIds": string[], "adversarialFormIds": string[], "contractCapabilityIds": string[]|null, "runtimeProbe": boolean|null, "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "emptyScopeRefutation": string|null, "contractCapabilityIds": string[]|null, "authorityBacked": boolean|null, "authorityHash": string|null, "authorityObservationRef": string|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }], "resolvedFindingIds": string[], "unresolvedFindingIds": string[] }——schema 2 须逐断言×kind 覆盖，artifact 为 evidence/ 内绝对路径。',
+        '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "assertionIds": string[], "adversarialFormIds": string[], "contractCapabilityIds": string[], "runtimeProbe": boolean, "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "category"?: "defect"|"boundary", "consequenceRefutation": string, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance", "emptyScopeRefutation": string, "contractCapabilityIds": string[], "authorityBacked": boolean, "authorityHash": string, "authorityObservationRef": string, "reopenOf": string, "firstDetectedStage": string, "origin": string, "expectedStage": string, "regressionTestRef": string }], "resolvedFindingIds": string[], "unresolvedFindingIds": string[] }——schema 2 须逐断言×kind 覆盖，artifact 为 evidence/ 内绝对路径；可缺省字段缺省时省略该键（不要写 null，null 亦按缺省处理）。',
         ...(corrective === null ? [] : [corrective]),
     ].join("\n"));
     const requiredArtifacts = [coverageReportPath, ...outcome.evidence.map((e) => e.artifact)];

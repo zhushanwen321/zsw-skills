@@ -107,7 +107,7 @@ schema 2 交付任务的候选反例审查运行 `independent-assurance-v6`（ar
        --artifact <发现报告路径> --credential <builder credentialId>
      ```
 
-     （category=boundary 用于实现有意的边界申报，须附对照论证 `--consequence-refutation`；findingId 缺省由 gate 自动分配）
+     （**schema 2 任务 severity=non-blocker 时必附两参数，不论 category**：`--consequence-refutation "<后果否证论证>"` 与 `--consequence-refutation-type will-not-occur|not-observable|accepted-by-acceptance`——缺任一 gate 直接拒绝该笔登记，照上面最小示例抄写的 non-blocker 登记必被拒；category=boundary 用于实现有意的边界申报，同样须附对照论证；findingId 缺省由 gate 自动分配）
 4. **功能分级登记同步**：新功能/新用例或「挂掉后果」变化 → 同 commit 更新（如 `docs/FEATURE-PRIORITIES.md`）；纯重构不触发；零触发也须汇报注明
 5. **文档资产更新检查**：对照项目 AGENTS.md 文档索引按变更内容判定同 commit 更新（产品→PRODUCT / 拓扑→ARCHITECTURE / 术语→CONTEXT / 视觉→DESIGN / 规范→STANDARDS / 测试→TEST-STRATEGY / 排障→TROUBLESHOOTING；采样管道资产同 commit 回写）；verification skill 触达时转第 6 步专用流程，不在本步泛化处理；零触发注明「文档资产零同步」
 6. **verification skill 同步检查（项目存在 verification skill 时执行，零触发注明「verification skill 零同步」）**：发现规则同 tech-design-v6 T3（项目 AGENTS.md 显式声明为唯一来源；2026-11-04 起废除 verify-* 前缀与 SKILL.md 内容特征探测）。触发 = 本次交付改动文件触达其覆盖矩阵登记的功能行：

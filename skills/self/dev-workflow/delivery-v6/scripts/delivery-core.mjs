@@ -329,7 +329,7 @@ function commandPending(args) {
     printJson({ resolved: item.id, open: document.items.filter((entry) => entry.status === "open").length });
     return;
   }
-  usageFail(`--action 必须是 list / add / resolve。`);
+  usageFail(`pending 子命令必须是 add / resolve / list（用法：pending <子命令> --task-dir <taskDir> [...]）。`);
 }
 
 // ── 世界加载（带验收包缺省降级：早期任务无 acceptance.json 时只读事件流）──
@@ -553,7 +553,13 @@ function deriveMainChainFlowState(world, verdict, findingOpenIds, exploration, s
 
 // 「下一步」唯一回答者。输出顺序 = 待办优先 → 五域状态 → 合法转移（含执行器与角色）→ 预算。
 // ── 转移分类与预填发起（三-6：例行转移给到可直接照抄的发起形态；裁决点显式停回）──
-const ADJUDICATION_PREDICATES = new Set(["userConfirmation", "versionIncrementApproved", "userRiskAcceptance", "baselineConfirmed"]);
+// 裁决类谓词 = rules.json predicates.decider=user 的登记集合（单源生成，不本地枚举——
+// 新增 decider=user 谓词时转移分类自动跟随；本地枚举会让新谓词被误分类为可自动执行）
+const ADJUDICATION_PREDICATES = new Set(
+  Object.entries(KERNEL_RULES.predicates)
+    .filter(([, definition]) => definition !== null && typeof definition === "object" && definition.decider === "user")
+    .map(([name]) => name),
+);
 // CreateWorkflow 可直接发起的 workflow 名 → 预填参数骨架（凭据由主 agent 持有，占位）
 const WORKFLOW_LAUNCH_ARGS = {
   "acceptance-design-v6": { projectRoot: "<projectRoot>", taskDir: "<taskDir>", objective: "<objective>", assuranceCredentialId: "<assuranceCredentialId>" },
@@ -618,7 +624,14 @@ async function commandNext(args) {
   const regrades = findingRegrades(recordsOf(world));
   const flowState = deriveFlowState(world, verdict, finding.openIds, exploration);
 
-  const mustFixOpen = finding.openRecords.filter((record) => record.category === "defect" && record.severity === "blocker").length;
+  // must-fix 计数按策略分类实例化（与 gate uniqueMustFix 同口径）：阻断位 = blocksAccepted
+  // ===true 的分类集合（默认 defect），不字面量比对分类 id——策略新增阻断分类后计数随策略走
+  const blockingCategoryIds = new Set(
+    (world.policy?.["finding-categories.json"]?.categories ?? [])
+      .filter((entry) => entry !== null && typeof entry === "object" && entry.blocksAccepted === true)
+      .map((entry) => entry.id),
+  );
+  const mustFixOpen = finding.openRecords.filter((record) => blockingCategoryIds.has(record.category) && record.severity === "blocker").length;
   const taskDomain = KERNEL_RULES.domains.task;
   const legalTransitions = taskDomain.transitions
     .filter((transition) => transition.from === flowState || transition.from === "*")

@@ -456,7 +456,10 @@ function contractExtras(raw, rawNodes) {
         }
       }
     }
-    // incremental：引擎宽容（形态不齐时静默忽略），此处镜像宽容——只核「形态齐且给出」的情形
+    // incremental：两形态口径——{program,args} 对象是 W3 NODE_PREP 增量测试门的消费形态
+    // （字符串被引擎排除：编译器把 impl-plan 的对象形态归一转抄、string 文字段原样转抄仅作
+    // 展示）；引擎对形态不齐的对象静默忽略不建增量门，此处镜像宽容——只核「形态齐且给出」
+    // 的情形（白名单与恒绿检测），形态不齐的字符串/残缺对象交给引擎的缺省跳过路径
     if (tp.incremental && typeof tp.incremental.program === "string" && Array.isArray(tp.incremental.args)) {
       if (!TEST_PLAN_WHITELIST.includes(tp.incremental.program)) {
         errors.push({ category: "whitelist", message: `testPlan.incremental.program 不在白名单: ${tp.incremental.program}` });
@@ -630,7 +633,7 @@ function checkIncrementContract(raw, increments) {
     if (!same) {
       errors.push({
         category: "increments",
-        message: `dev 节点 ${rn.id} 的 testCommand 与增量 ${incId} 的 testCommand 不一致——增量契约的测试命令照抄不改编（恢复：按 increments.json 该增量 testCommand 逐字转抄 T3 units 与 exec-plan 后重跑本门）`,
+        message: `dev 节点 ${rn.id} 的 testCommand 与增量 ${incId} 的 testCommand 不一致——增量契约的测试命令照抄不改编。注意：impl-plan 侧含 shell 元字符（引号 / && / ;）的命令必须写成 {program, args} 对象形态——字符串会被归一化包装（bash -c），包装后与 increments 的对象逐字比对必然不一致（恢复：按 increments.json 该增量 testCommand 逐字转抄 T3 units[].testCommand 与 impl-plan incrementalCommands[].command 后重编译、重跑本门）`,
       });
     }
   }
@@ -964,6 +967,13 @@ function main() {
     }
   }
   if (result.ok && incErrors.length === 0) {
+    // 「没核对」与「通过」机器可区分：缺 --task-dir 时增量契约 / 验收绑定 / 质量契约三段
+    // 附加核对被跳过，光一行 PASS 会被日志审阅者当成完整核对通过——补 warn 行（交付体系
+    // 任务照它重跑；独立设计任务无交付任务目录，警告可忽略）。exit 码维持 0（不传是独立
+    // 设计任务的合法形态，不构成失败）
+    if (taskDir === null) {
+      console.log("[warn] 未传 --task-dir，增量契约/验收绑定/质量段未核对——交付体系任务必传 --task-dir 重跑（独立设计任务无交付任务目录，本警告可忽略）");
+    }
     console.log("PASS");
     process.exit(0);
   }

@@ -22,7 +22,7 @@
     "aggregateRegradeHalt": 2
   },
   "guardrails": {
-    "//": "FindingRaised 登记护栏（delivery-gate 事件写入（appendEvent）当时执行）。gate 源码读取的全部 guardrails 键必须在此显式登记（键集对拍见 delivery-core-v6.test.mjs）。注意：本节键是护栏登记不是运行时开关——V5 设计确立的护栏（如 consequenceRefutation 强制）语义上不可关闭，gate 端硬编码执行，登记只为数据权威完整；未来新增真正可配置的护栏时才允许 gate 按 false 跳过。",
+    "//": "FindingRaised 登记护栏（delivery-gate 事件写入（appendEvent）当时执行）。gate 源码读取的全部 guardrails 键必须在此显式登记（键集对拍见 delivery-core-v6.test.mjs）。键分两种语义：boundaryBanOnAssertedRequirements / regradeHaltEnabled / emptyScopeBoundaryRequiresRefutation 是真开关——gate 按键值（false 或缺席）跳过对应护栏，置 false 即显式关闭；consequenceRefutationRequired 是登记位不是开关——gate 端零读取、硬编码强制（non-blocker 必附后果论证，语义不可关），登记只为键集完整（同 documentation.authorityRefutationRequired 的登记形态）。",
     "boundaryBanOnAssertedRequirements": true,
     "consequenceRefutationRequired": true,
     "regradeHaltEnabled": true,

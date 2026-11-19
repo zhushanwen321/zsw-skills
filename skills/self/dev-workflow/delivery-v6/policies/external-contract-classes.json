@@ -1,4 +1,5 @@
 {
+  "_comment": "schemaVersion 是登记性字段（当前零消费方——策略升级按快照哈希差判定，不读本键）；保留作文件格式演进预留位，修改不改变机器行为。classes 由候选探测线消费（detect-external-contracts 匹配源），词表变更走 upgrade-policy。",
   "schemaVersion": 1,
   "classes": [
     {

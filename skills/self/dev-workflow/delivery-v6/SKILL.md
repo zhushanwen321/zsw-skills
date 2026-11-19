@@ -1,7 +1,7 @@
 ---
 name: delivery-v6
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 7.8.0
+version: 7.9.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -32,14 +32,14 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 
 - **转移表是数据不是文档**：任务 / DAG 节点 / 发现 / 探索 / 验收包五域，`validate` 静态校验（无环除回边、状态可达、执行器唯一、谓词与角色在词表、写入矩阵词表闭包）——流程顺序矛盾在定义期被机器检出，不靠实跑暴露；静态校验随全量测试进 CI（`.github/workflows/ci.yml`）。
 - **判定单源**：发现 open 集、可用探索集、探索 due、修复轮预算只保留一份实现（kernel-judgments）；gate 与内核同进程复用，workflow 经内核 CLI 的 JSON 子命令消费（workflow 产物禁 import 的平台约束下仍单实现——判定随技能更新即时生效、artifact 哈希校验不分叉），禁止在 workflow 复刻同口径判定。
-- **事件意图提交**：全部事件经意图命令登记（record-implementation / record-finding / record-evidence / record-exploration / complete-assurance 等），信封（actor/revision/acceptanceVersion/domain/artifactSha256）由 gate 构造，执行器不再手工拼事件 JSON；`append` 通道已退役。
+- **事件意图提交**：全部事件经意图命令登记（record-implementation / record-finding / record-evidence / record-exploration / complete-assurance 等），信封（actor/revision/acceptanceVersion/domain/artifactSha256）由 gate 构造，执行器不再手工拼事件 JSON；`append` 通道已退役。事件来源旗标 `--channel workflow|manual`（缺省 manual）：workflow 执行器登记时自动带 workflow，手工 / 主会话经 CLI 直接登记缺省 manual——终态报告按通道分开统计，二者不做混算。
 - **写入防护**：批准即冻结验收包（0444 + frozen/v<N>/ 快照）；合法修订唯一通道 `open-revision`（RevisionOpened 留痕解封）；漏网改写被加载时篡改检测拦下；写入矩阵「角色 × 当前阶段 × 目标域」在写入当刻执行（builder 不可写验收/证据/裁决域，assurance 不可写实现/裁决域）。
 - **status.json 派生视图**：节点状态以 status.events 为源（事件带结构化 payload），`node-project` 按事件重新推算并比对在盘 nodes——绕过转移入口的改动被检出，`--write` 以事件恢复。
 - **过程记录读侧合流**：交付事件带 domain 章，过程记录（process-review.jsonl）带 process 域章；`delivery-core events` 输出统一时间线（签名流与观测流分储、读侧单口——签名完整性不因观测数据稀释）。
 - **定级护栏**：关联需求已有断言级判据明文覆盖的发现禁止归 boundary；non-blocker 必须附 consequenceRefutation 三类论证；同一条目定级组合超过 2 种熔断停回用户；T2 聚合分级与 D2 聚合定性的改判必附理由留痕，同一 ref/条目连续改判达上限停回（aggregateRegradeHalt）。护栏只拦新写入；历史记录违规在加载折算时留档 guardrailWarnings（旧任务目录可读）。
-- **循环预算**：perVersion 修复 ≤3、不同 must-fix ≤10、跨 run 保证总轮 ≤6、验收复审轮 ≤6——超限判 process-failed 停回（`quality.budgets` 报用量）。计数口径分两类：验收复审轮按 started 尝试计数（打回、失败、中断全部计入，跨 run 与手工路径累计不重置）；其余三项按签名事件计数（既有口径，environment/evidence 类不计轮）。尝试登记与查询走 `delivery-core loop-attempt` / `loop-budget`（记录文件 loop-attempts.jsonl，非签名事件）。
+- **循环预算**：perVersion 修复 ≤3、不同 must-fix ≤10、跨 run 保证总轮 ≤6、验收复审轮 ≤6——超限判 process-failed 停回（`quality.budgets` 报用量）。计数口径分两类：验收复审轮按 started 尝试计数（打回、失败、中断全部计入，跨 run 与手工路径累计不重置）；其余三项按签名事件计数（既有口径；RepairRoundRecorded 的 nature=environment|evidence 不计轮通道在内核预算判定中存在，但 assurance-repair-loop-v6 通道当前不发送 nature——全部修复轮按 behavior 计轮，重试密集的归因先在 run 内消化）。尝试登记与查询走 `delivery-core loop-attempt` / `loop-budget`（记录文件 loop-attempts.jsonl，非签名事件）。
 - **待办实体**（pending-actions）：善后 / 待恢复 / 待登记 / 待裁决 / 待复盘落盘，`next` 优先回答；中断恢复 = 读待办 + 合法转移，不依赖会话记忆。
-- **交付义务与 revision 来源对账**：accepted 判定从「事件是否齐」扩展——`delivery-core obligations` 从验收断言 / 必需阶段 / 修复轮 / blocking 待办 / 外部契约能力派生义务清单（不建人工总表），必需义务无 open 才可 accepted（`explicitly-waived` 须绑用户裁决，豁免通道按义务类型映射现有命令）；其中 kind=runtime（外部契约运行可用性）义务不可豁免——`accept-risk` 与 `preauthorize-risk` 均不消化，满足形态 = 当前 revision 由 assurance 登记、`runtimeProbe=true` 且认领该契约能力的证据；`delivery-core revision-provenance` 只读派生候选形成后每次 revision 变化的来源，来源不明（unknown）的代际不得被后续保证覆盖、不得 accepted，恢复动作 = 补做合法修复登记 / 恢复已知基线 / 用户确认外部基线（`confirm-baseline` 命令，登记 RevisionBaselineConfirmed 事件接链）。
+- **交付义务与 revision 来源对账**：accepted 判定从「事件是否齐」扩展——`delivery-core obligations` 从验收断言 / 必需阶段 / 修复轮 / blocking 待办 / 外部契约能力派生义务清单（不建人工总表），必需义务无 open 才可 accepted（`explicitly-waived` 须绑用户裁决，豁免通道按义务类型映射现有命令）；其中 kind=runtime（外部契约运行可用性）义务不可豁免——`accept-risk` 与 `preauthorize-risk` 均不消化，满足形态 = 当前 revision 由 assurance 登记、`runtimeProbe=true` 且认领该契约能力的证据；`delivery-core revision-provenance` 只读派生候选形成后每次 revision 变化的来源，来源不明（unknown）的代际不得被后续保证覆盖、不得 accepted，恢复动作按成因分四类 = ① 补做合法修复登记（`record-repair-round`，真实修复）② 恢复已知基线（git 恢复，无关改动）③ 用户确认外部基线（`confirm-baseline` 命令，登记 RevisionBaselineConfirmed 事件接链，属合法基线前进）④ 用户逐段署名确认历史断链区间（`confirm-history` 命令，--intervals 须与 revision-provenance 输出的 unknown 区间精确匹配；只解释历史不推进链条）。confirm-baseline 与 confirm-history 的适用区分：需要确立新基线、链条继续向前 = 前者；历史区间（候选形成后遗留的无来源代际）逐段解释 = 后者。
 - **人工处置显式转移**：DAG 节点人工改判 done 的唯一合法通道 `node-transition --event manual-disposition --basis <依据> --task-dir <taskDir>`（自动登记待复盘待办）；禁止词表外事件与直改状态文件。
 - **验证体系**：转移表静态校验 + 编排链已知答案样例 + golden 任务端到端（`scripts/tests/delivery-golden-v6.test.mjs`：正常流与预置缺陷流，断言拦截阶段/定级/轮次；agent 语义行为的 golden 需活跑，见 dev-flow-v6 题库分级）+ 历史任务回放（`delivery-core replay --task-dir`：真实事件序列对转移表的可表达性核验）+ 全量机制单测，全部进 CI。
 
@@ -68,10 +68,10 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 | 方案 | **用户确认方案包** | record-design-approved 绑哈希清单；保证后修订按轮入预算 |
 | 候选实现 | — | 入口门校验批准与 DesignApproved；schema 2 登记实现前必须已有当前 revision 探索（探索通道不要求实现先登记——转移表死锁防护）且 must-fix 清零 |
 | 独立保证 | — | full/recheck/explore-only 三模式语义门；探索 due 与 open 集由内核单源判定 |
-| 有限修复 | **预算耗尽停回**（perVersion >3 / 不同 must-fix >10 / 跨 run 保证 >6） | 轮次预判走内核 repair-budget；reopenOf 根去重；environment/evidence 不计轮 |
+| 有限修复 | **预算耗尽停回**（perVersion >3 / 不同 must-fix >10 / 跨 run 保证 >6） | 轮次预判走内核 repair-budget；reopenOf 根去重；nature=environment|evidence 不计轮通道存在但 assurance-repair-loop-v6 不发送 nature（全部轮按 behavior 计） |
 | 判定 | **风险接受逐项裁决** | 只有 evaluate 写 verdict；accepted / accepted_with_risk 才可交付；process-failed 不得作为成功交付；evaluate 前置机器核对：`obligations` 必需义务无 open、`revision-provenance` 无 unknown 来源代际、`loop-budget` 未超限、外部契约 runtime readiness 为 established / not-applicable 且环境历史链完好 |
 
-收尾质量指标：交付终态确定后运行 `node ~/.agents/skills/delivery-v6/scripts/delivery-quality-stats.mjs <taskDir> --json` 输出 11 项交付质量指标（uniqueMustFix、repairRounds、findings、reopenedFindings、expectedStageAccuracy、escapedByStage、assuranceMustFixFirstRun、targetedReviewRate、finalExplorations、evidenceIntegrityFailures、stuckContinuationCount），呈报用户并存档。卡住续跑次数由主会话按 dev-flow 执行记录统计后经 `--stuck-continuation-count N` 传入。过程审查统计：taskDir 含 process-review.jsonl（dev-flow-v6 渐进式 review 的过程记录）时追加输出 processReview 字段，缺失不影响既有指标。终态报告：`node ~/.agents/skills/delivery-v6/scripts/generate-delivery-report.mjs --task-dir <taskDir> [--status-file <dev-flow status.json>] [--out <路径>]` 由权威记录（verdict.json / events.jsonl / loop-attempts.jsonl / self-repairs.jsonl / status.json / workflow 观测记录）机器生成分节报告（与 delivery-quality-stats 并列使用：前者面向用户的终态呈报，后者为质量指标数值）——数字与状态以报告文件为准，LLM 只做叙事解释；缺运行记录的项标 unknown，不按 0 或成功补齐，人工转述数字属违规。两项已知缺口登记：① 层间漏检阈值触发的检查规则修订提案不自动化——发现来源（origin）与预期阶段（expectedStage）分布已进 delivery-quality-stats 与终态报告，阈值人工判读；② 过程记录（process-review.jsonl）条目较 V4 设计建议精简（无输入快照哈希 / 三值分类 / 重开引用），条目级「过程发现漏出到末端」对照待实跑需要时再建。
+收尾质量指标：交付终态确定后运行 `node ~/.agents/skills/delivery-v6/scripts/delivery-quality-stats.mjs <taskDir> --json` 输出 11 项交付质量指标（uniqueMustFix、repairRounds、findings、reopenedFindings、expectedStageAccuracy、escapedByStage、assuranceMustFixFirstRun、targetedReviewRate、finalExplorations、evidenceIntegrityFailures、stuckContinuationCount），呈报用户并存档。卡住续跑次数由主会话按 dev-flow 执行记录统计后经 `--stuck-continuation-count N` 传入。过程审查统计：taskDir 含 process-review.jsonl（dev-flow-v6 渐进式 review 的过程记录）时追加输出 processReview 字段，缺失不影响既有指标。终态报告：`node ~/.agents/skills/delivery-v6/scripts/generate-delivery-report.mjs --task-dir <taskDir> [--status-file <dev-flow status.json>] [--capabilities-file <project-capabilities.json>] [--out <路径>]` 由权威记录（verdict.json / events.jsonl / loop-attempts.jsonl / self-repairs.jsonl / status.json / workflow 观测记录）机器生成分节报告（与 delivery-quality-stats 并列使用：前者面向用户的终态呈报，后者为质量指标数值）——数字与状态以报告文件为准，LLM 只做叙事解释；缺运行记录的项标 unknown，不按 0 或成功补齐，人工转述数字属违规。两项已知缺口登记：① 层间漏检阈值触发的检查规则修订提案不自动化——发现来源（origin）与预期阶段（expectedStage）分布已进 delivery-quality-stats 与终态报告，阈值人工判读；② 过程记录（process-review.jsonl）条目较 V4 设计建议精简（无输入快照哈希 / 三值分类 / 重开引用），条目级「过程发现漏出到末端」对照待实跑需要时再建。
 
 ## 任务目录、血统与凭据
 
@@ -105,14 +105,14 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 
 1. **逐项解决旧发现**：旧 must-fix 必须由 reviewer 逐项确认，并有能在缺陷版本失败的回归测试；不允许仅凭全量测试绿自动重新认领全部旧发现。`ResolutionReaffirmed` 只用于有明确原解决事件与本轮逐项复核依据的通道。
 2. **风险预授权**：`preauthorize-risk` 与 `RiskPreauthorized` 保持既有安全边界——仅 finding 目标、severity 上限 non-blocker、名额有限且 user-explicit 登记；blocker 与 requirement 目标永不可预授权。名额按验收版本独立配额、按事件流顺序消耗（先登记先占）；同分类范围的重复登记不去重、不合并——每次登记是独立名额池，登记命令对同分类范围的重复默认拒绝，确属有意追加须显式 `--allow-duplicate true`。
-3. **三档处置**：must-fix 立即修复；suggestion 在 must-fix 清零后统一处理；info 是信息登记（映射 non-blocker defect，不落 boundary）；boundary 只用于无断言覆盖的真实边界申报，逐项确认或按授权处置。非 must-fix 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不能只按字面合规降级。
+3. **三档处置**：must-fix 立即修复（映射 blocker+defect，阻断终态）；suggestion 在 must-fix 清零后统一处理（映射 non-blocker defect，披露即可不阻终态）；info 是信息登记（映射 non-blocker defect，不落 boundary），披露即可不阻终态；boundary 只用于无断言覆盖的真实边界申报，逐项确认或按授权处置（确认前阻塞且不可接受风险）。非 must-fix 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不能只按字面合规降级。
 4. **有限结束**：`recheck` 不再默认开放探索。最后一批建议级修复后以 recheck 重新生成当前版本证据，解决「修复后版本变化使旧证据失效」与「最终必须重新取证」的冲突。
 5. **过程失败**：实现性修复需要第 4 轮，或累计不同 must-fix 达到第 11 条，进入 `process-failed`；不得通过改名、错误合并、降低级别或递增验收版本规避。
 6. **证据定位走统一内容索引**：统一内容索引 = evidence-bundle.json（dev-flow-v6 `gen-evidence-bundle.mjs` 生成的内容索引——原始记录与附属 artifact 的 path+sha256 清单，`--check` 可核，禁手改）；当前生成入口 = dev-flow-v6 验收阶段的手工路径（`dev-flow-v6/flow/acceptance.md` 证据内容索引条），独立保证 workflow（independent-assurance-v6）的自动消费接线属待实施项——接线落地前独立保证仍按事件与证据文件定位，缺记录、缺 artifact、skipped 未披露时不得按完整证据处理；原始步骤 pass/fail/skipped 不自动升格为 verified，交付判定仍走事件与 gate，本条不改变交付判定语义
 
 ## 密钥与信任边界
 
-三对 Ed25519 密钥（公钥登记 task.json，私钥在凭据文件）：`builder`（只给 candidate-build-v6）、`assurance`（只给 independent-assurance-v6 与验收审查）、`user`（仅主会话，用于批准/风险接受/替换/基线/策略类命令）。凭据 id 与事件 actor 由 CLI 强制一致——builder 凭据签不出 assurance 事件。
+三对 Ed25519 密钥（公钥登记 task.json，私钥在凭据文件）：`builder`（candidate-build-v6 全程；assurance-repair-loop-v6 的修复轮登记与 dev-flow-v6 D4 record-implementation——两通道按 builder actor 签事件）、`assurance`（independent-assurance-v6 与验收审查）、`user`（仅主会话，用于批准/风险接受/替换/基线/策略类命令）。凭据 id 与事件 actor 由 CLI 强制一致——builder 凭据签不出 assurance 事件。凭据 id 须随 workflow 输入表分发到位（缺 builder 凭据的 ARL / D4 调用会在 setup 被拒）。
 
 本机信任边界：凭据机制防无凭据伪造、跨角色误写、审查省略；**防不了同一操作系统用户下的恶意进程**（可读凭据文件、改公钥、回滚事件流重签）。防线是用户独立复核：A 档重算复跑（重跑 evaluate 对哈希、复跑证据脚本——防部分篡改，防不了整体替换与语义造假）；B 档用户独立抽查产品行为（唯一能覆盖弱测试与审查放水的手段）。verdict 生成后哈希呈报用户在任务目录之外保存。
 

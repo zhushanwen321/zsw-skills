@@ -44,6 +44,7 @@ import { fileURLToPath } from "node:url";
 import {
   KERNEL_RULES,
   LOOP_BUDGET_CAP_KEYS,
+  capabilityDeclarationMatches,
   criterionChangedSinceResolution,
   deriveObligations,
   deriveRevisionProvenance,
@@ -252,7 +253,7 @@ const HELP = `delivery-gate（V6）：delivery-v6 的确定性交付裁决器（
   一致——builder 凭据签不出 actor=assurance 的事件，user 凭据只供主会话使用，绝不注入子 agent。
 
 用法：
-  delivery-gate init --project-root P --task-id T [--new-round] [--resume-existing] [--intent-file F] [--delivery-profile a|b|c]  # 缺省 b（§13 分级；降档只减审查席与分区，不减必做机器门）
+  delivery-gate init --project-root P --task-id T [--new-round] [--resume-existing] [--intent-file F] [--verification-only] [--delivery-profile a|b|c]  # 缺省 b（§13 分级；降档只减审查席与分区，不减必做机器门）；--verification-only = 纳管体系外已有实现的只核验模式
   delivery-gate set-intent --task-dir D --file F
   delivery-gate validate-acceptance --task-dir D
   delivery-gate snapshot-policy --task-dir D
@@ -262,16 +263,16 @@ const HELP = `delivery-gate（V6）：delivery-v6 的确定性交付裁决器（
   delivery-gate declare-external-authority --task-dir D --contract-id C --resolver-kind K --locator L --snapshot-sha256 H --summary S --credential <user credentialId>  # local-path/executable 权威必须由用户凭据登记；designer/builder 填写的本地路径不生成 resolved
   delivery-gate confirm-environment-baseline --task-dir D --contract-ids '<JSON>' --new-authority-snapshot-sha256 H --credential <user credentialId>  # 用户确认新外部环境基线（只接环境历史链，不满足 runtime 义务；同一 acceptanceVersion 最多一次）
   delivery-gate set-delivery-profile --task-dir D --profile a|b|c --credential <user credentialId>  # 任务分级唯一写通道（禁直改 task.json）
-  delivery-gate record-design-approved --task-dir D --package-file F --decision-file F2 --summary S --credential <user credentialId>
+  delivery-gate record-design-approved --task-dir D --package-file F [--decision-file F2] --summary S --credential <user credentialId>
   # 意图提交命令组（执行器事件唯一通道；信封由 gate 构造：actor/revision/acceptanceVersion/domain/artifactSha256 缺省内核计算）
   delivery-gate record-implementation --task-dir D --increment-id INC-1 --summary S --artifact A --merge-receipt '<JSON>' --credential <builder credentialId> [--revision R]
   delivery-gate record-repair-round --task-dir D --round N --summary S --trigger-finding-ids '<JSON>' --affected-assertion-ids '<JSON>' --artifact A --credential <builder credentialId> [--from-revision R --to-revision R2 --nature behavior|environment|evidence --increment-receipts '<JSON>']
-  delivery-gate record-finding --task-dir D --summary S --category defect|boundary --severity blocker|non-blocker --requirement-ids '<JSON>' --artifact A --credential <builder|assurance credentialId> [--finding-id F --origin O --consequence-refutation S --consequence-refutation-type T --reopen-of F0 --empty-scope-refutation S --contract-capability-ids '<JSON>' --authority-backed true --authority-hash H --authority-observation-ref R]  # schema 2 下 category=boundary 且 --requirement-ids '[]'（空关联）必须附 --empty-scope-refutation（不影响任何需求的论证）；结构命中外部契约时 authority 三段必填
+  delivery-gate record-finding --task-dir D --summary S --category defect|boundary --severity blocker|non-blocker --requirement-ids '<JSON>' --artifact A --credential <builder|assurance credentialId> [--finding-id F --origin O --first-detected-stage S --expected-stage S --regression-test-ref R --consequence-refutation S --consequence-refutation-type T --reopen-of F0 --empty-scope-refutation S --contract-capability-ids '<JSON>' --authority-backed true --authority-hash H --authority-observation-ref R --revision R --run-id RUN]  # schema 2 下 category=boundary 且 --requirement-ids '[]'（空关联）必须附 --empty-scope-refutation（不影响任何需求的论证）；结构命中外部契约时 authority 三段必填
   delivery-gate resolve-finding --task-dir D --finding-id F --summary S --artifact A --credential <assurance credentialId>
   delivery-gate reaffirm-resolution --task-dir D --finding-id F --original-resolution-event-id E --basis S --summary S --artifact A --credential <assurance credentialId>
-  delivery-gate record-evidence --task-dir D --requirement-id R --kind K --result S --summary S --artifact A --credential <assurance credentialId> [--assertion-ids '<JSON>' --adversarial-form-ids '<JSON>' --contract-capability-ids '<JSON>' --runtime-probe]  # --runtime-probe = 真实 runner/宿主驱动产生的 runtime probe 证据（runtime 义务唯一可满足形态）
-  delivery-gate record-exploration --task-dir D --summary S --dimensions '<JSON>' --coverage-manifest-sha256 H --artifact A --credential <assurance credentialId>
-  delivery-gate complete-assurance --task-dir D --summary S --coverage-manifest-sha256 H --exploration-event-id E --increment-receipts '<JSON>' --artifact A --credential <assurance credentialId> [--mode full|recheck|explore-only --evidence-event-ids '<JSON>' --clean-build '<JSON>']
+  delivery-gate record-evidence --task-dir D --requirement-id R --kind K --result S --summary S --artifact A --credential <assurance credentialId> [--assertion-ids '<JSON>' --adversarial-form-ids '<JSON>' --contract-capability-ids '<JSON>' --runtime-probe --artifact-sha256 H --revision R --run-id RUN]  # --runtime-probe = 真实 runner/宿主驱动产生的 runtime probe 证据（runtime 义务唯一可满足形态）
+  delivery-gate record-exploration --task-dir D --summary S --dimensions '<JSON>' --coverage-manifest-sha256 H --artifact A --credential <assurance credentialId> [--artifact-sha256 H --revision R --run-id RUN]
+  delivery-gate complete-assurance --task-dir D --summary S --coverage-manifest-sha256 H --exploration-event-id E --increment-receipts '<JSON>' --artifact A --credential <assurance credentialId> [--mode full|recheck|explore-only --evidence-event-ids '<JSON>' --clean-build '<JSON>' --artifact-sha256 H --revision R --run-id RUN]
   delivery-gate record-assurance-drift --task-dir D --setup-revision R --finalize-revision R2 --drift-seq N --summary S --credential <assurance credentialId>
   delivery-gate accept-risk --task-dir D --target-type requirement|finding --target-id ID --confirmation user-explicit --summary S --credential <user credentialId> [--revision R] [--gap-id G]
   delivery-gate accept-risk --task-dir D --target-type finding --target-id ID --confirmation standing-authorization --summary S --credential <user credentialId>  # V6 代：须先由用户 preauthorize-risk 登记覆盖该 finding 的预授权（类别白名单 + 名额上限；severity 上限恒 non-blocker）
@@ -284,7 +285,7 @@ const HELP = `delivery-gate（V6）：delivery-v6 的确定性交付裁决器（
   delivery-gate declare-independent --task-dir D --credential <user credentialId>
   delivery-gate supersede-prepare --task-dir D --predecessor-dir P --summary S --credential <user credentialId>
   delivery-gate supersede-commit --task-dir D --summary S --credential <user credentialId>
-  delivery-gate supersede-cancel --task-dir D --cancelled-prepare-event-id E --reason S --summary S --credential <user credentialId>
+  delivery-gate supersede-cancel --task-dir D --cancelled-task-dir D2 --cancelled-prepare-event-id E --reason S --summary S --credential <user credentialId>
   delivery-gate lease-acquire --project-root P --run-id R
   delivery-gate lease-heartbeat --project-root P --run-id R
   delivery-gate lease-release --project-root P --run-id R
@@ -666,7 +667,7 @@ function validatePolicySources(sources) {
     }
   }
   for (const actor of ACTORS) {
-    if (!seenRoleIds.has(actor)) fail(`roles.json 缺少内核必需角色 ${actor}。`, `保留 builder/assurance/user 三角色定义（密钥体系依赖），可在其上追加自定义角色。`);
+    if (!seenRoleIds.has(actor)) fail(`roles.json 缺少内核必需角色 ${actor}。`, `保留 builder/assurance/user 三角色定义（密钥体系依赖）。角色词表封闭：三角色由 ACTORS / 签名密钥 / 事件 schema 三处共同约束，追加自定义角色需要改 delivery-gate 内核，不是策略文件可独立完成的扩展。`);
   }
   const kinds = sources["evidence-kinds.json"];
   requireRecord(kinds, "evidence-kinds.json");
@@ -1813,7 +1814,8 @@ function coversDimensions(eventDimensions, requiredDimensions) {
 
 // 逐事件折叠。失效范围（redesign 3.9；V6 代增补见标注）：
 //   AcceptanceReviewed/Approved —— 当前版本 + 包哈希 + intent + 快照（verdict 端组合判定）
-//   DesignApproved —— 当前版本（方案包哈希清单是声明值，技能③入口门核对）
+//   DesignApproved —— 当前版本（方案包哈希清单是声明值，机器不核对文件内容——方案包改动后
+//     须重新 record-design-approved，人工纪律保证；见 state-and-events.md 失效范围表）
 //   ImplementationRecorded —— 按版本有效、跨 revision 保留
 //   EvidenceRecorded / AssuranceCompleted / ExplorationCompleted / FindingResolved / RiskAccepted
 //     —— 当前版本 + 当前 revision（revision 过滤在 verdict，fold 只做版本与结构校验）
@@ -1968,15 +1970,17 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
             }
           }
           // 外部契约能力绑定存在性（§6.3）：contractCapabilityIds 的元素必须能在当前验收包
-          // 的 externalContracts 能力清单中找到——防自造能力名把 runtime 义务挂到不存在的
+          // 的 externalContracts 能力清单中解析到（qualified 精确命中或裸尾唯一命中——
+          // resolveContractCapabilityId 单源）——防自造能力名把 runtime 义务挂到不存在的
           // 能力上。验收包未声明外部契约时该字段无意义，直接拒绝
           if (Array.isArray(event.contractCapabilityIds) && event.contractCapabilityIds.length > 0) {
-            const known = knownContractCapabilityIds(world.acceptance);
-            const unknown = event.contractCapabilityIds.filter((id) => !known.has(id));
-            if (unknown.length > 0) {
+            const unresolved = event.contractCapabilityIds
+              .map((id) => ({ id, resolved: resolveContractCapabilityId(world.acceptance, String(id)) }))
+              .filter((item) => !item.resolved.ok);
+            if (unresolved.length > 0) {
               fail(
-                `${lineLabel} 的 contractCapabilityIds 含当前验收包未声明的能力 ${unknown.join(", ")}。`,
-                "把能力 id 改为 acceptance.externalContracts[].capabilities[].id（或「契约id:能力id」限定形式）；验收包未声明 externalContracts 时删除该字段。",
+                `${lineLabel} 的 contractCapabilityIds 含无法解析的能力：${unresolved.map((item) => `${item.id}（${item.resolved.reason}）`).join("；")}。`,
+                "多契约包或裸 id 歧义时必须用「契约id:能力id」限定形式重登（能力 id 取 acceptance.externalContracts[].capabilities[].id）；验收包未声明 externalContracts 时删除该字段。",
               );
             }
           }
@@ -2112,12 +2116,13 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
         // 行为自我证明的弱关闭通道由此封住）。只对新写入执行；历史记录在加载折算时降级为
         // guardrailWarnings 留档（与护栏①②同模式）
         if (current && Array.isArray(event.contractCapabilityIds) && event.contractCapabilityIds.length > 0) {
-          const known = knownContractCapabilityIds(world.acceptance);
-          const unknownIds = event.contractCapabilityIds.filter((id) => !known.has(id));
-          if (unknownIds.length > 0) {
+          const unresolvedIds = event.contractCapabilityIds
+            .map((id) => ({ id, resolved: resolveContractCapabilityId(world.acceptance, String(id)) }))
+            .filter((item) => !item.resolved.ok);
+          if (unresolvedIds.length > 0) {
             fail(
-              `${lineLabel} 的 contractCapabilityIds 含当前验收包未声明的能力 ${unknownIds.join(", ")}。`,
-              "把能力 id 改为 acceptance.externalContracts[].capabilities[].id（或「契约id:能力id」限定形式）后重登。",
+              `${lineLabel} 的 contractCapabilityIds 含无法解析的能力：${unresolvedIds.map((item) => `${item.id}（${item.resolved.reason}）`).join("；")}。`,
+              "多契约包或裸 id 歧义时必须用「契约id:能力id」限定形式（能力 id 取 acceptance.externalContracts[].capabilities[].id）；裸 id 仅在当前任务能力全表中唯一命中时可用。",
             );
           }
         }
@@ -2131,14 +2136,41 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
         );
         if (structuralContractHit) {
           const complete = event.authorityBacked === true &&
-            typeof event.authorityHash === "string" && event.authorityHash !== "" &&
+            typeof event.authorityHash === "string" && /^[0-9a-f]{64}$/.test(event.authorityHash) &&
             typeof event.authorityObservationRef === "string" && event.authorityObservationRef.trim() !== "";
           if (!complete) {
-            const message = `${lineLabel} 结构命中外部契约（contractCapabilityIds 非空，或关联需求断言带 requiredEnvironment.capability）但 authority 反驳组缺失或不完整——外部行为反驳必须引用权威工件。`;
+            const message = `${lineLabel} 结构命中外部契约（contractCapabilityIds 非空，或关联需求断言带 requiredEnvironment.capability）但 authority 反驳组缺失或不完整（authorityHash 须为 64 位十六进制 aggregateHash）——外部行为反驳必须引用权威工件。`;
             if (guardrailStrict) {
               fail(message, `三选一：① 补 --authority-backed --authority-hash <当前权威 aggregateHash> --authority-observation-ref <快照文件+符号/行 或真实 probe case id> 后重登；② 该发现与外部契约无关时删除 contractCapabilityIds 并确认关联需求断言不带 requiredEnvironment.capability；③ 判据本身缺外部契约依据时走 open-revision 修订验收。`);
             }
             fold.guardrailWarnings.push(`${message}（历史记录，写入时未拦）`);
+          }
+          // authorityHash 同源核对（R1-09 最小形态）：任务目录在盘当前权威快照（指针指向
+          // 的 environment-contracts/<sha>.json）可解析时，把声明值与命中契约的当前
+          // aggregateHash 对账——「当前权威 aggregateHash」是机器可核对的事实，不是纯文案；
+          // 快照缺席（无外部契约任务 / 指针缺失 / 快照损坏）时退回形态校验，真实性靠人工
+          // 核查（恢复文案已注明）。仅核对显式认领（contractCapabilityIds）的契约——
+          // requiredEnvironment.capability 侧的契约归属存在跨契约歧义，不在此判定
+          if (complete && current && Array.isArray(event.contractCapabilityIds) && event.contractCapabilityIds.length > 0) {
+            const claimedContractIds = new Set();
+            for (const id of event.contractCapabilityIds) {
+              const resolved = resolveContractCapabilityId(world.acceptance, String(id));
+              if (resolved.ok) claimedContractIds.add(resolved.contractId);
+            }
+            const authorityHashes = currentAuthorityHashesByContract(world.taskDir);
+            if (authorityHashes !== null) {
+              const mismatched = [...claimedContractIds].filter((contractId) => {
+                const hash = authorityHashes.get(contractId);
+                return hash !== undefined && hash !== event.authorityHash;
+              });
+              if (mismatched.length > 0) {
+                const message = `${lineLabel} 的 authorityHash 与契约 ${mismatched.join(", ")} 当前权威 aggregateHash 不一致——外部行为反驳必须引用当前权威工件（resolver 复核快照在盘，机器可核对）。`;
+                if (guardrailStrict) {
+                  fail(message, `重跑 node ~/.agents/skills/delivery-v6/scripts/resolve-external-contracts.mjs --task-dir <taskDir> --project-root <projectRoot> --write 刷新权威快照后，以当前快照该契约的 aggregateHash 作为 --authority-hash 重登；权威确实变化时先由用户 confirm-environment-baseline 接环境历史链，再按新权威重登。`);
+                }
+                fold.guardrailWarnings.push(`${message}（历史记录，写入时未拦）`);
+              }
+            }
           }
         }
         // 护栏③（V6 定级护栏）：定级改判熔断——同一条目（reopenOf 根）累计 (category,severity)
@@ -2322,6 +2354,12 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
         fold.cancelRecords.push(event);
         break;
       case "RiskAccepted": {
+        // finding 目标的风险接受收全部版本（与 findingClosures 同理由）：findingLifecycleStateOf
+        // 凭本集合判 risk-accepted 态——缺写入点会让「已接受风险的发现在判据变化后复发」的
+        // reopen 通道（gate 自己的恢复文案指引）永远被判 open 而拒绝
+        if (event.targetType === "finding" && typeof event.targetId === "string" && event.targetId !== "") {
+          fold.findingRiskAcceptedIds.add(event.targetId);
+        }
         if (current) {
           if (event.targetType === "requirement") {
             const requirement = requirementById(world.acceptance, event.targetId);
@@ -2513,9 +2551,10 @@ function environmentSatisfies(world, environment, required) {
   // capability 词法归一化（双形态）：验收包写 requiredEnvironment.capability，gate 其余
   // 位置（contractCapabilityIds 等）同时使用裸 id 与 qualified 形态「契约id:能力id」，两侧
   // 来源不同（designer 写验收、assurance 手写 probe artifact），严格字面相等会错判同一能力
-  //（2026-11-19 实跑：声明值明明在列仍报「能力声明不含 X」）。归一化只统一词法、不放宽
-  // 覆盖判定：要求含冒号时比对声明值的裸尾；要求不含冒号时接受声明值中任一前缀的
-  // 「<前缀>:<要求>」形态；完全相等仍直接命中。
+  //（2026-11-19 实跑：声明值明明在列仍报「能力声明不含 X」）。归一化判定单源在
+  // kernel-judgments.capabilityDeclarationMatches（runtime 义务判定同口径消费本函数，
+  // 同一 probe artifact 在断言环境检查与 runtime 义务两条判据下结论一致）：完全相等或
+  // 裸尾（去「契约id:」前缀）相等即命中；归一化只统一词法、不放宽覆盖判定。
   if (typeof required.capability === "string" && required.capability !== "") {
     const declared = [];
     if (typeof environment.capability === "string") declared.push(environment.capability);
@@ -2524,14 +2563,10 @@ function environmentSatisfies(world, environment, required) {
     if (declared.length === 0) {
       return { ok: false, reason: `environment 未声明能力覆盖（capability=${JSON.stringify(required.capability)} 要求）：证据未声明 capability/capabilities，不能证明该能力维度` };
     }
-    const bareCapability = (value) => (value.includes(":") ? value.slice(value.lastIndexOf(":") + 1) : value);
-    const requiredBare = bareCapability(required.capability);
-    const matched = declared.includes(required.capability) ||
-      declared.some((item) => bareCapability(item) === requiredBare);
-    if (!matched) {
+    if (!capabilityDeclarationMatches(declared, required.capability)) {
       return {
         ok: false,
-        reason: `environment 能力声明不含 ${JSON.stringify(required.capability)}（归一化后要求：${JSON.stringify(requiredBare)}；声明值：${declared.join(" / ")}；归一化后声明：${declared.map(bareCapability).join(" / ")}）`,
+        reason: `environment 能力声明不含 ${JSON.stringify(required.capability)}（裸尾归一化后仍无命中；声明值：${declared.join(" / ")}）`,
       };
     }
   }
@@ -2617,17 +2652,29 @@ function contractCapabilityEntries(acceptance) {
   return entries;
 }
 
-/** 验收包已声明的能力 id 集合：限定形式「契约id:能力id」+ 契约内裸 id（单契约包）。 */
-function knownContractCapabilityIds(acceptance) {
-  const contracts = externalContractsOf(acceptance);
-  const known = new Set();
-  for (const entry of contractCapabilityEntries(acceptance)) {
-    known.add(`${entry.contractId}:${entry.capabilityId}`);
+/** 契约能力 id 解析（裸 id 限定，R1-27）：qualified 形态「契约id:能力id」精确命中；
+ * 裸 id（或任意外来前缀的「X:能力id」）按当前任务已知能力全表（多契约全集）做裸尾归一化
+ * 解析——唯一命中即接受（同一能力在单契约与多契约包里都可用裸 id 指称），命中多个契约
+ * （歧义）或零命中（未声明）即拒绝并要求 qualified 形态。多契约包不再一律拒裸 id——
+ * 「单契约能过、多契约烧 run」的不对称由此消除；歧义防护保留（歧义裸 id 静默选契约会把
+ * runtime 义务挂到错误契约上）。返回 { ok, contractId, capabilityId, reason }。 */
+function resolveContractCapabilityId(acceptance, rawId) {
+  const entries = contractCapabilityEntries(acceptance);
+  const qualifiedHit = entries.find((entry) => `${entry.contractId}:${entry.capabilityId}` === rawId);
+  if (qualifiedHit !== undefined) return { ok: true, contractId: qualifiedHit.contractId, capabilityId: qualifiedHit.capabilityId, reason: null };
+  const bareTail = (value) => (value.includes(":") ? value.slice(value.lastIndexOf(":") + 1) : value);
+  const requiredBare = bareTail(rawId);
+  const bareHits = entries.filter((entry) => entry.capabilityId === requiredBare);
+  if (bareHits.length === 1) return { ok: true, contractId: bareHits[0].contractId, capabilityId: bareHits[0].capabilityId, reason: null };
+  if (bareHits.length > 1) {
+    return {
+      ok: false,
+      contractId: null,
+      capabilityId: null,
+      reason: `裸能力 id ${rawId} 在多契约包中歧义（命中 ${bareHits.map((entry) => `${entry.contractId}:${entry.capabilityId}`).join("、")}）`,
+    };
   }
-  if (contracts.length === 1) {
-    for (const entry of contractCapabilityEntries(acceptance)) known.add(entry.capabilityId);
-  }
-  return known;
+  return { ok: false, contractId: null, capabilityId: null, reason: `能力 ${rawId} 不在当前验收包 externalContracts 已声明能力全表中` };
 }
 
 /** 候选快照路径（按验收版本隔离，设计 §4.2）。 */
@@ -2853,6 +2900,36 @@ function resolveEnvironmentContracts(taskDir, projectRoot, { allowPointerFallbac
     }
   }
   return { available: false, source: "none", snapshotSha256: null, contracts: [], reason: outcome.reason };
+}
+
+/** 当前权威逐契约 aggregateHash（FindingRaised authorityHash 同源核对用，R1-09）：只读
+ * 任务目录在盘快照（environment-contracts.current.json 指针 → environment-contracts/<sha>.json），
+ * 不 spawn resolver（写入路径上的核对必须廉价）。返回 null = 当前权威快照不可得
+ * （指针缺失 / 损坏 / 快照文件缺失），调用方退回形态校验；Map 只收 status=resolved 且
+ * aggregateHash 可解析的契约条目。 */
+function currentAuthorityHashesByContract(taskDir) {
+  const pointerPath = join(taskDir, ENVIRONMENT_CONTRACTS_POINTER);
+  if (!existsSync(pointerPath)) return null;
+  let sha256 = null;
+  try {
+    const pointer = JSON.parse(readFileSync(pointerPath, "utf8"));
+    if (typeof pointer?.snapshotSha256 === "string") sha256 = pointer.snapshotSha256;
+  } catch {
+    return null;
+  }
+  if (sha256 === null) return null;
+  const document = readEnvironmentSnapshotFile(taskDir, sha256);
+  if (document === null || !Array.isArray(document.contracts)) return null;
+  const hashes = new Map();
+  for (const contract of document.contracts) {
+    if (contract === null || typeof contract !== "object" || typeof contract.id !== "string") continue;
+    // 只收 resolved 契约（unresolved 无权威哈希可核对）；hash 取值口径与
+    // contractAggregateHashOf 一致（authorityAggregateHash / aggregateHash 双拼写兼容）
+    if (contract.status !== undefined && contract.status !== "resolved") continue;
+    const hash = contractAggregateHashOf(contract);
+    if (typeof hash === "string" && hash !== "") hashes.set(contract.id, hash);
+  }
+  return hashes;
 }
 
 /** 批准时的每契约权威哈希（环境历史链起点）。approve-acceptance 在验收包声明外部契约时
@@ -3922,9 +3999,11 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     seen.add(findingId);
     return rootFindingId(event.reopenOf, seen);
   };
+  // uniqueMustFix 计数按策略分类实例化：「阻断位」= blocksAccepted===true 的分类集合
+  //（默认 defect），不字面量比对分类 id——策略新增阻断分类后预算与裁决口径保持一致
   const uniqueMustFix = new Set(
     [...findingById.values()]
-      .filter((event) => event.category === "defect" && event.severity === "blocker")
+      .filter((event) => policyFindingCategory(world.policy, event.category)?.blocksAccepted === true && event.severity === "blocker")
       .map((event) => rootFindingId(event.findingId)),
   );
   // 计轮与预算走内核单源（kernel-judgments.repairBudgetFromEvents）。perVersion 口径不变：
@@ -4001,16 +4080,21 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     return !entry.riskAccepted;
   });
   // 发现阻塞语义按策略分类实例化（finding-categories L2）：
-  //   blocksAccepted=true → defect 位（修复或用户接受风险后放行，默认 defect 分类）
-  //   blocksAccepted="until-confirmed" → boundary 位（确认前阻塞且不可接受，默认 boundary 分类）
-  //   blocksAccepted=false → 不阻 accepted
+  //   blocksAccepted=true → defect 位（默认 defect 分类）；blocksAccepted="until-confirmed" →
+  //   boundary 位（确认前阻塞且不可接受，默认 boundary 分类）；blocksAccepted=false → 不阻终态
+  // 三档分级的裁决落地：阻断收敛在 blocker 档——must-fix 映射 blocker+defect（修复或用户
+  // 接受风险后放行）；suggestion / info 映射 non-blocker+defect，披露即可不阻终态（修复
+  // 循环只修 blocker，non-blocker 若阻断则披露档永不收敛、accepted 无机器出口）。open
+  // non-blocker 照常进 verdict.openFindings 与 openDefects 披露，accept-risk 对其仍可用
+  //（显式接受）但不再是终态前置
   const openDefects = openFindings.filter(
     (finding) => policyFindingCategory(world.policy, finding.category)?.blocksAccepted === true,
   );
   const unconfirmedBoundaries = openFindings.filter(
     (finding) => policyFindingCategory(world.policy, finding.category)?.blocksAccepted === "until-confirmed",
   );
-  const unacceptedDefects = openDefects.filter((finding) => !finding.riskAccepted);
+  const openBlockerDefects = openDefects.filter((finding) => finding.severity === "blocker");
+  const unacceptedDefects = openBlockerDefects.filter((finding) => !finding.riskAccepted);
 
   // 交付义务派生（机制三 §7.1）：断言/阶段 state 全部复用上方既有缺口判定（聚合派生，
   // 不另立第二套判定）；受控修复轮与 blocking 待办从事件流与 pending-actions 派生。
@@ -4047,7 +4131,8 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   // 候选复扫不可用（探测脚本缺失/执行失败）：不伪造「无未登记 strong 信号」结论——fail-closed
   const candidateRescanBlock = runtime.rescanAvailable !== true;
 
-  // accepted 要求全部必需证据 verified、无未决 defect（不是「全部缺口被接受」——被接受的缺口只通往 accepted_with_risk）
+  // accepted 要求全部必需证据 verified、无未决 blocker defect（不是「全部缺口被接受」——
+  // 被接受的缺口只通往 accepted_with_risk；non-blocker defect 披露即可不阻，见三档分级注释）
   const accepted =
     !processFailed &&
     approved &&
@@ -4055,7 +4140,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     evidenceGaps.length === 0 &&
     assuranceCompleted &&
     explorationSatisfied &&
-    openDefects.length === 0 &&
+    openBlockerDefects.length === 0 &&
     unconfirmedBoundaries.length === 0 &&
     !obligationsBlock &&
     !runtimeReadinessBlock &&
@@ -4072,7 +4157,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
     explorationSatisfied &&
     unacceptedEvidenceGaps.length === 0 &&
     unacceptedDefects.length === 0 &&
-    (evidenceGaps.length > 0 || openDefects.length > 0) &&
+    (evidenceGaps.length > 0 || openBlockerDefects.length > 0) &&
     unconfirmedBoundaries.length === 0 &&
     !obligationsBlock &&
     !runtimeReadinessBlock &&
@@ -4084,7 +4169,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   const unacceptedFailed = requirements.filter(
     (requirement) => requirement.required && requirement.evidence.some((item) => item.result === "failed" && !item.riskAccepted),
   );
-  const unacceptedBlockers = openDefects.filter((finding) => finding.severity === "blocker" && !finding.riskAccepted);
+  const unacceptedBlockers = openBlockerDefects.filter((finding) => !finding.riskAccepted);
   // 无关联需求的未接受 non-blocker：无法按需求定位修复范围，修复时须全部增量复查（与 candidate-build 的全量复查口径一致）
   const unlinkedNonBlockers = openDefects
     .filter((finding) => finding.severity === "non-blocker" && !finding.riskAccepted && finding.requirementIds.length === 0)
@@ -4102,7 +4187,8 @@ function buildVerdict(world, revision, revisionSource = "computed") {
   else if (unacceptedBlockers.length > 0) state = "implementing";
   else if (implementedIncrementIds.length === 0) state = "acceptance-approved";
   else if (missingIncrementIds.length > 0) state = "implementing";
-  else if (openDefects.some((finding) => finding.severity === "non-blocker" && !finding.riskAccepted)) state = "candidate";
+  // 未接受 non-blocker defect 不再单独路由到 candidate（三档分级裁决落地：披露即可不阻，
+  // 清单见 verdict.openFindings；其余条件齐时直达 accepted / accepted_with_risk）
   else if (unconfirmedBoundaries.length > 0) state = "candidate";
   else if (unacceptedEvidenceGaps.length > 0) state = "candidate";
   else if (!assuranceCompleted || !explorationSatisfied) state = "candidate";
@@ -4163,7 +4249,7 @@ function buildVerdict(world, revision, revisionSource = "computed") {
           unknownCount: provenance.unknownCount,
           unknowns: provenance.revisions.filter((item) => item.source === "unknown"),
           explainedRevision: provenance.explainedRevision,
-          recovery: "存在来源不明的 revision 变化，不得交付：①属真实修复 → 回 assurance-repair-loop-v6 补做带 from/to revision 的受控修复登记（record-repair-round）；②属无关改动 → 恢复项目内容到已解释的基线（git 恢复）；③属合法外部基线前进 → 由用户执行 delivery-gate confirm-baseline 确认新基线后重新 evaluate",
+          recovery: "存在来源不明的 revision 变化，不得交付：①属真实修复 → 回 assurance-repair-loop-v6 补做带 from/to revision 的受控修复登记（record-repair-round）；②属无关改动 → 恢复项目内容到已解释的基线（git 恢复）；③属合法外部基线前进（链条继续向前） → 由用户执行 delivery-gate confirm-baseline 确认新基线后重新 evaluate；④属历史断链段（候选形成后已存在的旧 unknown 区间，多会话/外部写入留下的无来源代际） → 由用户执行 delivery-gate confirm-history 逐段署名确认（--intervals 须与 revision-provenance 输出的 unknown 区间精确匹配；只解释历史、不推进链条）。①②③消除或覆盖 unknown 后重新 evaluate；confirm-history 适用判据 = 该区间已是历史（后续已有合法锚点续接），需要确立新基线时走 confirm-baseline",
         }
       : null,
     // open 必需义务清单（机制三 §7.1）：accepted 前置——非空即不得进入交付终态。
@@ -5458,7 +5544,7 @@ function commandValidateAcceptance(args) {
   // 不把「没校验」显示成「已通过」
   if (externalContractsOf(world.acceptance).length > 0 && externalContractClassesPolicy(world) === null) {
     warnings.push(
-      `策略文件 ${EXTERNAL_CONTRACT_CLASSES_FILE} 缺失：外部契约调用类词表、resolverKind 词表与环境底线校验本次未执行。恢复动作：确认该策略文件已在技能 policies/ 目录落盘（由候选探测线创建）后重跑 snapshot-policy 与 validate-acceptance；确无调用类目录时，外部契约能力仍按结构规则校验，但调用类低报只由候选复扫兜底。`,
+      `策略文件 ${EXTERNAL_CONTRACT_CLASSES_FILE} 缺失：外部契约调用类词表、resolverKind 词表与环境底线校验本次未执行。恢复动作：确认该策略文件已随技能分发（技能 policies/ 目录内置，探测器只读消费、不创建该文件），缺失属技能安装残缺，重新安装或修复技能后重跑 snapshot-policy 与 validate-acceptance；在途任务确需变更调用类词表时由用户走 upgrade-policy（重拍快照并逐事件声明失效范围）。确无调用类目录时，外部契约能力仍按结构规则校验，但调用类低报只由候选复扫兜底。`,
     );
   }
   printJson({
@@ -6345,6 +6431,30 @@ function commandUpgradePolicy(args) {
     const newSha = sha256Text(text);
     if (newSha === oldSha) {
       fail("当前策略与既有快照相同，无可升级内容。", "调整安装目录或用户级策略后重试 upgrade-policy。");
+    }
+    // mayWrite 收窄前置校验（C-08）：新策略对既有任务全部历史事件在内存里折算一遍
+    // 「角色是否可写该事件」——任何事件将被判无权写入即拒绝升级并列出受影响事件。
+    // 不做本步，收窄后的快照会让任务在下次加载时折算崩溃（append 拒绝 + CLI 恢复通道
+    // 一并失效——loadWorld 都进不去），错误暴露点与操作点相隔整条执行链
+    try {
+      const previewWorld = loadWorld(options["task-dir"], { requirePackage: existsSync(join(core.taskDir, "acceptance.json")) });
+      const newPolicyDocument = document;
+      const affected = [];
+      for (const entry of previewWorld.entries) {
+        const event = entry.record;
+        if (!policyRoleMayWrite(newPolicyDocument, event.actor, event.type)) {
+          affected.push({ eventId: event.eventId ?? null, seq: event.seq ?? null, actor: event.actor, type: event.type, line: entry.line });
+        }
+      }
+      if (affected.length > 0) {
+        fail(
+          `升级后策略将使既有任务 ${affected.length} 条历史事件无法折算（角色无权写该事件类型）。`,
+          `先调整新策略 roles.json 的 mayWrite 覆盖全部已登记事件（受影响清单见下），或改用任务替换（supersede-prepare）在新任务上使用新策略；受影响事件：${JSON.stringify(affected.slice(0, 20))}${affected.length > 20 ? `（另有 ${affected.length - 20} 条略）` : ""}`,
+        );
+      }
+    } catch (error) {
+      // 任务目录本就加载失败（损坏事件流等）：与升级无关的既有故障，不因预检升级失败而掩盖
+      process.stderr.write(`delivery-gate: upgrade-policy 前置折算预检跳过（任务目录当前无法加载：${error && typeof error.message === "string" ? error.message.split("。")[0] : String(error)}）——升级后该任务的恢复仍受新策略约束。\n`);
     }
     const privateKey = loadCredentialPrivateKey({ task: core.task, keys: core.keys }, options.credential, "user");
     // 世界（含验收包）可能不存在：任务级事件允许无包

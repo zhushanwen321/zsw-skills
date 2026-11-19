@@ -1,6 +1,6 @@
 # 裁决点与命令参考（内核 next 驱动 + 凭据 + 写入防护 + 租约）
 
-「下一步做什么」的唯一回答者是内核：**先问 `delivery-core next`，再按合法转移的 executor 执行**——转移表（`scripts/kernel/rules.json`，五域：任务/节点/发现/探索/验收包）是流程唯一权威，本文只写裁决点、命令语义与角色权限。所有路径参数用绝对路径；`<...>` 是占位符。事件登记的 artifact 路径另有形态约定（见 §0 末段）：必须在 taskDir 的 evidence/ 内，相对路径以 taskDir 为基准，绝对路径与 symlink 逃逸一律拒。
+「下一步做什么」的唯一回答者是内核：**先问 `delivery-core next`，再按合法转移的 executor 执行**——转移表（`scripts/kernel/rules.json`，五域：任务/节点/发现/探索/验收包）是流程声明的唯一权威；其中任务 / 节点两域由内核机器执行（`next` / `node-transition` 按表路由），发现 / 探索 / 验收包三域为静态对账参考——finding 域运行时态判定在 gate 的 `findingLifecycleStateOf`（写入侧 from 态检查，硬编码实现），改这三域的表不改变运行时行为，改表必须同步实现（rules.json 头注同款声明）。本文只写裁决点、命令语义与角色权限。所有路径参数用绝对路径；`<...>` 是占位符。事件登记的 artifact 路径另有形态约定（见 §0 末段）：必须位于 taskDir 的 evidence/ 内，相对路径以 taskDir 为基准解析，该目录内的绝对路径同样接受；目录外路径、`..` 越界与 symlink 逃逸一律拒。
 
 并发登记同一任务目录的事件时，gate 以任务级事件锁（`.events.lock`）串行化写入：等待上限 30 秒、锁龄超 30 秒视为陈旧可被抢占（死 pid 锁同样可抢），抢占时 stderr 会告知；不要绕过锁直接写 events.jsonl。
 
@@ -15,6 +15,8 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs next --task-dir <tas
 | 命令 | 用途 | 调用方 |
 |------|------|--------|
 | `validate` | 转移表静态校验（无环除回边/可达/执行器唯一/谓词与角色在词表/写入矩阵词表闭包）——改 rules.json 后必跑 | 主 agent / CI |
+| `rules` | 输出内核规则全文（kernel/rules.json：budgets / guardrails / predicates / 五域转移表）——核对预算上限与谓词登记用 | 主 agent |
+| `full-qualification` | full 保证资格判定（kernel-judgments.priorFullQualification 单源）：历史 full 保证能否作为 recheck / full-first 的资格基础，逐条给合格性与原因 | workflow（IA/ARL）/ 主 agent |
 | `next [--auto]` | 下一步唯一回答者（见上）；转移带 kind 分类（裁决点 / workflow 附预填发起规格 / gate 命令），`--auto` 自动执行 evaluate 类例行转移 | 主 agent |
 | `pending add\|resolve\|list` | 脑内状态实体化：`--kind cleanup\|awaiting-restore\|awaiting-registration\|awaiting-ruling\|awaiting-review --note <一句话待办>` | 主 agent |
 | `budget` | 循环预算查询（修复轮/跨 run/改判统计） | 主 agent / workflow |
@@ -30,7 +32,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs next --task-dir <tas
 
 **判定单源的消费通道**：gate 与内核同进程 import kernel-judgments；workflow 经内核 CLI 的 JSON 子命令消费——zcode/pi workflow 产物禁模块 import（平台约束），CLI 通道保持判定随技能更新即时生效且 artifact 哈希校验不分叉，单实现不受影响。
 
-**事件意图提交**（执行器事件唯一通道，`append` 已退役）：`record-implementation` / `record-repair-round` / `record-finding` / `resolve-finding` / `reaffirm-resolution` / `record-evidence` / `record-exploration` / `complete-assurance` / `record-assurance-drift`——信封（actor/revision/acceptanceVersion/domain/artifactSha256）由 gate 构造；`--revision` 显式锁定保证 run 在途的 setup revision；写入矩阵「角色 × 当前阶段 × 目标域」与 domain 章在写入当刻执行。主会话命令（批准/风险接受/替换等）见 `delivery-gate.mjs help`。additive 可选参数：`record-finding` 带 `--contract-capability-ids '<JSON>'` 与 authority 组（`--authority-backed true --authority-hash H --authority-observation-ref R`）——结构命中外部契约（contractCapabilityIds 非空，或 requirementIds 反查到的断言含 requiredEnvironment.capability）时 authority 组必填；`record-evidence` 带 `--contract-capability-ids '<JSON>'` 认领契约能力，`--runtime-probe` 标记真实 runner / 宿主驱动产生的 runtime probe 证据（runtime 义务唯一可满足形态）。artifact 路径形态：必须位于 `<taskDir>/evidence/` 内（相对路径以 taskDir 为基准解析，也接受在该目录内的绝对路径）；目录外路径、`..` 越界与 symlink 逃逸一律拒绝（恢复动作 = 把报告/证据移入 evidence/ 后重登）。
+**事件意图提交**（执行器事件唯一通道，`append` 已退役）：`record-implementation` / `record-repair-round` / `record-finding` / `resolve-finding` / `reaffirm-resolution` / `record-evidence` / `record-exploration` / `complete-assurance` / `record-assurance-drift`——信封（actor/revision/acceptanceVersion/domain/artifactSha256）由 gate 构造；`--revision` 显式锁定保证 run 在途的 setup revision；写入矩阵「角色 × 当前阶段 × 目标域」与 domain 章在写入当刻执行。事件来源旗标 `--channel workflow|manual`（全部意图命令通用，缺省 manual）：workflow 执行器登记时自动带 workflow，手工 / 主会话经 CLI 直接登记缺省 manual——终态报告按通道分开统计。主会话命令（批准/风险接受/替换等）见 `delivery-gate.mjs help`。additive 可选参数：`record-finding` 带 `--contract-capability-ids '<JSON>'` 与 authority 组（`--authority-backed true --authority-hash H --authority-observation-ref R`）——结构命中外部契约（contractCapabilityIds 非空，或 requirementIds 反查到的断言含 requiredEnvironment.capability）时 authority 组必填；`record-evidence` 带 `--contract-capability-ids '<JSON>'` 认领契约能力，`--runtime-probe` 标记真实 runner / 宿主驱动产生的 runtime probe 证据（runtime 义务唯一可满足形态）。artifact 路径形态：必须位于 `<taskDir>/evidence/` 内（相对路径以 taskDir 为基准解析，也接受在该目录内的绝对路径）；目录外路径、`..` 越界与 symlink 逃逸一律拒绝（恢复动作 = 把报告/证据移入 evidence/ 后重登）。
 
 **写入防护**：`approve-acceptance` 即冻结验收包（acceptance.json + increments.json chmod 0444 + `frozen/v<N>/` 快照）——非法改写在写入当秒被拒，漏网者在下次加载被篡改检测拦下。合法修订唯一通道：
 
@@ -106,7 +108,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs init \
 
 | 凭据 | 持有 | 用途 | 注入边界 |
 |------|------|------|----------|
-| `builder` | 凭据文件 | candidate-build-v6 签 ImplementationRecorded/FindingRaised | builderCredentialId 可注入该 workflow |
+| `builder` | 凭据文件 | candidate-build-v6 签 ImplementationRecorded/FindingRaised；assurance-repair-loop-v6 修复轮（record-repair-round）；dev-flow-v6 D4 record-implementation 与 record-finding | builderCredentialId 可注入 candidate-build-v6 与 assurance-repair-loop-v6；dev-flow-v6 D4 由主会话持有调用 |
 | `assurance` | 凭据文件 | 验收审查、证据与发现、保证与探索事件 | assuranceCredentialId 可注入独立保证 workflow |
 | `user` | 凭据文件 | 批准、风险接受、替换、基线、策略、解冻命令 | **仅主会话**；绝不注入任何子 agent 或 workflow |
 
@@ -225,10 +227,10 @@ confirm-baseline --task-dir <taskDir> --reason "排查结论" --credential <user
 confirm-history  --task-dir <taskDir> --reason "确认结论" --credential <user> \
   --intervals '[{"fromRevision":"<旧指纹>","toRevision":"<新指纹>","rationale":"为何属合法外部变化"}]' [--revision R]
 upgrade-policy  --task-dir <taskDir> --invalidation-note "逐事件失效范围" --summary S --credential <user>
-snapshot-policy --task-dir <taskDir>   # 重建任务策略快照（读当前策略包并重算快照哈希；批准四元组与策略升级对账用）
+snapshot-policy --task-dir <taskDir>   # 固定任务策略快照（首次写入；快照已存在且内容与当前策略不同即拒绝，升级走 upgrade-policy）
 ```
 
-revision-unstable 排查完写入源后由用户确认新基线（漂移计数归零）。`confirm-history` 是历史 unknown 区间的署名解释通道：只接受派生结果（`delivery-core revision-provenance`）中精确存在的 unknown 区间（from/to 须逐字匹配，区间绑哈希），把该段来源归为 user-confirmed；它不推进链条位置、不等于新基线，未覆盖的 unknown 仍阻断 accepted。多会话并行提交造成的断链历史用该命令逐段确认——登记前先跑 `revision-provenance` 取当前 unknown 区间清单。策略升级重写任务快照并要求重新审查与批准受影响的验收包。策略快照由 `snapshot-policy` 在 AcceptanceReviewed 之前固化为任务目录内文件，此后审查 / 批准 / evaluate 全按该快照执行——执行中读到的策略变化不即时生效。
+revision-unstable 排查完写入源后由用户确认新基线（漂移计数归零）。`confirm-history` 是历史 unknown 区间的署名解释通道：只接受派生结果（`delivery-core revision-provenance`）中精确存在的 unknown 区间（from/to 须逐字匹配，区间绑哈希），把该段来源归为 user-confirmed；它不推进链条位置、不等于新基线，未覆盖的 unknown 仍阻断 accepted。多会话并行提交造成的断链历史用该命令逐段确认——登记前先跑 `revision-provenance` 取当前 unknown 区间清单。策略升级重写任务快照并要求重新审查与批准受影响的验收包。策略快照由 `snapshot-policy` 在 AcceptanceReviewed 之前固化为任务目录内文件，此后审查 / 批准 / evaluate 全按该快照执行——执行中读到的策略变化不即时生效（快照不在场的策略文件变更不会自动进入在途任务；确需变更走 `upgrade-policy`）。冻结范围说明：策略快照覆盖五个策略文件 + 外部契约调用类目录（若在盘）；`kernel/rules.json`（预算 / 护栏 / 转移表）不在快照冻结范围，随技能版本生效。
 
 ## 11. 中断恢复与人工处置（显式转移，无手工通道）
 

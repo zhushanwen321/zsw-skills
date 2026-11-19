@@ -1,7 +1,7 @@
 {
   "_comment": {
     "purpose": "已知答案回归样例（known-answer samples）：首场评测 7 个 must-fix 的固化形态。验收方式不是只看最终测试是否通过，还要检查问题是否在期望阶段被报告——最终保证阶段才首次发现仍判为流程漏检。",
-    "expectedStageAccuracy": "本文件是 delivery-v6/scripts/delivery-quality-stats.mjs 指标 expectedStageAccuracy 的期望数据源：同题重跑时，每条 FindingRaised 的 expectedStage 取本文件 stageVocabulary 中的对应值，firstDetectedStage 晚于全部 expectedStages 的发现计入 escapedByStage（流程漏检）。",
+    "expectedStageAccuracy": "本文件是人工标注样例集，不是 delivery-quality-stats.mjs 的运行时数据源——指标 expectedStageAccuracy 由该脚本从任务事件流现算（FindingRaised 的 expectedStage/firstDetectedStage 配对），不读本文件。本文件的 samples/expectedStages 只作为样例期望供人工对照与测试锚点校验。",
     "source": "三技能交付体系 V4 合并设计稿 §12.1 已知答案样例表（首场 pi 本地记忆系统评测的 7 个 must-fix）；判据限定词可回溯该评测验收包 REQ-INJECT / REQ-SCOPE / REQ-FAULT / REQ-PRESERVE / REQ-OFF 原文与「同内容、同作用范围至多一条」去重公理。",
     "anchorsNote": "interceptionAnchors[].anchor 必须能在 doc 文件（仓库相对路径）中检索到，由 scripts/tests/known-answer-samples-v6.test.mjs 逐条校验——锚点被删时测试变红，表示期望拦截机制已不存在。"
   },
@@ -35,6 +35,21 @@
       "id": "candidate-exploration",
       "name": "候选反例审查",
       "description": "D3 后、D4 前的 explore-only 探索：探索审查者读取真实实现，从原始意图、验收与真实实现构造反例并亲自运行实验。"
+    },
+    {
+      "id": "acceptance",
+      "name": "交付·验收阶段（词表对齐项）",
+      "description": "delivery-v6 发现侧 expectedStage 实际取值（验收判据遗漏，本应在 acceptance-design 阶段拦截）；与上方 acceptance-counterexample 同指验收阶段，登记为对齐项使运行时取值可进指标词表。"
+    },
+    {
+      "id": "assurance",
+      "name": "交付·独立保证阶段（词表对齐项）",
+      "description": "delivery-v6 发现侧 expectedStage 实际取值（本应在 independent-assurance 的覆盖核对/探索阶段拦截）。"
+    },
+    {
+      "id": "implementation",
+      "name": "交付·候选实现阶段（词表对齐项）",
+      "description": "delivery-v6 发现侧 expectedStage 实际取值（本应在 candidate-build / dev-flow 实现阶段拦截）。"
     }
   ],
   "samples": [

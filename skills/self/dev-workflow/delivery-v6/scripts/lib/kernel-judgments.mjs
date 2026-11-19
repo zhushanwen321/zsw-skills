@@ -248,9 +248,12 @@ export function findingRegrades(records) {
  * 变化）。gate 侧接线由 delivery-gate 消费本函数，禁止复刻第二份。 */
 export function criterionChangedSinceResolution(records, { findingId, currentAcceptanceVersion, currentRevision = null }) {
   const resolutions = records
-    .filter((record) =>
-      (record.type === "FindingResolved" || record.type === "ResolutionReaffirmed" || record.type === "RiskAccepted") &&
-      record.findingId === findingId)
+    .filter((record) => {
+      if (record.type === "FindingResolved" || record.type === "ResolutionReaffirmed") return record.findingId === findingId;
+      // RiskAccepted 的 finding 目标字段是 targetId（不是 findingId），targetType=finding 才参与
+      if (record.type === "RiskAccepted") return record.targetType === "finding" && record.targetId === findingId;
+      return false;
+    })
     .map((record) => ({ seq: seqOf(record), acceptanceVersion: record.acceptanceVersion, revision: record.revision }))
     .sort((left, right) => left.seq - right.seq);
   if (resolutions.length === 0) return false;
@@ -424,17 +427,23 @@ export function deriveRevisionProvenance(records, { currentRevision = null } = {
   const assuranceSeqs = sorted.filter((record) => record.type === "AssuranceCompleted").map((record) => (typeof record.seq === "number" ? record.seq : 0));
   const firstAssuranceSeq = assuranceSeqs.length > 0 ? Math.min(...assuranceSeqs) : null;
   // 用户确认的历史 unknown 区间（精确 from/to 匹配；区间不在派生结果中时不产生效果——
-  // 登记侧 confirm-history 已按当时的派生结果核对区间存在性）
+  // 登记侧 confirm-history 已按当时的派生结果核对区间存在性）。确认事件 id 一并登记：
+  // user-confirmed 区间的 eventRef 指向确认事件（不是后继锚点事件），审计可直接回溯
   const confirmedIntervals = [];
   for (const record of sorted) {
     if (record.type !== "RevisionBaselineConfirmed" || !Array.isArray(record.explainedUnknownIntervals)) continue;
     for (const item of record.explainedUnknownIntervals) {
       if (item !== null && typeof item === "object" && typeof item.fromRevision === "string" && typeof item.toRevision === "string") {
-        confirmedIntervals.push({ fromRevision: item.fromRevision, toRevision: item.toRevision });
+        confirmedIntervals.push({
+          fromRevision: item.fromRevision,
+          toRevision: item.toRevision,
+          eventRef: typeof record.eventId === "string" ? record.eventId : null,
+        });
       }
     }
   }
-  const confirmedByUser = (fromRevision, toRevision) => confirmedIntervals.some((item) => item.fromRevision === fromRevision && item.toRevision === toRevision);
+  const confirmedByUser = (fromRevision, toRevision) =>
+    confirmedIntervals.find((item) => item.fromRevision === fromRevision && item.toRevision === toRevision) ?? null;
   const revisions = [];
   let explained = null;
   let enabled = false;
@@ -454,8 +463,10 @@ export function deriveRevisionProvenance(records, { currentRevision = null } = {
     if (anchor.to === explained) continue; // 无 revision 变化（如 from===to 的实现回执、同基线重复确认）
     if (anchor.claimedFrom !== null && anchor.claimedFrom !== explained) {
       // 断链：事件声称从 claimedFrom 续接，但链条当前在 explained——中间存在无来源变化
-      //（用户以 confirm-history 明确解释过该区间时归为 user-confirmed，否则 unknown）
-      revisions.push({ fromRevision: explained, toRevision: anchor.claimedFrom, source: confirmedByUser(explained, anchor.claimedFrom) ? "user-confirmed" : "unknown", eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
+      //（用户以 confirm-history 明确解释过该区间时归为 user-confirmed，否则 unknown；
+      // user-confirmed 的 eventRef 指向确认事件本身）
+      const confirmed = confirmedByUser(explained, anchor.claimedFrom);
+      revisions.push({ fromRevision: explained, toRevision: anchor.claimedFrom, source: confirmed !== null ? "user-confirmed" : "unknown", eventRef: confirmed !== null ? confirmed.eventRef : eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
     }
     // 缺 from 的锚点分两类：RevisionBaselineConfirmed（external-baseline）无 from 属正常
     // 形态——用户确认「当前内容是新基线」，链条从确认点续接，保持 external-baseline 分类；
@@ -464,19 +475,21 @@ export function deriveRevisionProvenance(records, { currentRevision = null } = {
     // 未登记直改洗成已解释（探针实证：实现 r0→r2 直改到 r5 后补一条只带 to=r5 的修复
     // 轮，unknownCount 被清零）
     const from = anchor.claimedFrom ?? explained;
+    const confirmed = anchor.claimedFrom === null && anchor.source !== "external-baseline" ? confirmedByUser(from, anchor.to) : null;
     const source = anchor.claimedFrom !== null
       ? anchor.source
       : anchor.source === "external-baseline"
         ? "external-baseline"
-        : confirmedByUser(from, anchor.to) ? "user-confirmed" : "unknown";
-    revisions.push({ fromRevision: from, toRevision: anchor.to, source, eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
+        : confirmed !== null ? "user-confirmed" : "unknown";
+    revisions.push({ fromRevision: from, toRevision: anchor.to, source, eventRef: confirmed !== null ? confirmed.eventRef : eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
     explained = anchor.to;
   }
   if (explained !== null && currentRevision !== null && currentRevision !== explained) {
     // 尾部缺口：链条最新解释 revision 与当前裁决 revision 不一致——当前内容无任何登记来源
-    //（典型：候选受验树被主会话/外部进程直改）。eventRef=null（无事件可归因）；用户
-    // confirm-history 精确确认过该区间时归为 user-confirmed
-    revisions.push({ fromRevision: explained, toRevision: currentRevision, source: confirmedByUser(explained, currentRevision) ? "user-confirmed" : "unknown", eventRef: null, actor: null, recordedAt: null });
+    //（典型：候选受验树被主会话/外部进程直改）。eventRef 缺省 null（无事件可归因）；用户
+    // confirm-history 精确确认过该区间时归为 user-confirmed，eventRef 指向确认事件
+    const confirmed = confirmedByUser(explained, currentRevision);
+    revisions.push({ fromRevision: explained, toRevision: currentRevision, source: confirmed !== null ? "user-confirmed" : "unknown", eventRef: confirmed !== null ? confirmed.eventRef : null, actor: null, recordedAt: null });
   }
   return {
     revisions,
@@ -643,6 +656,18 @@ export function environmentKindSatisfies(evidenceKind, requiredKind) {
 /** 能力 id 的合法形态：契约内裸 id 或「契约id:能力id」限定 id。 */
 export function qualifiedCapabilityId(contractId, capabilityId) {
   return `${contractId}:${capabilityId}`;
+}
+
+/** 能力覆盖声明的词法归一化比对（裸尾归一化，单源）：声明值与要求值完全相等，或两者
+ * 的裸尾（去掉「契约id:」前缀）相等即命中。归一化只统一词法、不放宽覆盖判定——
+ * 两侧来源不同（designer 写验收 requiredEnvironment.capability、assurance 手写 probe
+ * artifact 的 capability/capabilities），严格字面相等会把同一能力判成两个结论
+ *（probe 证据在断言环境检查通过、runtime 义务却 open 的判据分叉）。gate 断言环境
+ * 检查与 kernel runtime 义务判定共同消费本函数，禁止各写一份。 */
+export function capabilityDeclarationMatches(declaredIds, requiredCapability) {
+  const bareTail = (value) => (value.includes(":") ? value.slice(value.lastIndexOf(":") + 1) : value);
+  const requiredBare = bareTail(requiredCapability);
+  return declaredIds.some((id) => id === requiredCapability || bareTail(id) === requiredBare);
 }
 
 function declaredCapabilitiesOf(environment) {
@@ -847,8 +872,8 @@ function runtimeEvidenceFailure(record, capability, authorityHash, contractId) {
   if (!environmentKindSatisfies(environment.kind, capability.minEnvironment)) {
     return `环境档位 ${environment.kind ?? "缺失"} 不满足能力底线 ${capability.minEnvironment}`;
   }
-  if (!declaredCapabilitiesOf(environment).some((id) => id === capability.id || id === qualifiedCapabilityId(contractId, capability.id))) {
-    return `environment 未声明能力覆盖 ${capability.id}`;
+  if (!capabilityDeclarationMatches(declaredCapabilitiesOf(environment), capability.id)) {
+    return `environment 未声明能力覆盖 ${capability.id}（裸尾归一化比对后仍无命中：声明 ${declaredCapabilitiesOf(environment).join(" / ") || "空"}，要求 ${capability.id}）`;
   }
   const cases = Array.isArray(record.cases) ? record.cases : [];
   const probeCase = cases.find((item) => item?.capabilityId === capability.id);

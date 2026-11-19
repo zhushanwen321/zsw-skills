@@ -1105,9 +1105,11 @@ test("blocksAccepted 三态与 riskAcceptAllowed：cosmetic 不阻、defect 可�
   // 负例：blocksAccepted=false（cosmetic）不阻 accepted
   raiseFinding(fx, revision, "F-COS", "cosmetic", "non-blocker", ["R2"]);
   assert.equal(evaluate(fx).state, "accepted", "blocksAccepted=false 的分类不得阻 accepted");
-  // 正例：blocksAccepted=true（defect）未决阻 accepted；riskAcceptAllowed=true 接受后放行
-  raiseFinding(fx, revision, "F-DEF", "defect", "non-blocker", ["R2"]);
-  assert.equal(evaluate(fx).state, "candidate", "defect 未决应阻 accepted");
+  // 正例：blocksAccepted=true（defect）且 severity=blocker 未决阻 accepted（三档分级裁决
+  // 落地后阻断收敛在 blocker 档——non-blocker defect 披露即可不阻，见 R1-01）；用户接受
+  // 风险后放行进 accepted_with_risk
+  raiseFinding(fx, revision, "F-DEF", "defect", "blocker", ["R2"]);
+  assert.equal(evaluate(fx).state, "implementing", "未接受 blocker defect 应阻 accepted（路由 implementing）");
   assertOk(fx.gate(
     "accept-risk", "--task-dir", fx.taskDir, "--target-type", "finding", "--target-id", "F-DEF",
     "--confirmation", "user-explicit", "--summary", "接受缺陷风险", "--credential", fx.creds.user,

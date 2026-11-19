@@ -821,3 +821,56 @@ test("机制八 §11.3 登记义务：编译摘要披露机检脚本绑定义务
   assert.ok(r.stdout.includes("验证资产门披露") && r.stdout.includes("登记义务"), "摘要须登记 §11.3 机器不可判定义务");
   assert.ok(r.stdout.includes("D2 Gate A") && r.stdout.includes("verification asset obligation open"), "义务登记须点名绑定去向与 open 处置");
 });
+
+// ── testPlan.incremental 两形态（X-05 形态统一）──
+
+test("testPlan.incremental：{program,args} 对象经归一转抄进 exec-plan（W3 增量测试门消费形态），不再静默丢弃", (t) => {
+  const f = makeFixture(t, {
+    testPlan: {
+      incremental: { program: "pnpm", args: ["-C", "app", "test"] },
+      incrementalCommands: [
+        { incrementId: "inc-1", unitIds: ["u-foundation"], command: "node --test tests/shared" },
+        { incrementId: "inc-2", unitIds: ["u-main"], command: { program: "pnpm", args: ["-C", "app", "test"] } },
+      ],
+      fullSuite: { program: "pnpm", args: ["test"] },
+    },
+  });
+  const r = f.run(["--impl-plan", f.planPath]);
+  assert.equal(r.status, 0, `dev 编译失败：${r.stderr}`);
+  const plan = JSON.parse(readFileSync(join(f.productRoot, "demo-compile.exec-plan.json"), "utf8"));
+  assert.deepEqual(plan.testPlan.incremental, { program: "pnpm", args: ["-C", "app", "test"] });
+});
+
+test("testPlan.incremental：string 文字段原样转抄（阅读视图语义，无机器消费方）", (t) => {
+  const f = makeFixture(t, {
+    testPlan: {
+      incremental: "随单元执行；无独立增量命令",
+      incrementalCommands: [
+        { incrementId: "inc-1", unitIds: ["u-foundation"], command: "node --test tests/shared" },
+        { incrementId: "inc-2", unitIds: ["u-main"], command: { program: "pnpm", args: ["-C", "app", "test"] } },
+      ],
+      fullSuite: { program: "pnpm", args: ["test"] },
+    },
+  });
+  const r = f.run(["--impl-plan", f.planPath]);
+  assert.equal(r.status, 0, `dev 编译失败：${r.stderr}`);
+  const plan = JSON.parse(readFileSync(join(f.productRoot, "demo-compile.exec-plan.json"), "utf8"));
+  assert.equal(plan.testPlan.incremental, "随单元执行；无独立增量命令");
+});
+
+test("testPlan.incremental：对象形态非法（缺 args）报三段式缺口不静默丢弃", (t) => {
+  const f = makeFixture(t, {
+    testPlan: {
+      incremental: { program: "pnpm" },
+      incrementalCommands: [
+        { incrementId: "inc-1", unitIds: ["u-foundation"], command: "node --test tests/shared" },
+        { incrementId: "inc-2", unitIds: ["u-main"], command: { program: "pnpm", args: ["-C", "app", "test"] } },
+      ],
+      fullSuite: { program: "pnpm", args: ["test"] },
+    },
+  });
+  const r = f.run(["--impl-plan", f.planPath]);
+  assert.equal(r.status, 1, `非法对象形态应拒绝编译：${r.stderr}`);
+  assert.ok(r.stderr.includes("testPlan.incremental 对象形态非法"), `须点名字段：${r.stderr}`);
+  assert.ok(r.stderr.includes("重新渲染、重新编译"), "恢复动作须指向重编译");
+});

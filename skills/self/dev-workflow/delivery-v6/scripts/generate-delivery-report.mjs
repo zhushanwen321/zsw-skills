@@ -695,6 +695,28 @@ const paritySection = (() => {
   };
 })();
 
+// ── 分节 15：发现来源与阶段分布（FindingRaised × origin/expectedStage/firstDetectedStage）──
+// 与 delivery-quality-stats 的 origins/firstDetectedStages 同口径（未登记值归 unclassified，
+// 不悄悄丢弃）；分布供层间漏检阈值人工判读（SKILL.md 已知缺口①的数据面）
+const findingDistributionSection = (() => {
+  if (!eventsReadable) {
+    return { status: "unknown", reason: `events.jsonl 不可读：${worldError}`, total: null, origins: null, expectedStages: null, firstDetectedStages: null };
+  }
+  const raised = records.filter((record) => record.type === "FindingRaised");
+  const tally = (values) => {
+    const counts = {};
+    for (const value of values) counts[value] = (counts[value] ?? 0) + 1;
+    return counts;
+  };
+  return {
+    status: "ok",
+    total: raised.length,
+    origins: tally(raised.map((record) => (typeof record.origin === "string" && record.origin !== "" ? record.origin : "unclassified"))),
+    expectedStages: tally(raised.map((record) => (typeof record.expectedStage === "string" && record.expectedStage !== "" ? record.expectedStage : "unclassified"))),
+    firstDetectedStages: tally(raised.map((record) => (typeof record.firstDetectedStage === "string" && record.firstDetectedStage !== "" ? record.firstDetectedStage : "unclassified"))),
+  };
+})();
+
 // ── 分节 14：工具链与验证资产状态（project-capabilities.json 摘录）──
 // 快照落 dev-flow 段 skill-data（寻址依赖 projectRoot 探针），报告不复制寻址算法——
 // --capabilities-file 显式传入（与 status.json 同款可选参数模式），缺省探测任务目录内
@@ -740,6 +762,7 @@ const report = {
   evidenceEnvironments: evidenceEnvironmentSection,
   parity: paritySection,
   toolchainAssets: toolchainSection,
+  findingDistribution: findingDistributionSection,
   counts: { increments: incrementsSection, dagNodes: nodeCountSection },
 };
 
@@ -1037,6 +1060,19 @@ if (toolchainSection.status !== "ok") {
   } else {
     lines.push(`- 测试配置（testConfig）：${fmtUnknown(testConfig.reason)}`);
   }
+}
+lines.push("");
+
+lines.push("## 15. 发现来源与阶段分布（FindingRaised × origin/expectedStage/firstDetectedStage）");
+lines.push("");
+if (findingDistributionSection.status !== "ok") {
+  lines.push(`- ${fmtUnknown(findingDistributionSection.reason)}`);
+} else {
+  const fmtCounts = (counts) => Object.entries(counts).map(([key, count]) => `${key} ${count}`).join("、");
+  lines.push(`- 发现 ${findingDistributionSection.total} 条（未登记值归 unclassified，与 delivery-quality-stats 同口径，不悄悄丢弃）`);
+  lines.push(`- 来源（origin）分布：${fmtCounts(findingDistributionSection.origins) || "无"}`);
+  lines.push(`- 预期拦截阶段（expectedStage）分布：${fmtCounts(findingDistributionSection.expectedStages) || "无"}`);
+  lines.push(`- 实际发现阶段（firstDetectedStage）分布：${fmtCounts(findingDistributionSection.firstDetectedStages) || "无"}`);
 }
 lines.push("");
 

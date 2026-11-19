@@ -1,4 +1,5 @@
 {
+  "_comment": "分类词表（gate 校验 id/blocksAccepted/exits/riskAcceptAllowed 四键齐备）。blocksAccepted 三态：true=阻断位（修复或用户接受风险后放行；accepted/accepted_with_risk 前置，且 uniqueMustFix 预算按本集合计数）；\"until-confirmed\"=boundary 位（确认前阻塞且不可接受）；false=不阻终态。exits 是登记性字段：当前零判定消费（出路语义由裁决器硬编码：阻断位走 resolve-finding / accept-risk，boundary 位走 assurance 对照论证确认），保留作人工对账与策略审查参考；修改 exits 不改变机器行为。",
   "categories": [
     {
       "id": "defect",

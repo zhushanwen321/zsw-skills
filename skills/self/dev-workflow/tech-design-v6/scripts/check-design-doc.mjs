@@ -14,7 +14,9 @@
 //      decisions[].guards[].id 同入全局并集（守护 id 与 gapTable 同为 G 前缀建议，编号须全局错开）；
 //      guards.text 必须是叶子全文、不得内嵌 {{id}}——见规则 2 段校验
 //   3. 导航对齐：meta.reviewNav[].decisionId 集合 == s3.decisions[].id 集合（A/B 级决策不得缺导航行）；
-//      A 级导航行的 criteria 必填非空（命中判据编号；B 级可省——见 references/review-guide-rubric.md）
+//      decisions 缺失或空数组即 fail（零关键决策的设计不成立）；A 级导航行的 criteria 必填非空
+//      （命中判据编号；B 级可省——见 references/review-guide-rubric.md）；导航行 level 与决策
+//      本体 level 不一致即 fail（防借 nav 行降档绕过 A 级义务）
 //   4. 引用存在：gapRefs / unitRefs / axiomRefs / goalRefs 引用的 id 在被引用数组中存在；
 //      {{<id>}} 守护引用 token（递归扫描六章节全部字符串值）指向 decisions[].guards 登记的
 //      id——{{...}} 是守护引用保留语法，正文不作字面量使用，凡 {{...}} 一律按引用校验；
@@ -24,10 +26,12 @@
 //      词表内；evidenceInputs 元素非空、不重复、无守护引用语法——仅对带 conformance 字段
 //      的条目生效，无绑定文档零失败零警告（向后兼容存量设计包）
 //   5. 分型一致：terminal 必填 terminalForm 三字段与 migrationWaves；evolution 必须为空或缺失
-//   6. 产物表与 e2e 影响面完备：verified 前提 evidence 非空；stateCopies 形态（空数组合法——
-//      未触发即空数组、不补空表行，与另三张产物表同口径）、nature 枚举合法、excluded=false 行
-//      sync 非空、excluded=true 行 exclusionNote 必填；s4 e2eImpact 必须存在且 items 非空与
-//      noneReason 互斥（items 为空时 noneReason 必填，行内 name/action 非空）
+//   6. 产物表与 e2e 影响面完备：verified 前提 evidence 非空；stateCopies 形态（缺失放行——
+//      未触发不写；存在须为数组；空数组合法——未触发即空数组、不补空表行，与另三张产物表
+//      同口径）、nature 枚举合法、excluded=false 行 sync 非空、excluded=true 行 exclusionNote
+//      必填；s4 e2eImpact 必须存在且 items 非空与 noneReason 互斥（双向：items 为空时
+//      noneReason 必填；items 非空时 noneReason 不得写实质依据，「—」占位除外，行内
+//      name/action 非空）
 //   7. 内容形态：typeRationale 不以分型名开头（渲染器已带「终态型（terminal）——」前缀，重复即冗余）；
 //      s5 units files 条目全/半角括号配对（不配对的说明括号使条目与后续文件粘连）
 //   8. warning（不阻塞）：穷举断言可复算——assumptions / assumptionExclusions / stateCopies
@@ -359,6 +363,14 @@ for (const [id, locations] of globalIdLocations) {
 
 const navRows = arr(meta?.reviewNav);
 const decisionRows = arr(s3?.decisions);
+// 零决策拦截：设计至少登记一条关键决策（schema §3 reviewNav 行判据——「零关键决策的设计
+// 不成立」）。仅拦 reviewNav 空会漏掉「decisions 为空 + 占位导航行」的穿透形态，此处补
+// decisions 侧机器判定（字段缺失与空数组同语义：没有任何决策登记）
+if (docs["s3-solution.json"] !== undefined && decisionRows.length === 0) {
+  failures.push(
+    "[导航] s3-solution.json decisions 缺失或为空数组——设计至少登记一条关键决策（A/B 级，schema §3）；零关键决策的设计不成立，占位导航行无法替代真实决策登记（确属纯执行型改动则不适用本流程，回 T1 判定）",
+  );
+}
 const decisionIdSet = new Set(decisionRows.map((d) => d?.id).filter(isFilled));
 for (const r of navRows) {
   if (isFilled(r?.decisionId) && !decisionIdSet.has(r.decisionId)) {
@@ -380,6 +392,22 @@ for (const d of decisionRows) {
     const level = isFilled(d.level) ? `${d.level} 级` : "A/B 级";
     failures.push(
       `[导航] s3-solution.json 决策「${d.id}（${d.title ?? "无标题"}）」未出现在 meta.json reviewNav——${level}决策必须逐条有人工审核导航行`,
+    );
+  }
+}
+// 分级一致性核对：A 级 criteria 必填等判定以 nav 行 level 为准，nav 行 level 与决策本体
+// level 不一致 = 借分级降档绕过 A 级义务（把 A 级决策写成 B 即绕过 criteria 必填）——两侧
+// 都有值且不同即 fail（一侧缺失无法比对，放行；引用不存在已由上方规则拦截）
+const decisionLevelById = new Map(
+  decisionRows.filter((d) => isFilled(d?.id) && isFilled(d?.level)).map((d) => [d.id, String(d.level).trim()]),
+);
+for (const r of navRows) {
+  if (!isFilled(r?.decisionId) || !isFilled(r?.level) || !decisionLevelById.has(r.decisionId)) continue;
+  const navLevel = String(r.level).trim();
+  const decisionLevel = decisionLevelById.get(r.decisionId);
+  if (navLevel !== decisionLevel) {
+    failures.push(
+      `[导航] meta.json reviewNav 中决策「${r.decisionId}」的 level「${navLevel}」与 s3-solution.json decisions 本体的 level「${decisionLevel}」不一致——两侧取同一权威事实改正；分级影响 A 级 criteria 必填与 T3 单元决策分级，禁止借 nav 行降档绕过 A 级义务`,
     );
   }
 }
@@ -593,7 +621,15 @@ arr(s2?.assumptions).forEach((a, i) => {
     );
   }
 });
-const stateCopies = arr(s2?.artifactTables?.stateCopies);
+// stateCopies 形态核对：字段缺失放行（与「未触发不写」一致）；存在但非数组（对象/字符串等）
+// 无法逐行判定，报形态缺口——不与「未触发即空数组」口径冲突
+const stateCopiesRaw = s2?.artifactTables?.stateCopies;
+if (s2 !== undefined && stateCopiesRaw !== undefined && stateCopiesRaw !== null && !Array.isArray(stateCopiesRaw)) {
+  failures.push(
+    `[产物表] s2-status.json artifactTables.stateCopies 存在但不是数组（实际：${typeof stateCopiesRaw}）——触发了才登记行（每行 { id, nature, sync, ... }），未触发的表写空数组或删除该字段`,
+  );
+}
+const stateCopies = arr(stateCopiesRaw);
 // 未触发的产物表为空数组（与 signalImplications / repairHistory / upstreamDeps 同口径，
 // 写作指令见 flow/write.md「触发了才有行，未触发的表为空数组」）——空数组不补空表行，不拦
 stateCopies.forEach((row, i) => {
@@ -640,6 +676,14 @@ if (s4 !== undefined) {
     if (e2e.items.length === 0 && !isFilled(e2e.noneReason)) {
       failures.push(
         `[e2e 影响面] ${e2eWhere}.items 为空数组但 noneReason 缺失或为空——无受影响项时必须填判定依据；有受影响项时 items 不可为空`,
+      );
+    }
+    // 互斥双向核对（R1-15/R1-33）：items 非空时 noneReason 不得写实质依据——两者并存
+    // 即「既有受影响项又声称无受影响项」的自相矛盾，静默放行会让下游继承口径二义。
+    // 「—」是模板规定的非空集占位（s4-accept.json 模板注记），不算实质依据
+    if (e2e.items.length > 0 && isFilled(e2e.noneReason) && String(e2e.noneReason).trim() !== "—") {
+      failures.push(
+        `[e2e 影响面] ${e2eWhere} items 非空（${e2e.items.length} 项）但 noneReason 写了实质内容「${String(e2e.noneReason).trim()}」——items 与 noneReason 互斥：noneReason 只承载空集判定依据，有受影响项时删除该内容或填「—」占位`,
       );
     }
   }

@@ -4,7 +4,11 @@
 // 各计一轮；nature=environment/evidence 重试不计。卡住续跑事件流无信号，由调用方经
 // --stuck-continuation-count 传入。
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+// 预算上限读内核规则单源（C-20 对齐 gate 裁决口径）：不再硬编码 10/3——rules.json 调整后
+// 统计与裁决同步生效
+import { KERNEL_RULES } from "./lib/kernel-judgments.mjs";
 
 const USAGE = "用法：node delivery-quality-stats.mjs <taskDir> [--json] [--stuck-continuation-count N]——读取该任务的 events.jsonl（与 verdict.json，若存在），输出合并稿 §13 的交付质量指标";
 const args = process.argv.slice(2);
@@ -83,7 +87,34 @@ function rootId(id, seen = new Set()) {
   seen.add(id);
   return rootId(event.reopenOf, seen);
 }
-const uniqueMustFix = new Set(history.filter((event) => event.category === "defect" && event.severity === "blocker").map((event) => rootId(event.findingId)));
+// 阻断分类按策略实例化（C-21 对齐 gate 裁决口径）：「defect 位」= blocksAccepted===true 的
+// 分类集合，不再字面量比对 "defect"。策略源 = 任务快照 policy-snapshot.json（裁决按快照
+// 执行）；快照缺失/不可解析时回退技能自带默认词表并披露来源——回退是统计层的降级披露，
+// 不是裁决行为
+const blockingCategories = (() => {
+  const readBlockingIds = (text) => {
+    try {
+      const doc = JSON.parse(text);
+      const ids = (Array.isArray(doc.categories) ? doc.categories : [])
+        .filter((entry) => entry !== null && typeof entry === "object" && entry.blocksAccepted === true)
+        .map((entry) => entry.id)
+        .filter((id) => typeof id === "string" && id !== "");
+      return ids.length > 0 ? ids : null;
+    } catch {
+      return null;
+    }
+  };
+  const snapshotPath = resolve(taskDir, "policy-snapshot.json");
+  if (existsSync(snapshotPath)) {
+    const ids = readBlockingIds(readFileSync(snapshotPath, "utf8"));
+    if (ids !== null) return { ids, source: "policy-snapshot.json" };
+  }
+  const defaultPath = join(dirname(fileURLToPath(import.meta.url)), "..", "policies", "finding-categories.json");
+  const ids = existsSync(defaultPath) ? readBlockingIds(readFileSync(defaultPath, "utf8")) : null;
+  return ids !== null ? { ids, source: "技能默认 finding-categories.json（任务快照缺失，回退）" } : { ids: ["defect"], source: "内置回退（defect）" };
+})();
+const isBlockingDefect = (event) => blockingCategories.ids.includes(event.category) && event.severity === "blocker";
+const uniqueMustFix = new Set(history.filter(isBlockingDefect).map((event) => rootId(event.findingId)));
 const origins = {};
 const stages = {};
 for (const event of history) {
@@ -126,7 +157,7 @@ if (firstFull !== undefined) {
   const unresolvedRoots = new Set();
   for (const event of events) {
     if ((event.seq ?? 0) >= cutoff) break;
-    if (event.type === "FindingRaised" && event.category === "defect" && event.severity === "blocker" && !resolvedBefore.has(event.findingId)) {
+    if (event.type === "FindingRaised" && isBlockingDefect(event) && !resolvedBefore.has(event.findingId)) {
       unresolvedRoots.add(rootId(event.findingId));
     }
   }
@@ -165,7 +196,10 @@ const report = {
     designRevisionsAfterAssurance: postAssuranceRevisions > 0 ? events.filter((event) => (event.seq ?? 0) > (firstAssurance.seq ?? 0) && event.type === "DesignApproved").length : 0,
     acceptanceRevisionsAfterAssurance: postAssuranceRevisions > 0 ? events.filter((event) => (event.seq ?? 0) > (firstAssurance.seq ?? 0) && event.type === "AcceptanceApproved").length : 0,
   },
-  processFailed: uniqueMustFix.size > 10 || repairRounds > 3,
+  processFailed: uniqueMustFix.size > KERNEL_RULES.budgets.uniqueMustFixCap || repairRounds > KERNEL_RULES.budgets.repairPerVersionCap,
+  processBudgets: { uniqueMustFixCap: KERNEL_RULES.budgets.uniqueMustFixCap, repairPerVersionCap: KERNEL_RULES.budgets.repairPerVersionCap },
+  blockingCategories: blockingCategories.ids,
+  blockingCategoriesSource: blockingCategories.source,
   findings: history.length,
   reopenedFindings: history.filter((event) => event.reopenOf !== undefined).length,
   origins,
@@ -194,8 +228,8 @@ if (json) {
   console.log(JSON.stringify(report, null, 2));
 } else {
   console.log(`taskDir: ${report.taskDir}`);
-  console.log(`uniqueMustFix: ${report.uniqueMustFix} / 10`);
-  console.log(`repairRounds: ${report.repairRounds} / 3（behavior ${behaviorRepairs.length} + 保证后方案/验收修订 ${postAssuranceRevisions}）`);
+  console.log(`uniqueMustFix: ${report.uniqueMustFix} / ${report.processBudgets.uniqueMustFixCap}（阻断分类：${report.blockingCategories.join(" / ")}，来源 ${report.blockingCategoriesSource}）`);
+  console.log(`repairRounds: ${report.repairRounds} / ${report.processBudgets.repairPerVersionCap}（behavior ${behaviorRepairs.length} + 保证后方案/验收修订 ${postAssuranceRevisions}）`);
   console.log(`processFailed: ${report.processFailed}`);
   console.log(`findings: ${report.findings}（reopened ${report.reopenedFindings}）`);
   console.log(`origins: ${JSON.stringify(report.origins)}`);
