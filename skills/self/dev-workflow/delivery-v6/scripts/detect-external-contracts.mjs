@@ -19,12 +19,20 @@
 //       "packageManifest": "<package.json sha256 或 \"absent\">",
 //       "sourceScanInputs": ["<相对路径>:<sha256>", ...]   // 全部被扫描的代码与文档输入
 //     },
+//     "detectionScope": { "source": "intent", "patterns": ["docs/**", ...] } | null,
 //     "candidates": [
 //       { "id": "candidate-...", "strength": "strong|weak", "signals": ["manifest:...", "source:...", ...],
 //         "suggestedResolver": "installed-npm-package|executable|null", "suggestedLocator": "<定位符|null>" }
 //     ],
 //     "unresolved": [ { "signal": "<形态+定位>", "reason": "<为什么无法静态归因>" } ]
 //   }
+//
+// 扫描范围两层过滤：①git 仓内只扫 tracked + untracked-not-ignored（gitignored 路径
+// 是项目自己声明的外部参考/产物，进候选只是噪声）；②intent 文件可携带交付面声明块
+// <!-- delivery-detection-scope … -->（块内每行一个 glob，** 跨目录 / * 段内通配，
+// 不含通配符的行同时匹配自身与递归子路径），声明在场时只扫命中 glob 的文件——外部
+// 契约的判定域是任务交付面，仓内非交付面（如 agent 工具目录）不进本任务候选。
+// detectionScope 字段显形当前生效的范围声明（无声明为 null），随 inputHashes.intent 可审计。
 //
 // 信号强度（§4.2）：strong = 外部系统 manifest 字段（pi.extensions）、真实 SDK import、
 // 外部注册/分发/生命周期调用类、测试中真实 SDK import；weak = intent 词、普通依赖声明、
@@ -41,6 +49,7 @@
 //
 // 退出码：0 成功（含候选为空）；2 用法错误；3 运行错误（路径不存在、策略文件损坏等）。
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { builtinModules } from "node:module";
@@ -217,9 +226,67 @@ function readManifest(projectRoot) {
 
 // ---------------------------------------------------------------------------
 // 文件收集：代码（.js/.mjs/.cjs/.ts/.tsx/.jsx）与文档（.md/.mdx），排除产物目录
+//
+// 两层范围过滤（2026-11-19 裁决：探测范围随任务交付面定，不随仓库全集定）：
+//   1. git 过滤：git 仓内只扫 tracked + untracked-not-ignored（git ls-files
+//      --cached --others --exclude-standard）。gitignored 路径（外部参考项目、
+//      产物目录）被项目自己声明为非项目面，进候选只会制造验收线无权放行的
+//      强信号噪声。非 git 仓（git 不可用/无 .git）退化为全量扫描并向 stderr 告警。
+//   2. 交付面声明：intent 文件可携带机器可读范围块（HTML 注释形态，markdown
+//      渲染不可见），块内每行一个 glob（** 跨目录 / * 段内通配；不含通配符的
+//      行同时匹配自身与其递归子路径）。声明在场时只扫命中 glob 的文件——外部
+//      契约的判定域是任务交付面，仓内非交付面（如 agent 工具目录）的真实 SDK
+//      import 不由本任务背负。范围块随 intent 内容哈希进 inputHashes，可审计。
 // ---------------------------------------------------------------------------
 
-function collectFiles(projectRoot, excludeAbs) {
+const SCOPE_BLOCK_RE = /<!--\s*delivery-detection-scope\s*\r?\n([^]*?)-->/;
+
+/** git 可扫描文件集合（POSIX 相对路径）：tracked + untracked-not-ignored；非 git 仓返回 null。 */
+function gitScannableFiles(projectRoot) {
+  const result = spawnSync("git", ["-C", projectRoot, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+    encoding: "buffer",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error || result.status !== 0) return null;
+  const set = new Set();
+  const out = result.stdout;
+  let start = 0;
+  for (let index = 0; index < out.length; index += 1) {
+    if (out[index] !== 0) continue;
+    if (index > start) set.add(out.toString("utf8", start, index));
+    start = index + 1;
+  }
+  return set;
+}
+
+/** intent 交付面声明块 → glob 行数组；无块或块内无有效行返回 null。 */
+function parseDetectionScope(intentText) {
+  const match = intentText.match(SCOPE_BLOCK_RE);
+  if (!match) return null;
+  const patterns = match[1]
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+  return patterns.length > 0 ? patterns : null;
+}
+
+/** 简单 glob → 正则：** 跨目录、* 段内通配、其余字符按字面转义；行首 / 规格化为相对。 */
+function globToRegExp(pattern) {
+  const normalized = pattern.replace(/^\/+/, "");
+  const source = normalized
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "\u0000")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\u0000/g, ".*");
+  return new RegExp(`^${source}$`);
+}
+
+/** glob 行集合 → 匹配器数组。不含通配符的行（如 docs）同时匹配自身与递归子路径（docs/**）。 */
+function compileScopeMatchers(patterns) {
+  return patterns.flatMap((pattern) => (pattern.includes("*") ? [pattern] : [pattern, `${pattern}/**`])).map(globToRegExp);
+}
+
+function collectFiles(projectRoot, excludeAbs, fileFilter) {
   const code = [];
   const docs = [];
   const walk = (dir, depth) => {
@@ -242,6 +309,8 @@ function collectFiles(projectRoot, excludeAbs) {
         walk(path, depth + 1);
       } else if (entry.isFile()) {
         if (excludeAbs.has(path)) continue; // intent 等独立输入有自己的哈希键，不进扫描输入
+        const rel = relative(projectRoot, path).split(sep).join("/");
+        if (fileFilter && !fileFilter(path, rel)) continue;
         const ext = pathExtname(path).toLowerCase();
         if (CODE_EXTS.has(ext)) code.push(path);
         else if (DOC_EXTS.has(ext)) docs.push(path);
@@ -389,7 +458,22 @@ function main() {
 
   console.error(`OK: 输入就绪（intent=${opts.intentFile}，packageManifest=${manifestSha === "absent" ? "absent" : manifestSha.slice(0, 12) + "…"}）`);
 
-  const { code, docs } = collectFiles(opts.projectRoot, new Set([opts.intentFile]));
+  const gitSet = gitScannableFiles(opts.projectRoot);
+  if (gitSet === null) {
+    console.error("WARN: git 不可用或非 git 仓：探测退化为全量目录扫描，gitignored 路径可能进入候选（处置时按 weak 语义人工核）；恢复动作：在 git 仓内运行或安装 git 后重跑");
+  }
+  const scopePatterns = parseDetectionScope(intent.text);
+  const scopeMatchers = scopePatterns ? compileScopeMatchers(scopePatterns) : null;
+  if (scopePatterns) {
+    console.error(`OK: intent 交付面声明在场，探测范围收窄为 ${scopePatterns.length} 个 glob（${scopePatterns.join("、")}）`);
+  }
+  const fileFilter = (absPath, rel) => {
+    if (gitSet !== null && !gitSet.has(rel)) return false;
+    if (scopeMatchers !== null && !scopeMatchers.some((matcher) => matcher.test(rel))) return false;
+    return true;
+  };
+
+  const { code, docs } = collectFiles(opts.projectRoot, new Set([opts.intentFile]), fileFilter);
   const codeFileSet = new Set(code);
   const sourceScanInputs = [];
   const scanned = new Map(); // absPath -> {rel, sha, text}
@@ -623,6 +707,7 @@ function main() {
       packageManifest: manifestSha,
       sourceScanInputs: sourceScanInputs.sort(byCodeUnit),
     },
+    detectionScope: scopePatterns ? { source: "intent", patterns: scopePatterns } : null,
     candidates,
     unresolved: unresolved.sort((a, b) => byCodeUnit(a.signal, b.signal) || byCodeUnit(a.reason, b.reason)),
   };
@@ -652,4 +737,4 @@ function isDocSignalPath(rel) {
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) main();
 
-export { loadPolicyClasses, scanCodeFile, slugify };
+export { compileScopeMatchers, globToRegExp, loadPolicyClasses, parseDetectionScope, scanCodeFile, slugify };
