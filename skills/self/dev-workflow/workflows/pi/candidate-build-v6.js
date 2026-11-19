@@ -88,9 +88,14 @@ const SCHEMA_FindingDraft = {
     summary: { type: "string", description: "缺陷现象与影响" },
     requirementIds: { type: "array", items: { type: "string" }, description: "关联契约条目 id；契约外发现为空数组" },
     severity: { type: "string", enum: ["blocker", "non-blocker"], description: "blocker = 阻断该增量完成；non-blocker = 可继续" },
-    category: { type: "string", enum: ["defect", "boundary"], description: "defect=违反判据；boundary=设计边界申报（争议按 defect）" },
+    category: { type: "string", enum: ["defect", "boundary"], description: "defect=违反判据；boundary=无断言级判据覆盖的真实边界申报（关联需求已有断言级判据明文覆盖的行为一律 defect；空关联时必附 emptyScopeRefutation）" },
     consequenceRefutation: { type: "string", description: "非 blocker 必填：否定其用户可观察后果的依据；禁止只按字面合规降级" },
     consequenceRefutationType: { type: "string", enum: ["will-not-occur", "not-observable", "accepted-by-acceptance"], description: "非 blocker 必填：论证类型三择一（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许），先标类型再给依据" },
+    emptyScopeRefutation: { type: "string", description: "空关联 boundary 的不影响任何需求论证（空关联不得绕过定级护栏）" },
+    contractCapabilityIds: { type: "array", items: { type: "string" }, description: "该发现认领的外部契约能力 id（裸 id 或「契约id:能力id」）；结构命中外部契约时 authority 组必填（外部行为反驳必须引用权威工件）" },
+    authorityBacked: { type: "boolean", description: "外部行为反驳已引用权威工件（须同时给 authorityHash 与 authorityObservationRef）" },
+    authorityHash: { type: "string", description: "权威工件内容哈希（authorityBacked=true 时必填）" },
+    authorityObservationRef: { type: "string", description: "权威工件观察记录引用（权威来源文件路径或记录 id；authorityBacked=true 时必填）" },
     origin: { type: "string", enum: ["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"], description: "来源阶段" },
     expectedStage: { type: "string", description: "该问题本应在哪个阶段被拦截" },
     regressionTestRef: { type: "string", description: "回归测试标识" },
@@ -456,7 +461,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "7.5.5"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "7.6.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 let repairsJournalPath = "";
 const repairCounts = {};
 let repairsWarnedWrite = false;
@@ -907,7 +912,13 @@ function intentArgsFor(event) {
                 ...opt("origin", "--origin"), ...opt("reopenOf", "--reopen-of"),
                 ...opt("consequenceRefutation", "--consequence-refutation"), ...opt("consequenceRefutationType", "--consequence-refutation-type"),
                 ...opt("firstDetectedStage", "--first-detected-stage"), ...opt("expectedStage", "--expected-stage"),
-                ...opt("regressionTestRef", "--regression-test-ref"), ...rev];
+                ...opt("regressionTestRef", "--regression-test-ref"),
+                // 空关联 boundary 论证与外部契约 authority 组（gate 护栏②④ 的供给通道）：
+                // 漏传会让「按前置判据申报的合规形态」在登记时被拒并烧整轮
+                ...opt("emptyScopeRefutation", "--empty-scope-refutation"),
+                ...(event.contractCapabilityIds !== undefined ? ["--contract-capability-ids", JSON.stringify(event.contractCapabilityIds)] : []),
+                ...(event.authorityBacked === true ? ["--authority-backed", "true"] : []),
+                ...opt("authorityHash", "--authority-hash"), ...opt("authorityObservationRef", "--authority-observation-ref"), ...rev];
         default:
             throw new Error(`intentArgsFor 未路由事件类型 ${event.type}`);
     }
@@ -932,6 +943,8 @@ function validateBuilderOutcome(value) {
             return "finding.summary 须为非空字符串";
         if (finding.severity !== "blocker" && finding.severity !== "non-blocker")
             return "finding.severity 非法";
+        if (finding.category !== undefined && finding.category !== "defect" && finding.category !== "boundary")
+            return "finding.category 非法（只允许 defect / boundary）";
         if (finding.origin !== undefined && !["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"].includes(finding.origin))
             return "finding.origin 非法";
         if (acceptanceDoc?.schemaVersion === 2 && finding.severity === "non-blocker") {
@@ -945,6 +958,43 @@ function validateBuilderOutcome(value) {
         if (!Array.isArray(finding.requirementIds) || finding.requirementIds.some((id) => typeof id !== "string" || !requirementIds.has(id))) {
             return "finding.requirementIds 必须引用契约条目或为空数组";
         }
+        // 前置判据（与 gate 护栏①②同口径，修正重问代替被拒后整轮失败）：
+        // ① 关联需求已有断言级判据明文覆盖 → 不得申报 boundary（判据见角色文件与任务书）
+        const asserted = acceptanceDoc?.schemaVersion === 2 && finding.requirementIds.some((requirementId) => {
+            const requirement = requirements.find((item) => item.id === requirementId);
+            return requirement !== undefined && Array.isArray(requirement.assertions) && requirement.assertions.length > 0;
+        });
+        if (finding.category === "boundary" && asserted) {
+            return `发现「${finding.summary}」标 category=boundary，但关联需求已有断言级判据明文覆盖——该行为一律按 defect 申报（请改 category=defect 按实际严重度定级），或从 requirementIds 移除已有断言覆盖的需求并附对照论证`;
+        }
+        // ② 空关联 boundary 必须附 emptyScopeRefutation（gate 护栏②）
+        if (finding.category === "boundary" && finding.requirementIds.length === 0 && typeof finding.emptyScopeRefutation !== "string") {
+            return `发现「${finding.summary}」是空关联 boundary，必须附 emptyScopeRefutation（该发现不影响任何需求的论证）——否则登记被 gate 拒`;
+        }
+        // ③ 结构命中外部契约（认领契约能力，或关联需求断言带 requiredEnvironment.capability）
+        // 时必须给 authority 反驳组（gate 护栏④）——正常关联形态缺该组必被拒
+        const structuralContractHit = (Array.isArray(finding.contractCapabilityIds) && finding.contractCapabilityIds.length > 0) ||
+            (acceptanceDoc?.schemaVersion === 2 && finding.requirementIds.some((requirementId) => {
+                const requirement = requirements.find((item) => item.id === requirementId);
+                return requirement !== undefined && (requirement.assertions ?? []).some((assertion) => typeof assertion.requiredEnvironment?.capability === "string" && assertion.requiredEnvironment.capability !== "");
+            }));
+        if (structuralContractHit) {
+            const authorityComplete = finding.authorityBacked === true &&
+                typeof finding.authorityHash === "string" && /^[0-9a-f]{64}$/.test(finding.authorityHash) &&
+                typeof finding.authorityObservationRef === "string" && finding.authorityObservationRef.trim() !== "";
+            if (!authorityComplete) {
+                return `发现「${finding.summary}」结构命中外部契约（认领契约能力或关联需求断言带 requiredEnvironment.capability），必须同时给 authorityBacked=true / authorityHash（当前权威 aggregateHash，64 位十六进制）/ authorityObservationRef（权威快照文件+符号或真实 probe case id）——外部行为反驳必须引用权威工件`;
+            }
+        }
+        if (finding.contractCapabilityIds !== undefined && (!Array.isArray(finding.contractCapabilityIds) || finding.contractCapabilityIds.some((id) => typeof id !== "string" || id.trim() === ""))) {
+            return "finding.contractCapabilityIds 须为非空字符串数组";
+        }
+        if (finding.authorityBacked !== undefined && typeof finding.authorityBacked !== "boolean")
+            return "finding.authorityBacked 须为布尔值";
+        if (finding.authorityHash !== undefined && !/^[0-9a-f]{64}$/.test(finding.authorityHash))
+            return "finding.authorityHash 须为 64 位十六进制 sha256";
+        if (finding.authorityObservationRef !== undefined && (typeof finding.authorityObservationRef !== "string" || finding.authorityObservationRef.trim() === ""))
+            return "finding.authorityObservationRef 须为非空字符串";
     }
     return "";
 }
@@ -969,6 +1019,11 @@ async function appendFinding(draft, artifact) {
         // 带合法反驳论证，本函数漏抄致登记失败
         ...(draft.consequenceRefutation === undefined ? {} : { consequenceRefutation: draft.consequenceRefutation }),
         ...(draft.consequenceRefutationType === undefined ? {} : { consequenceRefutationType: draft.consequenceRefutationType }),
+        ...(draft.emptyScopeRefutation === undefined ? {} : { emptyScopeRefutation: draft.emptyScopeRefutation }),
+        ...(draft.contractCapabilityIds === undefined ? {} : { contractCapabilityIds: draft.contractCapabilityIds }),
+        ...(draft.authorityBacked === undefined ? {} : { authorityBacked: draft.authorityBacked }),
+        ...(draft.authorityHash === undefined ? {} : { authorityHash: draft.authorityHash }),
+        ...(draft.authorityObservationRef === undefined ? {} : { authorityObservationRef: draft.authorityObservationRef }),
         ...(draft.origin === undefined ? {} : { origin: draft.origin }),
         ...(draft.expectedStage === undefined ? {} : { expectedStage: draft.expectedStage }),
         ...(draft.regressionTestRef === undefined ? {} : { regressionTestRef: draft.regressionTestRef }),
@@ -1120,6 +1175,7 @@ for (let index = 0; index < increments.length; index += 1) {
             item.testCommand !== undefined
                 ? "你返回后脚本会执行该增量声明的 testCommand 并把测试摘要追加进报告；不要等待测试结果，也不要伪造。"
                 : "该增量未声明 testCommand；报告中的自测命令与退出码由你亲自运行取得。",
+            "外部调用边界：实现中若引入验收未登记的外部系统调用（真实宿主 / 官方 runner / 外部 SDK），不要自行补登记——先停回主会话走 open-revision 修订验收、登记对应 externalContracts capability；未登记的新增外部调用会在交付判定阶段的候选复扫被拒，交付判定无法通过。",
             ...(isContractSmoke
                 ? [
                     "本增量为契约冒烟（contract-smoke）：testCommand 运行 runtime probe driver。driver 约定（V6 设计 §6.3，引擎机器校验）：driver 限定单文件；禁止动态 import()、eval()、new Function() 与非字面量 require()（静态不可解析 = import 闭包不可枚举）；需要辅助模块时全部经静态 import 引入。引擎核对 driver 文件存在性并静态扫描上述禁用形态，同时把 driverHash（全文 sha256）登记进实现报告与实现事件——gate 侧凭该哈希对账，违规即构建失败。",
@@ -1130,7 +1186,7 @@ for (let index = 0; index < increments.length; index += 1) {
                 ? "不修改任何产品代码与测试；禁止修改 acceptance.json、increments.json、events.jsonl、verdict.json，禁止 Git 写操作与派新 agent。"
                 : "只实现当前增量的产品代码与测试；禁止修改 acceptance.json、increments.json、events.jsonl、verdict.json，禁止 Git 写操作与派新 agent。",
             "builder 的测试输出不是 verified 证据；不要写 EvidenceRecorded 或宣告 accepted。",
-            '返回结构（严格 JSON）：{ "summary": string, "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }——无发现也须返回空 findings 数组；schema 2 非 blocker 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据。',
+            '返回结构（严格 JSON）：{ "summary": string, "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "emptyScopeRefutation": string|null, "contractCapabilityIds": string[]|null, "authorityBacked": boolean|null, "authorityHash": string|null, "authorityObservationRef": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }——无发现也须返回空 findings 数组；schema 2 非 blocker 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据。category 申报判据：关联需求已有断言级判据明文覆盖的行为一律 defect；boundary 只用于无断言覆盖的真实边界申报，空关联 boundary 必须给 emptyScopeRefutation。发现结构命中外部契约（认领契约能力或关联需求断言带 requiredEnvironment.capability）时必须给 authorityBacked=true / authorityHash（当前权威 aggregateHash）/ authorityObservationRef（权威快照文件+符号或真实 probe case id）——否则登记被拒。',
             ...(corrective === null ? [] : [corrective]),
         ].join("\n"));
         const reportCheck = await runNode([NODE_CHECK_EXISTS, reportPath]);
@@ -1264,8 +1320,9 @@ for (let index = 0; index < increments.length; index += 1) {
                 `历史探索索引（不得重复已排除方向）：${JSON.stringify(history)}`,
                 `探索报告写入路径：${explorationReportPath}`,
                 `必须覆盖维度：${JSON.stringify(dimensions)}`,
-                "从原始意图、验收与真实实现构造反例并亲自运行实验。每条 must-fix 给 origin/expectedStage/regressionTestRef；非 blocker 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据。",
-                '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
+                "从原始意图、验收与真实实现构造反例并亲自运行实验。每条 blocker 发现给 origin/expectedStage/regressionTestRef；非 blocker 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据。",
+                "category 申报判据：关联需求已有断言级判据明文覆盖的行为一律 defect；boundary 只用于无断言覆盖的真实边界申报，空关联 boundary 必须给 emptyScopeRefutation（不影响任何需求的论证）。发现结构命中外部契约（认领契约能力或关联需求断言带 requiredEnvironment.capability）时必须给 authorityBacked=true / authorityHash（当前权威 aggregateHash）/ authorityObservationRef（权威快照文件+符号或真实 probe case id）——否则登记被拒。",
+                '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "severity": "blocker"|"non-blocker", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "emptyScopeRefutation": string|null, "contractCapabilityIds": string[]|null, "authorityBacked": boolean|null, "authorityHash": string|null, "authorityObservationRef": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
                 ...(corrective === null ? [] : [corrective]),
             ].join("\n"));
             const reportCheck = await runNode([NODE_CHECK_EXISTS, explorationReportPath]);
@@ -1282,8 +1339,16 @@ for (let index = 0; index < increments.length; index += 1) {
                     return `缺探索维度 ${dimension}`;
             return validateBuilderOutcome(value);
         }, { workflow: "candidate-build-v6", step: "execute", round: index + 1, target: `candidate-explorer-${item.id}` });
-        if (!explorationGuard.ok || explorationGuard.value === null)
-            return failBuild(`候选反例审查失败：${explorationGuard.error}`, explorationReportPath);
+        if (!explorationGuard.ok || explorationGuard.value === null) {
+            // 探索耗尽不丢弃已申报发现（D21）：最后一次尝试返回的 findings 按 validateBuilderOutcome
+            // 单条口径过滤出可挽救条目，随 failure 产物经 failBuild 登记——探索者已写进报告的
+            // 发现不随 run 终态蒸发
+            const rawFindings = explorationGuard.raw !== null && Array.isArray(explorationGuard.raw.findings) ? explorationGuard.raw.findings : [];
+            const salvageable = rawFindings.filter((d) => typeof d?.summary === "string" && d.summary.trim() !== "" &&
+                (d.severity === "blocker" || d.severity === "non-blocker") &&
+                Array.isArray(d.requirementIds) && d.requirementIds.every((id) => typeof id === "string" && requirementIds.has(id)));
+            return failBuild(`候选反例审查失败：${explorationGuard.error}`, explorationReportPath, salvageable);
+        }
         const exploration = explorationGuard.value;
         for (const draft of exploration.findings) {
             const event = {
@@ -1292,6 +1357,11 @@ for (let index = 0; index < increments.length; index += 1) {
                 severity: draft.severity, requirementIds: draft.requirementIds,
                 ...(draft.consequenceRefutation === undefined ? {} : { consequenceRefutation: draft.consequenceRefutation }),
                 ...(draft.consequenceRefutationType === undefined ? {} : { consequenceRefutationType: draft.consequenceRefutationType }),
+                ...(draft.emptyScopeRefutation === undefined ? {} : { emptyScopeRefutation: draft.emptyScopeRefutation }),
+                ...(draft.contractCapabilityIds === undefined ? {} : { contractCapabilityIds: draft.contractCapabilityIds }),
+                ...(draft.authorityBacked === undefined ? {} : { authorityBacked: draft.authorityBacked }),
+                ...(draft.authorityHash === undefined ? {} : { authorityHash: draft.authorityHash }),
+                ...(draft.authorityObservationRef === undefined ? {} : { authorityObservationRef: draft.authorityObservationRef }),
                 ...(draft.origin === undefined ? {} : { origin: draft.origin }),
                 ...(draft.expectedStage === undefined ? {} : { expectedStage: draft.expectedStage }),
                 ...(draft.regressionTestRef === undefined ? {} : { regressionTestRef: draft.regressionTestRef }),
@@ -1312,6 +1382,11 @@ for (let index = 0; index < increments.length; index += 1) {
                 ...(ev.origin !== undefined ? ["--origin", String(ev.origin)] : []),
                 ...(ev.expectedStage !== undefined ? ["--expected-stage", String(ev.expectedStage)] : []),
                 ...(ev.regressionTestRef !== undefined ? ["--regression-test-ref", String(ev.regressionTestRef)] : []),
+                ...(ev.emptyScopeRefutation !== undefined ? ["--empty-scope-refutation", String(ev.emptyScopeRefutation)] : []),
+                ...(ev.contractCapabilityIds !== undefined ? ["--contract-capability-ids", JSON.stringify(ev.contractCapabilityIds)] : []),
+                ...(ev.authorityBacked === true ? ["--authority-backed", "true"] : []),
+                ...(ev.authorityHash !== undefined ? ["--authority-hash", String(ev.authorityHash)] : []),
+                ...(ev.authorityObservationRef !== undefined ? ["--authority-observation-ref", String(ev.authorityObservationRef)] : []),
                 "--credential", assuranceCredentialId,
             ];
             let appended = await runGate(gatePath, findingGateArgs(event));

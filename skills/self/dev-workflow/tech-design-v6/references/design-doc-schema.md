@@ -36,11 +36,11 @@
 | priority | string 枚举 | 必填 | `P0` / `P1` / `P2` / `P3`，判定规则见 `flow/write.md` 前置「判断层性质」 |
 | riskScore | number | 必填 | 风险分（整数） |
 | riskRationale | string | 必填 | 风险分依据一句话 |
-| reviewNav | object 数组 | 必填 | 人工审核导航，每条 A/B 级决策一行；全部 decisionId 的集合必须与 `s3-solution.json` decisions 的 id 集合完全一致（A/B 级决策不得缺导航行） |
+| reviewNav | object 数组 | 必填（非空） | 人工审核导航，每条 A/B 级决策一行；全部 decisionId 的集合必须与 `s3-solution.json` decisions 的 id 集合完全一致（A/B 级决策不得缺导航行）。设计至少一条关键决策（A/B 级）——零关键决策的设计不成立，reviewNav 不得为空数组 |
 | skillVersion | string | 可选 | 产出本设计的技能版本（semver `MAJOR.MINOR.PATCH`），值读本技能 SKILL.md frontmatter `version`（唯一权威，T1 创建 meta.json 时写入——写入义务见 `flow/write.md`「meta.json skillVersion 写入」节）。产物溯源字段：回答「本设计包由哪个技能版本产出」，只读溯源不参与任何执行裁决；机器检查校验 semver 形态（有则查、无则放行——存量设计目录零影响） |
 | acceptanceBinding | object | 交付体系任务必填；独立设计任务省略 | 验收绑定 `{ acceptanceVersion, acceptancePackageSha256, taskDir }`（子字段见下表）——T1 入口门（`flow/write.md` Step 0）在验收批准检查通过后写入；绑定交付任务目录的当前批准（dev-flow-v6 入口门核对其与当前批准一致）；验收版本变化后旧设计包不可直接进 T3 / dev-flow-v6 入口，须重新影响审查。机器检查按「有则核形态与子字段齐全，无则 warning 提示（独立设计任务合法省略）」处理 |
 | environmentBinding | object | 可选（外部契约任务必填） | 环境契约快照绑定 `{ snapshotSha256 }`（子字段见下表）——T1 入口门（`flow/write.md` Step 0）在任务目录存在 `environment-contracts.current.json` 时写入；绑定设计引用的权威快照身份（T3 入口自检比对现行性，方案包哈希清单计入该哈希——环境漂移即清单不再覆盖当前设计包）。无外部契约的任务整字段省略 |
-| relatedDocs | object 数组 | 可选（默认空数组） | 关联登记清单：本设计触及、修改、推翻的项目内存量权威文档（决策记录 ADR、产品定义、领域模型等），供下游终态同步（design-code-sync）核对回写——登记了没同步 = 可立项的遗漏。纯语义登记，不强制非空（无关联时空数组，校验只查数组形态）；渲染为头部表「关联登记」行（空数组不渲染该行） |
+| relatedDocs | object 数组 | 可选（默认空数组） | 关联登记清单：本设计触及、修改、推翻的项目内存量权威文档（决策记录 ADR、产品定义、领域模型等），供下游终态同步（design-code-sync）核对回写——登记了没同步 = 可立项的遗漏。纯语义登记，不强制非空（无关联时空数组）；机器检查只查数组形态与元素 `path` 非空，`relation` 为写作建议（下游核对依据）、机器不校验；渲染为头部表「关联登记」行（空数组不渲染该行） |
 
 **reviewNav 行内字段**：
 
@@ -50,7 +50,7 @@
 | anchor | string | 必填 | 渲染视图中的锚点（如 `§3.3`） |
 | level | string 枚举 | 必填 | `A` / `B`，与被引用决策的 level 一致 |
 | title | string | 必填 | 决策标题，与被引用决策的 title 一致 |
-| criteria | string | 必填 | 命中的审查判据编号 |
+| criteria | string | A 级必填；B 级可省 | 命中的审查判据编号（如「命中判据 2：权威源归属变更」）。A 级决策须逐条人工裁决，缺判据编号 = 无裁决依据（机器检查规则 3 拦截 A 级空 criteria）；B 级「无异议即过」，可省 |
 | impact | string | 必填 | 关键影响简述（写有实质影响的维度，不写「无」） |
 
 **acceptanceBinding 行内字段**：
@@ -72,7 +72,7 @@
 | 字段 | 类型 | 必填 | 填写要求 |
 |---|---|---|---|
 | path | string | 必填 | 关联文档的项目内相对路径 |
-| relation | string | 必填 | 本设计与该文档的关系一句话（触及 / 修改 / 推翻了它的什么语义） |
+| relation | string | 可选（建议填写） | 本设计与该文档的关系一句话（触及 / 修改 / 推翻了它的什么语义）——下游终态同步的判断依据；机器检查只校验 path，relation 缺失时渲染为「—」，不阻塞 |
 
 ## 4. s1-context.json —— §1 背景目标
 
@@ -141,7 +141,7 @@
 
 ### 5.4 artifactTables.stateCopies —— 状态副本清单
 
-P2 权威唯一原则的产物表（触发条件：设计涉及持久化状态、多进程或多视图共享状态、新增落盘格式）。填表三原则（通用表述，不绑技术栈）：
+P2 权威唯一原则的产物表（触发条件：设计涉及持久化状态、多进程或多视图共享状态、新增落盘格式）。**未触发时写空数组（与其他产物表同口径，不补空表行）**；触发时填表三原则（通用表述，不绑技术栈）：
 
 1. **候选位置从代码检索得出**（修改点、读取点、进程清单），检索方式按项目技术栈自行确定，禁止凭印象列举；
 2. **每个候选逐个给「存在副本 / 不存在」结论**——存在副本的行 `excluded=false` 并填 sync；不存在的行 `excluded=true` 并在 exclusionNote 附一句排除依据；
@@ -240,9 +240,9 @@ P7 上游约束原则的产物表（触发条件：设计依赖非本项目代�
 | choice | string | 必填 | 采用：选了什么、怎么工作 |
 | rejected | string | 必填 | 不采用：不选什么、为什么不行；用自然句说明「不采用 X 的理由：若用 X，现状例子会变成什么样」 |
 | evidence | string | 必填 | 证据：符号名 + 设计时坐标 / 先例 / 探针编号，带核实状态（已核实 / 推断须显式标注，禁止未标注的推断冒充证据） |
-| gapRefs | string 数组 | 必填 | 引用本文件 terminalForm.gapTable[].id（见 §9） |
+| gapRefs | string 数组 | 必填 | 引用本文件 terminalForm.gapTable[].id（见 §9）。**演进型必填空数组**：演进型无 terminalForm（§6.1 规定不得有），不存在可引用差距，非空即触发规则 4 引用失败 |
 | unitRefs | string 数组 | 必填 | 引用 s5-breakdown.json units[].id（见 §9）——本决策的交付影响对应哪些拆分单元 |
-| axiomRefs | string 数组 | 必填 | 引用本文件 terminalForm.axioms[].id（见 §9） |
+| axiomRefs | string 数组 | 必填 | 引用本文件 terminalForm.axioms[].id（见 §9）。**演进型必填空数组**：演进型无 terminalForm，不存在可引用公理，非空即触发规则 4 引用失败 |
 | impact | object | 必填 | 六维度效果（本决策让哪些目标 / 场景成立），字段与含义：`architecture` 架构、`function` 功能、`complexity` 复杂度、`performance` 性能、`resource` 资源、`redline` 红线；无影响的维度可留空串 |
 | guards | object 数组 | 可选 | 守护登记：该决策的守护 / 命令 / 正则类可执行内容单一登记于此（权威载体 = text 全文）；其余章节以 {{Gx}} 标记引用（渲染展开为全文）；同一内容禁止两处登记，重复登记由检查器拦截，登记全文在正文其他字段的逐字残留由检查器 warning 提示（不阻塞，残留处收敛为 {{id}} 引用）——决策无守护内容时省略整个字段。行内字段见下表 |
 
@@ -271,7 +271,7 @@ P7 上游约束原则的产物表（触发条件：设计依赖非本项目代�
 |---|---|---|---|
 | scenarios | object 数组 | 必填 | 验证场景：真实依赖、真实数据、真实路径，不用 mock / 桩 / 假数据；按改动大小匹配投入（小改动一句话，大改动多场景）；关键负面行为也要有反向验证场景 |
 | assertionRedlights | object 数组 | 条件触发 | 断言-红灯映射表（P6 产物）：设计含运行时行为断言（自清理 / 在 X 之前执行 / 不丢 / 有界）时必填；未触发写空数组 |
-| e2eImpact | object | 必填 | e2e 影响面评估：受影响的既有 e2e / 真实进程测试资产清单与开发阶段需跑子集；无受影响项时 items 为空数组且 noneReason 填依据（禁止留空或省略） |
+| e2eImpact | object | 必填 | e2e 影响面评估：受影响的既有 e2e / 真实进程测试资产清单与开发阶段需跑子集；无受影响项时 items 为空数组且 noneReason 填依据。**机器检查规则 6 拦截缺失 / 非对象 / items 非数组 / items 为空且 noneReason 为空 / 行内 name·action 为空**——字段省略不再被渲染视图的固定标题掩盖（禁止留空或省略） |
 | criterionMechanisms | object 数组 | V5 交付任务必填 | 判据与机制对账：每条 `assertionId / decisionIds / mechanismRefs / consistency / counterexample / resolution`；每条验收断言至少一行，decisionIds 指向 s3 decisions；consistency 三值词表 = `pass`（一致）/ `conflict`（机制与判据冲突，须给非空 resolution 处置结果）/ `not-applicable`（机制不适用本断言，须在 counterexample 写明不适用理由或检查过程）。T2 完成口径：全部行最终 pass，或带 resolution 的 conflict 清零（机器检查拦截空理由的 not-applicable 与无 resolution 的 conflict） |
 | verificationBindings | object 数组 | V5 交付任务必填 | 反例场景测试绑定：每条 `adversarialFormId / testRef / preconditions / actions / assertions`；每个 adversarialForm 至少一行，写明实际前置条件、操作步骤和断言位置，不得只写场景标题 |
 

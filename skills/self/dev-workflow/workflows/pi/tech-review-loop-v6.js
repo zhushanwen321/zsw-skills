@@ -547,7 +547,7 @@ const SKILL_DATA_DETECT_VECTORS = [
     { kind: "stray-worktree", label: "游离 worktree：临时目录内 worktree 的形态输出确定", expectForm: "single" },
     { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
-const SKILL_VERSION = "6.3.0"; // 构建注入自 tech-design-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "6.4.0"; // 构建注入自 tech-design-v6/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // tech-review-loop-v6 — tech-design-v6 技能 W1 审查循环（zcode 动态工作流）
 // 骨架镜像自 saved review-fix-loop.dwf.ts（多脚本循环骨架 = 镜像 + 头部差异登记，
@@ -797,7 +797,8 @@ async function askValidated(validate, rawAsk, prompt) {
             ``,
             `重新返回完整 JSON（全量重新给出，不是增量补丁；除该 JSON 外不要改任何已落盘产物）。`,
             ``,
-            `（同一子代理续写——完整任务上下文见前文对话，无需重述任务。你的任务开头摘录：${prompt.slice(0, 160)}${prompt.length > 160 ? "…" : ""}）`,
+            `（平台无关：以下完整重发原任务书——pi 侧回喂由新 agent 接收、不得依赖前文对话；zcode 同名续聊同样按原文执行）原任务书全文：`,
+            prompt,
         ].join("\n"));
     }
     const fin = validate(last);

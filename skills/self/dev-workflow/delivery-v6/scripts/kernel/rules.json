@@ -26,7 +26,53 @@
     "boundaryBanOnAssertedRequirements": true,
     "consequenceRefutationRequired": true,
     "regradeHaltEnabled": true,
-    "emptyScopeBoundaryRequiresRefutation": true
+    "emptyScopeBoundaryRequiresRefutation": true,
+    "documentation": {
+      "//": "护栏判据前置登记（scripts/check-gate-prompt-parity.mjs 对账 2 的输入源）：每条登记 keywords（判据核心词，任一命中即算在场）与 requiredIn（必须写明该判据的消费方文件，仓库相对路径）。本块只做结构性检查——关键词命中不等于判据语义到位，判据措辞变化时同步维护关键词。authorityRefutationRequired 是 gate 硬编码护栏（无本开关键），仅作 documentation 条目登记。",
+      "boundaryBanOnAssertedRequirements": {
+        "keywords": ["断言级判据", "断言覆盖"],
+        "requiredIn": [
+          "skills/self/dev-workflow/delivery-v6/references/roles/explorer.md",
+          "skills/self/dev-workflow/delivery-v6/references/roles/builder.md",
+          "skills/self/dev-workflow/delivery-v6/references/roles/coverage-reviewer.md",
+          "skills/self/dev-workflow/workflows/src/candidate-build-v6.shared.ts",
+          "skills/self/dev-workflow/workflows/src/independent-assurance-v6.shared.ts",
+          "skills/self/dev-workflow/workflows/src/assurance-repair-loop-v6.shared.ts"
+        ]
+      },
+      "emptyScopeBoundaryRequiresRefutation": {
+        "keywords": ["empty-scope-refutation", "emptyScopeRefutation"],
+        "requiredIn": [
+          "skills/self/dev-workflow/workflows/src/candidate-build-v6.shared.ts",
+          "skills/self/dev-workflow/workflows/src/independent-assurance-v6.shared.ts",
+          "skills/self/dev-workflow/workflows/src/assurance-repair-loop-v6.shared.ts"
+        ]
+      },
+      "regradeHaltEnabled": {
+        "keywords": ["定级熔断", "定级改判", "定级组合"],
+        "requiredIn": [
+          "skills/self/dev-workflow/workflows/src/independent-assurance-v6.shared.ts",
+          "skills/self/dev-workflow/workflows/src/assurance-repair-loop-v6.shared.ts"
+        ]
+      },
+      "consequenceRefutationRequired": {
+        "keywords": ["consequenceRefutation", "consequence-refutation", "行为后果否证"],
+        "requiredIn": [
+          "skills/self/dev-workflow/delivery-v6/references/roles/explorer.md",
+          "skills/self/dev-workflow/workflows/src/candidate-build-v6.shared.ts",
+          "skills/self/dev-workflow/workflows/src/independent-assurance-v6.shared.ts",
+          "skills/self/dev-workflow/workflows/src/assurance-repair-loop-v6.shared.ts"
+        ]
+      },
+      "authorityRefutationRequired": {
+        "keywords": ["--authority-backed", "authorityBacked"],
+        "requiredIn": [
+          "skills/self/dev-workflow/workflows/src/candidate-build-v6.shared.ts",
+          "skills/self/dev-workflow/workflows/src/independent-assurance-v6.shared.ts",
+          "skills/self/dev-workflow/workflows/src/assurance-repair-loop-v6.shared.ts"
+        ]
+      }
+    }
   },
   "predicates": {
     "//": "转移前置谓词词表。decider = 谁机器判定：gate = delivery-gate 命令、core = delivery-core 命令、workflow = 执行 workflow、user = 用户动作本身。",

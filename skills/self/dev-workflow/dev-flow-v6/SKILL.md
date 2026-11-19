@@ -3,7 +3,7 @@ name: dev-flow-v6
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 6.5.1
+version: 6.6.0
 description: >-
   Use when 一份完整设计包（tech-design-v6 产出：设计文档 + impl-plan.json 单源与渲染视图 + 审查终态）
   需要落地为已验收代码。纯执行七段——编译 → 开发 → 一致性审查 → 验收 → 收尾 →
@@ -31,7 +31,7 @@ description: >-
 | 判据 | 缺失时 |
 |------|--------|
 | 交付任务目录存在已批准 acceptance.json（`delivery-gate evaluate` 的 state ∈ {design, revision-unstable, implementing, acceptance-approved, candidate, accepted, accepted_with_risk}——显式枚举，替换态 superseded / supersede-pending / supersede-cancelled 与未批准 draft 不放行；meta.json acceptanceBinding 与当前批准一致——D0 编译门 `check-exec-plan.mjs --task-dir` 机器核对：acceptanceVersion 与验收包联合哈希（acceptance.json + increments.json 解析内容规范 JSON）复算比对，见 `flow/compile.md` 步骤 3） | 回 delivery-v6 走验收设计与批准 |
-| DesignApproved 存在且绑定的方案包哈希清单覆盖当前设计包（`verdict.designApproved == true`） | 回 tech-design-v6 重新确认方案包并 record-design-approved |
+| DesignApproved 存在且绑定的 acceptanceVersion 为当前版本（`verdict.designApproved == true`；登记时的 packageFiles 是声明快照清单，机器不核对方案包文件当前内容——方案包改动须人工纪律重新确认） | 回 tech-design-v6 重新确认方案包并 record-design-approved |
 | increments.json 的增量契约未被 impl-plan 变更（D0 编译门 `check-exec-plan.mjs --task-dir <交付任务目录>` 逐增量核对 exec-plan 单元归属（nodes[].incrementId）与测试命令一致；不一致 → fail-fast 回 T3） | 回 tech-design-v6 修 T3（increments 的增删改属技能①，走验收版本递增重批） |
 
 设计包判据表（交付体系任务同样适用）：
@@ -50,9 +50,9 @@ description: >-
 
 | 段 | 内容 | 承载 | 推进门 |
 |----|------|------|--------|
-| D0 编译 | 编译器 `scripts/compile-exec-plan.mjs --impl-plan <plan.json>` 生成 exec-plan.json（生成即校验 PASS，含三类关联声明 associations 对账）+ 逐节点 promptFile + 初始 status.json（语义缺口回上游修后重新编译，禁手修生成物；验收资产就绪后再跑 `--mode acceptance`；手工降级路径见 flow 文件）+ L0 前置 + 环境 smoke；交付体系契约感知任务加跑外部契约门（权威快照 / essential 契约的契约冒烟增量与 spike DAG / D0 复扫 / runtime-probe 行，拒绝条件全部在写盘前，判据见 `flow/compile.md`） | 主 agent | `flow/compile.md` |
+| D0 编译 | 编译器 `scripts/compile-exec-plan.mjs --impl-plan <plan.json>` 生成 exec-plan.json（生成即校验 PASS，含三类关联声明 associations 对账）+ 逐节点 promptFile + 初始 status.json（语义缺口回上游修后重新编译，禁手修生成物；验收资产就绪后再跑 `--mode acceptance`；手工降级路径见 flow 文件）+ L0 前置 + 环境 smoke；交付体系契约感知任务加跑外部契约门（权威快照 / essential 契约的契约冒烟增量与 spike DAG / D0 复扫 / runtime-probe 行，拒绝条件全部在写盘前，判据见 `flow/compile.md`）；机制八验证资产门（类型层 / 空跑放行 / 全量绑定无测试配置三判据 + 两个裁决旗 `--allow-missing-typescript` 与 `--allow-zero-test-passthrough`，数据源 = 产物根 `project-capabilities.json`，判据见 `flow/compile.md`「机制八验证资产门」节） | 主 agent | `flow/compile.md` |
 | D1 开发循环 | 单元 DAG 流式并行（写码→核验→commit→解锁；开发期 e2e verify 失败与 commit 门禁被拒同入统一失败处理中心轮内修；过程审查 kind=review 节点 = 渐进式 review——机器检查三态 + reviewer 按需触发 + 修复波及机器重验，过程记录 process-review.jsonl 带 process 域章，与交付事件流经 `delivery-core events` 读侧合流（分储单口），判据见 `flow/compile.md`） | W2 wave-executor-v6（手工路径 `flow/execute.md`） | 全节点 done 或 blocked |
-| D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组流式槽位池并行（在途 ≤5；文档修复组按文件门控进同一派发池——不相交同池并行、相交回退串行段）+ Gate A 全量测试（红后归因分诊独立 phase：本批回归条目回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态，≤2 轮）；外部契约任务加契约快照对照（实现接口与权威 surface 漂移核对），deliveryProfile=a 时分区降档为契约与改动对照（判据见 `flow/consistency-review.md`） | W3 dev-consistency-loop-v6（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
+| D2 一致性审查 | diff × 设计对照（R1 全面分区审 / R2+ 定向复审）+ 每轮聚合定性独立 phase（跨区同根因去重 / 定性复核 / 无交集分组 / 跨职责路由）+ 修复组流式槽位池并行（在途 ≤5；文档修复组按文件门控进同一派发池——不相交同池并行、相交回退串行段）+ Gate A 全量测试（红后归因分诊独立 phase：本批回归条目回注修复轮再修、瞬态重跑、存量红/测试基建缺陷带分诊报告终态，≤2 轮）；外部契约任务加契约快照对照（实现接口与权威 surface 漂移核对），deliveryProfile=a 时分区降档为契约与改动对照（判据见 `flow/consistency-review.md`）；过程层关联对账 CLI `check-associations.mjs`（check / recheck，手工调用、非 review 节点脚本——三态退出码与 worktree unknown 处置见 `flow/consistency-review.md`「过程层关联对账」节） | W3 dev-consistency-loop-v6（手工路径 `flow/consistency-review.md`） | unreasonable 清零 + Gate A 绿 |
 | D3 端到端验收 | 验收计划表 L3/L4 编译成 verify/inspect 节点（核心先行 + 短路）+ 验收失败修复循环（failed 入失败池 → 聚合裁决独立 phase（跨节点同根因合并/disputed 反证/文件不相交分组）→ 修复组独立 phase（fixer 修产品代码与验收资产，引擎按组 commit）→ 节点重置机器重验回调度循环，≤3 轮不收敛才熔断）；外部契约任务的 runtime-probe 节点随验收编译（D0 生成 wrapper 进 taskDir evidence），D3 全绿后、D4 候选完成前跑外部契约复扫门（未登记 strong 信号 / probe 未跑不得进入候选完成，命令与判据见 `flow/acceptance.md`） | W2 第二实例化（手工路径 `flow/acceptance.md`） | 验收全绿 + 复扫门通过 |
 | D4 收尾（候选完成） | 交付汇总 + 增量实现登记（交付体系任务：逐增量以 builder 凭据 `delivery-gate record-implementation` 登记 ImplementationRecorded，与 candidate-build-v6 同一事件流与回执口径——`flow/acceptance.md` 收尾节）+ 功能分级登记 + 文档资产同步 + ADR 复审 + 最终 commit——收尾产出的是**候选实现**，不是交付结论 | 主 agent | `flow/acceptance.md` 收尾节 |
 | D5 终态同步 | 代码与设计差距收敛为固定义务覆盖率的一致性对账（义务表 → checker 派发（机械优先/语义缓存）→ 差距地址聚合 → 隔离变更集 → 集成器唯一写入门径 → 四层结论；状态唯一权威 = conformance-state 事件流，agent 无状态；未绑定 legacy 包由旧引擎只读期收尾，带 cutover 标记的包旧引擎入口拒启） | W4 v2 design-code-sync-v2（绑定包；手工路径 `flow/sync.md`）/ W4 legacy design-code-sync-loop（未绑定包收尾） | 引擎 completed + 覆盖率分母全 verified/waived |

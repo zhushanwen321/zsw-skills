@@ -419,7 +419,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "7.5.5"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "7.6.0"; // 构建注入自 delivery-v6/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // resilience.shared.ts — DEV 加固线韧性层（单一构建输入；仅拼进三个 delivery-dev
 // workflow，构建器按 RESILIENCE_WORKFLOWS 登记，业务 shared 禁止拷贝副本）。
@@ -706,12 +706,24 @@ interface FindingDraft {
   /** 三档分级（V6 代裁决规则）：must-fix=违反验收判据，立即修复；suggestion=建议级缺陷，
    * 攒批最后一波统一处理；info=边界申报/信息登记，披露即可。事件侧映射（与 v2 词表兼容）：
    * must-fix→severity=blocker+category=defect；suggestion→severity=non-blocker+category=defect；
-   * info→severity=non-blocker+category=boundary */
+   * info→severity=non-blocker+category=defect（信息登记不是 boundary——boundary 只用于无
+   * 断言覆盖的真实边界申报，关联需求已有断言级判据明文覆盖的行为不得归 boundary） */
   tier: "must-fix" | "suggestion" | "info";
+  /** 可选显式分类覆盖（缺省按 tier 映射 defect）：仅 non-must-fix 档可设 boundary，
+   * 用于「无断言覆盖的真实边界申报」；关联需求已有断言级判据明文覆盖的行为不得设 boundary */
+  category?: "defect" | "boundary";
   /** 非 must-fix 必须否定其用户可观察后果；禁止只按字面合规降级 */
   consequenceRefutation?: string;
   /** 行为后果否决论证类型（合并稿 §9 三择一，先标类型再给依据） */
   consequenceRefutationType?: "will-not-occur" | "not-observable" | "accepted-by-acceptance";
+  /** 空关联 boundary 的不影响任何需求论证（gate 护栏②：空关联不得绕过定级护栏） */
+  emptyScopeRefutation?: string;
+  /** 认领的外部契约能力 id（裸 id 或「契约id:能力id」）；结构命中外部契约时 authority
+   * 组必填（gate 护栏④——外部行为反驳必须引用权威工件） */
+  contractCapabilityIds?: string[];
+  authorityBacked?: boolean;
+  authorityHash?: string;
+  authorityObservationRef?: string;
   reopenOf?: string;
   origin?: "acceptance" | "design" | "planning" | "implementation" | "testing" | "evidence" | "environment";
   firstDetectedStage?: string;
@@ -1473,6 +1485,46 @@ function validateFindings(findings: FindingDraft[]): string {
     if (finding.origin !== undefined && !["acceptance", "design", "planning", "implementation", "testing", "evidence", "environment"].includes(finding.origin)) {
       return "finding.origin 非法";
     }
+    // 前置判据（与 gate 护栏①②④同口径，修正重问代替被拒后整轮失败）：
+    if (finding.category !== undefined && finding.category !== "defect" && finding.category !== "boundary") {
+      return "finding.category 非法（只允许 defect / boundary）";
+    }
+    // ① must-fix 档不允许 boundary 覆盖（boundary 是「不修复、披露待确认」语义）
+    if (finding.tier === "must-fix" && finding.category === "boundary") {
+      return `发现「${finding.summary}」是 must-fix 档，不能申报 boundary——立即修复档按 defect 登记；确属无断言覆盖的真实边界时降为 suggestion/info 档并给后果论证`;
+    }
+    // ② 关联需求已有断言级判据覆盖 → 不得申报 boundary（D1）
+    const asserted = finding.requirementIds.some((requirementId) => {
+      const requirement = requirements.find((item) => item.id === requirementId);
+      const assertionList = (requirement as { assertions?: unknown[] } | undefined)?.assertions;
+      return Array.isArray(assertionList) && assertionList.length > 0;
+    });
+    if (asserted && finding.category === "boundary") {
+      return `发现「${finding.summary}」申报 boundary，但关联需求已有断言级判据明文覆盖——有断言覆盖的行为一律按 defect 申报（category 省略或显式 defect），或从 requirementIds 移除已有断言覆盖的需求并附对照论证`;
+    }
+    // ③ 空关联 boundary 必须附 emptyScopeRefutation（gate 护栏②）
+    if (finding.category === "boundary" && finding.requirementIds.length === 0 && typeof finding.emptyScopeRefutation !== "string") {
+      return `发现「${finding.summary}」是空关联 boundary，必须附 emptyScopeRefutation（该发现不影响任何需求的论证）——否则登记被 gate 拒`;
+    }
+    // ③ 结构命中外部契约（认领契约能力或关联需求断言带 requiredEnvironment.capability）
+    // 时必须给 authority 反驳组（gate 护栏④）
+    const structuralContractHit = (Array.isArray(finding.contractCapabilityIds) && finding.contractCapabilityIds.length > 0) ||
+      finding.requirementIds.some((requirementId) => {
+        const requirement = requirements.find((item) => item.id === requirementId);
+        return requirement !== undefined && (requirement.assertions ?? []).some((assertion) =>
+          typeof assertion.requiredEnvironment?.capability === "string" && assertion.requiredEnvironment.capability !== "");
+      });
+    if (structuralContractHit) {
+      const authorityComplete = finding.authorityBacked === true &&
+        typeof finding.authorityHash === "string" && /^[0-9a-f]{64}$/.test(finding.authorityHash) &&
+        typeof finding.authorityObservationRef === "string" && finding.authorityObservationRef.trim() !== "";
+      if (!authorityComplete) {
+        return `发现「${finding.summary}」结构命中外部契约（认领契约能力或关联需求断言带 requiredEnvironment.capability），必须同时给 authorityBacked=true / authorityHash（当前权威 aggregateHash）/ authorityObservationRef（权威快照文件+符号或真实 probe case id）——外部行为反驳必须引用权威工件`;
+      }
+    }
+    if (finding.contractCapabilityIds !== undefined && (!Array.isArray(finding.contractCapabilityIds) || finding.contractCapabilityIds.some((id) => typeof id !== "string" || id.trim() === ""))) {
+      return "finding.contractCapabilityIds 须为非空字符串数组";
+    }
   }
   return "";
 }
@@ -1515,6 +1567,12 @@ function validateCoverage(value: CoverageOutcome): string {
       const formSet = new Set(adversarialForms.map((form) => form.id));
       for (const id of item.adversarialFormIds ?? []) {
         if (!formSet.has(id)) return `未知反例场景 ${id}`;
+        // 交叉一致性（与 gate 的 EvidenceRecorded 校验同口径）：反例场景所属断言必须
+        // 在本结论的 assertionIds 内——场景挂到未包含其断言的结论上，登记时会被拒
+        const form = adversarialForms.find((candidate) => candidate.id === id);
+        if (form !== undefined && !(item.assertionIds ?? []).includes(form.assertionId)) {
+          return `反例场景 ${id} 所属断言 ${form.assertionId} 未包含在本结论的 assertionIds——场景与断言不匹配`;
+        }
       }
     }
     if (item.result !== "verified" && item.result !== "partial" && item.result !== "failed") return "evidence.result 非法";
@@ -1615,7 +1673,12 @@ function intentArgsFor(event: DeliveryEvent): string[] {
         ...opt("origin", "--origin"), ...opt("reopenOf", "--reopen-of"),
         ...opt("consequenceRefutation", "--consequence-refutation"), ...opt("consequenceRefutationType", "--consequence-refutation-type"),
         ...opt("firstDetectedStage", "--first-detected-stage"), ...opt("expectedStage", "--expected-stage"),
-        ...opt("regressionTestRef", "--regression-test-ref"), ...rev];
+        ...opt("regressionTestRef", "--regression-test-ref"),
+        // 空关联 boundary 论证与外部契约 authority 组（gate 护栏②④ 的供给通道）
+        ...opt("emptyScopeRefutation", "--empty-scope-refutation"),
+        ...(event.contractCapabilityIds !== undefined ? ["--contract-capability-ids", JSON.stringify(event.contractCapabilityIds)] : []),
+        ...(event.authorityBacked === true ? ["--authority-backed", "true"] : []),
+        ...opt("authorityHash", "--authority-hash"), ...opt("authorityObservationRef", "--authority-observation-ref"), ...rev];
     case "FindingResolved":
       return ["resolve-finding", ...base,
         "--finding-id", String(event.findingId), "--summary", event.summary, "--artifact", String(event.artifact), ...rev];
@@ -1824,12 +1887,13 @@ async function appendFinding(draft: FindingDraft, artifact: string): Promise<str
     findingSequence += 1;
     findingId = `F-A${findingSequence}`;
   } while (events.some((e) => e.findingId === findingId));
-  // 三档→事件词表映射（词表与 v2 双向兼容：tier 只存在于 reviewer 报告与 workflow 层）
+  // 三档→事件词表映射（词表与 v2 双向兼容：tier 只存在于 reviewer 报告与 workflow 层）。
+  // 缺省 category 一律 defect；仅显式 category=boundary 的 non-must-fix 发现走 boundary
+  // （校验层已保证：boundary 不用于已断言覆盖的需求、空关联必附 emptyScopeRefutation）。
+  // info 档映射 non-blocker+defect：信息登记不是 boundary（boundary 有独立的申报判据）
   const tierToEvent = draft.tier === "must-fix"
     ? { category: "defect", severity: "blocker" }
-    : draft.tier === "suggestion"
-      ? { category: "defect", severity: "non-blocker" }
-      : { category: "boundary", severity: "non-blocker" };
+    : { category: draft.category === "boundary" ? "boundary" : "defect", severity: "non-blocker" };
   await appendEvent({
     type: "FindingRaised",
     actor: "assurance",
@@ -1842,6 +1906,11 @@ async function appendFinding(draft: FindingDraft, artifact: string): Promise<str
     severity: tierToEvent.severity,
     ...(draft.consequenceRefutation === undefined ? {} : { consequenceRefutation: draft.consequenceRefutation }),
     ...(draft.consequenceRefutationType === undefined ? {} : { consequenceRefutationType: draft.consequenceRefutationType }),
+    ...(draft.emptyScopeRefutation === undefined ? {} : { emptyScopeRefutation: draft.emptyScopeRefutation }),
+    ...(draft.contractCapabilityIds === undefined ? {} : { contractCapabilityIds: draft.contractCapabilityIds }),
+    ...(draft.authorityBacked === undefined ? {} : { authorityBacked: draft.authorityBacked }),
+    ...(draft.authorityHash === undefined ? {} : { authorityHash: draft.authorityHash }),
+    ...(draft.authorityObservationRef === undefined ? {} : { authorityObservationRef: draft.authorityObservationRef }),
     ...(draft.reopenOf === undefined ? {} : { reopenOf: draft.reopenOf }),
     ...(draft.origin === undefined ? {} : { origin: draft.origin }),
     ...(draft.firstDetectedStage === undefined ? {} : { firstDetectedStage: draft.firstDetectedStage }),
@@ -2224,12 +2293,13 @@ if (mode === "explore-only") {
       `用户原始意图原文：${intentPath}；原始意图与验收：${acceptancePath}`,
       `候选探索清单：${candidateManifestPath}`,
       `历史探索报告索引（已探索方向不得重复）：${JSON.stringify(explorationHistory)}`,
+      `本轮开始前仍 open 的 finding id 清单（数据）：${JSON.stringify([...openFindings.keys()])}——reopenOf 只能指向已关闭的发现，不能指向该清单内条目（仍在 open 的直接按新发现申报或由后续复核处置）`,
       `报告写入路径：${explorationReportPath}`,
       `必须覆盖的探索维度：${JSON.stringify(reviewDimensions)}`,
       "这是候选交付前的开放探索：从原始意图、验收、反例场景与真实实现主动寻找反例，亲自运行实验并保存原始证据。",
       "每个 must-fix 给 origin/expectedStage/regressionTestRef；suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据。",
-      "重报此前已登记过的同类问题（修复回退/回归/同根因复发）时附 reopenOf=<旧 findingId>——同题判定责任在审查者，沿用旧 id 使计数不重复；不确定是否同题时不填（宁可多计不可漏计）。",
-      '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
+      "reopenOf 两条硬判据：目标须已关闭（上面清单中仍 open 的发现不能作为 reopen 目标），且其关闭后判据环境已变化（验收版本递增或代码 revision 变化）；不满足时不要附 reopenOf（同版本同 revision 的复发按新发现登记）。同题判定责任在审查者，沿用旧 id 使计数不重复；不确定 id 时不填（宁可多计不可漏计）。同一 reopenOf 根的定级组合超过 2 种会触发定级熔断（停回用户裁决）——重报改档前先确认。",
+      '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "emptyScopeRefutation": string|null, "contractCapabilityIds": string[]|null, "authorityBacked": boolean|null, "authorityHash": string|null, "authorityObservationRef": string|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }',
       ...(corrective === null ? [] : [corrective]),
     ].join("\n"));
     const reportRes = await runNode([NODE_CHECK_FILES, explorationReportPath]);
@@ -2278,7 +2348,7 @@ const coverageGuard = await askGuarded<CoverageOutcome>(
       "对照验收、候选代码与原始证据，亲自运行必要命令；schema 2 按断言×证据类型逐项返回 verified/partial/failed 和 evidence/ 内原始文件，每个反例场景用 adversarialFormIds 明确认领。",
       `对照 ${incrementsPath} 冻结的 testCommand 与上一轮测试产物（taskDir/evidence/ 内 increment-*.log），审查本轮测试内容是否被改弱（断言删除、范围收窄、skip 扩大）；发现改弱即按 must-fix 申报。`,
       "写覆盖报告；新发现不分配 findingId。仅当亲自确认旧发现已修复时，把其 findingId 放入 resolvedFindingIds；亲自核对后确认仍未修复的旧发现放入 unresolvedFindingIds（两者不得重叠）。",
-      "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据，不得只按字面合规降级。",
+      "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=信息登记（披露即可，不修；事件侧映射 non-blocker defect，不落 boundary）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据，不得只按字面合规降级。category 判据：关联需求已有断言级判据明文覆盖的行为一律 defect；boundary 只用于无断言覆盖的真实边界申报（需显式申报 category=boundary，仅 non-must-fix 档可设；缺省与 info 档一律 defect），空关联 boundary 必须给 emptyScopeRefutation（不影响任何需求的论证）。发现结构命中外部契约（认领契约能力或关联需求断言带 requiredEnvironment.capability）时必须同时给 authorityBacked=true / authorityHash（当前权威 aggregateHash）/ authorityObservationRef（权威快照文件+符号或真实 probe case id）。同一 reopenOf 根的定级组合超过 2 种会触发定级熔断（停回用户裁决）——重报改档前先确认，不要反复改写档位。",
       "不得修改产品代码、验收、事件或 verdict；builder 的测试输出不能未经独立核对直接记为 verified。",
       // 外部契约硬责任（设计 §8.2/§8.3/§5.3）：仅在任务带 externalContracts 时注入
       ...(contractPhaseActive
@@ -2293,7 +2363,7 @@ const coverageGuard = await askGuarded<CoverageOutcome>(
           `【外部契约·申报结构】contractObservations[{contractId,capabilityId,artifact,executedBy:"assurance-agent"|"manual-handoff",negativeCaseRefs?:string[],manualHandoffReason?:string}]——executedBy=assurance-agent 表示该观察由你亲自执行（自写最小 probe 或亲自执行独立执行器）；parityRecords[{mockAssetId,realProbeArtifact,sampleIds,parity[...]}]。无外部契约观察义务时两者给空数组。`,
         ]
         : []),
-      '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "assertionIds": string[], "adversarialFormIds": string[], "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }], "resolvedFindingIds": string[], "unresolvedFindingIds": string[], "contractObservations": [{ "contractId": string, "capabilityId": string, "artifact": string, "executedBy": "assurance-agent"|"manual-handoff", "negativeCaseRefs": string[], "manualHandoffReason": string|null }], "parityRecords": [{ "mockAssetId": string, "realProbeArtifact": string, "sampleIds": string[], "parity": [{ "sampleId": string, "mockObserved": { "artifact": string, "caseId": string, "value": string }, "realObserved": { "artifact": string, "caseId": string, "value": string }, "same": boolean }] }] }——schema 2 须逐断言×kind 覆盖，artifact 为 evidence/ 内绝对路径；contractObservations/parityRecords 无义务时给空数组。',
+      '返回结构（严格 JSON）：{ "summary": string, "evidence": [{ "requirementId": string, "kind": "command"|"scenario"|"inspection", "result": "verified"|"partial"|"failed", "assertionIds": string[], "adversarialFormIds": string[], "artifact": string }], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "emptyScopeRefutation": string|null, "contractCapabilityIds": string[]|null, "authorityBacked": boolean|null, "authorityHash": string|null, "authorityObservationRef": string|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }], "resolvedFindingIds": string[], "unresolvedFindingIds": string[], "contractObservations": [{ "contractId": string, "capabilityId": string, "artifact": string, "executedBy": "assurance-agent"|"manual-handoff", "negativeCaseRefs": string[], "manualHandoffReason": string|null }], "parityRecords": [{ "mockAssetId": string, "realProbeArtifact": string, "sampleIds": string[], "parity": [{ "sampleId": string, "mockObserved": { "artifact": string, "caseId": string, "value": string }, "realObserved": { "artifact": string, "caseId": string, "value": string }, "same": boolean }] }] }——schema 2 须逐断言×kind 覆盖，artifact 为 evidence/ 内绝对路径；contractObservations/parityRecords 无义务时给空数组。',
       ...(corrective === null ? [] : [corrective]),
     ].join("\n"));
     // 完成后验：覆盖结论、契约观察与 parity 记录引用的 artifact 必须全部落盘——
@@ -2358,7 +2428,14 @@ function satisfiesRequiredEnvironment(meta: Record<string, unknown> | null, requ
     const declared = Array.isArray(meta.capabilities)
       ? (meta.capabilities as unknown[]).map(String)
       : typeof meta.capability === "string" ? [meta.capability] : null;
-    if (declared !== null && !declared.includes(required.capability)) return false;
+    // capability 词法归一化（与 gate environmentSatisfies 同口径）：要求与声明值都可为
+    // 裸 id 或「契约id:能力id」qualified 形态——严格字面相等会把同一能力判成不匹配
+    // （2026-11-19 实跑：声明值明明在列却整批降级）。归一化只统一词法
+    if (declared !== null) {
+      const bareCapability = (value: string) => (value.includes(":") ? value.slice(value.lastIndexOf(":") + 1) : value);
+      const requiredBare = bareCapability(required.capability);
+      if (!declared.includes(required.capability) && !declared.some((item) => bareCapability(item) === requiredBare)) return false;
+    }
   }
   return true;
 }
@@ -2833,8 +2910,8 @@ if (explorationDue && mode === "full") {
           : []),
         "从原始意图、验收与真实实现主动寻找验收外反例；亲自运行探索命令并保存原始证据。",
         "写探索报告，申报实际覆盖维度与新发现；不分配 findingId，不修改产品代码、验收、事件或 verdict。",
-        "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=边界申报/信息登记（不修，披露即可）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据，不得只按字面合规降级。重报此前已登记过的同类问题（修复回退/回归/同根因复发）时附 reopenOf=<旧 findingId>——同题判定责任在审查者，沿用旧 id 使计数不重复；不确定是否同题时不填。",
-        '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }——dimensions 须覆盖全部必选维度且去重；must-fix 给 origin/expectedStage/regressionTestRef。',
+        "新发现分级（三档，按对验收判据的影响）：must-fix=违反验收判据或破坏关键行为的缺陷（立即修复档）；suggestion=建议改进但不违反判据的缺陷（攒批档，不单独触发修复轮）；info=信息登记（披露即可，不修；事件侧映射 non-blocker defect，不落 boundary）。拿不准 must-fix 还是 suggestion 时按 must-fix——漏报的代价高于多报。suggestion/info 必须先标 consequenceRefutationType（will-not-occur=不会发生 / not-observable=用户不可观察 / accepted-by-acceptance=验收明确允许）再给 consequenceRefutation 依据，不得只按字面合规降级。category 判据：关联需求已有断言级判据明文覆盖的行为一律 defect；boundary 只用于无断言覆盖的真实边界申报（需显式申报 category=boundary，仅 non-must-fix 档可设；缺省与 info 档一律 defect），空关联 boundary 必须给 emptyScopeRefutation。发现结构命中外部契约（认领契约能力或关联需求断言带 requiredEnvironment.capability）时必须同时给 authorityBacked=true / authorityHash / authorityObservationRef。reopenOf 两条硬判据：目标须已关闭（本轮仍 open 的发现不能作为 reopen 目标——直接放入 unresolvedFindingIds 或按新发现申报），且其关闭后判据环境已变化（验收版本递增或代码 revision 变化）；不满足时不要附 reopenOf（同版本同 revision 的复发按新发现登记）。同题判定责任在审查者，沿用旧 id 使计数不重复；不确定 id 时不填（宁可多计不可漏计）。同一 reopenOf 根的定级组合超过 2 种会触发定级熔断（停回用户裁决）——重报改档前先确认。",
+        '返回结构（严格 JSON）：{ "summary": string, "dimensions": string[], "findings": [{ "summary": string, "requirementIds": string[], "tier": "must-fix"|"suggestion"|"info", "category"?: "defect"|"boundary", "consequenceRefutation": string|null, "consequenceRefutationType": "will-not-occur"|"not-observable"|"accepted-by-acceptance"|null, "emptyScopeRefutation": string|null, "contractCapabilityIds": string[]|null, "authorityBacked": boolean|null, "authorityHash": string|null, "authorityObservationRef": string|null, "reopenOf": string|null, "origin": string|null, "expectedStage": string|null, "regressionTestRef": string|null }] }——dimensions 须覆盖全部必选维度且去重；must-fix 给 origin/expectedStage/regressionTestRef。',
         ...(corrective === null ? [] : [corrective]),
       ].join("\n"));
       const reportRes = await runNode([NODE_CHECK_FILES, explorationReportPath]);
@@ -3069,8 +3146,9 @@ await obsEnd("finalize", null);
 await obsCloseExecution("assurance-completed");
 // ── V6 代：三档停修判据（终态建议块——裁决权在主 agent 与用户，workflow 只给判据结论）──
 // 三档规则：must-fix（severity=blocker 的 defect）未清零 → 下一轮立即修复；must-fix 清零
-// 且攒批项（suggestion=non-blocker defect、info=boundary）非空 → 执行最后一波统一修复后
-// 循环退出（boundary/info 档可按风险预授权或用户裁决登记处置）；零未决 → 循环退出进裁决。
+// 且攒批项非空 → 执行最后一波统一修复后循环退出；零未决 → 循环退出进裁决。
+// 攒批项 = 未接受风险的 non-blocker defect（suggestion 与 info 档同映射该词表——info 是
+// 信息登记不是 boundary）∪ 未确认 boundary（后者按风险预授权或用户裁决登记处置）。
 const openVerdictFindings = Array.isArray(finalVerdict.openFindings)
   ? (finalVerdict.openFindings as Array<Record<string, unknown>>)
   : [];
@@ -3090,7 +3168,7 @@ const triageNote =
     : mustFixOpen.length > 0
     ? `三档停修判据未满足：must-fix 未清零（${mustFixOpen.map((f) => String(f.findingId)).join("、") || "?"}）——立即修复后重新发起`
     : suggestionOpen.length + infoOpen.length > 0
-      ? `三档停修判据满足（must-fix 清零）：攒批 ${suggestionOpen.length + infoOpen.length} 条（suggestion ${suggestionOpen.length} + info ${infoOpen.length}，清单见 verdict.openFindings）——执行最后一波统一修复后循环退出；info/boundary 档也可按风险预授权（preauthorize-risk）或用户裁决登记处置`
+      ? `三档停修判据满足（must-fix 清零）：攒批 ${suggestionOpen.length + infoOpen.length} 条（未接受 non-blocker defect ${suggestionOpen.length} + 未确认 boundary ${infoOpen.length}，清单见 verdict.openFindings）——执行最后一波统一修复后循环退出；boundary 档也可按风险预授权（preauthorize-risk）或用户裁决登记处置`
       : "三档停修判据满足：零未决发现，循环退出，按 verdict 进入裁决";
 // finished 先于 message 拼接登记：登记失败的 attemptNote 才能进本出口的终态披露
 await recordAssuranceAttempt("finished", "passed");

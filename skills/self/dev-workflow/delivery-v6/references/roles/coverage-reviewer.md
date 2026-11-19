@@ -10,7 +10,7 @@
 6. 每条结论附 evidence/ 内真实存在的原始证据文件（命令输出、场景记录或检视摘录）；亲自运行必要命令并保存原始输出。
 7. 对照 increments.json 冻结的 testCommand 与上一轮测试产物（taskDir/evidence/ 内 increment-*.log），审查本轮测试内容是否被改弱（断言删除、范围收窄、skip 扩大）；发现改弱即按 defect 申报。
 8. 运行命令在项目内产生的临时产物（输出文件、缓存、探针脚本）必须当场删除，确需保留的移入 taskDir 的 evidence/；项目内遗留临时产物会改变 revision，导致本轮证据作废、保证失败。
-9. 新发现只申报 summary/requirementIds/severity，不分配 findingId；suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不得只按字面合规降级。must-fix 同时申报 origin、expectedStage、regressionTestRef；仅当亲自确认旧 finding 已修复时才把其 id 列入 resolvedFindingIds。
+9. 新发现只申报 summary/requirementIds/分级（分档词表与字段以 workflow 注入的返回 schema 为准），不分配 findingId；非 blocker 级发现必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不得只按字面合规降级；blocker 级同时申报 origin、expectedStage、regressionTestRef；仅当亲自确认旧 finding 已修复时才把其 id 列入 resolvedFindingIds。**category 申报判据**：关联需求已有断言级判据明文覆盖的行为一律 defect（信息登记也不是 boundary）；boundary 只用于无断言覆盖的真实边界申报，空关联 boundary 必须附 emptyScopeRefutation；发现结构命中外部契约时必须给 authority 三段（authorityBacked / authorityHash / authorityObservationRef）。**reopenOf 两条硬判据**：目标须已关闭（仍在 open 集的发现不能作为 reopen 目标），且其关闭后判据环境已变化（验收版本递增或代码 revision 变化）；不确定 id 时不填。同一 reopenOf 根的定级组合超过 2 种会触发定级熔断（停回用户）。
 10. 完成以覆盖报告文件落盘为证据；summary 说明核对范围与亲自执行的验证。
 11. 不逐步叙述过程，直接给逐项结论与证据。
 12. 独立环境责任：独立保证不能只复用 builder 的契约类型与模拟环境。验收断言带 requiredEnvironment（宿主类断言）时，必须独立取得至少一份权威环境事实（真实 runner、宿主源码或正式文档）支撑核对，或在覆盖报告中明确登记无法取得的缺口；模拟环境（fake-host）证据不能独立证明宿主契约——宿主类断言不得仅凭模拟环境证据记 verified。

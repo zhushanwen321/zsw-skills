@@ -1,7 +1,7 @@
 ---
 name: delivery-v6
 # 技能版本唯一权威（手动 semver）。workflow 构建器读此值注入产物；改本行后必须重建
-version: 7.5.5
+version: 7.6.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」「独立验收」「审查这次交付」「高风险功能开发」，
   需要把需求转为有证据支持的代码交付，或只完成其中的目标与验收设计、候选实现、独立保证。
@@ -104,8 +104,8 @@ dev-flow-v6（技能③执行）在本体系内协作：②在已批准目标与
 ### 有限修复与证据语义
 
 1. **逐项解决旧发现**：旧 must-fix 必须由 reviewer 逐项确认，并有能在缺陷版本失败的回归测试；不允许仅凭全量测试绿自动重新认领全部旧发现。`ResolutionReaffirmed` 只用于有明确原解决事件与本轮逐项复核依据的通道。
-2. **风险预授权**：`preauthorize-risk` 与 `RiskPreauthorized` 保持既有安全边界——仅 finding 目标、severity 上限 non-blocker、名额有限且 user-explicit 登记；blocker 与 requirement 目标永不可预授权。
-3. **三档处置**：must-fix 立即修复；suggestion 在 must-fix 清零后统一处理；info/boundary 逐项确认或按授权处置。非 must-fix 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不能只按字面合规降级。
+2. **风险预授权**：`preauthorize-risk` 与 `RiskPreauthorized` 保持既有安全边界——仅 finding 目标、severity 上限 non-blocker、名额有限且 user-explicit 登记；blocker 与 requirement 目标永不可预授权。名额按验收版本独立配额、按事件流顺序消耗（先登记先占）；同分类范围的重复登记不去重、不合并——每次登记是独立名额池，登记命令对同分类范围的重复默认拒绝，确属有意追加须显式 `--allow-duplicate true`。
+3. **三档处置**：must-fix 立即修复；suggestion 在 must-fix 清零后统一处理；info 是信息登记（映射 non-blocker defect，不落 boundary）；boundary 只用于无断言覆盖的真实边界申报，逐项确认或按授权处置。非 must-fix 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），不能只按字面合规降级。
 4. **有限结束**：`recheck` 不再默认开放探索。最后一批建议级修复后以 recheck 重新生成当前版本证据，解决「修复后版本变化使旧证据失效」与「最终必须重新取证」的冲突。
 5. **过程失败**：实现性修复需要第 4 轮，或累计不同 must-fix 达到第 11 条，进入 `process-failed`；不得通过改名、错误合并、降低级别或递增验收版本规避。
 6. **证据定位走统一内容索引**：统一内容索引 = evidence-bundle.json（dev-flow-v6 `gen-evidence-bundle.mjs` 生成的内容索引——原始记录与附属 artifact 的 path+sha256 清单，`--check` 可核，禁手改）；当前生成入口 = dev-flow-v6 验收阶段的手工路径（`dev-flow-v6/flow/acceptance.md` 证据内容索引条），独立保证 workflow（independent-assurance-v6）的自动消费接线属待实施项——接线落地前独立保证仍按事件与证据文件定位，缺记录、缺 artifact、skipped 未披露时不得按完整证据处理；原始步骤 pass/fail/skipped 不自动升格为 verified，交付判定仍走事件与 gate，本条不改变交付判定语义

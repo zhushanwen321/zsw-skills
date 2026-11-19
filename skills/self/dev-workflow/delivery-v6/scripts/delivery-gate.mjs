@@ -223,6 +223,11 @@ const OPTIONAL_EVENT_FIELDS = {
   // 测试回执（合并稿 §11.1，与 AssuranceCompleted 回执同款双哈希）；nature = 轮次性质
   //（behavior 计轮；environment/evidence 重试不计轮——合并稿 §7.1）
   RepairRoundRecorded: ["fromRevision", "toRevision", "artifactSha256", "incrementReceipts", "nature"],
+  // 历史 unknown 区间确认（confirm-history 命令，V5 完整性改造 §7.2 的最小补充通道）：
+  // explainedUnknownIntervals = 用户署名确认的 revision 区间清单 [{fromRevision,toRevision,
+  // intervalSha256,rationale}]——每段区间与哈希绑定，只解释派生结果中精确匹配的 unknown
+  // 区间，不推进链条位置、不构成新基线；未确认的 unknown 仍阻断 accepted
+  RevisionBaselineConfirmed: ["explainedUnknownIntervals"],
 };
 const EVENTS_LOCK_DIRNAME = ".events.lock";
 const EVENTS_LOCK_MAX_AGE_MS = 30_000;
@@ -270,10 +275,11 @@ const HELP = `delivery-gate（V6）：delivery-v6 的确定性交付裁决器（
   delivery-gate record-assurance-drift --task-dir D --setup-revision R --finalize-revision R2 --drift-seq N --summary S --credential <assurance credentialId>
   delivery-gate accept-risk --task-dir D --target-type requirement|finding --target-id ID --confirmation user-explicit --summary S --credential <user credentialId> [--revision R] [--gap-id G]
   delivery-gate accept-risk --task-dir D --target-type finding --target-id ID --confirmation standing-authorization --summary S --credential <user credentialId>  # V6 代：须先由用户 preauthorize-risk 登记覆盖该 finding 的预授权（类别白名单 + 名额上限；severity 上限恒 non-blocker）
-  delivery-gate preauthorize-risk --task-dir D --categories defect,boundary --max-findings N --summary S --credential <user credentialId>  # V6 代：用户预先声明 standing 接受范围（持久授权声明；blocker 永不可预授权）
+  delivery-gate preauthorize-risk --task-dir D --categories defect,boundary --max-findings N --summary S --credential <user credentialId> [--allow-duplicate true]  # V6 代：用户预先声明 standing 接受范围（持久授权声明；blocker 永不可预授权；同分类范围重复登记默认拒绝）
   delivery-gate evaluate --task-dir D [--revision R]
   delivery-gate revision --project-root P
   delivery-gate confirm-baseline --task-dir D --reason S --credential <user credentialId> [--revision R]
+  delivery-gate confirm-history --task-dir D --reason S --intervals '<JSON:[{fromRevision,toRevision,rationale}]>' --credential <user credentialId> [--revision R]  # 用户署名解释历史 unknown 区间（区间须在 revision-provenance 派生结果中精确存在；不推进链条）
   delivery-gate upgrade-policy --task-dir D --invalidation-note S --summary S --credential <user credentialId>
   delivery-gate declare-independent --task-dir D --credential <user credentialId>
   delivery-gate supersede-prepare --task-dir D --predecessor-dir P --summary S --credential <user credentialId>
@@ -491,6 +497,12 @@ function sha256File(filePath, label) {
   } catch (error) {
     fail(`无法读取 ${label}：${filePath}（${error.message}）。`, `确认文件存在且可读后重试当前命令。`);
   }
+}
+
+/** revision 区间哈希（confirm-history 的区间绑定）：规范化 JSON（键序固定）覆盖
+ *  {fromRevision,toRevision}——区间与哈希同绑，事件签名之外再加一层区间身份校验。 */
+function revisionIntervalSha256(fromRevision, toRevision) {
+  return sha256Text(canonicalJson({ fromRevision, toRevision }));
 }
 
 function projectSlug(projectRoot) {
@@ -1464,6 +1476,27 @@ function validateEventShape(event, { record = false } = {}) {
     case "RevisionBaselineConfirmed":
       requireNonEmptyString(event.confirmedRevision, "event.confirmedRevision");
       requireNonEmptyString(event.reason, "event.reason");
+      // 历史 unknown 区间确认（confirm-history）：区间形态与哈希绑定校验——from/to 与
+      // intervalSha256 必须同时存在且哈希与区间一致（哈希覆盖规范化 JSON，防区间被
+      // 误配到另一段变化）
+      if (Object.hasOwn(event, "explainedUnknownIntervals")) {
+        const intervals = event.explainedUnknownIntervals;
+        if (!Array.isArray(intervals) || intervals.length === 0) {
+          fail("RevisionBaselineConfirmed.explainedUnknownIntervals 须为非空数组（无区间确认走 confirm-baseline）。", "删除该字段改用 confirm-baseline，或传入至少一段区间后重试。");
+        }
+        for (let index = 0; index < intervals.length; index += 1) {
+          const interval = intervals[index];
+          const label = `event.explainedUnknownIntervals[${index}]`;
+          requireRecord(interval, label);
+          requireNonEmptyString(interval.fromRevision, `${label}.fromRevision`);
+          requireNonEmptyString(interval.toRevision, `${label}.toRevision`);
+          requireSha256(interval.intervalSha256, `${label}.intervalSha256`);
+          requireNonEmptyString(interval.rationale, `${label}.rationale`);
+          if (interval.intervalSha256 !== revisionIntervalSha256(interval.fromRevision, interval.toRevision)) {
+            fail(`${label}.intervalSha256 与区间 from/to 不一致。`, "按 confirm-history 命令重新计算区间哈希（区间经命令登记，不允许手拼事件）后重试。");
+          }
+        }
+      }
       break;
     case "RevisionOpened":
       requireEnum(event.target, ["acceptance"], "event.target");
@@ -2222,7 +2255,11 @@ function foldEvents(world, entries, { guardrailStrict = true } = {}) {
         fold.drifts.push(event);
         break;
       case "RevisionBaselineConfirmed":
-        fold.baselines.push(event);
+        // confirm-history（携带 explainedUnknownIntervals）只解释历史 unknown 区间，
+        // 不是新基线：不进 baselines，不得重置漂移链计数
+        if (!(Array.isArray(event.explainedUnknownIntervals) && event.explainedUnknownIntervals.length > 0)) {
+          fold.baselines.push(event);
+        }
         break;
       case "RevisionOpened":
         fold.revisionOpens.push(event);
@@ -2472,8 +2509,13 @@ function environmentSatisfies(world, environment, required) {
   //（independent-assurance 的 satisfiesRequiredEnvironment）只降级「已声明且不含要求值」
   // 的证据、未声明时不降级；gate 终判侧保守兜住该缺口——required.capability 存在而证据未声明
   // 能力覆盖即不满足（能力维度无法证伪时不得凭 kind 单独放行，否则 IA 侧降级会被
-  // evaluate 的 verified 洗掉）。字段口径与 IA 对齐：capability 单值严格相等，
-  // capability/capabilities 数组 includes
+  // evaluate 的 verified 洗掉）。
+  // capability 词法归一化（双形态）：验收包写 requiredEnvironment.capability，gate 其余
+  // 位置（contractCapabilityIds 等）同时使用裸 id 与 qualified 形态「契约id:能力id」，两侧
+  // 来源不同（designer 写验收、assurance 手写 probe artifact），严格字面相等会错判同一能力
+  //（2026-11-19 实跑：声明值明明在列仍报「能力声明不含 X」）。归一化只统一词法、不放宽
+  // 覆盖判定：要求含冒号时比对声明值的裸尾；要求不含冒号时接受声明值中任一前缀的
+  // 「<前缀>:<要求>」形态；完全相等仍直接命中。
   if (typeof required.capability === "string" && required.capability !== "") {
     const declared = [];
     if (typeof environment.capability === "string") declared.push(environment.capability);
@@ -2482,8 +2524,15 @@ function environmentSatisfies(world, environment, required) {
     if (declared.length === 0) {
       return { ok: false, reason: `environment 未声明能力覆盖（capability=${JSON.stringify(required.capability)} 要求）：证据未声明 capability/capabilities，不能证明该能力维度` };
     }
-    if (!declared.includes(required.capability)) {
-      return { ok: false, reason: `environment 能力声明不含 ${JSON.stringify(required.capability)}（声明值：${declared.join(" / ")}）` };
+    const bareCapability = (value) => (value.includes(":") ? value.slice(value.lastIndexOf(":") + 1) : value);
+    const requiredBare = bareCapability(required.capability);
+    const matched = declared.includes(required.capability) ||
+      declared.some((item) => bareCapability(item) === requiredBare);
+    if (!matched) {
+      return {
+        ok: false,
+        reason: `environment 能力声明不含 ${JSON.stringify(required.capability)}（归一化后要求：${JSON.stringify(requiredBare)}；声明值：${declared.join(" / ")}；归一化后声明：${declared.map(bareCapability).join(" / ")}）`,
+      };
     }
   }
   // sourceHash 只登记不核对：其权威源内容的哈希比对通道不存在（本仓无权威源索引），
@@ -5880,7 +5929,7 @@ function commandAppend(args) {
 function commandPreauthorizeRisk(args) {
   const options = parseOptions(args, {
     required: ["task-dir", "categories", "max-findings", "summary", "credential"],
-    optional: [],
+    optional: ["allow-duplicate"],
   });
   const categories = options.categories
     .split(",")
@@ -5893,6 +5942,7 @@ function commandPreauthorizeRisk(args) {
   if (!Number.isInteger(maxFindings) || maxFindings < 1) {
     fail("--max-findings 须为正整数。", "登记可消耗的名额上限（该授权下允许的 standing 接受累计数）后重试。");
   }
+  const allowDuplicate = options["allow-duplicate"] === "true";
   withEventsLock(options["task-dir"], () => {
     const world = loadWorld(options["task-dir"], { requirePackage: false });
     if (world.policy === null) {
@@ -5902,6 +5952,20 @@ function commandPreauthorizeRisk(args) {
       if (policyFindingCategory(world.policy, category) === undefined) {
         fail(`--categories 含未登记分类 ${category}。`, "只允许策略 finding-categories.json 词表内的分类（新增分类走策略升级 upgrade-policy）。");
       }
+    }
+    // 重复登记查重（D16/R9）：同分类范围的既有预授权不会合并，名额按事件流顺序
+    // 独立叠加——同一范围再来一条等于悄悄扩大名额池，与「预授权是收紧机制」的意图相反。
+    // 命中时要求显式确认（--allow-duplicate true）才能登记，确认动作留痕在事件流里
+    const sortedCategories = [...categories].sort();
+    const duplicate = world.fold.preauthorizations.find((event) =>
+      Array.isArray(event.categories) &&
+      [...event.categories].sort().join(",") === sortedCategories.join(",") &&
+      event.maxSeverity === "non-blocker");
+    if (duplicate !== undefined && !allowDuplicate) {
+      fail(
+        `同分类范围的预授权已存在（eventId=${String(duplicate.eventId ?? "?")}，名额 ${String(duplicate.maxFindings ?? "?")}）：重复登记会叠加名额池，不做合并。`,
+        `确认这是有意追加的独立授权时加 --allow-duplicate true 重试；只是同一范围的复述则不要重登（名额已按事件流顺序消耗）。`,
+      );
     }
     const privateKey = loadCredentialPrivateKey(world, options.credential, "user");
     const event = {
@@ -6197,6 +6261,69 @@ function commandConfirmBaseline(args) {
       summary: options.reason,
       confirmedRevision: revision,
       reason: options.reason,
+    };
+    printJson(appendEvent(world, event, privateKey));
+  });
+}
+
+// 历史 unknown 区间的用户确认通道（revision 来源对账 §7.2 的最小补充）：confirm-baseline
+// 只能从确认点续接链条，不消除已产生的历史 unknown 段；confirm-history 让用户对派生结果
+// 中精确存在的 unknown 区间逐段署名确认（区间 from/to + 区间哈希），使其归为
+// user-confirmed 而不改变「无确认不得 accepted」的语义。只接受用户凭据——builder/
+// assurance 无法自证洗白来源不明的变化。
+function commandConfirmHistory(args) {
+  const options = parseOptions(args, { required: ["task-dir", "reason", "intervals", "credential"], optional: ["revision"] });
+  withEventsLock(options["task-dir"], () => {
+    const world = loadWorld(options["task-dir"], { requirePackage: false });
+    const privateKey = loadCredentialPrivateKey(world, options.credential, "user");
+    const revision = Object.hasOwn(options, "revision") ? options.revision : computeRevision(world.task.projectRoot);
+    const provenance = deriveRevisionProvenance(world.entries.map((entry) => entry.record), { currentRevision: revision });
+    const unknownSegments = provenance.revisions.filter((item) => item.source === "unknown");
+    const unknownList = unknownSegments
+      .map((item) => `${item.fromRevision}..${item.toRevision}`)
+      .join(" | ");
+    let parsed;
+    try {
+      parsed = JSON.parse(options.intervals);
+    } catch (error) {
+      fail(`--intervals 不是合法 JSON：${error.message}。`, `传入 [{"fromRevision":"<旧>","toRevision":"<新>","rationale":"<为何属合法外部变化>"}] 后重试；当前 unknown 区间：${unknownList || "无"}`);
+    }
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      fail("--intervals 须为非空数组。", `当前 unknown 区间：${unknownList || "无"}——按该清单逐段登记 from/to 与理由后重试。`);
+    }
+    const explainedUnknownIntervals = [];
+    for (const raw of parsed) {
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        fail("--intervals 的条目须为对象。", `传入 [{"fromRevision":"<旧>","toRevision":"<新>","rationale":"..."}] 后重试；当前 unknown 区间：${unknownList || "无"}`);
+      }
+      const fromRevision = raw.fromRevision;
+      const toRevision = raw.toRevision;
+      const rationale = raw.rationale;
+      if (typeof fromRevision !== "string" || fromRevision === "" || typeof toRevision !== "string" || toRevision === "" || typeof rationale !== "string" || rationale.trim() === "") {
+        fail("--intervals 条目字段非法。", "fromRevision/toRevision 须为非空字符串、rationale 须非空（说明该段变化为何属合法外部变更）；三者齐全后重试。");
+      }
+      const matched = unknownSegments.some((item) => item.fromRevision === fromRevision && item.toRevision === toRevision);
+      if (!matched) {
+        fail(`区间 ${fromRevision}..${toRevision} 不在当前派生结果的无来源段中。`, `只允许确认派生结果里精确存在的 unknown 区间；当前 unknown 区间：${unknownList || "无"}——按该清单重登（派生结果随事件与当前 revision 变化，登记前先跑 revision-provenance 核对）。`);
+      }
+      explainedUnknownIntervals.push({
+        fromRevision,
+        toRevision,
+        intervalSha256: revisionIntervalSha256(fromRevision, toRevision),
+        rationale: rationale.trim(),
+      });
+    }
+    const event = {
+      type: "RevisionBaselineConfirmed",
+      actor: "user",
+      acceptanceVersion: world.acceptance ? world.acceptance.acceptanceVersion : 0,
+      revision,
+      summary: options.reason,
+      // 历史确认不推进链条：confirmedRevision 记录确认时点的当前 revision，派生层对
+      // 携带 explainedUnknownIntervals 的确认事件不作基线锚点（见 kernel-judgments）
+      confirmedRevision: revision,
+      reason: options.reason,
+      explainedUnknownIntervals,
     };
     printJson(appendEvent(world, event, privateKey));
   });
@@ -6650,6 +6777,9 @@ function main() {
         break;
       case "confirm-baseline":
         commandConfirmBaseline(commandArgs);
+        break;
+      case "confirm-history":
+        commandConfirmHistory(commandArgs);
         break;
       case "upgrade-policy":
         commandUpgradePolicy(commandArgs);

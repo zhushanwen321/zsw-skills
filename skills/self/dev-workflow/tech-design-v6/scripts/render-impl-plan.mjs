@@ -24,7 +24,8 @@ import { fileURLToPath } from "node:url";
 
 // 渲染器版本（观测性元数据，写入生成视图头部注释）：MINOR = 渲染行为新增——1.1.0 加
 // units[].kind=contract-spike 的 Unit 列后缀标注（additive，无 kind 字段的存量计划
-// 渲染结果逐字节不变，映射表 §1.2 登记该字段）
+// 渲染结果逐字节不变，映射表 §1.2 登记该字段）。cwd 弱一致性校验属输入校验加固，不改变
+// 合法计划的渲染输出（不升渲染器版本——版本号只标记渲染行为变化）
 const RENDERER_VERSION = "1.1.0";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const MAPPING_DOC = "skills/self/dev-workflow/tech-design-v6/references/impl-plan-mapping.md";
@@ -203,6 +204,45 @@ const section = (h) => {
   push(h);
   blank();
 };
+
+// ── units[].cwd 与 headerNote 的 cwd 声明弱一致性校验 ──
+// 弱校验边界：只核「headerNote 点名的绝对路径根」与 units[].cwd 的包含关系，不解读自然语言
+// 其余语义（声明未点名路径的注记无从机器对照，跳过）。历史实跑形态：headerNote 写「全部单元
+// cwd 统一 Stock 根」而 units 写 plugins 仓根——两侧矛盾没有任何门拦截；此检查把该形态
+// 在渲染期暴露（渲染器是 T3 落盘必经步，比 D0 编译更早）
+{
+  const cwdNotes = (Array.isArray(plan.headerNote) ? plan.headerNote : []).filter(
+    (note) => typeof note === "string" && /\bcwd\b|工作树|worktree|检出根/i.test(note),
+  );
+  const declaredCwdUnits = unitList.filter((u) => typeof u?.cwd === "string" && u.cwd.trim() !== "");
+  const absPathTokens = (text) =>
+    (text.match(/\/[^\s，。；、"'`）)】]+/g) ?? []).map((token) => token.replace(/[，。；、）)】]+$/g, ""));
+  const conflicts = [];
+  for (const note of cwdNotes) {
+    const roots = absPathTokens(note);
+    if (roots.length === 0) continue;
+    if (declaredCwdUnits.length === 0) {
+      conflicts.push(
+        `headerNote 的 cwd 声明点名了路径根（${roots.join("、")}），但没有任何单元声明 units[].cwd——plain 单元固定在工作仓库根运行、cwd 不随声明生效；若存在跨仓/隔离单元，须逐单元声明 isolation=worktree 与 cwd`,
+      );
+      continue;
+    }
+    for (const u of declaredCwdUnits) {
+      const cwd = u.cwd.trim();
+      if (!roots.some((root) => cwd === root || cwd.startsWith(root.endsWith("/") ? root : `${root}/`))) {
+        conflicts.push(
+          `headerNote 声称单元 cwd 落在 ${roots.join("、")}，但单元 ${u.id} 的 units[].cwd = ${cwd}——不在声明的路径根之内（检查 headerNote 与 units[].cwd 哪一侧是权威事实，改 JSON 后重渲染）`,
+        );
+      }
+    }
+  }
+  if (conflicts.length > 0) {
+    fail(planPathAbs, [
+      `FAIL: 语义缺口——units[].cwd 与 headerNote 的 cwd 声明不一致（共 ${conflicts.length} 处）：`,
+      ...conflicts.map((c) => `  - ${c}`),
+    ]);
+  }
+}
 
 // ── 头部 ──
 

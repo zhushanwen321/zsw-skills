@@ -13,7 +13,8 @@
 //   2. id 唯一：各数组内 id 不重复，全部 id 数组并集无重复（不同前缀 G/U/D 等各自编号）；
 //      decisions[].guards[].id 同入全局并集（守护 id 与 gapTable 同为 G 前缀建议，编号须全局错开）；
 //      guards.text 必须是叶子全文、不得内嵌 {{id}}——见规则 2 段校验
-//   3. 导航对齐：meta.reviewNav[].decisionId 集合 == s3.decisions[].id 集合（A/B 级决策不得缺导航行）
+//   3. 导航对齐：meta.reviewNav[].decisionId 集合 == s3.decisions[].id 集合（A/B 级决策不得缺导航行）；
+//      A 级导航行的 criteria 必填非空（命中判据编号；B 级可省——见 references/review-guide-rubric.md）
 //   4. 引用存在：gapRefs / unitRefs / axiomRefs / goalRefs 引用的 id 在被引用数组中存在；
 //      {{<id>}} 守护引用 token（递归扫描六章节全部字符串值）指向 decisions[].guards 登记的
 //      id——{{...}} 是守护引用保留语法，正文不作字面量使用，凡 {{...}} 一律按引用校验；
@@ -23,8 +24,10 @@
 //      词表内；evidenceInputs 元素非空、不重复、无守护引用语法——仅对带 conformance 字段
 //      的条目生效，无绑定文档零失败零警告（向后兼容存量设计包）
 //   5. 分型一致：terminal 必填 terminalForm 三字段与 migrationWaves；evolution 必须为空或缺失
-//   6. 产物表完备：verified 前提 evidence 非空；stateCopies 至少一行、nature 枚举合法、
-//      excluded=false 行 sync 非空、excluded=true 行 exclusionNote 必填
+//   6. 产物表与 e2e 影响面完备：verified 前提 evidence 非空；stateCopies 形态（空数组合法——
+//      未触发即空数组、不补空表行，与另三张产物表同口径）、nature 枚举合法、excluded=false 行
+//      sync 非空、excluded=true 行 exclusionNote 必填；s4 e2eImpact 必须存在且 items 非空与
+//      noneReason 互斥（items 为空时 noneReason 必填，行内 name/action 非空）
 //   7. 内容形态：typeRationale 不以分型名开头（渲染器已带「终态型（terminal）——」前缀，重复即冗余）；
 //      s5 units files 条目全/半角括号配对（不配对的说明括号使条目与后续文件粘连）
 //   8. warning（不阻塞）：穷举断言可复算——assumptions / assumptionExclusions / stateCopies
@@ -363,6 +366,13 @@ for (const r of navRows) {
       `[导航] meta.json reviewNav 引用的 decisionId「${r.decisionId}」在 s3-solution.json decisions 中不存在——核对 id 拼写，或删除该多余导航行`,
     );
   }
+  // A 级决策必须可人工逐条裁决：criteria 写命中判据编号（判据见 references/review-guide-rubric.md）。
+  // B 级可省——review-guide-rubric 的 B 级定位是「无异议即过」，不要求逐条给判据编号
+  if (r?.level === "A" && !isFilled(r?.criteria)) {
+    failures.push(
+      `[导航] meta.json reviewNav 中 A 级决策「${r.decisionId ?? "缺 decisionId"}」的 criteria 缺失或为空——A 级决策须写命中判据编号（如「命中判据 2：权威源归属变更」），使人工审核有裁决依据`,
+    );
+  }
 }
 const navIdSet = new Set(navRows.map((r) => r?.decisionId).filter(isFilled));
 for (const d of decisionRows) {
@@ -584,11 +594,8 @@ arr(s2?.assumptions).forEach((a, i) => {
   }
 });
 const stateCopies = arr(s2?.artifactTables?.stateCopies);
-if (stateCopies.length === 0) {
-  failures.push(
-    "[产物表] s2-status.json artifactTables.stateCopies 至少一行——状态副本清单不可为空（候选位置不存在副本时，登记为 excluded=true 的排除行）",
-  );
-}
+// 未触发的产物表为空数组（与 signalImplications / repairHistory / upstreamDeps 同口径，
+// 写作指令见 flow/write.md「触发了才有行，未触发的表为空数组」）——空数组不补空表行，不拦
 stateCopies.forEach((row, i) => {
   const where = `s2-status.json artifactTables.stateCopies[${i}]（${row?.id ?? "缺 id"}）`;
   if (!["authority", "projection", "cache"].includes(row?.nature)) {
@@ -604,6 +611,39 @@ stateCopies.forEach((row, i) => {
     failures.push(`[产物表] ${where} excluded=false 但 sync 为空——非排除行须写明与权威副本的同步机制`);
   }
 });
+
+// e2e 影响面评估（s4-accept.json 固定子节，下游 T3 按标题继承）：字段本身必填——缺失 /
+// 非对象 / items 非数组 / 空 items 无 noneReason 三者任一即 fail。此前由「渲染标题恒存在」
+// 兜底，省略字段会在渲染视图显示「无受影响项（—）」而被静默继承为零验证节点（flow/write.md
+// Step 4 的「禁止留空或省略」在机器层落位）
+if (s4 !== undefined) {
+  const e2e = s4.e2eImpact;
+  const e2eWhere = "s4-accept.json e2eImpact";
+  if (e2e === undefined || e2e === null || typeof e2e !== "object" || Array.isArray(e2e)) {
+    failures.push(
+      `[e2e 影响面] ${e2eWhere} 缺失或不是对象——§4 固定子节必填：{ items, noneReason }；无受影响项时 items 为空数组且 noneReason 填依据（禁止留空或省略字段，空集会被下游静默继承为零验证节点）`,
+    );
+  } else if (!Array.isArray(e2e.items)) {
+    failures.push(
+      `[e2e 影响面] ${e2eWhere}.items 须为数组（受影响测试资产清单，每项 { name, action }）——无受影响项时写空数组并在 noneReason 填依据`,
+    );
+  } else {
+    e2e.items.forEach((item, i) => {
+      const where = `${e2eWhere}.items[${i}]`;
+      if (!isFilled(item?.name)) {
+        failures.push(`[e2e 影响面] ${where} 缺 name——每项须写受影响测试资产名（e2e / 真实进程 / 真实 LLM 资产）`);
+      }
+      if (!isFilled(item?.action)) {
+        failures.push(`[e2e 影响面] ${where} 缺 action——每项须写开发阶段需跑的子集与命令，或「不跑（理由）」`);
+      }
+    });
+    if (e2e.items.length === 0 && !isFilled(e2e.noneReason)) {
+      failures.push(
+        `[e2e 影响面] ${e2eWhere}.items 为空数组但 noneReason 缺失或为空——无受影响项时必须填判定依据；有受影响项时 items 不可为空`,
+      );
+    }
+  }
+}
 
 // ── 规则 7：内容形态（渲染层可呈现性） ──
 

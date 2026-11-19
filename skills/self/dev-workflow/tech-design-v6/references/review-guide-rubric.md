@@ -1,6 +1,6 @@
 # 人工审核分级判据（决策三级 + 六维评估）
 
-> 目的：降低设计文档的人工审核成本。写作期由作者给每条关键决策定审核级别（`s3-solution.json` decisions[].level），`meta.json` reviewNav 渲染为正文之前的人工审核导航表；读者只逐条裁决 A 级、B 级无异议即过、其余局部实现细节不审。本文件是判据唯一来源——`flow/write.md` Step 3/Step 6、文档模板、`review/rubric-design-doc.md` 的 P0-26 都引用它，判据修订只改这里。
+> 目的：降低设计文档的人工审核成本。写作期由作者给每条关键决策定审核级别（`s3-solution.json` decisions[].level），`meta.json` reviewNav 渲染为正文之前的人工审核导航表；读者只逐条裁决 A 级、B 级无异议即过、其余局部实现细节不审。本文件是判据唯一来源——`flow/write.md` Step 3/Step 6 与文档模板都引用它，判据修订只改这里。
 
 ## 三级定义
 
@@ -10,7 +10,7 @@
 | B | 需要知会但默认可信的决策 | 扫导航表一行一条，无异议即过；有异议才展开该节 |
 | C | 局部实现细节 | 不审 |
 
-**C 级不得出现在「关键决策与权衡」节**：评出 C 级说明它不是关键决策，挪到实现机制节作为普通实现叙述。关键决策节只收 A/B 两级条目。
+**C 级不得出现在「关键决策与权衡」节**：评出 C 级说明它不是关键决策，挪到实现机制节作为普通实现叙述。关键决策节只收 A/B 两级条目。**每份设计至少一条 A/B 级关键决策**（零关键决策的设计不成立——`meta.json` reviewNav 不得为空数组，机器检查规则 1 拦截）。
 
 ## A 级触发判据（命中任一即 A，逐条核对，不打分）
 
@@ -54,7 +54,7 @@
 1. **决策条目落 `s3-solution.json` decisions[]**：固定四件套 choice / rejected / evidence / impact（六维对象，只填非「无」维度），定级落 level 字段（`A` / `B`；字段规格见 `references/design-doc-schema.md` §6.3）。渲染脚本自动把每条决策渲染为带（A 级）/（B 级）标记的条目——级别标记不靠手写标题
 2. **命中判据与关键影响落导航行**：A 级决策在 `meta.json` reviewNav 对应行的 criteria 写命中判据编号（如「命中判据 2：权威源归属变更」），B 级可省；关键影响简述落该行 impact 字段（写有实质影响的维度，不写「无」）
 3. **导航行落 `meta.json` reviewNav[]**：每条 A/B 级决策一行，decisionId 与 decisions 的 id 对齐，anchor 填渲染视图锚点（如 `§3.3`）。渲染脚本自动在正文之前产出人工审核导航表——导航表不手写
-4. **一致性要求（机器判据）**：reviewNav.decisionId 集 == decisions.id 集（`scripts/check-design-doc.mjs` 规则 3），A/B 级决策不得缺导航行；每条 A 级决策 criteria 非空由 schema 必填与 `flow/write.md` Step 6 自检、`review/rubric-design-doc.md` P0-26 审查项保证
+4. **一致性要求（机器判据）**：reviewNav.decisionId 集 == decisions.id 集（`scripts/check-design-doc.mjs` 规则 3），A/B 级决策不得缺导航行；每条 A 级决策 criteria 必填非空由机器检查（同一规则 3）拦截，写作期自检见 `flow/write.md` Step 6.2「导航行 criteria」项
 
 ## 示例
 

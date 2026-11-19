@@ -37,6 +37,20 @@ node ~/.agents/skills/dev-flow-v6/scripts/verification-index.mjs query --index <
 
 索引只作初始定位，不声称完整语义依赖——本分区实际 diff 始终完整提供；查询输出含未映射文件（带 fallback 标注）时回退现行分区审查范围，reviewer 可主动向外扩展。修复轮定向复审同理可用 `--unit <id>` / `--asset <id>` 查直接关联的断言与测试；完整失效范围仍按 acceptance dependsOn、check-quality-contract 与 revision 规则判定——索引不判定计划缺漏，空引用集合只是查询事实。
 
+## 过程层关联对账（check-associations.mjs，手工调用）
+
+`scripts/check-associations.mjs` 是 exec-plan `associations` 的过程层机器检查（D0 编译期对账只看「落计划 + 同节点覆盖」；本 CLI 看运行期改动是否真的同步）。**使用形态**：必须带子命令与 `--plan`，不能当 review 节点 script 直跑（引擎以 `node <script>` 无参启动，会把缺子命令判用法错误 exit 3）；W3 引擎当前不自动调用本 CLI——由主 agent 手工执行（workflow 路径在 R1 前 / 修复批次后由主 agent跑，手工路径同）。
+
+```bash
+node ~/.agents/skills/dev-flow-v6/scripts/check-associations.mjs check   --plan <exec-plan.json 绝对路径> [--base <gitRev>]
+node ~/.agents/skills/dev-flow-v6/scripts/check-associations.mjs recheck --plan <exec-plan.json 绝对路径> [--base <gitRev>]
+```
+
+- **何时跑**：`check` = R1 发起前与每批修复 commit 后（生产方已改而 related 未同步是本检查的靶）；`recheck` = R1 分区完成后、Gate A 前（改动集含 .js/.mjs/.cjs/.ts 且 import 边可能变化时），报告声明外跨单元依赖边。`--base` 缺省取 exec-plan `baseline`，两者皆缺 exit 3。
+- **三态退出码处置**（clean=0 / dirty=1 / unknown=2 / 运行错误=3，三态是硬契约）：clean → 通过；dirty → 回修复批次——`check` 的 trigger↔related 未同步按关联条目补改 related 或改 `action=exempt` 并写 rationale；`recheck` 的声明外依赖边登记进 associations（trigger/related 文件对）或移除该 import / 回 T3 调整单元边界；unknown → 人工确认（逐条看 unknowns 的 reason），**不得当 clean 通过**；运行错误 → 按 stderr 恢复（核对 `--plan` 路径 / `--base` 有效提交 / exec-plan `projectRoot` 是 git 工作树 / `associations` 条目形态）。
+- **worktree unknown 处置**：worktree 节点（cwd ≠ projectRoot）territory 命中的改动文件恒记 unknown（改动集路径相对 projectRoot 仓库根，与 worktree 检出的实际文件对不上，静态解析是猜测）——逐个文件人工核对 import 边，或确认其无可疑跨单元依赖；结论登记 ledger（`<name>.ledger.md`）或补进 associations。该项是**静态分析缺口**，不阻塞正常路径，但不得声称已做静态核验。
+- **口径限制（如实告知不算缺陷）**：改动集 = `git diff --name-only <base>`，未 add 的 untracked 文件不进改动集（初筛只以 git 可见为准）；`recheck` 只认四种字面量 import 形态，包名 / 别名 / 逃出仓库根的 spec 不追踪；非字面量动态引用整文件记 unknown（宁可暴露不放行）。
+
 ## W3 workflow 契约（zcode 环境默认动作）
 
 ```

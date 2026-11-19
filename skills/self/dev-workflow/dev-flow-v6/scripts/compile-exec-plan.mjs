@@ -76,8 +76,9 @@
 // 本表是 D0 消费口径的唯一登记处）：
 //   units[].designRef          string 可选——设计章节锚（任务书「单元目标」段；缺省空串，
 //                              编译摘要按警告列出未登记单元，不拦）
-//   units[].cwd                string 可选——isolation=worktree 单元的 worktree 绝对路径
-//                              （必填缺口；plain 单元恒 null，不接受声明）
+//   units[].cwd                string 可选——isolation=worktree 单元的 worktree 检出根绝对路径
+//                              （必填缺口；plain 单元不接受非 projectRoot 的 cwd——声明即缺口，
+//                              不再静默丢弃；等于 projectRoot 的冗余声明放行）
 //   units[].kind               string 可选——单元角色 additive 标记；现只登记
 //                              "contract-spike"（契约冒烟 spike 单元，外部契约任务的 DAG
 //                              首个可执行节点）。声明其他值 = 上游契约含糊，报缺口不静默
@@ -376,7 +377,10 @@ function buildDevNodes(ctx) {
       }
     }
 
-    // cwd 契约：plain（含缺省）= null；worktree = units[].cwd 显式声明（不猜 worktree 路径）
+    // cwd 契约：plain（含缺省）= null；worktree = units[].cwd 显式声明（不猜 worktree 路径）。
+    // plain 单元声明 cwd 不再静默丢弃——非绝对形态 / 不等于 projectRoot 两种都报缺口：
+    // plain 单元固定在工作仓库根执行，跨仓或隔离执行必须用 isolation=worktree 显式表达
+    //（历史实跑：plain 单元携带另一仓根 cwd 被本编译器丢弃，单元实际在工作仓库根执行）
     let cwd = null;
     if (unit.isolation === "worktree") {
       if (!isStr(unit.cwd) || !isAbsolute(expandHome(unit.cwd))) {
@@ -388,6 +392,23 @@ function buildDevNodes(ctx) {
         continue;
       }
       cwd = abs(unit.cwd);
+    } else if (unit.cwd !== undefined && unit.cwd !== null) {
+      if (!isStr(unit.cwd) || !isAbsolute(expandHome(unit.cwd))) {
+        gap(
+          `单元 ${unit.id} isolation=${unit.isolation ?? "plain（缺省）"} 声明了 units[].cwd 但不是绝对路径（实际：${showVal(unit.cwd)}）`,
+          `units[].cwd 权威 = ${planPath}；cwd 只接受绝对路径（相对路径会被引擎拼成仓库子目录）`,
+          `回 tech-design-v6 T3 删除该单元的 cwd（plain 单元在工作仓库根执行），或把 isolation 改为 worktree 并登记 worktree 检出根绝对路径`,
+        );
+        continue;
+      }
+      if (abs(unit.cwd) !== abs(ctx.projectRoot)) {
+        gap(
+          `单元 ${unit.id} isolation=plain 声明了与 projectRoot 不同的 units[].cwd（${abs(unit.cwd)} ≠ ${abs(ctx.projectRoot)}）——plain 单元不接受跨仓 cwd`,
+          `cwd 语义权威 = ${planPath} units[].cwd + dev-flow-v6 references/dag-authoring.md（cwd 仅 worktree 单元生效；territory 相对该 cwd 所在仓库根）`,
+          `回 tech-design-v6 T3 二选一：删除该 cwd（单元改在工作仓库根执行），或把 isolation 改为 worktree 并保留检出根绝对路径（跨仓 worktree 指向另一仓库根合法）后重新编译`,
+        );
+        continue;
+      }
     }
 
     const promptRel = join(ctx.promptsDir, `${unit.id}.md`);
@@ -510,7 +531,7 @@ ${NUMBERING_NOTE}
 - 验收条款：
 ${acceptance}
 
-## 范围声明（territory，相对仓库根）
+## 范围声明（territory，相对本节点 cwd 所在仓库根）
 ${territory}
 
 ## 验收基线与测试要求
@@ -521,8 +542,10 @@ ${incSection}
 ## 返回契约（固定）
 执行完成后返回 JSON：
 \`\`\`json
-{"status": "done|blocked", "files_changed": ["精确路径"], "test_evidence": "测试输出要点", "deviations": [], "blockers": [], "summary": "commit message 摘要"}
+{"status": "done|fail|blocked", "files_changed": ["精确路径"], "test_evidence": "测试输出要点", "deviations": [], "blockers": [], "summary": "commit message 摘要"}
 \`\`\`
+- status 三态判据：**done** = 实现完成且 testCommand 跑绿；**fail** = 可重试失败（测试红、实现方向错、本轮没做完——重派/续聊能修），引擎按打回重做处理；**blocked** = 不可自解的环境/任务书/依赖问题（缺工具、任务书自相矛盾、需要上游裁决），引擎置节点 blocked 并挂起后继。
+- blockers 只在 blocked 时填（不可自解的事实 + 已尝试动作）；fail 的失败原因与已试方案写进 test_evidence / summary，不填 blockers（填了会被判 blocked，整 run 可能熔断）。
 - summary 末行必须是「测试：${cmdText} 绿」（commitTemplate 渲染依赖它承载测试结论）。
 - deviations 为强制字段，无偏离填空数组；files_changed 逐条精确路径。
 - 宿主无 structured-output 工具时在回复中用 json 代码块返回同构对象，解析失败视同本次汇报无效打回重报。
@@ -633,6 +656,9 @@ ${lines}
 
 const LEVEL_VERIFY = (l) => isStr(l) && l.trim().startsWith("L3");
 const LEVEL_INSPECT = (l) => isStr(l) && (l.trim().startsWith("L4") || l.trim() === "inspect-only");
+// 验收行 id 形态（与 gen-acceptance-wrapper / gen-runtime-probe-wrapper 的 NODE_ID_RE 同源）：
+// 行 id 会成为 exec-plan 节点 id 与 wrapper 文件名，含路径分隔符/引号即注入风险——编译期拦
+const ACCEPTANCE_ROW_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function buildAcceptanceNodes(ctx) {
   const { plan, planPath, statusData } = ctx;
@@ -651,6 +677,14 @@ function buildAcceptanceNodes(ctx) {
         `acceptancePlan 条目缺 id（实际：${showVal(row)}）`,
         `验收计划行权威 = ${planPath} acceptancePlan[]（渲染必填校验由 tech-design-v6 渲染器承担——先过渲染门）`,
         "回 tech-design-v6 T3 补齐行 id 后重新渲染、重新编译",
+      );
+      continue;
+    }
+    if (!ACCEPTANCE_ROW_ID_RE.test(row.id.trim())) {
+      gap(
+        `验收行 id「${row.id}」形态非法——合法形态 ${ACCEPTANCE_ROW_ID_RE.source}（含路径分隔符一律拒绝：id 会成为 exec-plan 节点 id 与 wrapper 文件名，防路径穿越与注入）`,
+        `验收行 id 权威 = ${planPath} acceptancePlan[].id（与 gen-acceptance-wrapper / gen-runtime-probe-wrapper 的 nodeId 判据同源）`,
+        "回 tech-design-v6 T3 把该行 id 改为字母/数字开头的纯路径安全形态（字母、数字、点、下划线、连字符）后重新渲染、重新编译",
       );
       continue;
     }
@@ -793,6 +827,17 @@ function buildAcceptanceNodes(ctx) {
         ...(rowFormRefs !== null ? { adversarialFormRefs: rowFormRefs } : {}),
       });
     }
+  }
+
+  // 空验收节点前置判据：L0/L1/L2 行不编译成节点——全部行都是 L0/L1/L2（或 acceptancePlan
+  // 为空）时 acceptance.nodes 必为空，而 exec-plan 校验要求非空。在此给出可操作缺口，
+  // 而不是把编译推到写盘后由 check-exec-plan 报「acceptance.nodes 必须是非空数组」（无上游指引）
+  if (nodes.length === 0) {
+    gap(
+      "acceptance 编译产出空验收节点：acceptancePlan 的全部行都是 L0/L1/L2（或该数组为空）——L0/L1/L2 由 D1 单元测试与 D2 Gate A 覆盖，不编译为 D3 节点",
+      `验收计划权威 = ${planPath} acceptancePlan[]（D3 至少需要一行 L3脚本 / L4 agent / inspect-only）`,
+      "回 tech-design-v6 T3 把至少一个无法由 D1/D2 覆盖的验收场景标为 L3/L4（或 inspect-only），重新渲染后重新编译；确无可独立验收的场景须回设计层补验收场景，不是跳过 D3",
+    );
   }
 
   // deps 引用完整性：验收节点 deps 只能指向编译成节点的验收行（L0/L1/L2 行不进 D3）

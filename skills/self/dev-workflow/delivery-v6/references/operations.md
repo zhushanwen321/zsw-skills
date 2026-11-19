@@ -1,6 +1,8 @@
 # 裁决点与命令参考（内核 next 驱动 + 凭据 + 写入防护 + 租约）
 
-「下一步做什么」的唯一回答者是内核：**先问 `delivery-core next`，再按合法转移的 executor 执行**——转移表（`scripts/kernel/rules.json`，五域：任务/节点/发现/探索/验收包）是流程唯一权威，本文只写裁决点、命令语义与角色权限。所有路径参数用绝对路径；`<...>` 是占位符。
+「下一步做什么」的唯一回答者是内核：**先问 `delivery-core next`，再按合法转移的 executor 执行**——转移表（`scripts/kernel/rules.json`，五域：任务/节点/发现/探索/验收包）是流程唯一权威，本文只写裁决点、命令语义与角色权限。所有路径参数用绝对路径；`<...>` 是占位符。事件登记的 artifact 路径另有形态约定（见 §0 末段）：必须在 taskDir 的 evidence/ 内，相对路径以 taskDir 为基准，绝对路径与 symlink 逃逸一律拒。
+
+并发登记同一任务目录的事件时，gate 以任务级事件锁（`.events.lock`）串行化写入：等待上限 30 秒、锁龄超 30 秒视为陈旧可被抢占（死 pid 锁同样可抢），抢占时 stderr 会告知；不要绕过锁直接写 events.jsonl。
 
 ```bash
 node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs next --task-dir <taskDir> [--status-file <dev-flow status.json>]
@@ -28,7 +30,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs next --task-dir <tas
 
 **判定单源的消费通道**：gate 与内核同进程 import kernel-judgments；workflow 经内核 CLI 的 JSON 子命令消费——zcode/pi workflow 产物禁模块 import（平台约束），CLI 通道保持判定随技能更新即时生效且 artifact 哈希校验不分叉，单实现不受影响。
 
-**事件意图提交**（执行器事件唯一通道，`append` 已退役）：`record-implementation` / `record-repair-round` / `record-finding` / `resolve-finding` / `reaffirm-resolution` / `record-evidence` / `record-exploration` / `complete-assurance` / `record-assurance-drift`——信封（actor/revision/acceptanceVersion/domain/artifactSha256）由 gate 构造；`--revision` 显式锁定保证 run 在途的 setup revision；写入矩阵「角色 × 当前阶段 × 目标域」与 domain 章在写入当刻执行。主会话命令（批准/风险接受/替换等）见 `delivery-gate.mjs help`。additive 可选参数：`record-finding` 带 `--contract-capability-ids '<JSON>'` 与 authority 组（`--authority-backed true --authority-hash H --authority-observation-ref R`）——结构命中外部契约（contractCapabilityIds 非空，或 requirementIds 反查到的断言含 requiredEnvironment.capability）时 authority 组必填；`record-evidence` 带 `--contract-capability-ids '<JSON>'` 认领契约能力，`--runtime-probe` 标记真实 runner / 宿主驱动产生的 runtime probe 证据（runtime 义务唯一可满足形态）。
+**事件意图提交**（执行器事件唯一通道，`append` 已退役）：`record-implementation` / `record-repair-round` / `record-finding` / `resolve-finding` / `reaffirm-resolution` / `record-evidence` / `record-exploration` / `complete-assurance` / `record-assurance-drift`——信封（actor/revision/acceptanceVersion/domain/artifactSha256）由 gate 构造；`--revision` 显式锁定保证 run 在途的 setup revision；写入矩阵「角色 × 当前阶段 × 目标域」与 domain 章在写入当刻执行。主会话命令（批准/风险接受/替换等）见 `delivery-gate.mjs help`。additive 可选参数：`record-finding` 带 `--contract-capability-ids '<JSON>'` 与 authority 组（`--authority-backed true --authority-hash H --authority-observation-ref R`）——结构命中外部契约（contractCapabilityIds 非空，或 requirementIds 反查到的断言含 requiredEnvironment.capability）时 authority 组必填；`record-evidence` 带 `--contract-capability-ids '<JSON>'` 认领契约能力，`--runtime-probe` 标记真实 runner / 宿主驱动产生的 runtime probe 证据（runtime 义务唯一可满足形态）。artifact 路径形态：必须位于 `<taskDir>/evidence/` 内（相对路径以 taskDir 为基准解析，也接受在该目录内的绝对路径）；目录外路径、`..` 越界与 symlink 逃逸一律拒绝（恢复动作 = 把报告/证据移入 evidence/ 后重登）。
 
 **写入防护**：`approve-acceptance` 即冻结验收包（acceptance.json + increments.json chmod 0444 + `frozen/v<N>/` 快照）——非法改写在写入当秒被拒，漏网者在下次加载被篡改检测拦下。合法修订唯一通道：
 
@@ -81,7 +83,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs set-delivery-profile
 
 - `declare-external-authority` 登记 ExternalAuthorityDeclared 事件（绑 contractId、resolverKind、locator 与快照哈希）：local-path 按 git 仓库身份覆盖全部 worktree，路径位于同仓库可写范围内即拒绝；executable 登记绝对路径、版本与厂商来源指纹，不依赖会话 PATH 上的 `which` 结果。
 - `confirm-environment-baseline` 登记 EnvironmentBaselineConfirmed 事件（绑新快照哈希与覆盖的契约 id 清单）：确认后仍必须在当前环境重跑 probe；同一 acceptanceVersion 内再次漂移必须 `open-revision` 或停回用户，不允许用环境重试掩盖实现缺陷。
-- `set-delivery-profile` 写 task.json 的 deliveryProfile（a=机制小改 / b=结构改，缺省 / c=大版本）：降档只减审查席与分区，不减必做机器门。
+- `set-delivery-profile` 写 task.json 的 deliveryProfile（a=机制小改 / b=结构改，缺省 / c=大版本）：降档只减审查席与分区，不减必做机器门。已批准任务降档到 a 的前提：验收 `reviewDimensions` 必须 ⊆ a 级两维（「外部契约」「故障形态」），否则探索登记（ExplorationCompleted）会因维度覆盖不足被拒——需更多维度时先 `open-revision` 收窄验收维度并重新审查批准，或保持 b 级。
 
 ## 1. 初始化（init：意图 + 凭据 + 血统）
 
@@ -94,6 +96,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs init \
 ```
 
 - stdout 输出：`taskDir`、`credentials`（三个 credentialId，形态 `<分组>/<任务id>/<角色>`）、`intentSha256` 与三把公钥。**私钥不输出**——已写入凭据目录 `~/.agents/skill-data/delivery-keys/<分组>/<任务id>/`（0600）。
+- `--task-id` 形态约束：以字母或数字开头、不含连续两个点、长度 ≤128，非法即拒绝（它直接参与目录名与凭据路径）。
 - `--delivery-profile` 缺省 b（a=机制小改 / b=结构改 / c=大版本，与 benchmark 同级）；降档只减审查席与分区，不减必做机器门。唯一写通道 = init 本参数或 user 凭据命令 `set-delivery-profile`（第 0 节），禁直改 task.json。
 - 血统规则：同 git 仓库身份下已存在同 intent 的未替换任务时 init 拒绝——走任务替换（第 8 节）或先 `declare-independent`。
 - `--verification-only`：纳管体系外已有实现的只核验模式（豁免方案包与 DesignApproved）；由 candidate-build-v6 承载——builder 不改代码，逐增量核验在当前 revision 成立并登记实现记录。
@@ -113,7 +116,7 @@ zcode：`CreateWorkflow saved: acceptance-design-v6`，args `{ projectRoot, task
 
 workflow 完成 designer 起草 → assurance 独立审查 → 机器校验，双通过后以 assurance 凭据登记 `record-review --conclusion pass`（自动绑验收包/intent/快照哈希）。机器校验入口 = `delivery-gate validate-acceptance --task-dir <taskDir>`（只读幂等；验收包声明 `externalContracts` 时增跑外部契约静态检查，失败按其恢复动作交 designer 修订）。审查与校验语义、修订轮对照上一版草稿差异的机制见 workflow 契约（delivery-v6 SKILL「Workflow 契约」节）。**验收复审轮预算**：按 `delivery-core loop-budget` 的 started 计数执行（进入复审即 `loop-attempt` 登记 started；打回、校验失败、designer 失败、中断全部计入，跨 run 累计），超 `acceptanceReReviewRoundCap`（6）判 process-failed 停回用户。审查反馈 artifact 按 `acceptanceVersion + runId + round` 隔离存放，禁止只按 round 覆盖历史报告；打回后下一轮 designer 发起前必须读取最新反馈 artifact（不靠主 agent 转述）。
 
-**外部契约任务的验收复审流程**（验收包出现 `externalContracts` 键时，workflow 顺序固定）：候选探测（setup 跑 `detect-external-contracts.mjs`，候选快照落 `taskDir/evidence/acceptance-v<N>/external-contract-candidates.json`，detectionSha256 = 快照文件字节 sha256）→ 候选处置（designer 在 `externalContractReview` 逐候选填 bound / manual / not-external / unresolved）→ 权威解析（跑 `resolve-external-contracts.mjs --write`，落 `taskDir/environment-contracts/<snapshotSha256>.json` 与派生指针 `environment-contracts.current.json`）→ 起草 / 修订 → 独立审查 → 机器校验 → 以 assurance 凭据登记 `record-review`。审查与批准时刻自动绑定当前环境契约快照哈希（additive 字段 `authoritySnapshotSha256`，显式 `--authority-snapshot-sha256` 优先）；批准事件绑定的哈希是环境历史链起点。无外部候选时也落空候选快照与空环境快照（`contracts: []`），使 detectionSha256 / authoritySnapshotSha256 有可绑定对象，不缺省猜测。
+**外部契约任务的验收复审流程**（验收包出现 `externalContracts` 键时，workflow 顺序固定）：候选探测（setup 跑 `detect-external-contracts.mjs`，候选快照落 `taskDir/evidence/acceptance-v<N>/external-contract-candidates.json`，detectionSha256 = 快照文件字节 sha256）→ 候选处置（designer 在 `externalContractReview` 逐候选填 bound / manual / not-external / unresolved）→ 权威解析（跑 `resolve-external-contracts.mjs --write`，落 `taskDir/environment-contracts/<snapshotSha256>.json` 与派生指针 `environment-contracts.current.json`）→ 起草 / 修订 → 独立审查 → 机器校验 → 以 assurance 凭据登记 `record-review`。审查与批准时刻自动绑定当前环境契约快照哈希（additive 字段 `authoritySnapshotSha256`，显式 `--authority-snapshot-sha256` 优先）；批准事件绑定的哈希是环境历史链起点。无外部候选时也落空候选快照与空环境快照（`contracts: []`），使 detectionSha256 / authoritySnapshotSha256 有可绑定对象，不缺省猜测。环境快照或 current 指针被手改 / 损坏时：重跑 `resolve-external-contracts.mjs --write` 重建（快照按哈希分文件存储、不覆盖历史），不要手改快照文件。
 
 呈报关键目标、非目标、风险与覆盖对照，用户明确批准后：
 
@@ -126,6 +129,8 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs approve-acceptance \
 
 批准自动绑最新通过的审查事件并**冻结验收包**（见第 0 节写入防护）。同组合后发的 reject 审查会使批准失效（回 draft 重新走审查）。修改验收判据必须：`open-revision` 解封 → 递增 acceptanceVersion 重新起草 → 重新审查与批准。只做设计的任务到批准即停止。
 
+冻结验收包被误改（0444 权限被绕过、内容被改）时：下次加载的篡改检测会拒绝——恢复动作 = 从 `taskDir/frozen/v<N>/` 快照恢复 acceptance.json 与 increments.json 原内容后再重试；确需改判据走 `open-revision` 正常修订通道，不要手工改回后继续用旧批准。
+
 ## 3. 方案确认（裁决点：用户确认方案包；技能②衔接）
 
 tech-design-v6 产出完整方案包并经用户确认后：
@@ -136,7 +141,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs record-design-approv
   --package-file <方案包哈希清单 JSON：[{name, sha256}]> --credential <user credentialId>
 ```
 
-方案包或验收版本变化后 DesignApproved 失效，需重新确认。注意：首次保证之后的方案修订按一轮并入修复预算（perVersion）。
+验收版本变化后 DesignApproved 失效，需重新确认。**方案包内容变化不被机器自动检出**（packageFiles 是登记时声明的快照清单，gate 只判「事件存在 + 版本一致」）——改动方案包后必须重新 `record-design-approved`，否则执行侧仍按旧批准继续；首次保证之后的方案修订按一轮并入修复预算（perVersion）。
 
 ## 4. 候选实现（技能③，两通道任选）
 
@@ -154,6 +159,8 @@ zcode：`CreateWorkflow saved: independent-assurance-v6`，args `{ projectRoot, 
 策略快照 `runsFromIgnoredArtifacts=true`（policies/revision.json 随任务固定）时的执行语义：workflow 取证前生成干净构建（HEAD 导出 + 工作树补丁 + 非 ignored 新文件复制，不含 ignored 本地产物），逐增量测试在干净目录执行并统一绑 buildId，AssuranceCompleted 附 cleanBuild 记录——证明证据不依赖本机 ignored 产物；干净目录内测试失败（如需本机 ignored 依赖）会如实记入回执，裁决器按退出码判定保证无效。`mode=content-manifest` 时豁免干净构建：产物已纳入内容清单、变化即改变 revision 使旧证据失效，裁决器与 workflow 同判定。
 
 **外部契约任务的 runtime probe 义务**（验收包带 `externalContracts` 时，coverage-reviewer 硬责任，六条）：① 亲自运行 resolver，不采信 builder 提供的路径字符串，权威以 resolver 输出与权威 surface 文件为准；② 每个 essential capability 至少一条由 assurance 亲自执行的非 builder 自报观察——经 resolver 输出的 resolvedPath（权威绝对路径）调用外部系统做最小观察，probe artifact 写入 evidence/（environment.kind=official-runner|real-host、sourceHash=该契约 aggregateHash、capabilities 含该能力、subject.revision=当前 revision、cases 记录 operation/observed/passed、summary 计数与 cases 一致），禁止用裸包名、项目内 alias 或 mock 模块替代权威入口；③ 验收反例引用的 negative case 由 assurance 亲自执行——自写最小 probe 或亲自执行独立执行器并观察真实环境拒绝，不能只运行 builder driver；④ 不从平台文档重新推导契约，文档只作辅助材料；⑤ authority 不可得时申报 `authority-missing` must-fix，不得降为 info；⑥ recheck 必须重跑 runtime probe——全部 essential capability 的 probe artifact 必须为当前 revision 重新执行产生，不得引用早期 spike，只复跑项目测试不满足义务。real-host 类无法安全自动化的能力转人工执行：由 assurance 承担人工执行义务，回传 artifact 并登记 `executedBy=manual-handoff` 与理由，不得静默跳过。fake-host 资产被用于证明契约专属语义时另需 parity 记录（mock 与真实 probe 逐样本对照，任一样本语义不同则该 mock 不得继续作为该语义的证明，见 `references/roles/coverage-reviewer.md`）。runtime 义务唯一可满足形态 = `record-evidence` 带 `--runtime-probe` 且认领该能力的 assurance 证据。
+
+**内容冻结窗口（主会话与用户义务）**：revision = git HEAD + tracked 修改 + untracked 非 ignored 文件逐文件哈希——任何字节变化（含新建临时文件、手工 git commit、编辑项目内文件）都会改变 revision，使该 revision 上的既有证据失效。因此独立保证 run 在途期间、以及 D4 最终 commit 后到 verdict 产出之前，项目内容必须冻结：不手工 commit、不写临时文件、不整理文件；builder/explorer/coverage-reviewer 的角色文件已要求「临时产物当场删除」，主会话同样受此约束。确需变更时等本轮保证结束或接受整轮作废重跑。
 
 ## 6. 有限修复与统一判定（裁决点：预算停回）
 
@@ -176,7 +183,7 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs accept-risk \
 ```
 
 - accept-risk 缺口绑定：单缺口缺省自动绑定当前 gapId（missing 缺口为确定性派生 id；partial/failed 绑对应证据事件 id）；同一需求存在多个未接受缺口时必须 `--gap-id` 指定其一（缺省执行会列出全部候选 gapId）——多缺口不允许自动绑定，防登记项与用户批准项错位。boundary 类与 riskAcceptable=false 需求拒绝。
-- evaluate 前的机器核对（内核只读命令，任一不过按其恢复动作处置）：`obligations` 必需义务无 open；`revision-provenance` 候选形成后无 unknown 来源代际；`loop-budget` 各循环 started 计数未超上限；外部契约任务的 `runtimeReadiness.overall` 为 established / not-applicable 且每个外部契约的环境历史链完好（当前权威 aggregateHash 等于批准时该契约哈希，或有覆盖该契约的 `EnvironmentBaselineConfirmed` 接链；同一 acceptanceVersion 最多确认一次）。runtime 义务不接受风险接受——`accept-risk` 与 `preauthorize-risk` 均不消化 kind=runtime 义务，环境不可得时停回用户裁决。
+- evaluate 前的机器核对（内核只读命令，任一不过按其恢复动作处置）：`obligations` 必需义务无 open；`revision-provenance` 候选形成后无 unknown 来源代际（历史 unknown 区间可由用户 `confirm-history` 署名确认后归 user-confirmed，见第 10 节）；`loop-budget` 各循环 started 计数未超上限；外部契约候选复扫（evaluate 会重新扫描当前实现对外部系统的实际调用点）：实现中新增验收未登记的外部系统调用会让候选复扫不过、evaluate 拒绝——恢复动作 = 走第 2 节 `open-revision` 修订验收登记 capability；外部契约任务的 `runtimeReadiness.overall` 为 established / not-applicable 且每个外部契约的环境历史链完好（当前权威 aggregateHash 等于批准时该契约哈希，或有覆盖该契约的 `EnvironmentBaselineConfirmed` 接链；同一 acceptanceVersion 最多确认一次）。runtime 义务不接受风险接受——`accept-risk` 与 `preauthorize-risk` 均不消化 kind=runtime 义务，环境不可得时停回用户裁决。
 - 按 `nextAction` 处理；预算耗尽的 process-failed 带用量明细（修复三档 + 各循环 started 计数）与停回指引。
 
 ## 8. 写事务租约（workflow run 级）
@@ -189,9 +196,14 @@ node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs lease-release --proj
 
 失联租约被 acquire 接管时先按进程组终止旧进程树并递增代次；事件登记命令（意图命令组）的 `--run-id` 在事件锁临界区内复核租约持有者，非当前代次拒绝写入。
 
+- **心跳时效 120 秒**：租约持有者必须至少每 120 秒发一次 `lease-heartbeat`，超过即视为失联、可被其他 run 的 acquire 接管（接管会终止旧进程树）。主会话手工 `lease-acquire` 后做长操作前要评估时长，超过 2 分钟须先发心跳。
+- **手工路径豁免租约**：意图命令组不传 `--run-id` 时直接放行（手工路径不需要租约）；并发边界 = 手工登记与 workflow run 不得同时写同一任务目录——有 run 在途时先等其结束或由其主会话统一登记。
+
 ## 9. 任务替换与独立声明
 
 凭据丢失或任务接管时，在新任务上发起（不依赖旧任务密钥；血统限同一 git 仓库身份）：
+
+前置约束：`supersede-prepare` 要求前任任务目录已有 verdict.json（缺 verdict = 未裁决的前任不能作为替换来源，先让前任走到裁决终态或走 supersede-cancel）；prepare 绑定前任 task.json/verdict/openFindings 三份哈希，`supersede-commit` 再次复核该哈希，任一变化即拒（前任在 prepare 后被改动 → 取消本次替换重新发起）。`declare-independent` 要求目标任务已有 intent.md（未 set-intent 的任务不能声明独立，先 `set-intent` 写意图）。
 
 ```bash
 # prepare：绑前任身份（task.json/verdict/openFindings 哈希）并继承未决发现
@@ -210,11 +222,13 @@ declare-independent --task-dir <既有任务> --credential <user>
 
 ```bash
 confirm-baseline --task-dir <taskDir> --reason "排查结论" --credential <user> [--revision R]
+confirm-history  --task-dir <taskDir> --reason "确认结论" --credential <user> \
+  --intervals '[{"fromRevision":"<旧指纹>","toRevision":"<新指纹>","rationale":"为何属合法外部变化"}]' [--revision R]
 upgrade-policy  --task-dir <taskDir> --invalidation-note "逐事件失效范围" --summary S --credential <user>
 snapshot-policy --task-dir <taskDir>   # 重建任务策略快照（读当前策略包并重算快照哈希；批准四元组与策略升级对账用）
 ```
 
-revision-unstable 排查完写入源后由用户确认新基线（漂移计数归零）。策略升级重写任务快照并要求重新审查与批准受影响的验收包。策略快照由 `snapshot-policy` 在 AcceptanceReviewed 之前固化为任务目录内文件，此后审查 / 批准 / evaluate 全按该快照执行——执行中读到的策略变化不即时生效。
+revision-unstable 排查完写入源后由用户确认新基线（漂移计数归零）。`confirm-history` 是历史 unknown 区间的署名解释通道：只接受派生结果（`delivery-core revision-provenance`）中精确存在的 unknown 区间（from/to 须逐字匹配，区间绑哈希），把该段来源归为 user-confirmed；它不推进链条位置、不等于新基线，未覆盖的 unknown 仍阻断 accepted。多会话并行提交造成的断链历史用该命令逐段确认——登记前先跑 `revision-provenance` 取当前 unknown 区间清单。策略升级重写任务快照并要求重新审查与批准受影响的验收包。策略快照由 `snapshot-policy` 在 AcceptanceReviewed 之前固化为任务目录内文件，此后审查 / 批准 / evaluate 全按该快照执行——执行中读到的策略变化不即时生效。
 
 ## 11. 中断恢复与人工处置（显式转移，无手工通道）
 
@@ -225,3 +239,6 @@ revision-unstable 排查完写入源后由用户确认新基线（漂移计数�
 3. DAG 节点的人工处置（blocked/failed/suspended → done）唯一合法通道 = `delivery-core node-transition --event manual-disposition --basis "<处置依据>"`——依据必填留痕；禁止直接编辑 status.json 或自造词表外事件。
 4. 手工复核独立性：高风险任务的关键手工复核（替代独立保证路径的人工环节，如验收复审、修复受影响复核）须由独立 assurance 子角色完成，主 agent 只做登记与呈报、不亲自复核；无法达到独立性时只能降低证据结论（如实降级为 partial/unknown 并披露）或停回用户，不得按完整独立保证表述。
 5. 场景库零产出治理：验证场景只保留实际拦截过问题或能证明区分度（能区分正误实现）的条目，连续零拦截且无区分度证明的场景删除；治理随实跑任务建设，不预设清单。
+6. 中断恢复的补登记锚定事实时点：意图命令缺省按「当下 revision」登记（`computeRevision`），中断后补登记实现/修复事件必须显式传 `--revision <事实发生时点的 revision>`，否则事件被绑到恢复时点的 revision、证据范围错位。补登记前用合并回执/修复轮的 from/to revision 核对事实时点。
+7. 「代码已提交但轮次未记账」的补登记：assurance-repair-loop-v6 在 `RepairRoundRecorded` 登记失败时会在终态 message 给出完整补登记命令（`record-repair-round` 带 round/trigger-finding-ids/affected-assertion-ids/artifact/revision/from-revision/to-revision/increment-receipts + builder 凭据）——按原命令补登记后重发本 workflow（重发会跳过已清零的修复轮）；不要用 `git reset --soft` 撤回已提交的修复代码（登记优先）。
+8. 同一 revision 重复关闭：`resolve-finding` 只接受当前版本 + 当前 revision 下仍 open 的 finding；已关闭的（同 revision 内）再次关闭属表外转移，会被拒——手工复核时先读 `delivery-core open-findings` 确认目标仍在 open 集，已关闭的用 `reaffirm-resolution`（有原解决事件与复核依据时）或按新发现登记。

@@ -9,6 +9,6 @@
 5. 探索角度不限于验收维度：边界条件、错误路径、并发与状态、数据形态、与既有行为的交互、验收外但违背 objective 的行为都在射程内。
 6. 每个结论必须有亲自运行或亲自检视的原始证据支撑，保存到 evidence/；推测不写成发现。
 7. 运行命令在项目内产生的临时产物（输出文件、缓存、探针脚本）必须当场删除，确需保留的移入 taskDir 的 evidence/；项目内遗留临时产物会改变 revision，导致本轮证据作废、保证失败。
-8. 必须申报实际覆盖的 dimensions（完整覆盖验收要求的 reviewDimensions，如实增补）；读取 workflow 提供的历史探索报告索引，已排除方向不重复，优先构造新状态组合与时序。新发现只申报 summary/requirementIds/severity，不分配 findingId；suggestion/info 必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），must-fix 同时申报 origin、expectedStage、regressionTestRef。
+8. 必须申报实际覆盖的 dimensions（完整覆盖验收要求的 reviewDimensions，如实增补）；读取 workflow 提供的历史探索报告索引，已排除方向不重复，优先构造新状态组合与时序。新发现只申报 summary/requirementIds/分级（分档词表与字段以 workflow 注入的返回 schema 为准），不分配 findingId；非 blocker 级发现必须附 consequenceRefutation（不会发生 / 用户不可观察 / 验收明确允许，三择一并给依据），blocker 级同时申报 origin、expectedStage、regressionTestRef。**category 申报判据**：关联需求已有断言级判据明文覆盖的行为一律 defect；boundary 只用于无断言覆盖的真实边界申报，空关联 boundary 必须附 emptyScopeRefutation（不影响任何需求的论证）；发现结构命中外部契约时需要 authorityBacked / authorityHash / authorityObservationRef 三段。
 9. 完成以探索报告文件落盘为证据；summary 说明探索了什么、排除了什么。
 10. 不逐步叙述过程，直接给发现、维度与证据。

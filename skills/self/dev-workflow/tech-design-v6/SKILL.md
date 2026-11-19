@@ -3,7 +3,7 @@ name: tech-design-v6
 # 技能版本唯一权威（手动 semver）。bump 语义：MAJOR = 数据契约变更（须伴随 schemaVersion 升号）/
 # MINOR = 行为新增（新参数、新阶段）/ PATCH = 修复与措辞。构建器（scripts/build-workflows.mjs）
 # 读此值注入产物 SKILL_VERSION——改本行后必须重跑该构建，--check 对账版本戳
-version: 6.3.0
+version: 6.4.0
 description: >-
   Use when 在已批准目标与验收（delivery-v6 产出）的约束下三阶段推敲方案并产出完整设计包：
   写技术设计文档 → 对抗式审查循环 → 实施计划（impl-plan.json 单源 + 渲染视图），用户确认后登记方案包
@@ -89,7 +89,7 @@ T3 确认通过即形成**完整方案包** = 设计文档目录 + `<name>.impl-
 node ~/.agents/skills/delivery-v6/scripts/delivery-gate.mjs record-design-approved   --task-dir <交付任务目录> --summary "方案包确认"   --package-file <方案包哈希清单 JSON> --credential <user credentialId>
 ```
 
-方案包或验收版本变化后 DesignApproved 自动失效（重新确认）。**方案包不得变更 increments.json 的增量契约**
+验收版本变化后 DesignApproved 失效（重新确认）。方案包文件内容变化不被机器自动检出——哈希清单是登记时的声明快照，机器只按「事件存在 + 当前版本一致」判定，改动须靠人工纪律保证（重新 record-design-approved）。**方案包不得变更 increments.json 的增量契约**
 （增量×需求×测试命令由技能①的 acceptance-design 产出并随验收包批准）——impl-plan 只细化实施步骤与调度，
 逐增量核对要求见 `flow/plan.md`「增量契约对齐」节。
 

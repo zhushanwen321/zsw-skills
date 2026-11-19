@@ -12,17 +12,17 @@
 | DesignApproved | user | 方案包确认；绑包文件哈希清单（packageFiles）与决策参照 |
 | ImplementationRecorded | builder | 增量在某指纹下实现完成；附合并回执（起始指纹、合并后指纹、补丁哈希） |
 | EvidenceRecorded | assurance | 某需求或断言某证据类型的结论；schema 2 附 assertionIds/adversarialFormIds；additive 可选字段 contractCapabilityIds（认领的外部契约能力 id）与 runtimeProbe（真实 runner / 宿主驱动产生的 runtime probe 证据，runtime 义务唯一可满足形态）；绑 artifact 内容哈希（禁止覆盖写）；宿主类证据的 JSON artifact 附 environment 元数据（kind/name/version/source/sourceHash/driver，见「宿主类断言与证据环境」节） |
-| FindingRaised | builder/assurance | 登记发现；category=defect/boundary、severity、关联需求（可空）；非 blocker 附 consequenceRefutation；重开附 reopenOf；可附来源阶段与回归测试 |
+| FindingRaised | builder/assurance | 登记发现；category=defect/boundary、severity、关联需求（可空）；非 blocker 附 consequenceRefutation；schema 2 空关联 boundary 附 emptyScopeRefutation；重开附 reopenOf（目标须已关闭且判据环境已变化）；结构命中外部契约时附 authorityBacked/authorityHash/authorityObservationRef 三段；可附来源阶段与回归测试 |
 | FindingResolved | assurance | 发现解决（当前指纹有效）；boundary 的确认也走此事件，附对照论证 |
 | ResolutionReaffirmed | assurance | 原解决事件在当前 revision 的逐项重认领；必须有原解决事件与复核依据，不允许只凭全量测试绿 |
-| ExplorationCompleted | assurance | 探索审查完成；绑覆盖维度 + 冻结清单哈希 |
+| ExplorationCompleted | assurance | 探索审查完成；绑覆盖维度 + coverageManifestSha256（该值是探索报告文件的内容哈希声明值，机器只校验格式与与报告文件的同源计算，不做额外清单对账） |
 | AssuranceCompleted | assurance | 独立保证完成；mode=full/recheck；绑本轮证据事件 id 集 + 探索事件 id + 逐增量测试回执 + 干净构建记录（按策略） |
 | AssuranceRevisionDrift | assurance | 保证期间指纹漂移；setup/finalize 指纹与序号，按链计数 |
 | RepairRoundRecorded | builder | 一次实现性修复开始；绑轮次、触发 finding、受影响断言与修复报告；第 4 轮触发 process-failed |
 | RiskAccepted | user | 接受具体缺口；绑 gapId（missing 派生 / 证据事件 id / findingId）与当时证据状态 |
-| RiskPreauthorized | user | 预授权指定类别 non-blocker finding 的风险接受范围与名额；blocker 与 requirement 目标不可预授权 |
+| RiskPreauthorized | user | 预授权指定类别 non-blocker finding 的风险接受范围与名额；blocker 与 requirement 目标不可预授权；名额按验收版本独立配额、按事件流顺序消耗；同分类范围的重复登记不合并、不叠加去重（每次登记是独立名额池） |
 | PolicyUpgraded | user | 策略升级；绑旧/新快照哈希与逐事件失效范围声明 |
-| RevisionBaselineConfirmed | user | 人工确认新基线；漂移计数此后归零重计 |
+| RevisionBaselineConfirmed | user | 人工确认新基线（`confirm-baseline`）：漂移计数此后归零重计；或携带 explainedUnknownIntervals（`confirm-history`）：用户署名逐段解释 revision 来源对账中的历史 unknown 区间（每段绑 from/to 与区间哈希），不推进链条、不构成新基线——只把精确匹配的区间归为 user-confirmed |
 | IndependentTaskDeclared | user | 独立任务声明；绑 intent 哈希与当时全部未替换任务清单 |
 | TaskSuperseded | user | 任务替换 prepare/committed 两段；predecessor 绑 task.json/verdict/openFindings 哈希与继承发现 |
 | TaskSupersedeCancelled | user | 恢复型取消；绑被取消 prepare 的事件 id 与被取消任务身份 |
@@ -36,7 +36,7 @@
 | 事件 | 有效范围 |
 |------|----------|
 | AcceptanceReviewed / AcceptanceApproved | 当前 acceptanceVersion + 验收包哈希 + intentSha256 + 策略快照哈希；同组合后发 reject 使旧通过失效 |
-| DesignApproved | 当前 acceptanceVersion（方案包变化经哈希清单声明，技能③入口核对） |
+| DesignApproved | 当前 acceptanceVersion。packageFiles 是登记时声明的快照清单：机器层按「事件存在 + 版本一致」判定，不核对方案包文件当前内容——方案包改动不被机器自动检出，须靠人工纪律（改动后重新 record-design-approved）保证 |
 | ImplementationRecorded | 按 acceptanceVersion 有效，跨 revision 保留；当前行为仍含增量由 AssuranceCompleted 回执兜底 |
 | EvidenceRecorded | 当前版本 + 当前 revision；schema 1 同需求×同类型取最后一条，schema 2 同断言×同类型取最后一条 |
 | FindingRaised | 按版本持久（继承发现同语义且跨版本持久） |
@@ -45,9 +45,18 @@
 | RiskAccepted | 当前版本 + 当前 revision 且 gapId 与当前缺口一致；缺口内容变化即失效 |
 | AssuranceRevisionDrift / RevisionBaselineConfirmed / IndependentTaskDeclared / TaskSuperseded / TaskSupersedeCancelled / PolicyUpgraded / ExternalAuthorityDeclared / EnvironmentBaselineConfirmed | 持久事实 |
 
+## artifact 登记后冻结（五类带哈希事件）
+
+EvidenceRecorded / ImplementationRecorded / ExplorationCompleted / AssuranceCompleted / RepairRoundRecorded 登记时绑 artifact 内容哈希。两条机器行为同时生效：
+
+1. **写入时拒绝覆盖**：同一 artifact 路径已被事件以不同内容哈希登记时，再写入即拒（恢复动作 = 换新文件名写新报告）。
+2. **登记后修改文件本体 = 静默失效**：evaluate 每次重算内容哈希，登记后再向已登记报告追加/编辑任何字符，该事件在下一次 evaluate 时退出有效集（missingArtifacts 标 hash-mismatch），**不报错、不拒绝**——现象与原因相距很远，容易被误判为「证据莫名其妙失效」。
+
+正确做法：需要补充说明或追加结论时，用新文件名写一份追加报告并登记新事件，不要改动已登记文件；手工重跑要覆盖旧报告时同样换新路径（workflow 自动路径靠 attemptTag/revisionHash 命名隔离）。
+
 ## 判定式（两个终态）
 
-- **accepted** = 批准有效（四元组一致 + 审查未被 reject 击穿）＋ 全部增量实现 ＋ 每条必需断言的**每类证据** verified（schema 1 仍为每条必需需求）＋ 当前指纹的保证完成（回执覆盖全部增量、退出码 0、绑定事件可追溯、按策略附干净构建）＋ 探索完成（如要求）＋ 无未决 defect ＋ 无未确认 boundary ＋ 候选形成后全部 revision 变化有合法来源（`revision-provenance` 无 unknown 代际）＋ 必需交付义务无 open（`obligations` 派生；`explicitly-waived` 须绑用户裁决）＋ 循环尝试未超预算（`loop-budget` 按 started 计数）＋ runtime readiness 为 established / not-applicable 且每个外部契约的环境历史链完好（当前权威哈希等于批准时哈希，或有覆盖该契约的 `EnvironmentBaselineConfirmed` 接链）＋ 未进入 process-failed。
+- **accepted** = 批准有效（四元组一致 + 审查未被 reject 击穿）＋ 全部增量实现 ＋ 每条必需断言的**每类证据** verified（schema 1 仍为每条必需需求）＋ 当前指纹的保证完成（回执覆盖全部增量、退出码 0、绑定事件可追溯、按策略附干净构建）＋ 探索完成（如要求）＋ 无未决 defect ＋ 无未确认 boundary ＋ 候选形成后全部 revision 变化有合法来源（`revision-provenance` 无 unknown 代际；用户经 `confirm-history` 署名确认的历史区间归 user-confirmed 来源）＋ 必需交付义务无 open（`obligations` 派生；`explicitly-waived` 须绑用户裁决）＋ 循环尝试未超预算（`loop-budget` 按 started 计数）＋ runtime readiness 为 established / not-applicable 且每个外部契约的环境历史链完好（当前权威哈希等于批准时哈希，或有覆盖该契约的 `EnvironmentBaselineConfirmed` 接链）＋ 未进入 process-failed。
 - **accepted_with_risk** = 上述条件中，逐缺口豁免：每个未 verified 的「需求×证据类型」都有绑定该缺口 gapId 的有效接受（且需求 riskAcceptable=true），每个未决 defect 有有效接受；boundary 不可接受风险；至少存在一项具体接受。两类证据缺口各自需独立接受。来源不明的 revision 与无豁免通道的 open 义务不在可接受范围内——豁免只作用于现有规则允许接受风险的事项。
 
 缺口 gapId：完全缺失 = (acceptanceVersion, requirementId, evidenceKind, revision, "missing") 确定性派生；partial/failed = 对应证据事件 id；finding = findingId。

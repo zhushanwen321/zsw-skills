@@ -444,7 +444,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "6.5.1"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "6.6.0"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
 // ============================================================================
 // design-code-sync-v2 — dev-flow-v1 技能 W4 v2 一致性对账引擎（sync-conformance-plane
 // U4/M4：D5 从 issue 循环升级为「设计义务 + 证据 + 隔离变更集」对账）

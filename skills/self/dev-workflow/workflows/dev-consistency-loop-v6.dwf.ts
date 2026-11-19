@@ -682,7 +682,7 @@ const SKILL_DATA_DETECT_VECTORS = [
   { kind: "non-git", label: "非 git 目录：退单仓兜底不抛错", expectForm: "single" },
 ];
 
-const SKILL_VERSION = "6.5.1"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
+const SKILL_VERSION = "6.6.0"; // 构建注入自 dev-flow-v6/SKILL.md frontmatter version（唯一权威）
 // W3 dev-consistency-loop-v6 — dev-flow-v6 D2 一致性审查 + Gate A 的 zcode 执行体。
 // 语义权威 = 设计文档 §6.2 D2（轮次形态 + 分区互斥契约）与 §8.6（停机线阈值）。
 // 与 rfl（review-fix-loop）的关键差异（有意为之，见设计 §9.1「W3 聚合层砍除」）：
@@ -2115,7 +2115,8 @@ async function askValidated<T>(
         ``,
         `重新返回完整 JSON（全量重新给出，不是增量补丁；空数组须显式返回 []；除该 JSON 外不要改任何已落盘产物）。`,
         ``,
-        `（同一子代理续写——完整任务上下文见前文对话，无需重述任务。你的任务开头摘录：${prompt.slice(0, 160)}${prompt.length > 160 ? "…" : ""}）`,
+        `（平台无关：以下完整重发原任务书——pi 侧回喂由新 agent 接收、不得依赖前文对话；zcode 同名续聊同样按原文执行）原任务书全文：`,
+        prompt,
       ].join("\n"),
     );
   }
@@ -2776,7 +2777,7 @@ gateARetry: while (true) {
           "4. 每条修复申报 affectedFiles（含波及文件，相对仓库根路径的纯路径——不得夹说明文字或 file:line 行号，引擎按值校验，杂质会被拒收回喂）；修不动 / 需上游裁决的条目放 skipped 带具体 reason，不静默跳过。",
           "5. 其他并行修复组工作中：只动本清单涉及的文件；如确需触碰清单外文件，在 affectedFiles 如实申报（引擎按全体申报并集核验改动归属；未申报的改动引擎不处置不阻塞，留盘随终态呈报主 agent 判归属）。",
           "6. 职责外申报：条目属实、但修复动作属其他职责域（典型 = e2e/测试资产修复落在生产代码分区）——放入 delegated（reason 写修复动作属什么域），它将转升级呈报由主 agent 重派；职责内该修的照常修。",
-          "7. 修复触及 workflows/src/ 单源时：返回前必跑 node scripts/check-no-text-assertion.mjs——基线外命中若为既有代码行号移位（内容逐字未变、仅行号推移），跑 --update 重登记基线并把 scripts/text-assertion-baseline.json 加入 affectedFiles 申报（组提交要过 pre-commit 同款门禁，实测移位未登记会拒 commit）；新出现的字面判定命中按检查器输出指引归类处置，禁止盲目 --update 洗入。",
+          "7. 仓库联动门禁（条件适用）：若项目根存在 scripts/check-no-text-assertion.mjs（本仓及同构部署的仓库门禁脚本——不同项目不一定有）——修复触及 workflows/src/ 单源时，返回前必跑 node scripts/check-no-text-assertion.mjs：基线外命中若为既有代码行号移位（内容逐字未变、仅行号推移），跑 --update 重登记基线并把 scripts/text-assertion-baseline.json 加入 affectedFiles 申报（组提交要过 pre-commit 同款门禁，实测移位未登记会拒 commit）；新出现的字面判定命中按检查器输出指引归类处置，禁止盲目 --update 洗入。该脚本或其基线文件不存在 = 本项目无此门禁约定，跳过本条不执行。",
           foreignNote
             ? ["", "工作区说明（存在无人申报的改动，引擎不处置不阻塞，留盘待认领；在现状基础上继续修复）：", foreignNote].join("\n")
             : "",

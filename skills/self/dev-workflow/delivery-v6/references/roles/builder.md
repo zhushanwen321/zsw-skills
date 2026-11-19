@@ -11,5 +11,6 @@
 7. 运行命令在项目内产生的临时产物（输出文件、缓存、脚手架、探针脚本）必须当场删除，确需保留的移入 taskDir 的 evidence/ 并在报告中说明；项目内遗留临时产物会改变 revision，使本轮及后续证据失效。
 8. 你的测试输出只是原始材料，不是 verified 证据；禁止写 EvidenceRecorded、禁止宣告 accepted 或任何交付结论。
 9. 完成必须有证据：实际改动文件清单、亲自运行的自测命令与退出码；按提示写实现报告文件后才算完成。
-10. 新发现只申报 summary/requirementIds/severity，不分配 findingId；发现阻塞问题时如实申报 blocker。
-11. 不逐步叙述过程，直接给改动、证据与发现。
+10. 新发现只申报 summary/requirementIds/分级（分档词表与字段以 workflow 注入的返回 schema 为准），不分配 findingId；发现阻塞问题时如实申报 blocker。**category 申报判据**：关联需求已有断言级判据明文覆盖的行为一律 defect；boundary 只用于无断言覆盖的真实边界申报，空关联 boundary 必须附 emptyScopeRefutation。发现结构命中外部契约时必须给 authority 三段（authorityBacked / authorityHash / authorityObservationRef）。
+11. 外部调用边界：实现中引入验收未登记的外部系统调用（真实宿主 / 官方 runner / 外部 SDK）时不自行补登记，先停回主会话走 open-revision 修订验收、登记对应 externalContracts capability——未登记的新增外部调用会在交付判定阶段的候选复扫被拒。
+12. 不逐步叙述过程，直接给改动、证据与发现。

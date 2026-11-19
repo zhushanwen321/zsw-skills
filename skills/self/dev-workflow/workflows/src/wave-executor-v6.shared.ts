@@ -115,7 +115,10 @@ const DEV_PERSONA =
   "只申报缺口不闭环视同未完成；" +
   "不要自行 git add / git commit——引擎核验通过后统一提交，自行提交会破坏状态对账与并行调度；" +
   "引擎会确定性重跑测试并对改动做对账登记（范围外改动如实申报即可），伪造 files_changed 或测试证据必被抓住；" +
-  "任务书与现实冲突、环境缺失时如实填报 blockers/deviations，不要硬编绕过。" +
+  "返回 status 三态判据：done = 实现完成且 testCommand 跑绿；fail = 可重试失败（测试红/实现方向错/本轮没做完，" +
+  "重派或续聊能修），失败原因与已试方案写 test_evidence / summary；blocked = 不可自解的环境/任务书/依赖问题" +
+  "（缺工具、任务书自相矛盾、需上游裁决），blockers 只在 blocked 时填——可自修的困难填进 blockers 会让节点" +
+  "被判 blocked 并挂起后继，整 run 可能熔断；deviations 申报范围外的必要改动与测试缺口，不替代上述三态。" +
   NO_ASK_RULE;
 
 const INSPECT_PERSONA =
@@ -1134,7 +1137,8 @@ async function askValidated<T>(
         ``,
         `重新返回完整 JSON（全量重新给出，不是增量补丁；除该 JSON 外不要改任何已落盘产物）。`,
         ``,
-        `（同一子代理续写——完整任务上下文见前文对话，无需重述任务。你的任务开头摘录：${prompt.slice(0, 160)}${prompt.length > 160 ? "…" : ""}）`,
+        `（平台无关：以下完整重发原任务书——pi 侧回喂由新 agent 接收、不得依赖前文对话；zcode 同名续聊同样按原文执行）原任务书全文：`,
+        prompt,
       ].join("\n"),
     );
   }
@@ -1962,6 +1966,11 @@ function makeAcceptanceAggValidator(failedIds: string[]) {
   };
 }
 
+/** affectedFiles 申报杂质形态（与 W3 dev-consistency-loop-v6 的 IMPURE_PATH_RE 同口径）：
+ *  空白分隔的说明文字、全角括注、引号、file:line 行号尾缀——组级 commit 按申报路径直接
+ *  git add，杂质会让 add 失败并熔断整 run（W3 走校验拒收回喂自纠，W2 此前只查非空数组） */
+const ACCEPTANCE_FIX_PATH_IMPURE_RE = /[\s（「『“”"']|:\d+(?:-\d+)?$/;
+
 /** fixer 自报校验器工厂（依赖本组条目 id 集）：itemId 归属查 + fixes∩disputed 互斥——
  *  幻觉/他组 itemId 的修复文件会绕过 commitItemIds 过滤混进本组组级 commit（破坏组间
  *  文件不相交）；同条目两边并报时 commit 条目被 disputed 移出池、文件又被组级 commit
@@ -1975,7 +1984,16 @@ function makeAcceptanceFixValidator(allowedItemIds: Set<string>) {
       for (const f of o["fixes"] as Record<string, unknown>[]) {
         if (typeof f["itemId"] !== "string") errors.push("fixes[].itemId 须为字符串");
         else if (!allowedItemIds.has(f["itemId"])) errors.push(`fixes ${f["itemId"]}：itemId 不在本组条目清单（幻觉/他组条目——只申报本组任务文档中的条目）`);
-        if (!isStrArr(f["files"]) || (f["files"] as string[]).length === 0) errors.push(`fixes ${f["itemId"]}：files 须为非空字符串数组（无改动走 disputed，不占 fixes）`);
+        if (!isStrArr(f["files"]) || (f["files"] as string[]).length === 0) {
+          errors.push(`fixes ${f["itemId"]}：files 须为非空字符串数组（无改动走 disputed，不占 fixes）`);
+        } else {
+          const impure = (f["files"] as string[]).filter((p) => ACCEPTANCE_FIX_PATH_IMPURE_RE.test(p));
+          if (impure.length > 0) {
+            errors.push(
+              `fixes ${f["itemId"]}：files 须为相对仓库根纯路径，不得夹说明文字、引号、括注或 file:line 行号（含杂质的值：${impure.map((p) => p.trim().slice(0, 60)).join("；")}；说明放 selfCheck / disputed evidence）`,
+            );
+          }
+        }
       }
     if (!Array.isArray(o["disputed"])) errors.push("disputed 须为数组");
     else

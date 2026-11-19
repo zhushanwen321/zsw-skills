@@ -363,6 +363,7 @@ export const REVISION_PROVENANCE_SOURCES = [
   "assurance-repair",
   "environment",
   "external-baseline",
+  "user-confirmed",
   "unknown",
 ];
 
@@ -396,6 +397,9 @@ function provenanceAnchorOf(record, firstAssuranceSeq) {
   // 用户确认外部基线（现有 confirm-baseline 命令 / RevisionBaselineConfirmed 事件）：
   // 用户裁决「当前项目内容是新基线」——不声称 from，链条从确认点续接
   if (record.type === "RevisionBaselineConfirmed" && typeof record.confirmedRevision === "string" && record.confirmedRevision !== "") {
+    // 带历史区间解释的确认事件（confirm-history）不是基线锚点：它只解释既有 unknown
+    // 区间（见 deriveRevisionProvenance 的 user-confirmed 归类），不推进链条位置
+    if (Array.isArray(record.explainedUnknownIntervals) && record.explainedUnknownIntervals.length > 0) return null;
     return { claimedFrom: null, to: record.confirmedRevision, source: "external-baseline" };
   }
   return null;
@@ -409,12 +413,28 @@ function provenanceAnchorOf(record, firstAssuranceSeq) {
  *   unknownCount = source="unknown" 的区间数（>0 时 gate 不得判 accepted）
  *   enabled    = 事件流是否存在候选形成锚点（无锚点 = 候选未形成，不做对账——
  *                实现/修复/基线确认之前项目树变化属验收起草期，不判）。
+ * 历史 unknown 区间的唯一解释通道 = 用户签名的 confirm-history 事件（同一
+ * RevisionBaselineConfirmed 类型携带 explainedUnknownIntervals，区间以 from/to 精确
+ * 匹配）。匹配的区间归为 source="user-confirmed"，未匹配的一律保持 unknown——机器
+ * 不为来源不明区间自证洗白（设计 §7.2）。
  * AssuranceRevisionDrift 不产来源记录：它登记的是「保证期间发现漂移」现象而非合法来源，
  * 若把它当来源会把无来源改动洗成 environment——设计 §7.2 明令禁止这种覆盖。 */
 export function deriveRevisionProvenance(records, { currentRevision = null } = {}) {
   const sorted = [...records].sort((left, right) => (typeof left.seq === "number" ? left.seq : 0) - (typeof right.seq === "number" ? right.seq : 0));
   const assuranceSeqs = sorted.filter((record) => record.type === "AssuranceCompleted").map((record) => (typeof record.seq === "number" ? record.seq : 0));
   const firstAssuranceSeq = assuranceSeqs.length > 0 ? Math.min(...assuranceSeqs) : null;
+  // 用户确认的历史 unknown 区间（精确 from/to 匹配；区间不在派生结果中时不产生效果——
+  // 登记侧 confirm-history 已按当时的派生结果核对区间存在性）
+  const confirmedIntervals = [];
+  for (const record of sorted) {
+    if (record.type !== "RevisionBaselineConfirmed" || !Array.isArray(record.explainedUnknownIntervals)) continue;
+    for (const item of record.explainedUnknownIntervals) {
+      if (item !== null && typeof item === "object" && typeof item.fromRevision === "string" && typeof item.toRevision === "string") {
+        confirmedIntervals.push({ fromRevision: item.fromRevision, toRevision: item.toRevision });
+      }
+    }
+  }
+  const confirmedByUser = (fromRevision, toRevision) => confirmedIntervals.some((item) => item.fromRevision === fromRevision && item.toRevision === toRevision);
   const revisions = [];
   let explained = null;
   let enabled = false;
@@ -434,7 +454,8 @@ export function deriveRevisionProvenance(records, { currentRevision = null } = {
     if (anchor.to === explained) continue; // 无 revision 变化（如 from===to 的实现回执、同基线重复确认）
     if (anchor.claimedFrom !== null && anchor.claimedFrom !== explained) {
       // 断链：事件声称从 claimedFrom 续接，但链条当前在 explained——中间存在无来源变化
-      revisions.push({ fromRevision: explained, toRevision: anchor.claimedFrom, source: "unknown", eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
+      //（用户以 confirm-history 明确解释过该区间时归为 user-confirmed，否则 unknown）
+      revisions.push({ fromRevision: explained, toRevision: anchor.claimedFrom, source: confirmedByUser(explained, anchor.claimedFrom) ? "user-confirmed" : "unknown", eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
     }
     // 缺 from 的锚点分两类：RevisionBaselineConfirmed（external-baseline）无 from 属正常
     // 形态——用户确认「当前内容是新基线」，链条从确认点续接，保持 external-baseline 分类；
@@ -447,14 +468,15 @@ export function deriveRevisionProvenance(records, { currentRevision = null } = {
       ? anchor.source
       : anchor.source === "external-baseline"
         ? "external-baseline"
-        : "unknown";
+        : confirmedByUser(from, anchor.to) ? "user-confirmed" : "unknown";
     revisions.push({ fromRevision: from, toRevision: anchor.to, source, eventRef, actor: record.actor ?? null, recordedAt: record.recordedAt ?? null });
     explained = anchor.to;
   }
   if (explained !== null && currentRevision !== null && currentRevision !== explained) {
     // 尾部缺口：链条最新解释 revision 与当前裁决 revision 不一致——当前内容无任何登记来源
-    //（典型：候选受验树被主会话/外部进程直改）。eventRef=null（无事件可归因）
-    revisions.push({ fromRevision: explained, toRevision: currentRevision, source: "unknown", eventRef: null, actor: null, recordedAt: null });
+    //（典型：候选受验树被主会话/外部进程直改）。eventRef=null（无事件可归因）；用户
+    // confirm-history 精确确认过该区间时归为 user-confirmed
+    revisions.push({ fromRevision: explained, toRevision: currentRevision, source: confirmedByUser(explained, currentRevision) ? "user-confirmed" : "unknown", eventRef: null, actor: null, recordedAt: null });
   }
   return {
     revisions,

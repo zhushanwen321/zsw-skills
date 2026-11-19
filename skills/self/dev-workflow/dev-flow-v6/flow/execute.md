@@ -42,9 +42,21 @@ worktree 单元：节点 cwd 字段生效——派发/核验/commit 在该 workt
 7. **流式推进**：任一 done 即重算就绪集，解锁后继在并发余量内立即补派
 8. **循环至全 done**——后续推进由 delivery-core next 裁决（转移表唯一权威）
 
+**状态写入通道（手工路径同样适用 [MANDATORY]）**：status.json 的唯一合法写入通道 = 内核转移命令，**禁止直改**（直改会破坏事件流与 attempts 对账）：
+
+```bash
+node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs node-transition --status <status.json> --node <unitId> --event begin           # 派发即计数：attempts +1
+node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs node-transition --status <status.json> --node <unitId> --event finish-done --commit <sha> --evidence "<测试结论>"
+node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs node-transition --status <status.json> --node <unitId> --event block --reason "<不可自解原因>"
+node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs node-transition --status <status.json> --node <unitId> --event fail --reason "<失败原因>"
+node ~/.agents/skills/delivery-v6/scripts/delivery-core.mjs node-transition --status <status.json> --node <unitId> --event manual-disposition --basis "<处置依据>"
+```
+
+**attempts 语义**：派发（begin）即 +1；完成 / 阻塞 / 失败 / 重排队 / 级联失效均保留计数，**重派不清零**——第 6 步「轮次 +1」的载体就是重新派发时的 begin，不要另写计数器（「重编译拒绝」判据读 `status !== "pending" 或 attempts > 0`，漏记 attempts 会让重编译把该单元当成无进度而清零）。人工处置（blocked/failed → done）是逃生通道不是后门：`manual-disposition --basis` 依据必填留痕，带 `--task-dir` 时自动登记待复盘待办。
+
 ## 中断恢复
 
-回到第 1 步；以 git log 与工作区实物校准 status.json（冲突以 git 为准）。引擎重启时自动双向对账：标 done 无 commit → 回 pending；有 commit 未记 done → 按 git log 匹配单元 id 补写 done。人工手改 status.json 无必要——字段见 compile.md「手工降级路径」第 4 步（初始 status.json 的 status/attempts）。
+回到第 1 步；以 git log 与工作区实物校准 status.json（冲突以 git 为准）。引擎重启时自动双向对账：标 done 无 commit → 回 pending；有 commit 未记 done → 按 git log 匹配单元 id 补写 done。人工手改 status.json 是禁止项而非「无必要」（见上节「状态写入通道」：唯一合法通道 = delivery-core node-transition，含 manual-disposition 人工处置与 reconcile 类恢复事件；字段见 compile.md「手工降级路径」第 4 步）。
 
 ## 终态处置表
 

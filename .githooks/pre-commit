@@ -94,4 +94,20 @@ if [ -n "$GEN_STAGED" ]; then
   }
 fi
 
+# 段 6：gate 与前置提示对账（「有 gate 无前置提示」结构性护栏，2026-11-19 审计配套）
+# 三对账：意图命令旗标通道（gate INTENT_SPECS vs workflow intentArgsFor）/ 护栏判据前置
+# （rules.json guardrails.documentation 关键词命中）/ 引用有效性（P0 编号与 scripts 路径）。
+# 触发范围 = 三技能 v6 全部文件 + workflow 单源 + zcode agents + 本脚本自身（判据红绿由
+# 被检文件决定，任一侧变化都可能改变结论）
+PARITY_STAGED=$(git diff --cached --name-only --diff-filter=ACMRD -- 'skills/self/dev-workflow/delivery-v6/' 'skills/self/dev-workflow/tech-design-v6/' 'skills/self/dev-workflow/dev-flow-v6/' 'skills/self/dev-workflow/workflows/src/' '.zcode/agents/' 'scripts/check-gate-prompt-parity.mjs' 'scripts/tests/check-gate-prompt-parity.test.mjs')
+if [ -n "$PARITY_STAGED" ]; then
+  echo "pre-commit[gate-prompt-parity]: staged 变更触及 v6 三技能 / workflow 单源 / agents，跑 gate 前置提示对账…"
+  node scripts/check-gate-prompt-parity.mjs || {
+    echo ""
+    echo "[gate-prompt-parity] 存在「机器拒绝点无前置告知/无供给通道」的结构性红灯（逐条修复动作见上方）。"
+    echo "  恢复动作：按每条提示补判据关键词 / 接通旗标供给通道 / 清理死引用；确认属目标项目侧脚本引用时登记 REFERENCE_EXEMPTIONS（带理由）"
+    exit 1
+  }
+fi
+
 exit 0

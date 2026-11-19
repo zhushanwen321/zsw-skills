@@ -47,7 +47,7 @@
 
 - **action=co-change**：trigger 与 related 必须落在同一 dev 单元 territory 内——拆单元时把契约两侧归并进同一单元；分属不同单元 = 另一侧漏改在过程中不可见（D0 编译门 `FAIL: assoc` 打回）。确需分单元的，改 action=exempt 写理由并由影响面审确认兜底审查通道
 - **action=exempt**：rationale 必填非空；空理由 = 没登记豁免
-- 调用 / import 关系**不手工登记**（D1 review 节点由 `check-associations.mjs recheck` 静态分析反查，声明外跨单元依赖边无所遁形）；断言与测试的关联复用现有 criterionMechanisms / verificationBindings / fileMap 字段，不在本表重复登记
+- 调用 / import 关系**不手工登记**（过程层反向对账用 `check-associations.mjs recheck`——手工调用的 CLI（子命令 + `--plan`），不是 review 节点脚本、也不由引擎自动接线，使用形态与三态处置见 dev-flow-v6 `flow/consistency-review.md`「过程层关联对账」节）；断言与测试的关联复用现有 criterionMechanisms / verificationBindings / fileMap 字段，不在本表重复登记
 - 跨文件契约、共享状态写入、异步时序的高风险单元，在 D0 编译时同步登记 review 节点（dev-flow-v6 `flow/compile.md` kind=review）：机器检查（check / recheck）+ 必要时的过程 reviewer 任务书
 
 ## 终态型设计：波次单元与跨版本交付
@@ -65,6 +65,8 @@
 - **0 章节映射** ← `sectionMap`：四类内容 + 待验证检查点在设计包的实际位置（坐标唯一来源；扩展键承载「决策分级来源」「验收契约」等附加行）
 - **1 目标快照** ← `goalSnapshot`：摘录设计背景/目标 + Out-of-scope，逐字摘录禁止改写
 - **2 单元列表** ← `units[]`，八列 = id / responsibility / territory / deps（`depReasons` 括注理由）/ isolation(plain/worktree) / acceptance / decisionTier / incrementId
+  - 路径基准：territory 条目相对**该单元执行所在仓库根**（worktree 单元 = 其 `cwd` 检出根；plain 单元 = 工作仓库根），不是固定相对某个全局根；`units[].cwd` 仅 worktree 单元声明（绝对路径），plain 单元不得携带（D0 编译器报缺口）
+  - headerNote 声明 cwd 统一根的注记须与各单元 `units[].cwd` 一致——渲染器弱校验（点名绝对路径根的注记与 cwd 包含关系矛盾即语义缺口）
   - u-foundation 固定为共享契约根节点，初始即就绪的 DAG 根；外部契约任务例外——契约 spike 单元（`kind=contract-spike`，见「外部契约任务」节）取代它成为唯一根，全部业务单元（含 u-foundation）经 deps 依赖 spike
   - 契约 spike 单元的 Unit 单元格渲染为 `<id>（契约 spike）` 后缀标注（additive 渲染支持，`kind` 字段登记见 `references/impl-plan-mapping.md`）
   - 增量归属 = increments.items[].id（交付体系任务逐单元必填，见「增量契约对齐」节；独立设计任务省略该字段，渲染为「—（不归属增量）」）
@@ -123,6 +125,7 @@
       "deps": [], "isolation": "plain", "acceptance": ["条款…"], "decisionTier": "A",
       "incrementId": "<increments.items[].id——交付体系任务必填（D0 编译门核对归属与测试命令一致），独立设计任务省略>",
       "kind": "contract-spike",                   // additive 可选：契约 spike 单元标记（唯一登记值 contract-spike；外部契约任务必有且为 DAG 唯一根——见「外部契约任务」节，渲染为 Unit 列后缀标注）
+      "cwd": "<worktree 单元的执行检出根绝对路径>", // 仅 isolation=worktree 时声明（worktree 的检出根；跨仓 worktree 指向另一仓库根合法）；plain 单元不填（固定在工作仓库根运行）。territory 条目相对该 cwd 所在仓库根
       "depReasons": { "<依赖单元id>": "<依赖理由>" } }   // additive 可选：依赖列括注理由
   ],
   "unitsNotes": [],                             // additive 可选：单元表后自检陈述（波次覆盖对账等）
@@ -199,7 +202,7 @@ node ~/.agents/skills/tech-design-v6/scripts/render-impl-plan.mjs ~/.agents/skil
 
 对着 DAG 与单元表自检，通过即落盘，不停等用户：
 
-1. 切分粒度：无跨范围声明耦合、无空转单元、依赖方向与 DAG 一致；依赖只写「编译依赖 / 运行时读对方产物」，其他理由（测试可跑、想先验一把）删掉或写真实理由
+1. 切分粒度：无跨范围声明耦合、无空转单元、依赖方向与 DAG 一致；依赖只写「编译依赖 / 运行时读对方产物」，其他理由（测试可跑、想先验一把）删掉或写真实理由；**路径基准一致**：territory 条目相对该单元 cwd 所在仓库根、worktree 单元 cwd 为检出根绝对路径、plain 单元不填 cwd；headerNote 若有 cwd 统一根声明，须与各单元 cwd 实际值一致（渲染器弱校验会拦矛盾形态）
 2. worktree 标记符合判据（见 dev-flow-v6 `references/dag-authoring.md` 隔离决策表）
 3. 验收条款无遗漏：每单元至少一条可机械核验条款；设计验收场景表每行落到某单元验收条款**且出现在验收计划表**；每个 adversarialForm 必须被至少一个 acceptancePlan[].adversarialFormRefs 认领，D3 节点也须携带同一引用
 4. 验收计划表自洽：核心组覆盖主链路；依赖列无环，非默认依赖带理由；verifyAsset = `reuse:` 的场景 id 在项目 verification skill 的场景清单中实际存在（读清单核对，防编造 id 把雷埋到 D3 启动）

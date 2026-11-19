@@ -59,7 +59,7 @@
 - **DoR**（Definition of Ready）：PBI 可进入 sprint 的就绪标准——**包括"验收标准已定义且 testable"**
 - **AC**（Acceptance Criteria）：单个 user story 特有的成功条件
 
-关系：AC 回答"功能做对了吗（what）"；DoD 回答"可以发布了吗（quality）"。准则 11 借 DoR 的定位——**没有 testable 验收 = 设计未就绪**（对应审查 P0-13）。
+关系：AC 回答"功能做对了吗（what）"；DoD 回答"可以发布了吗（quality）"。准则 11 借 DoR 的定位——**没有 testable 验收 = 设计未就绪**（验收字段完备性由 `check-design-doc.mjs` 机器拦截，可测性语义归 T2 主审 P0-10/P0-12）。
 
 来源：[Atlassian: DoD](https://www.atlassian.com/agile/project-management/definition-of-done) · [Scrum Alliance: DoR vs DoD](https://resources.scrumalliance.org/Article/definition-vs-ready) · [AltexSoft: AC vs DoD](https://www.altexsoft.com/blog/acceptance-criteria-definition-of-done)
 

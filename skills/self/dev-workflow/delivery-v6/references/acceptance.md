@@ -10,7 +10,7 @@ acceptance.json 回答「这个任务要做到什么、做到什么样算做对�
 - `riskAcceptable=false` 表示该条不满足时不允许「用户接受风险后照样交付」——只能修复或递增版本改验收。
 - `evidenceKinds` 声明该条需要哪几类证据（command / scenario / inspection；词表可经策略包扩展）。每类证据独立判定，全部 verified 才算通过。
 - schema 2 的每个 requirement 必须有 assertions[]：每条断言写 id/statement/qualifiers/given/when/then/adversarialFormRefs/testAssetRefs，只描述一个可观察行为；可选 qualifierNotApplicable[]（每条 { qualifier, rationale }）为无法构造反例的限定条件登记不适用理由，带理由的限定条件豁免「每个限定条件有反例场景」要求；可选 dependsOn（{ incrementIds, mechanismRefs, testAssetRefs }）声明该断言依赖的实现增量与机制条款，供修复轮机器推导受影响断言；可选 requiredEnvironment（{ kind: "official-runner" | "real-host", capability? }）声明宿主环境要求——`official-runner` 用于证明官方命令解析、注册与事件语义，需要完整用户交互或进程行为的断言要求 `real-host`，缺省不限制。环境要求属验收契约：变更递增 acceptanceVersion。gate 对宿主类断言核对证据 artifact 的 environment 元数据（gate 核对 kind、capability 与 source；name/version/sourceHash/driver 登记不核，见 state-and-events.md），证据环境不满足要求时最多 partial/unknown、不得 verified；模拟环境不能独立证明宿主契约。顶层 adversarialForms[] 逐条写 assertionId/qualifier/entryPoint/initialState/operation/timing/expected/testAssetRefs/rationale。每个限定条件有反例场景或不适用理由，断言与场景双向引用一致；全局不变量覆盖全部相关写入入口和等待点（允许记录不适用理由）。schema 1 存量任务保持需求级判定。
-- `nonGoals` 与需求同等重要：防止验收范围被悄悄扩大或缩小。
+- `nonGoals` 与需求同等重要：防止验收范围被悄悄扩大或缩小。acceptance.json 必填顶层字段：objective、nonGoals（字符串数组）、riskLevel（low|medium|high）、exploratoryReview（not-required|required）、reviewDimensions（required 时至少一项非空且去重）、requirements；缺任一字段 validate-acceptance 直接拒绝。
 - 检测与分流类功能（detector / router / classifier / 检索 / 分流）的断言必须包含正、负信号场景且行为不同：恒 true、恒 false 或空变量集只能登记为未实现或残余风险，不能按差异化行为已经实现处理。机器层只做词面初筛（validate-acceptance 对含检测/分流关键词的需求组无否定性场景标记时记 warning，不拒写入——词面有误伤率），硬判定由验收审查者语义裁决：要求补正负场景对照，或书面论证不适用。
 - 自动后台、检索、长期驻留类功能的验收设计必须把产品自身运行成本纳入判据：空内容回合是否调模型 / 重复事件是否重复调用 / 每回合调用次数与等待上界 / 注入条数与无关内容占比 / 长期存储增长及整理触发条件。产品运行成本必须通过产品自身的调用计数与行为证据测量，不能用开发会话 token 推断。没有预算或成本要求时，把该取舍呈报用户确认，「默认遗漏」不允许。
 - 高风险目标鼓励实际构造反例输入（推荐档判别力验证）：验收设计时为高风险目标在 testAssetRefs 指向的验证资产中登记反例输入构造要求，后续 builder 实现与 assurance 取证按资产实际构造反例输入、证明判据会拒绝错误实现，产物进各自 artifact 目录。轻量档（审查者书面列出反例）是底线要求，推荐档是鼓励项不强制。推荐档当前落点的取舍依据：实际构造反例需要成熟的验证资产支撑，轻量档先行、验证资产成熟后升级推荐档（设计 §5.2 取舍）。风险最小场景集（宿主集成 / 检索与注入 / 自动后台 / 检测与分流 / 持久状态 / 项目隔离六类）当前落点为 golden 任务层（`scripts/tests/delivery-golden-v6.test.mjs`），验收入口接入待实跑校准（设计 §5.3 取舍）。
@@ -96,7 +96,9 @@ node ~/.agents/skills/delivery-v6/scripts/detect-project-capabilities.mjs --proj
 
 ## increments.json
 
-每个增量关联至少一条需求、可带一条测试命令（program + args + 可选 timeoutMs）。测试命令在验收包批准时被哈希锁定——批准后替换测试命令即验收包变化、批准失效。增量是验收内部的实施步骤，不是独立交付版本。
+每个增量关联至少一条需求、**必须声明一条测试命令**（program + args + 可选 timeoutMs）。测试命令在验收包批准时被哈希锁定——批准后替换测试命令即验收包变化、批准失效。增量是验收内部的实施步骤，不是独立交付版本。
+
+字段判据（validate-acceptance 机器校验）：增量 id 以字母或数字开头、仅含字母数字/下划线/连字符且长度 ≤64（非 ASCII id 一律拒绝，建议 `INC-0-contract-smoke` 式命名）；`testCommand.timeoutMs` 须为 1000..3600000 的整数（缺省 300000）；全部增量都声明测试命令是独立保证回执的前提——缺一条即 validate-acceptance 拒绝。
 
 **契约冒烟增量**：验收含（有效）essential 外部契约时，`increments.items` 必须有一条 `kind=contract-smoke` 增量（建议 id `INC-0-contract-smoke`）：`testCommand` 指向真实环境契约冒烟探针，让 API 形态、签名与回执通道在业务实现前先被真实环境揭示；反例引用的 negative case 用错误契约形态调用真实环境并断言真实环境拒绝。分两阶段——spike 阶段用最小可装载实现确认契约形态，final 阶段在当前完整候选 revision 重跑满足 runtime 义务；只过 spike 不满足 accepted。能力绑定不写在增量里，唯一来源仍是断言 `requiredEnvironment.capability`。
 
