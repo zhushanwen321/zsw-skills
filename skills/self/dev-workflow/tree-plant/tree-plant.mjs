@@ -340,6 +340,32 @@ function rootStaticChecks() {
         }
       }
     }
+    // 纯 JS 交付面（主干范围内有 .js 无 .ts）须登记类型层放弃——root 期主干未写码时本检查不触发，harvest 复检兜底
+    const trunkList = parseTrunkAllowlist();
+    const skip = new Set(["node_modules", ".git", ".run", ".sdk", "dist", "build", "coverage", ".zcode"]);
+    const scopeHas = (re) => {
+      const walk = (p) => {
+        try {
+          const st = fs.statSync(p);
+          if (st.isDirectory()) {
+            for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+              if (skip.has(e.name)) continue;
+              if (e.isDirectory()) {
+                if (walk(path.join(p, e.name))) return true;
+              } else if (re.test(e.name)) return true;
+            }
+          } else return re.test(path.basename(p));
+        } catch {
+          // 清单路径尚不存在时按无命中计
+        }
+        return false;
+      };
+      return trunkList.some((rel) => walk(path.resolve(process.cwd(), rel)));
+    };
+    if (scopeHas(/\.(m|c)?js$/) && !scopeHas(/\.tsx?$/)) {
+      const hasTypeRow = excl && excl.rows.some((r) => /类型层|类型检查|typecheck|checkjs/i.test(r.join(" ")));
+      push("纯 JS 交付面已登记类型层放弃", !!hasTypeRow, "主干范围有 .js 无 .ts：选纯 JS 须在显式不做表登记「类型层放弃」行（理由 + 重审触发）——补登记行后重跑 root 更新基线，再重跑 harvest");
+    }
   }
 
   const fc = readDoc(DOCS.factCheck);
@@ -389,7 +415,11 @@ function rootStaticChecks() {
     push(`API 文档覆盖 ≥3 类表面（现 ${hit.length}/5：${hit.join("/")}）`, hit.length >= 3, "不适用的类目保留小节标题并写「不适用：理由」");
     const storageSec = api.split(/(^|\n)#{1,3}\s.*存储/)[2] || "";
     if (storageSec && !/不适用/.test(storageSec.slice(0, 300)) && design) {
-      push("存储格式演进已处置（声明或实现）", /(版本|迁移|重建)/.test(design), "api.md 存储节生效时，design.md 须含版本/迁移/重建之一（格式带版本+迁移实现，或显式声明不迁移+重建代价）");
+      const dTables = parseMdTables(design);
+      const rowHit = [findTable(dTables, ["项", "类别", "不做会怎样"]), findTable(dTables, ["项", "理由", "题面提及"])]
+        .filter(Boolean)
+        .some((t) => t.rows.some((r) => /格式演进|格式版本|存储格式|数据格式/.test(r.join(" "))));
+      push("存储格式演进已处置（声明或实现）", rowHit, "api.md 存储节生效时，design.md 非功能/显式不做表须有格式演进行（格式版本+迁移实现，或不迁移+重建代价的完整声明行）——相邻机制的损坏重建路径（如 quarantine 重建）不算格式演进声明");
     }
   }
 

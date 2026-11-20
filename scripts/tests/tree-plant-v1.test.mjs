@@ -28,9 +28,17 @@ const DESIGN = [
   "| save | 保存增强 | - | 常规 | src/save/ | B1 |",
   "| gov | 治理 | - | 常规 | src/gov/ | B2 |",
   "",
-  "## 非功能设计", "崩溃窗口数据损坏（可靠性）：断电丢全量数据，天级出问题。",
-  "存储格式演进：JSONL v1 无版本字段——数据量小可全量重建（不迁移的重建代价已声明）。", "",
-  "### 显式不做", "- 读缓存", "",
+  "## 非功能设计", "崩溃窗口数据损坏（可靠性）：断电丢全量数据，天级出问题。", "",
+  "| 项 | 类别 | 不做会怎样 | 预计多久出问题 |",
+  "|---|---|---|---|",
+  "| 存储格式演进 | 可靠性 | 格式无版本字段，跨版本不可迁移 | 数据量小可全量重建（不迁移代价已声明） |",
+  "",
+  "### 显式不做", "",
+  "| 项 | 理由 | 题面提及 | 重审触发 |",
+  "|---|---|---|---|",
+  "| 类型层放弃 | 脚本规模小，类型收益低于维护成本 | 否 | 交付物进多人协作或超 500 行时 |",
+  "| 读缓存 | 规模未到 | 否 | 存储超 5MB |",
+  "",
 ].join("\n");
 
 const FACT_CHECK = [
@@ -367,7 +375,7 @@ test("harvest 红：root 后 acceptance 被整体替换（四文档基线+静态
 
 test("root 红：api 存储节生效但 design 无格式演进处置", () => {
   const dir = makeFixture({
-    design: DESIGN.replace("存储格式演进：JSONL v1 无版本字段——数据量小可全量重建（不迁移的重建代价已声明）。", ""),
+    design: DESIGN.replace("| 存储格式演进 | 可靠性 | 格式无版本字段，跨版本不可迁移 | 数据量小可全量重建（不迁移代价已声明） |\n", ""),
   });
   try {
     const r = runCli(dir, ["root"]);
@@ -441,6 +449,35 @@ test("root 红：显式不做表重审触发列是占位值", () => {
     const r = runCli(dir, ["root"]);
     assert.equal(r.status, 1);
     assert.match(r.stdout + r.stderr, /重审触发非占位/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("root 红：纯 JS 交付面未登记类型层放弃", () => {
+  const dir = makeFixture({
+    design: DESIGN.replace("| 类型层放弃 | 脚本规模小，类型收益低于维护成本 | 否 | 交付物进多人协作或超 500 行时 |\n", ""),
+  });
+  try {
+    const r = runCli(dir, ["root"]);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout + r.stderr, /类型层放弃/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("root 红：格式演进以相邻机制词面绕过被拒", () => {
+  const dir = makeFixture({
+    design: DESIGN.replace(
+      "| 存储格式演进 | 可靠性 | 格式无版本字段，跨版本不可迁移 | 数据量小可全量重建（不迁移代价已声明） |",
+      "| 损坏自恢复 | 可靠性 | 坏文件反复抛错 | 天级 |"
+    ),
+  });
+  try {
+    const r = runCli(dir, ["root"]);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout + r.stderr, /存储格式演进/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
