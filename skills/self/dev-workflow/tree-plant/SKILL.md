@@ -1,6 +1,6 @@
 ---
 name: tree-plant
-version: 1.5.0
+version: 1.6.0
 description: >-
   Use when 用户说「设计并实现」「按目标与验收开发」且任务有可实机验证的交付物。树形交付协议：
   扎根（背景拆解 → 方案草稿 → 论据事实核查）与生长（主干 TDD 实机跑通 → 长枝 → 长叶补异常与单测 →
@@ -57,7 +57,7 @@ docs/fact-check.md    事实核查文档（论据三分类 + 接口核实表 + �
 6. **长叶**：补异常处理、兜底、边界条件；补单测。跑 `leaf`（单测绿 + 全部 case 回归绿）。
 7. **修剪**：并行派攻击者（每类判据卡一个 subagent），武器 = 全量 diff（`git diff $(jq -r .commit .run/root.json)..HEAD`，含工作区）+ 设计文档第 3/4 节 + 真实宿主探针 + 判据卡。**攻击目标含设计文档第 4 节声明的每个必要非功能项**（如「原子写」声明即触发写中途 kill 探针）。
    攻击者只报四件套（id/category/finding/reproCmd + 证据输出）；**主 agent 汇总处置**后写 `.run/prune-findings.json`，每条发现三态：fixed（附修复+回归+`mutationEvidence` 变异验证——撤掉修复测试必红）、refuted（附复现不成立的证据）、registered（附理由）。发现须可复现（reproCmd），不可复现只能登记。
-   修复后做两件收尾：**定向复审**（逐个修复点检查修复本身是否引入卡片所列类别的新缺陷——历史实证：修复引入 claim 机制直接产生 4 条新发现）；**升格**（fixed 发现的复现探针升格为 acceptance case 或单测，重跑相关 gate）。跑 `prune`。
+   修复后做两件收尾：**定向复审**（逐个修复点检查修复本身是否引入卡片所列类别的新缺陷——历史实证：修复引入 claim 机制直接产生 4 条新发现）；**升格**（fixed 发现的复现探针升格为 acceptance case 或单测，重跑相关 gate；升格时同步复跑全部攻击探针，修复改变探针前提（async 化/预期反转）则更新预期再复跑——崩着的探针 = 证据链断点）。跑 `prune`。
 8. **收获**：前置两件——确认 `.run/` 已在 .gitignore、工作区按「完成即提交」处理干净。跑 `harvest`——四文档哈希比对 + root 静态复检 + 全部实机 case 终态真机重跑 + 生成 `.run/report.md`（含交付文件清单与 case 输出索引）；终态 `delivered` 或 `blocked-needs-user`，残余风险进报告不阻塞。
 
 ### findings 文件格式（主 agent 汇总时写）
