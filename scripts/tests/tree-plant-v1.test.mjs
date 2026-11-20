@@ -28,7 +28,8 @@ const DESIGN = [
   "| save | 保存增强 | - | 常规 | src/save/ | B1 |",
   "| gov | 治理 | - | 常规 | src/gov/ | B2 |",
   "",
-  "## 非功能设计", "崩溃窗口数据损坏（可靠性）：断电丢全量数据，天级出问题。", "",
+  "## 非功能设计", "崩溃窗口数据损坏（可靠性）：断电丢全量数据，天级出问题。",
+  "存储格式演进：JSONL v1 无版本字段——数据量小可全量重建（不迁移的重建代价已声明）。", "",
   "### 显式不做", "- 读缓存", "",
 ].join("\n");
 
@@ -50,7 +51,7 @@ const FACT_CHECK = [
   "",
 ].join("\n");
 
-function makeFixture({ factCheck, acceptance, noTestEntry = false, tsFile = false, typecheckCmd = null } = {}) {
+function makeFixture({ design, factCheck, acceptance, noTestEntry = false, tsFile = false, typecheckCmd = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tree-plant-"));
   sh("git", ["init", "-q"], dir);
   sh("git", ["config", "user.email", "t@t"], dir);
@@ -69,7 +70,7 @@ function makeFixture({ factCheck, acceptance, noTestEntry = false, tsFile = fals
   if (!noTestEntry) {
     fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "fixture", scripts: { test: "node test/all.test.mjs" } }, null, 2));
   }
-  fs.writeFileSync(path.join(dir, "docs/design.md"), DESIGN);
+  fs.writeFileSync(path.join(dir, "docs/design.md"), design ?? DESIGN);
   fs.writeFileSync(path.join(dir, "docs/api.md"), "# API\n\n## 命令\n/memory list\n\n## 工具\nmemory_save\n\n## 配置\nenabled\n\n## 存储\nJSONL 追加\n\n## 挂点\ncontext\n");
   fs.writeFileSync(
     path.join(dir, "docs/acceptance.md"),
@@ -359,6 +360,103 @@ test("harvest 红：root 后 acceptance 被整体替换（四文档基线+静态
     const r = runCli(dir, ["harvest"]);
     assert.equal(r.status, 1);
     assert.match(r.stdout + r.stderr, /root/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("root 红：api 存储节生效但 design 无格式演进处置", () => {
+  const dir = makeFixture({
+    design: DESIGN.replace("存储格式演进：JSONL v1 无版本字段——数据量小可全量重建（不迁移的重建代价已声明）。", ""),
+  });
+  try {
+    const r = runCli(dir, ["root"]);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout + r.stderr, /存储格式演进/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("root 红：目标清单缺 case/落点列", () => {
+  const dir = makeFixture({
+    design: DESIGN.replace(
+      "## 验收是什么",
+      [
+        "| 编号 | 目标 | 题面原句（逐字） |",
+        "|---|---|---|",
+        "| G1 | 显式保存 | 用户可以显式保存记忆 |",
+        "",
+        "## 验收是什么",
+      ].join("\n")
+    ),
+  });
+  try {
+    const r = runCli(dir, ["root"]);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout + r.stderr, /case\/落点/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("root 红：目标清单 case 引用不存在的验收编号", () => {
+  const dir = makeFixture({
+    design: DESIGN.replace(
+      "## 验收是什么",
+      [
+        "| 编号 | 目标 | 题面原句（逐字） | 限定词落点 | case/落点 |",
+        "|---|---|---|---|---|",
+        "| G1 | 显式保存 | 用户可以显式保存记忆 | 机制：保存工具 | T9 |",
+        "| G2 | 关闭 | 可一键关闭 | 机制：命令开关 | 不可机验：需人工 |",
+        "",
+        "## 验收是什么",
+      ].join("\n")
+    ),
+  });
+  try {
+    const r = runCli(dir, ["root"]);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout + r.stderr, /T9/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("root 红：显式不做表重审触发列是占位值", () => {
+  const dir = makeFixture({
+    design: DESIGN.replace(
+      "### 显式不做",
+      [
+        "### 显式不做",
+        "",
+        "| 项 | 理由 | 题面提及 | 重审触发 |",
+        "|---|---|---|---|",
+        "| 读缓存 | 规模未到 | 否 | 无 |",
+        "| 排序 | 恒注入已够 | 否 | 存储超 5MB |",
+      ].join("\n")
+    ),
+  });
+  try {
+    const r = runCli(dir, ["root"]);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout + r.stderr, /重审触发非占位/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("prune 红：发现 category 不在判据卡集合", () => {
+  const dir = makeFixture();
+  try {
+    for (const args of [["root"], ["trunk"], ["leaf"]]) assert.equal(runCli(dir, args).status, 0, args.join(" "));
+    fs.mkdirSync(path.join(dir, ".run"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".run", "prune-findings.json"), JSON.stringify([
+      { ...FINDINGS[0], category: "card-99" },
+    ]));
+    const r = runCli(dir, ["prune"]);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout + r.stderr, /不在判据卡集合/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

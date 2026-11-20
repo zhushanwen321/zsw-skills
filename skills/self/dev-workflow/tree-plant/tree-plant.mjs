@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const DOCS = {
   design: "docs/design.md",
@@ -302,6 +303,45 @@ function rootStaticChecks() {
     cases = [];
   }
 
+  if (design) {
+    // 目标清单表：列名形态可能有后缀（如「题面原句（逐字）」），按列名前缀宽松定位
+    const goal = parseMdTables(design).find((t) => {
+      const norm = t.header.map((h) => h.replace(/\s+/g, "").toLowerCase());
+      return norm.includes("编号") && norm.includes("目标") && norm.some((h) => h.startsWith("题面原句"));
+    });
+    if (goal) {
+      const iC = col(goal, "case/落点");
+      push("目标清单含「case/落点」列", iC >= 0, "目标清单表加「case/落点」列（覆盖该目标的 acceptance 编号，或「不可机验：理由」）——没有 case 的目标=没验证过的目标");
+      if (iC >= 0) {
+        const goalIds = new Set(cases.map((c) => c.id));
+        for (const r of goal.rows) {
+          const cell = (r[iC] || "").trim();
+          if (!cell) {
+            push(`目标行 case 覆盖（${r[0] || "?"}）`, false, "目标无 case 落点；确不可机验写「不可机验：理由」");
+            continue;
+          }
+          if (/^不可机验/.test(cell)) continue;
+          const refs = cell.split(/[,，/、\s]+/).filter(Boolean);
+          const missing = refs.filter((x) => !goalIds.has(x));
+          if (missing.length) push(`目标行 case 覆盖（${r[0] || "?"}）`, false, `引用了不存在的 case：${missing.join(",")}`);
+        }
+      }
+    }
+    const excl = findTable(parseMdTables(design), ["项", "理由", "题面提及"]);
+    if (excl) {
+      const iR = col(excl, "重审触发");
+      push("显式不做表含「重审触发」列", iR >= 0, "每个不做项写何时必须重审（具体信号，如「存储超 X MB」「题面边界变化时」；整理/过期类通道附增长量级）");
+      if (iR >= 0) {
+        for (const r of excl.rows) {
+          const v = (r[iR] || "").trim();
+          if (/^(—|–|-|无|n\/a|tbd|待定)?$/i.test(v)) {
+            push(`重审触发非占位（${r[0] || "?"}）`, false, "写具体重审信号，占位值不通过");
+          }
+        }
+      }
+    }
+  }
+
   const fc = readDoc(DOCS.factCheck);
   if (fc) {
     const tables = parseMdTables(fc);
@@ -347,6 +387,10 @@ function rootStaticChecks() {
     const need = ["命令", "工具", "配置", "存储", "挂点"];
     const hit = need.filter((k) => api.includes(k));
     push(`API 文档覆盖 ≥3 类表面（现 ${hit.length}/5：${hit.join("/")}）`, hit.length >= 3, "不适用的类目保留小节标题并写「不适用：理由」");
+    const storageSec = api.split(/(^|\n)#{1,3}\s.*存储/)[2] || "";
+    if (storageSec && !/不适用/.test(storageSec.slice(0, 300)) && design) {
+      push("存储格式演进已处置（声明或实现）", /(版本|迁移|重建)/.test(design), "api.md 存储节生效时，design.md 须含版本/迁移/重建之一（格式带版本+迁移实现，或显式声明不迁移+重建代价）");
+    }
   }
 
   return { checks, cases, pass: checks.every((c) => c.pass) };
@@ -552,10 +596,15 @@ function gatePrune() {
   loadRun("leaf");
   const findings = loadFindings();
   if (!Array.isArray(findings)) fail("prune-findings.json 顶层必须是数组", "每条发现一个对象");
+  const cardsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "cards");
+  const validCats = new Set(
+    fs.readdirSync(cardsDir).filter((f) => /^card-\d+/.test(f)).map((f) => f.split("-").slice(0, 2).join("-")),
+  );
   const problems = [];
   for (const f of findings) {
     if (!f.id || !f.category || !f.finding || !f.status) problems.push(`${f.id || "?"}: 缺 id/category/finding/status`);
     if (!["fixed", "refuted", "registered"].includes(f.status)) problems.push(`${f.id}: 非法 status ${f.status}`);
+    if (!validCats.has(f.category)) problems.push(`${f.id || "?"}: category「${f.category}」不在判据卡集合（${[...validCats].sort().join("/")}）——发现归错类会破坏修剪记录可追溯性`);
     if (["fixed", "refuted"].includes(f.status) && !f.reproCmd) problems.push(`${f.id}: ${f.status} 须附 reproCmd（复现命令）`);
     if (f.status === "fixed" && !f.mutationEvidence) problems.push(`${f.id}: fixed 须附变异验证记录（撤掉修复测试必红）`);
     if (f.status === "refuted" && !f.evidence) problems.push(`${f.id}: refuted 须附复现不成立的证据`);
