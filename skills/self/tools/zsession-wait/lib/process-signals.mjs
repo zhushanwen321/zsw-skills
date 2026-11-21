@@ -49,16 +49,17 @@ export function extractRunIds(command) {
 }
 
 async function listProcesses() {
-  const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid=,command="], {
+  const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid=,cputime=,command="], {
     timeout: PS_TIMEOUT_MS,
     maxBuffer: 8 * 1024 * 1024,
   });
   const procs = [];
   for (const line of stdout.split("\n")) {
-    // ps 固定列 pid ppid 后跟 command（command 本身含空格，不能按空白 split 整行）
-    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+    // ps 固定列 pid ppid cputime 后跟 command（command 本身含空格，不能按空白 split 整行）
+    // cputime 形态：MM:SS / HH:MM:SS / DD-HH:MM:SS；取不到时为 null（快照对比按未知处理）
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+([\d:-]+)\s+(.*)$/);
     if (!m) continue;
-    procs.push({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] });
+    procs.push({ pid: Number(m[1]), ppid: Number(m[2]), cputime: m[3], command: m[4] });
   }
   return procs;
 }
@@ -147,7 +148,7 @@ export async function collectProcessSignals({ directory, activeRunIds }) {
       if (seenShellPids.has(d.pid)) continue;
       if (!isShellProcess(d)) continue;
       seenShellPids.add(d.pid);
-      hostShells.push({ pid: d.pid, command: d.command.slice(0, 120) });
+      hostShells.push({ pid: d.pid, cputime: d.cputime ?? null, command: d.command.slice(0, 120) });
     }
   }
 
@@ -156,7 +157,7 @@ export async function collectProcessSignals({ directory, activeRunIds }) {
   // 默认只提示不阻塞（--strict-orphan 升级为阻塞）。
   const orphanShells = procs
     .filter((p) => p.ppid === 1 && isShellProcess(p))
-    .map((p) => ({ pid: p.pid, command: p.command.slice(0, 120) }));
+    .map((p) => ({ pid: p.pid, cputime: p.cputime ?? null, command: p.command.slice(0, 120) }));
 
   return {
     hostPids,

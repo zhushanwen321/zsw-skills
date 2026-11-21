@@ -30,6 +30,9 @@ options:
   --json                 最终报告以 JSON 输出到 stdout（进度行始终在 stderr）
   --ignore-shells        跳过宿主 shell 后代信号（workspace 有并发会话时用）
   --strict-orphan        孤儿 shell（PPID=1）升级为阻塞信号（默认只提示）
+  --shell-grace-polls <n> 泄漏确认轮数：会话本体已停、只剩 host_shells 且 shell 清单与
+                         CPU 时间连续 n 轮零变化时，带 stopped-stale-shells 终态退出
+                         （默认 20 ≈ 5 分钟；泄漏 shell 由调用方裁决杀否，监控不杀）
   --db <path>            db 路径（默认 ~/.zcode/cli/db/db.sqlite）
   -h, --help             显示本帮助`;
 
@@ -41,6 +44,7 @@ function parseArgs(argv) {
     rounds: 3,
     timeoutSec: 7200,
     staleAfterSec: 86_400,
+    shellGracePolls: 20,
     json: false,
     ignoreShells: false,
     strictOrphan: false,
@@ -60,6 +64,7 @@ function parseArgs(argv) {
     else if (a === "--rounds") opts.rounds = Number(next());
     else if (a === "--timeout") opts.timeoutSec = Number(next());
     else if (a === "--stale-after") opts.staleAfterSec = Number(next());
+    else if (a === "--shell-grace-polls") opts.shellGracePolls = Number(next());
     else if (a === "--json") opts.json = true;
     else if (a === "--ignore-shells") opts.ignoreShells = true;
     else if (a === "--strict-orphan") opts.strictOrphan = true;
@@ -131,6 +136,13 @@ async function main() {
   let failures = 0;
   let lastSnapshot = null;
   let lastJudge = null;
+  // 泄漏确认状态机：红条件只剩 host_shells 时，逐轮对比 shell 清单与 CPU 时间快照；
+  // 连续 shellGracePolls 轮零变化 = 挂死泄漏（会话本体已停、shell 永不自行收尾），
+  // 带终态退出交调用方裁决——监控只报事实（pid/cputime/command），不做杀进程裁决。
+  let staleShellRounds = 0;
+  let staleShellStreakSince = null;
+  let shellCpuSnapshot = new Map();
+  let staleShellsFinal = null;
 
   while (true) {
     round++;
@@ -183,6 +195,34 @@ async function main() {
     greenStreak = j.green ? greenStreak + 1 : 0;
     if (greenStreak >= opts.rounds) break;
 
+    // 泄漏确认：其余红条件全部解除、只剩宿主 shell 时开始记账。
+    const onlyShellsRed = j.red.length === 1 && j.red[0] === "host_shells";
+    if (onlyShellsRed && !opts.ignoreShells) {
+      const current = new Map(p.hostShells.map((s) => [s.pid, s.cputime ?? null]));
+      const sameShellSet =
+        current.size === shellCpuSnapshot.size &&
+        [...current.keys()].every((pid) => shellCpuSnapshot.has(pid));
+      const cpuAllFrozen =
+        sameShellSet &&
+        [...current.entries()].every(([pid, cpu]) => cpu !== null && shellCpuSnapshot.get(pid) === cpu);
+      if (sameShellSet && cpuAllFrozen) {
+        if (staleShellRounds === 0) staleShellStreakSince = new Date();
+        staleShellRounds++;
+      } else {
+        staleShellRounds = 0;
+        staleShellStreakSince = null;
+      }
+      shellCpuSnapshot = current;
+      if (staleShellRounds >= opts.shellGracePolls) {
+        staleShellsFinal = p.hostShells.map((s) => ({ pid: s.pid, cputime: s.cputime, command: s.command }));
+        break;
+      }
+    } else {
+      staleShellRounds = 0;
+      staleShellStreakSince = null;
+      shellCpuSnapshot = new Map();
+    }
+
     const elapsed = Date.now() - startedAt;
     if (elapsed >= timeoutMs) break;
     // 睡眠不超过剩余预算，保证 --timeout 是墙上时钟硬上限。
@@ -191,9 +231,10 @@ async function main() {
 
   const stopped = greenStreak >= opts.rounds;
   const elapsedMs = Date.now() - startedAt;
+  const verdict = stopped ? "stopped" : staleShellsFinal ? "stopped-stale-shells" : "timeout";
   const report = {
     sessionId: opts.sessionId,
-    verdict: stopped ? "stopped" : "timeout",
+    verdict,
     greenStreak,
     rounds: round,
     elapsedMs,
@@ -232,14 +273,22 @@ async function main() {
   } else {
     const outcome = sessionRow.last_outcome ?? "none";
     const finish = lastSnapshot.db.lastFinish ?? "none";
+    const headLine = stopped
+      ? `session ${opts.sessionId} fully stopped after ${round} rounds (${Math.round(elapsedMs / 1000)}s)\n`
+      : staleShellsFinal
+        ? `session ${opts.sessionId} stopped with stale shell(s) after ${round} rounds (${Math.round(elapsedMs / 1000)}s) — ` +
+          `session idle, ${staleShellsFinal.length} host shell(s) frozen for ${opts.shellGracePolls} polls ` +
+          `(since ${staleShellStreakSince ? hhmmss(staleShellStreakSince) : "?"}); caller decides whether to kill:\n` +
+          staleShellsFinal.map((s) => `  stale-shell pid=${s.pid} cputime=${s.cputime ?? "?"} cmd=${s.command}`).join("\n") + "\n"
+        : `TIMEOUT after ${Math.round(elapsedMs / 1000)}s, last state: red=(${lastJudge.red.join(",")}) green=${greenStreak}/${opts.rounds}\n`;
     process.stdout.write(
-      (stopped
-        ? `session ${opts.sessionId} fully stopped after ${round} rounds (${Math.round(elapsedMs / 1000)}s)\n`
-        : `TIMEOUT after ${Math.round(elapsedMs / 1000)}s, last state: red=(${lastJudge.red.join(",")}) green=${greenStreak}/${opts.rounds}\n`) +
+      headLine +
         `  last_outcome=${outcome} last_message_finish=${finish} idle=${formatIdle(lastJudge.idleMs)}\n`,
     );
   }
-  process.exitCode = stopped ? 0 : 1;
+  // stopped 与 stopped-stale-shells 都是「会话已停」的确定性结论，退出码 0；
+  // 区别在后者留了泄漏 shell 清单交调用方裁决（杀否由调用方定，监控不做破坏性动作）。
+  process.exitCode = stopped || staleShellsFinal ? 0 : 1;
 }
 
 main().catch((error) => {

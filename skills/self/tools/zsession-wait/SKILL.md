@@ -20,6 +20,8 @@ description: >-
 
 「宿主死」的判定收紧为 ps 里无任何 app-server 候选进程；有候选但按 cwd 未能绑定时（识别失败），db 在途证据照常采信。宿主真死时 db 的 running 行按崩溃残留处理，沙箱孤儿 / 孤儿 shell（`--strict-orphan`）仍阻塞判定。
 
+**泄漏终态（stopped-stale-shells）**：会话本体已停（条件 1-3 满足）但条件 4 的宿主 shell 一直不退（答卷侧挂死的后台任务，如实证中变异验证 bash 挂在无超时的 node --test 上）时，监控不再无限红——shell 清单与其 CPU 时间连续 `--shell-grace-polls` 轮（默认 20 ≈ 5 分钟）零变化即认定挂死泄漏，带终态退出（verdict=`stopped-stale-shells`，退出码 0），报告附 shell 清单（pid/cputime/command）。裁决权在调用方：对照 command 与 cputime 判断杀否（监控不做破坏性动作）；健康的长跑后台（如 quota-wait 轮询）CPU 会周期性增长，不会命中冻结判定。`--timeout` 仍是最后兜底（调用方不应传 0——无限等在泄漏场景会挂死整条链）。
+
 ## Quick Reference
 
 ```bash
@@ -33,12 +35,13 @@ node ~/.agents/skills/zsession-wait/bin/zsession-wait.mjs <sessionId> [options]
 | `--rounds <n>` | 3 | 连续全绿轮数 |
 | `--timeout <sec>` | 7200 | 总超时（0 = 不限；墙上时钟硬上限，sleep 会被截短） |
 | `--stale-after <sec>` | 86400 | tool_usage running 行视为残留的行龄阈值（0 = 禁用） |
+| `--shell-grace-polls <n>` | 20 | 泄漏确认轮数：只剩 host_shells 且 shell 清单与 CPU 时间连续 n 轮零变化 → `stopped-stale-shells` 终态退出 |
 | `--json` | - | 最终 JSON 报告进 stdout（进度行始终在 stderr） |
 | `--ignore-shells` | - | 跳过宿主 shell 后代信号 |
 | `--strict-orphan` | - | 孤儿 shell（PPID=1）升级为阻塞信号，默认只提示 |
 | `--db <path>` | `~/.zcode/cli/db/db.sqlite` | db 路径 |
 
-退出码：`0` 已停止 / `1` 超时 / `2` 会话不存在或 db 不可读 / `3` 参数错误 / `4` 采集连续失败。
+退出码：`0` 已停止（verdict=`stopped` 或 `stopped-stale-shells`，后者附泄漏 shell 清单交调用方裁决）/ `1` 超时 / `2` 会话不存在或 db 不可读 / `3` 参数错误 / `4` 采集连续失败。
 
 stderr 前几行可能出现 Node 的 `ExperimentalWarning: SQLite is an experimental feature`（node:sqlite 实验特性告警，每次运行最多两行）——按行解析 stderr 时过滤非 `zsession-wait:` / `warn:` / `[` 开头的行。
 
